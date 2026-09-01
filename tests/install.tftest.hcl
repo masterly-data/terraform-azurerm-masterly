@@ -44,8 +44,8 @@ run "eval_defaults_provision_starter_postgres" {
   # (the demo) hold in state; a change here REPLACES their subnets.
   assert {
     condition = (
-      azurerm_subnet.aca.address_prefixes[0] == "10.20.0.0/23" &&
-      azurerm_subnet.private_endpoints.address_prefixes[0] == "10.20.4.0/24"
+      azurerm_subnet.aca[0].address_prefixes[0] == "10.20.0.0/23" &&
+      azurerm_subnet.private_endpoints[0].address_prefixes[0] == "10.20.4.0/24"
     )
     error_message = "Derived subnet layout changed for the default /16 — this would replace live installs' subnets."
   }
@@ -443,7 +443,7 @@ run "small_vnet_with_explicit_subnets_plans" {
   }
 
   assert {
-    condition     = azurerm_subnet.aca.address_prefixes[0] == "10.99.0.0/23"
+    condition     = azurerm_subnet.aca[0].address_prefixes[0] == "10.99.0.0/23"
     error_message = "Explicit aca_subnet_prefix must be used verbatim."
   }
 }
@@ -1343,4 +1343,105 @@ run "invalid_location_geo_is_rejected" {
   }
 
   expect_failures = [var.location_geo]
+}
+
+# --- The three network topologies the module serves without a fork -----------------------
+# 1. public ingress behind an IP allowlist (the default, covered throughout above)
+# 2. private ingress, reached over VPN/ExpressRoute
+# 3. hub-and-spoke: subnets injected, the module owns no network at all
+
+# The module builds its own VNet unless told otherwise — topology 1.
+run "default_topology_owns_its_network" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = length(azurerm_virtual_network.this) == 1 && length(azurerm_subnet.aca) == 1
+    error_message = "With no subnets injected the module must create its own VNet and subnets."
+  }
+
+  assert {
+    condition     = module.aca_env.internal_load_balancer_enabled == false
+    error_message = "The default topology keeps the environment's public endpoint."
+  }
+}
+
+# Topology 2: internal load balancer, no public endpoint. The frontend stays `external`
+# because on an internal environment that means "reachable from the VNet", which is
+# exactly what a VPN user needs.
+run "private_ingress_topology" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+  }
+
+  assert {
+    condition     = module.aca_env.internal_load_balancer_enabled == true
+    error_message = "aca_internal_load_balancer must reach the Container App Environment."
+  }
+}
+
+# Guard: the footgun that makes an install unreachable from anywhere, including VPN.
+run "internal_lb_with_unexposed_frontend_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    frontend_ingress_external  = false
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Topology 3: the platform team owns the spoke; the module creates no network.
+run "injected_network_creates_no_network" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+  }
+
+  assert {
+    condition     = length(azurerm_virtual_network.this) == 0 && length(azurerm_subnet.aca) == 0 && length(azurerm_subnet.private_endpoints) == 0
+    error_message = "Injecting subnets must create no VNet and no subnets — the platform team owns them."
+  }
+
+  # The VNet is derived from the subnet id rather than asked for, so the two cannot disagree.
+  assert {
+    condition     = local.virtual_network_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke"
+    error_message = "The VNet id must be derived from the injected subnet id."
+  }
+}
+
+# Guard: half an injected network.
+run "half_injected_network_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    aca_subnet_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: private endpoints cannot live in the delegated ACA subnet.
+run "same_subnet_twice_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
 }

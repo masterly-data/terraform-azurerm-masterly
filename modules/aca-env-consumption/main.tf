@@ -11,7 +11,8 @@ resource "azurerm_container_app_environment" "this" {
 
   # SELF-HOSTED EXTENSION: create-time only — changing it REPLACES the environment
   # (and with it the apps' FQDNs). Consumption-only environments need a /23 subnet.
-  infrastructure_subnet_id = var.infrastructure_subnet_id
+  infrastructure_subnet_id       = var.infrastructure_subnet_id
+  internal_load_balancer_enabled = var.internal_load_balancer_enabled
 
   tags = var.tags
 

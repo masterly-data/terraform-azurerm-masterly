@@ -109,7 +109,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "key_vault" {
   name                  = "pdzl-${var.name_prefix}-kv"
   resource_group_name   = azurerm_resource_group.aca.name
   private_dns_zone_name = azurerm_private_dns_zone.key_vault[0].name
-  virtual_network_id    = azurerm_virtual_network.this.id
+  virtual_network_id    = local.virtual_network_id
   tags                  = local.tags
 }
 
@@ -119,7 +119,7 @@ resource "azurerm_private_endpoint" "key_vault" {
   name                = "pe-${var.name_prefix}-kv"
   resource_group_name = azurerm_resource_group.data.name
   location            = var.location
-  subnet_id           = azurerm_subnet.private_endpoints.id
+  subnet_id           = local.private_endpoints_subnet_id
 
   private_service_connection {
     name                           = "psc-${var.name_prefix}-kv"
