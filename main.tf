@@ -37,6 +37,44 @@ locals {
     cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 4)
   )
 
+  # --- Data residency: check the promise against where the resources actually land ------
+  # `location` (an Azure region) and `masterly_region` (a Masterly geo, ADR 0022) were
+  # independent inputs that nothing reconciled, so an install could sit in Sweden and declare
+  # itself "us" — or, on the old ["eu","us"] default for allowed_regions, accept a "us"
+  # Environment whose data lands in Sweden. Region pinning is a promise customers repeat in
+  # contracts and auditors read back, so it is checked rather than trusted.
+  #
+  # UK and Switzerland are deliberately ABSENT, not forgotten: neither is in the EU, and
+  # whether either satisfies an "eu" residency commitment is a legal question this module
+  # must not answer by omission. Declare it with location_geo and own the decision.
+  location_geo_map = {
+    swedencentral      = "eu"
+    westeurope         = "eu"
+    northeurope        = "eu"
+    germanywestcentral = "eu"
+    francecentral      = "eu"
+    norwayeast         = "eu"
+    polandcentral      = "eu"
+    italynorth         = "eu"
+    spaincentral       = "eu"
+    eastus             = "us"
+    eastus2            = "us"
+    centralus          = "us"
+    northcentralus     = "us"
+    southcentralus     = "us"
+    westcentralus      = "us"
+    westus             = "us"
+    westus2            = "us"
+    westus3            = "us"
+  }
+  # Azure accepts "Sweden Central" and "swedencentral" interchangeably.
+  location_key = lower(replace(var.location, " ", ""))
+  install_geo  = var.location_geo != null ? var.location_geo : lookup(local.location_geo_map, local.location_key, null)
+
+  # One install is one data plane in one location, so the only geo whose data it can hold is
+  # its own. Defaulting to that makes the safe configuration the automatic one.
+  allowed_regions = var.allowed_regions != null ? var.allowed_regions : [var.masterly_region]
+
   # Data plane seam (ADR 0065): BYO-DB when the customer supplies a DSN, otherwise the
   # provisioned starter server.
   provision_postgres = var.external_database_url == null
@@ -60,6 +98,25 @@ resource "azurerm_resource_group" "aca" {
   name     = local.rg_aca_name
   location = var.location
   tags     = local.tags
+
+  # The first resource of the install, so a residency mismatch is refused at plan — before
+  # any resource exists, and long before an Environment records a region it cannot honour.
+  lifecycle {
+    precondition {
+      condition     = local.install_geo != null
+      error_message = "This module does not know which Masterly geo the Azure location \"${var.location}\" belongs to, so it cannot check the install's data-residency claim. Set location_geo to the geo whose residency this location actually satisfies (\"eu\" or \"us\") — a deliberate statement, because for locations outside the EU and the US (UK, Switzerland, and others) that is a legal question, not a lookup."
+    }
+
+    precondition {
+      condition     = local.install_geo == null || local.install_geo == var.masterly_region
+      error_message = "Data-residency mismatch: this install declares masterly_region = \"${var.masterly_region}\", but every resource is created in Azure location \"${var.location}\", which is geo \"${local.install_geo == null ? "unknown" : local.install_geo}\". The declared geo is what customers are told and what the app stamps on usage records; the location is where the data actually sits. Change one to match the other — or, if this location genuinely satisfies that residency commitment, say so explicitly with location_geo."
+    }
+
+    precondition {
+      condition     = local.install_geo == null || alltrue([for r in local.allowed_regions : r == local.install_geo])
+      error_message = "allowed_regions is ${jsonencode(local.allowed_regions)}, but this install has exactly one data plane, in geo \"${local.install_geo == null ? "unknown" : local.install_geo}\". Permitting any other geo would let someone create an Environment that claims a residency this install cannot honour: its data would land in \"${var.location}\" regardless. Leave allowed_regions unset to permit exactly this install's geo."
+    }
+  }
 }
 
 resource "azurerm_resource_group" "data" {
@@ -377,7 +434,7 @@ locals {
       MASTERLY_REGION          = var.masterly_region
       MASTERLY_ORG_ID          = var.org_id
       MASTERLY_INSTALL_ID      = var.install_id
-      MASTERLY_ALLOWED_REGIONS = join(",", var.allowed_regions)
+      MASTERLY_ALLOWED_REGIONS = join(",", local.allowed_regions)
     },
     var.org_name != null ? { MASTERLY_ORG_NAME = var.org_name } : {},
     var.initial_owner_email != null ? { MASTERLY_INITIAL_OWNER_EMAIL = var.initial_owner_email } : {},

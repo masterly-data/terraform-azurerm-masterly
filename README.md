@@ -44,7 +44,9 @@ module "masterly" {
   org_id              = "org_acme"        # your Organization id (ADR 0039; must match the license sub claim)
   org_name            = "Acme Industries"
   install_id          = "prod"            # this Install's slug within the Org
-  allowed_regions     = ["eu"]
+  # allowed_regions is deliberately unset: it defaults to this install's own geo, which is
+  # the only geo a single data plane can hold. The module refuses at plan an install whose
+  # declared geo contradicts its Azure location, or that permits a geo it cannot honour.
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
   api_image           = "masterly.azurecr.io/api:v0.132.2"      # v0.132.2 is the floor: below it ca-workers
   frontend_image      = "masterly.azurecr.io/frontend:v0.137.0" # registers no job handlers, silently

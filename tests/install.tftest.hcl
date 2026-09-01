@@ -1238,3 +1238,95 @@ run "redis_managed_eviction_alert_aggregates_correctly" {
     error_message = "evictedkeys is documented with the Average aggregation on Microsoft.Cache/redisEnterprise; Maximum silently changes what the alert means."
   }
 }
+
+# --- Data residency: the declared geo is checked against where resources actually land ----
+# `location` and `masterly_region` were independent inputs that nothing reconciled, so an
+# install could sit in Sweden and tell customers (and auditors, and the usage ledger) that it
+# was "us". These pin the reconciliation.
+
+# Guard: a geo that contradicts the Azure location is refused at plan.
+run "residency_mismatch_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    # swedencentral is geo "eu" — claiming "us" would put EU-resident data behind a US promise
+    masterly_region = "us"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: a location the module cannot place is refused rather than waved through. Silently
+# skipping the check would make the unknown case the UNSAFE one.
+run "unknown_location_is_rejected_not_ignored" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    # In Azure, not in the EU: whether it satisfies an "eu" commitment is a legal question.
+    location = "uksouth"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# ...and location_geo is the way to answer that question deliberately.
+run "unknown_location_with_explicit_geo_plans" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    location              = "uksouth"
+    location_geo          = "eu"
+    masterly_region       = "eu"
+  }
+
+  assert {
+    condition     = local.install_geo == "eu"
+    error_message = "location_geo must decide the install's geo for a location the map does not carry."
+  }
+}
+
+# Guard: one install is one data plane in one location, so permitting a second geo would let
+# someone create an Environment claiming a residency this install cannot honour. This was the
+# old default (["eu", "us"]) — the leak shipped switched on.
+run "cross_geo_allowed_regions_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    allowed_regions       = ["eu", "us"]
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# The safe configuration is the automatic one: unset means exactly this install's geo.
+run "allowed_regions_defaults_to_the_install_geo" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = length(local.allowed_regions) == 1 && local.allowed_regions[0] == "eu"
+    error_message = "Unset allowed_regions must resolve to the install's own geo, not a multi-geo default."
+  }
+}
+
+# Azure accepts the display form; the check must not depend on which one is written.
+run "display_form_location_resolves" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    location              = "Sweden Central"
+  }
+
+  assert {
+    condition     = local.install_geo == "eu"
+    error_message = "\"Sweden Central\" and \"swedencentral\" must resolve identically."
+  }
+}
