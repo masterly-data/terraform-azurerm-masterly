@@ -1330,3 +1330,17 @@ run "display_form_location_resolves" {
     error_message = "\"Sweden Central\" and \"swedencentral\" must resolve identically."
   }
 }
+
+# Guard: location_geo still rejects a value that is not a geo. Paired with the example's
+# validate in CI, which is what caught the null case this condition originally had — `||`
+# does not short-circuit in Terraform, so the unset default reached contains() and threw.
+run "invalid_location_geo_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    location_geo          = "emea"
+  }
+
+  expect_failures = [var.location_geo]
+}
