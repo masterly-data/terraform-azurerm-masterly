@@ -7,15 +7,13 @@
 tfplan
 crash.log
 
-# local variable files — committed exceptions: the demo deployment's non-secret tfvars
+# Local variable files. NO un-ignore exception here on purpose: this repo carries no
+# deployments, and a rule un-ignoring deployments/**/terraform.tfvars would follow anyone
+# who copies this file into their own install repo — where that is exactly the directory
+# they would put a tfvars holding a licence JWT and an OIDC client secret.
 *.tfvars
-!deployments/**/terraform.tfvars
 
 # OS / editor
 .DS_Store
 .idea/
 .vscode/
-
-# Claude Code worktrees. Each one is its own git repository, so committing the path adds
-# a gitlink rather than files — and `git add -A` picks it up silently.
-.claude/worktrees/
