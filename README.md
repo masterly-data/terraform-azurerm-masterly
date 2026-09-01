@@ -29,6 +29,20 @@ The customer-facing walkthrough — prerequisites, the two-pass apply, upgrades 
 **[masterlydata.com/docs/self-hosted](https://masterlydata.com/docs/self-hosted/install/)**. Start
 there; this README documents the module surface.
 
+
+## Network topologies
+
+The module serves three from one artifact, and the default needs nothing set:
+
+| | Reached from | Set |
+|---|---|---|
+| Public ingress (default) | the internet, narrowed by `ingress_allowed_cidrs` | nothing |
+| Private ingress | VPN / ExpressRoute only | `aca_internal_load_balancer = true` |
+| Hub-and-spoke | whatever the spoke allows | `aca_subnet_id` + `private_endpoints_subnet_id` |
+
+The last two compose. Subnet requirements, centralised private DNS, egress, and what upgrading
+an existing install does are in [docs/networking.md](docs/networking.md).
+
 ## Usage
 
 ```hcl

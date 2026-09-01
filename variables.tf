@@ -438,6 +438,30 @@ variable "tags" {
   description = "Tags applied to every resource (merge the required governance tags here: cost-center, data-residency, deployment-model, owner, lifecycle)."
 }
 
+variable "aca_subnet_id" {
+  type        = string
+  default     = null
+  description = "Join an existing network instead of creating one (hub-and-spoke / landing zone): the id of a subnet delegated to Microsoft.App/environments, /23 or larger. Set this and private_endpoints_subnet_id together and the module creates no VNet, no subnets, and needs no network permissions outside this resource group — the platform team keeps ownership of the spoke. Leave both unset and the module builds its own VNet from vnet_address_space."
+}
+
+variable "private_endpoints_subnet_id" {
+  type        = string
+  default     = null
+  description = "Subnet for the Postgres, Key Vault, and Redis private endpoints when joining an existing network. Required with aca_subnet_id, and must have private endpoint network policies disabled. Must not be the ACA subnet: a delegated subnet cannot hold private endpoints."
+}
+
+variable "frontend_ingress_external" {
+  type        = bool
+  default     = true
+  description = "Whether the frontend has ingress beyond the Container App Environment itself. Leave TRUE in every topology a person signs into, including the VPN-only one: on an internal environment `external` means \"reachable from the VNet\", not \"reachable from the internet\". What makes an install private is aca_internal_load_balancer, not this. Set false only to hide the frontend from everything except other apps in the environment."
+}
+
+variable "aca_internal_load_balancer" {
+  type        = bool
+  default     = false
+  description = "Give the Container App Environment an internal load balancer, so it has no public endpoint and its apps answer only inside the VNet — reached over VPN or ExpressRoute. THIS is the switch that makes an install private; frontend_ingress_external stays true. The environment's default domain must be resolvable privately (a private DNS zone for it, linked to the VNet); Azure does not do that for you."
+}
+
 variable "vnet_address_space" {
   type        = list(string)
   default     = ["10.20.0.0/16"]

@@ -37,6 +37,23 @@ locals {
     cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 4)
   )
 
+  # --- Network: create the VNet, or join one the platform team already owns -------------
+  # Three topologies the module has to serve without a fork (docs/networking.md):
+  #   1. public ingress behind an IP allowlist   — the default; module owns the VNet
+  #   2. private ingress, reached over VPN/ER    — internal LB, no public endpoint
+  #   3. hub-and-spoke landing zone              — subnets injected, module owns no network
+  # Injection is all-or-nothing: a half-injected network is a topology nobody asked for and
+  # every combination of it would need its own test matrix.
+  inject_network = var.aca_subnet_id != null
+
+  aca_subnet_id               = local.inject_network ? var.aca_subnet_id : azurerm_subnet.aca[0].id
+  private_endpoints_subnet_id = local.inject_network ? var.private_endpoints_subnet_id : azurerm_subnet.private_endpoints[0].id
+
+  # Private DNS links need the VNet, and an injected subnet id already carries it:
+  # /subscriptions/../virtualNetworks/<vnet>/subnets/<subnet>. Derived rather than asked
+  # for, so the two can never disagree.
+  virtual_network_id = local.inject_network ? regex("^(.*)/subnets/[^/]+$", var.aca_subnet_id)[0] : azurerm_virtual_network.this[0].id
+
   # --- Data residency: check the promise against where the resources actually land ------
   # `location` (an Azure region) and `masterly_region` (a Masterly geo, ADR 0022) were
   # independent inputs that nothing reconciled, so an install could sit in Sweden and declare
@@ -113,6 +130,21 @@ resource "azurerm_resource_group" "aca" {
     }
 
     precondition {
+      condition     = (var.aca_subnet_id == null) == (var.private_endpoints_subnet_id == null)
+      error_message = "aca_subnet_id and private_endpoints_subnet_id go together: either the module builds the whole network, or the platform team supplies both subnets. Half of an injected network is a topology nobody asked for."
+    }
+
+    precondition {
+      condition     = var.aca_subnet_id == null || var.aca_subnet_id != var.private_endpoints_subnet_id
+      error_message = "aca_subnet_id and private_endpoints_subnet_id must be different subnets: the ACA subnet is delegated to Microsoft.App/environments, and Azure refuses private endpoints in a delegated subnet."
+    }
+
+    precondition {
+      condition     = var.frontend_ingress_external || !var.aca_internal_load_balancer
+      error_message = "aca_internal_load_balancer with frontend_ingress_external = false leaves the frontend reachable from nothing outside the environment — not over VPN either. On an internal environment `external` already means \"reachable from the VNet only\", so leave frontend_ingress_external true."
+    }
+
+    precondition {
       condition     = local.install_geo == null || alltrue([for r in local.allowed_regions : r == local.install_geo])
       error_message = "allowed_regions is ${jsonencode(local.allowed_regions)}, but this install has exactly one data plane, in geo \"${local.install_geo == null ? "unknown" : local.install_geo}\". Permitting any other geo would let someone create an Environment that claims a residency this install cannot honour: its data would land in \"${var.location}\" regardless. Leave allowed_regions unset to permit exactly this install's geo."
     }
@@ -129,7 +161,29 @@ resource "azurerm_resource_group" "data" {
 # The runtime subnet hosts the ACA environment; the endpoints subnet hosts the
 # Postgres private endpoint. The database has NO public network presence.
 
+# These three gained `count` when the network became injectable. Without these blocks
+# Terraform reads azurerm_subnet.aca -> azurerm_subnet.aca[0] as "destroy one, create
+# another" and takes the subnets of every LIVE install with it — the ACA environment's
+# infrastructure subnet cannot be replaced under a running environment. The upgrade has
+# to be a no-op in state, and this is what makes it one.
+moved {
+  from = azurerm_virtual_network.this
+  to   = azurerm_virtual_network.this[0]
+}
+
+moved {
+  from = azurerm_subnet.aca
+  to   = azurerm_subnet.aca[0]
+}
+
+moved {
+  from = azurerm_subnet.private_endpoints
+  to   = azurerm_subnet.private_endpoints[0]
+}
+
 resource "azurerm_virtual_network" "this" {
+  count = local.inject_network ? 0 : 1
+
   name                = "vnet-${var.name_prefix}"
   resource_group_name = azurerm_resource_group.aca.name
   location            = var.location
@@ -141,9 +195,11 @@ resource "azurerm_virtual_network" "this" {
 # requires the subnet to be delegated to Microsoft.App/environments (the first apply
 # failed with ManagedEnvironmentSubnetDelegationError without it).
 resource "azurerm_subnet" "aca" {
+  count = local.inject_network ? 0 : 1
+
   name                 = "snet-aca"
   resource_group_name  = azurerm_resource_group.aca.name
-  virtual_network_name = azurerm_virtual_network.this.name
+  virtual_network_name = azurerm_virtual_network.this[0].name
   address_prefixes     = [local.aca_subnet_prefix] # /23 required by consumption-only ACA
 
   delegation {
@@ -156,9 +212,11 @@ resource "azurerm_subnet" "aca" {
 }
 
 resource "azurerm_subnet" "private_endpoints" {
+  count = local.inject_network ? 0 : 1
+
   name                              = "snet-private-endpoints"
   resource_group_name               = azurerm_resource_group.aca.name
-  virtual_network_name              = azurerm_virtual_network.this.name
+  virtual_network_name              = azurerm_virtual_network.this[0].name
   address_prefixes                  = [local.private_endpoints_subnet_prefix] # clear of the runtime subnet
   private_endpoint_network_policies = "Disabled"
 }
@@ -181,7 +239,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "postgres" {
   name                  = "pdzl-${var.name_prefix}-postgres"
   resource_group_name   = azurerm_resource_group.aca.name
   private_dns_zone_name = azurerm_private_dns_zone.postgres[0].name
-  virtual_network_id    = azurerm_virtual_network.this.id
+  virtual_network_id    = local.virtual_network_id
   tags                  = local.tags
 }
 
@@ -210,12 +268,13 @@ module "logs" {
 module "aca_env" {
   source = "./modules/aca-env-consumption"
 
-  name                       = "aca-${var.name_prefix}"
-  resource_group_name        = azurerm_resource_group.aca.name
-  location                   = var.location
-  log_analytics_workspace_id = module.logs.id
-  infrastructure_subnet_id   = azurerm_subnet.aca.id
-  tags                       = local.tags
+  name                           = "aca-${var.name_prefix}"
+  resource_group_name            = azurerm_resource_group.aca.name
+  location                       = var.location
+  log_analytics_workspace_id     = module.logs.id
+  infrastructure_subnet_id       = local.aca_subnet_id
+  internal_load_balancer_enabled = var.aca_internal_load_balancer
+  tags                           = local.tags
 }
 
 # --- Image-pull identity ---------------------------------------------------------
@@ -311,7 +370,7 @@ resource "azurerm_private_endpoint" "postgres" {
   name                = "pe-${var.name_prefix}-postgres"
   resource_group_name = azurerm_resource_group.data.name
   location            = var.location
-  subnet_id           = azurerm_subnet.private_endpoints.id
+  subnet_id           = local.private_endpoints_subnet_id
 
   private_service_connection {
     name                           = "psc-${var.name_prefix}-postgres"
@@ -576,7 +635,7 @@ module "frontend" {
   registry_username             = var.registry_username
   registry_password_secret_name = var.registry_username != null ? "registry-password" : null
 
-  ingress_external    = true
+  ingress_external    = var.frontend_ingress_external
   ingress_target_port = 3000
 
   min_replicas = var.frontend_min_replicas
