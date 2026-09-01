@@ -130,6 +130,16 @@ resource "azurerm_resource_group" "aca" {
     }
 
     precondition {
+      condition     = (var.telemetry_url == null) == (var.telemetry_client_id == null)
+      error_message = "telemetry_url and telemetry_client_id go together: the application gates reporting on BOTH, so setting one alone produces an install that looks configured and reports nothing. Set both, or neither."
+    }
+
+    precondition {
+      condition     = !(var.telemetry_url != null && var.telemetry_client_id != null) || var.telemetry_client_secret != null
+      error_message = "telemetry_client_secret is required once telemetry_url and telemetry_client_id are set: the report authenticates with that service account, and without the secret every hourly report fails against the control plane rather than failing here."
+    }
+
+    precondition {
       condition     = (var.aca_subnet_id == null) == (var.private_endpoints_subnet_id == null)
       error_message = "aca_subnet_id and private_endpoints_subnet_id go together: either the module builds the whole network, or the platform team supplies both subnets. Half of an injected network is a topology nobody asked for."
     }
@@ -509,6 +519,7 @@ locals {
     local.keyvault_env,          # durable secret store when the Key Vault is enabled (ADR 0066)
     local.redis_env,             # redis session registry when Redis is enabled (ADR 0066)
     local.workers_inprocess_env, # the api hands the loop to ca-workers when enabled (ADR 0066)
+    local.telemetry_env,         # usage reporting to the control plane, off unless configured
     # The license verification key (ADR 0013) is public material — plain env.
     var.license_public_jwk != null ? { MASTERLY_LICENSE_PUBLIC_JWK = var.license_public_jwk } : {},
   )
@@ -526,6 +537,7 @@ locals {
     local.redis_secrets, # the Redis URL embeds the access key (ADR 0066)
     var.license_token != null ? { "license-token" = var.license_token } : {},
     var.breakglass_secret_hash != null ? { "breakglass-secret-hash" = var.breakglass_secret_hash } : {},
+    local.telemetry_configured ? { "telemetry-client-secret" = var.telemetry_client_secret } : {},
   )
 
   api_env_secret_refs = merge(
@@ -536,7 +548,18 @@ locals {
     local.redis_secret_refs,
     var.license_token != null ? { MASTERLY_LICENSE_TOKEN = "license-token" } : {},
     var.breakglass_secret_hash != null ? { MASTERLY_BREAKGLASS_SECRET_HASH = "breakglass-secret-hash" } : {},
+    local.telemetry_configured ? { MASTERLY_TELEMETRY_CLIENT_SECRET = "telemetry-client-secret" } : {},
   )
+
+  # The application gates reporting on url AND client_id together, so the module treats the
+  # pair as the switch and refuses a half-configuration at plan rather than shipping an
+  # install that silently reports nothing.
+  telemetry_configured = var.telemetry_url != null && var.telemetry_client_id != null
+
+  telemetry_env = local.telemetry_configured ? {
+    MASTERLY_TELEMETRY_URL       = var.telemetry_url
+    MASTERLY_TELEMETRY_CLIENT_ID = var.telemetry_client_id
+  } : {}
 }
 
 # --- The api (internal ingress: only the frontend's BFF reaches it) ---------------

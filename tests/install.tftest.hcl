@@ -1445,3 +1445,83 @@ run "same_subnet_twice_is_rejected" {
 
   expect_failures = [azurerm_resource_group.aca]
 }
+
+# --- Telemetry to the control plane (ADR 0034/0056) --------------------------------------
+# Built at both ends and never wired: the application's reporter gates on url AND client_id,
+# and the module set neither, so no self-hosted install has ever reported.
+
+# Off by default, and off means genuinely absent — not an empty string the app might read.
+run "telemetry_is_off_unless_configured" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_TELEMETRY_URL")
+    error_message = "With no telemetry inputs the reporting environment must not be set at all."
+  }
+
+  assert {
+    condition     = local.telemetry_configured == false
+    error_message = "telemetry_configured must be false when neither input is set."
+  }
+}
+
+run "telemetry_wires_url_id_and_secret" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    telemetry_url           = "https://cp.masterlydata.com"
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_TELEMETRY_URL"] == "https://cp.masterlydata.com"
+    error_message = "telemetry_url must reach the apps."
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_TELEMETRY_CLIENT_ID"] == "sa_01TEST"
+    error_message = "telemetry_client_id must reach the apps."
+  }
+
+  # The secret travels as a Container App secret, never as plain environment.
+  assert {
+    condition     = local.api_env_secret_refs["MASTERLY_TELEMETRY_CLIENT_SECRET"] == "telemetry-client-secret"
+    error_message = "The telemetry secret must be a secret reference, not plain env."
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_TELEMETRY_CLIENT_SECRET")
+    error_message = "The telemetry secret must never appear in the plain environment map."
+  }
+}
+
+# Guard: half a configuration reports nothing while looking configured.
+run "half_configured_telemetry_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    telemetry_url         = "https://cp.masterlydata.com"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: configured without the secret fails hourly at the control plane, not at plan.
+run "telemetry_without_secret_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    telemetry_url         = "https://cp.masterlydata.com"
+    telemetry_client_id   = "sa_01TEST"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
