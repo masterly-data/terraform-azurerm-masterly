@@ -277,6 +277,34 @@ variable "breakglass_secret_hash" {
 # Both arrive in the customer's install bundle. Unset = the app's fixture license
 # (evaluation); a configured-but-invalid license crashes the install at startup.
 
+# --- Telemetry to the Masterly control plane (ADR 0034/0056) --------------------------
+# The reporter exists in the application and self-schedules hourly once these are set; it
+# posts the usage ledger incrementally, from a watermark, to <telemetry_url>/v1/telemetry/usage.
+# Unset on every install until now, which is why no self-hosted install has ever reported.
+#
+# Self-hosted is fixed-price, so this is NOT billing input — it is fleet visibility: which
+# installs exist, on what versions, and whether their licence is near expiry. The install is
+# fully functional without it, and a customer who declines telemetry simply leaves it unset.
+
+variable "telemetry_url" {
+  type        = string
+  default     = null
+  description = "Base URL of the Masterly control plane that receives usage reports (from the install bundle). Leave unset to report nothing — the reporter is inert unless both this and telemetry_client_id are set."
+}
+
+variable "telemetry_client_id" {
+  type        = string
+  default     = null
+  description = "Service-account client id the install reports as (from the install bundle). Required with telemetry_url; reporting stays off unless both are present."
+}
+
+variable "telemetry_client_secret" {
+  type        = string
+  default     = null
+  sensitive   = true
+  description = "That service account's secret (from the install bundle). Travels as a Container App secret, never plain environment."
+}
+
 variable "license_token" {
   type        = string
   default     = null
