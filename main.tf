@@ -225,8 +225,23 @@ resource "azurerm_postgresql_flexible_server" "this" {
   tags = local.tags
 
   lifecycle {
-    # Azure may rebalance the server across zones; never let a plan try to move it back.
-    ignore_changes = [zone]
+    # Both of these are ASSIGNED BY AZURE at creation and absent from this configuration, so
+    # without ignoring them every later plan proposes setting them to null — and Azure refuses:
+    #
+    #   Error: an existing `high_availability.0.standby_availability_zone` can only be changed
+    #   when exchanged with the zone specified in `zone`
+    #
+    # `zone` was already ignored here. `standby_availability_zone` was not, and it is inside the
+    # dynamic high_availability block, which is why it was easy to miss — a ZoneRedundant server
+    # gets a standby zone whether or not the configuration mentions one.
+    #
+    # The consequence was total: the FIRST apply succeeds, and every apply after it fails. The
+    # documented production bring-up is two applies, so a customer could not even finish the
+    # install, let alone upgrade. Found on the first production rehearsal, 2026-09-01.
+    ignore_changes = [
+      zone,
+      high_availability[0].standby_availability_zone,
+    ]
   }
 }
 
