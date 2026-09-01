@@ -1,0 +1,53 @@
+# CI for the public module: formatting, validation, and mock-provider tests. No cloud
+# access and no secrets — `terraform test` runs entirely against mock providers, so this
+# is safe to run on pull requests from forks, which is the point of a public repo.
+#
+# This repo carries no deployment. Everything Masterly deploys with the module lives
+# elsewhere; what is gated here is the artifact customers consume at a version tag.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # At or above the module's required_version (>= 1.10) — cross-resource
+          # preconditions and the test framework both depend on it.
+          terraform_version: 1.10.5
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      - name: Validate the module (root)
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      # The example is what a customer copies, so a broken one is a customer-facing
+      # defect. It reads the licence JWK from a file the bundle supplies, which a bare
+      # checkout does not have — so CI writes a throwaway public key to validate the
+      # example's STRUCTURE. Deliberately not committed: a fake key sitting in a public
+      # repo next to a real one is a worse trap than the one this closes.
+      - name: Validate the production example
+        run: |
+          printf '{"kty":"EC","crv":"P-256","x":"AAAA","y":"AAAA","kid":"ci-placeholder"}' \
+            > examples/production/license-issuer.jwk.json
+          terraform -chdir=examples/production init -backend=false -input=false
+          terraform -chdir=examples/production validate
+          rm -f examples/production/license-issuer.jwk.json
+
+      - name: Test the module (mock providers — guards, residency, conditional branches)
+        run: terraform test

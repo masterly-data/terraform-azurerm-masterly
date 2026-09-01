@@ -119,7 +119,9 @@ variable "location_geo" {
   description = "The Masterly geo (eu | us) whose data-residency commitment the Azure `location` satisfies. Leave unset for the locations this module knows. Set it for a location it does not — notably the UK and Switzerland, which are not in the EU and whose suitability for an \"eu\" commitment is a legal question this module refuses to answer by omission."
 
   validation {
-    condition     = var.location_geo == null || contains(["eu", "us"], var.location_geo)
+    # `||` does not short-circuit in Terraform — both operands evaluate, so contains()
+    # is handed the null and throws. A conditional evaluates only the branch it takes.
+    condition     = var.location_geo == null ? true : contains(["eu", "us"], var.location_geo)
     error_message = "location_geo must be \"eu\" or \"us\"."
   }
 }
