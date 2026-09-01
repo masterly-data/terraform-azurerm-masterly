@@ -109,8 +109,19 @@ variable "install_id" {
 
 variable "allowed_regions" {
   type        = list(string)
-  default     = ["eu", "us"]
-  description = "Data-residency geos in which Environments may be created in this Install (ADR 0031/0039) — wired as MASTERLY_ALLOWED_REGIONS and enforced by the app at Environment creation. Region is pinned per Environment and immutable; narrow to this install's geo (e.g. [\"eu\"])."
+  default     = null
+  description = "Data-residency geos in which Environments may be created in this Install (ADR 0031/0039) — wired as MASTERLY_ALLOWED_REGIONS and enforced by the app at Environment creation. Region is pinned per Environment and immutable. Leave unset: it defaults to this install's own geo, which is the only geo whose data a single data plane can hold. Setting any other geo is refused at plan."
+}
+
+variable "location_geo" {
+  type        = string
+  default     = null
+  description = "The Masterly geo (eu | us) whose data-residency commitment the Azure `location` satisfies. Leave unset for the locations this module knows. Set it for a location it does not — notably the UK and Switzerland, which are not in the EU and whose suitability for an \"eu\" commitment is a legal question this module refuses to answer by omission."
+
+  validation {
+    condition     = var.location_geo == null || contains(["eu", "us"], var.location_geo)
+    error_message = "location_geo must be \"eu\" or \"us\"."
+  }
 }
 
 variable "api_image" {
