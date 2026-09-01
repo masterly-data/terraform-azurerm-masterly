@@ -1,5 +1,5 @@
 # Inputs of the Masterly self-hosted install module (Layer 5).
-# Consumed as: source = "github.com/masterly-data/terraform-azurerm-masterly?ref=vX.Y.Z"
+# Consumed as: source = "masterly-data/masterly/azurerm", version = "~> X.Y"
 
 variable "name_prefix" {
   type        = string

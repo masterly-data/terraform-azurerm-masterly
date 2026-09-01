@@ -6,11 +6,19 @@ Apps (the same images every deployment model runs), and the data plane — eithe
 (BYO-DB) or a provisioned starter server, on which the api creates one database per Masterly
 Environment at first touch.
 
-Consume it at a **semver tag**, never a branch:
+Published on the [Terraform Registry](https://registry.terraform.io/modules/masterly-data/masterly/azurerm):
 
 ```hcl
-source = "github.com/masterly-data/terraform-azurerm-masterly?ref=v0.8.0"
+module "masterly" {
+  source  = "masterly-data/masterly/azurerm"
+  version = "~> 0.8"
+}
 ```
+
+Pin a version — `~> 0.8` takes patches, `= 0.8.0` pins exactly. Sourcing straight from
+GitHub also works (`github.com/masterly-data/terraform-azurerm-masterly?ref=v0.8.0`) and is
+what air-gapped mirrors do, but the registry gives you version constraints and needs no
+`git` on the runner.
 
 No credential is needed to fetch this module. Running Masterly does need two things it does not
 contain: the **container images**, pulled with the registry credential in your install bundle, and
@@ -25,7 +33,8 @@ there; this README documents the module surface.
 
 ```hcl
 module "masterly" {
-  source = "github.com/masterly-data/terraform-azurerm-masterly?ref=v0.8.0"
+  source  = "masterly-data/masterly/azurerm"
+  version = "~> 0.8"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.

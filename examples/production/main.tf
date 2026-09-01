@@ -21,9 +21,10 @@ provider "azurerm" {
 
 module "masterly" {
   # Sourced relatively so this example is testable in-repo. Copying it into your own
-  # install repository? Use the public module at a pinned tag, never a branch:
+  # install repository? Use the registry, and pin a version:
   #
-  #   source = "github.com/masterly-data/terraform-azurerm-masterly?ref=v0.8.0"
+  #   source  = "masterly-data/masterly/azurerm"
+  #   version = "~> 0.8"
   source = "../../"
 
   mode = "production"
