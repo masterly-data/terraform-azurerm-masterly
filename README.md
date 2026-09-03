@@ -11,12 +11,12 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.8"
+  version = "~> 0.11"
 }
 ```
 
-Pin a version — `~> 0.8` takes patches, `= 0.8.0` pins exactly. Sourcing straight from
-GitHub also works (`github.com/masterly-data/terraform-azurerm-masterly?ref=v0.8.0`) and is
+Pin a version — `~> 0.11` takes patches, `= 0.11.0` pins exactly. Sourcing straight from
+GitHub also works (`github.com/masterly-data/terraform-azurerm-masterly?ref=v0.11.0`) and is
 what air-gapped mirrors do, but the registry gives you version constraints and needs no
 `git` on the runner.
 
@@ -48,7 +48,7 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.8"
+  version = "~> 0.11"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -62,8 +62,12 @@ module "masterly" {
   # the only geo a single data plane can hold. The module refuses at plan an install whose
   # declared geo contradicts its Azure location, or that permits a geo it cannot honour.
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
-  api_image           = "masterly.azurecr.io/api:v0.132.2"      # v0.132.2 is the floor: below it ca-workers
-  frontend_image      = "masterly.azurecr.io/frontend:v0.137.0" # registers no job handlers, silently
+  # The pair each release names in What's new (masterlydata.com/docs/whats-new). Floors:
+  # api v0.132.2 (below it ca-workers registers no job handlers, silently) and frontend
+  # v0.138.2 (below it a fresh install cannot create its first Environment). api v0.133.1
+  # has no published image — pin v0.133.2.
+  api_image           = "masterly.azurecr.io/api:v0.133.2"
+  frontend_image      = "masterly.azurecr.io/frontend:v0.138.2"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -93,6 +97,13 @@ module "masterly" {
   # License (ADR 0013): from your install bundle.
   license_token      = var.license_token # from your secret store
   license_public_jwk = file("license-issuer.jwk.json")
+
+  # Fleet telemetry (optional, from the same bundle): usage ledger + an install snapshot
+  # (version, health, counts) to Masterly's control plane. Leave all three unset to report
+  # nothing; set them together — a partial set is refused at plan. Never billing input.
+  # telemetry_url           = "<control-plane URL from your install bundle>"
+  # telemetry_client_id     = var.telemetry_client_id
+  # telemetry_client_secret = var.telemetry_client_secret # from your secret store
 
   # BYO-DB (ADR 0065): your own Postgres. Omit to provision the starter server instead.
   external_database_url = var.masterly_database_url # from your secret store

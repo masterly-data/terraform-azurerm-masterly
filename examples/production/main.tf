@@ -24,7 +24,7 @@ module "masterly" {
   # install repository? Use the registry, and pin a version:
   #
   #   source  = "masterly-data/masterly/azurerm"
-  #   version = "~> 0.8"
+  #   version = "~> 0.11"
   source = "../../"
 
   mode = "production"
