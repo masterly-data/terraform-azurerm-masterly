@@ -1525,3 +1525,69 @@ run "telemetry_without_secret_is_rejected" {
 
   expect_failures = [azurerm_resource_group.aca]
 }
+
+# --- The api's ingress: internal by default, opt-out, never unrestricted --------------------
+# The published Python SDK talks to the api directly (bearer token to /v1), not through the
+# frontend's BFF — which proxies /api/proxy/... with session cookies and short-circuits
+# unauthenticated requests without forwarding. While the api was hardcoded internal, no
+# self-hosted install could be reached by the SDK we publish and document.
+
+run "the_api_is_internal_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = module.api.ingress_external == false
+    error_message = "The api must stay internal unless asked for: it sits behind the BFF."
+  }
+}
+
+run "api_ingress_can_be_opted_into_and_is_narrowed" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_ingress_external  = true
+  }
+
+  assert {
+    condition     = module.api.ingress_external == true
+    error_message = "api_ingress_external must reach the api app."
+  }
+
+  # The flag being set proves nothing about who can reach it. Until this assertion existed,
+  # removing the allowlist from the api entirely still passed every test in this file.
+  assert {
+    condition     = module.api.ingress_allowed_ip_ranges == ["203.0.113.7/32"]
+    error_message = "An externally-exposed api must carry the same allowlist the frontend does."
+  }
+
+  assert {
+    condition     = module.frontend.ingress_allowed_ip_ranges == ["203.0.113.7/32"]
+    error_message = "The frontend allowlist must be unaffected by the api opting in."
+  }
+}
+
+# Guard: exposing /v1 to the whole internet as the price of SDK access would be a worse
+# problem than the one being solved. Empty means UNRESTRICTED in Azure, not deny-all.
+run "external_api_without_an_allowlist_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = []
+    api_ingress_external  = true
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}

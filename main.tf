@@ -130,6 +130,11 @@ resource "azurerm_resource_group" "aca" {
     }
 
     precondition {
+      condition     = !var.api_ingress_external || length(var.ingress_allowed_cidrs) > 0
+      error_message = "api_ingress_external = true with an empty ingress_allowed_cidrs would publish /v1 to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. The api holds no session of its own — it trusts a bearer token — so it is the surface least able to survive being open. Name the CIDRs that may reach it."
+    }
+
+    precondition {
       condition     = (var.telemetry_url == null) == (var.telemetry_client_id == null)
       error_message = "telemetry_url and telemetry_client_id go together: the application gates reporting on BOTH, so setting one alone produces an install that looks configured and reports nothing. Set both, or neither."
     }
@@ -578,9 +583,28 @@ module "api" {
   registry_username             = var.registry_username
   registry_password_secret_name = var.registry_username != null ? "registry-password" : null
 
-  ingress_external       = false
+  # Internal by default: the api sits behind the frontend's BFF and nothing outside the
+  # environment needs it. Opt out when something must call /v1 directly — the published
+  # Python SDK talks to the api, not through the BFF (the BFF proxies /api/proxy/... with
+  # session COOKIES and short-circuits unauthenticated requests without forwarding, so it is
+  # not a substitute for a bearer-token client). Until this input existed, an install could
+  # not be reached by the SDK we publish and document.
+  ingress_external       = var.api_ingress_external
   ingress_target_port    = 8001
   ingress_allow_insecure = true # in-environment hop; TLS hardening with VNet later
+
+  # The SAME allowlist the frontend gets. Until api_ingress_external existed this list was
+  # frontend-only, which was fine while the api was unreachable — exposing it without also
+  # narrowing it would have shipped a wide-open /v1 as the price of SDK access, which is a
+  # worse problem than the one being solved. Empty stays UNRESTRICTED (Azure's semantics),
+  # so a plan-time guard below refuses external api ingress with an empty list.
+  ingress_allowed_ip_security_restrictions = var.api_ingress_external ? [
+    for index, cidr in var.ingress_allowed_cidrs : {
+      name             = "allow-${index}"
+      ip_address_range = cidr
+      action           = "Allow"
+    }
+  ] : []
 
   # Defaults to a single replica: with the in-memory session registry a second replica
   # would drop sessions mid-flight. api_max_replicas > 1 requires enable_redis

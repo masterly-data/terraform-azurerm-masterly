@@ -1,19 +1,19 @@
-# Terraform
-.terraform/
-.terraform.lock.hcl
-*.tfstate
-*.tfstate.*
-*.tfplan
-tfplan
-crash.log
 
 # Local variable files. NO un-ignore exception here on purpose: this repo carries no
-# deployments, and a rule un-ignoring deployments/**/terraform.tfvars would follow anyone
-# who copies this file into their own install repo — where that is exactly the directory
-# they would put a tfvars holding a licence JWT and an OIDC client secret.
-*.tfvars
-
 # OS / editor
+# Terraform
+# deployments, and a rule un-ignoring deployments/**/terraform.tfvars would follow anyone
+# they would put a tfvars holding a licence JWT and an OIDC client secret.
+# who copies this file into their own install repo — where that is exactly the directory
+*.tfplan
+*.tfstate
+*.tfstate.*
+*.tfvars
 .DS_Store
+.claude/worktrees/
 .idea/
+.terraform.lock.hcl
+.terraform/
 .vscode/
+crash.log
+tfplan
