@@ -478,6 +478,12 @@ variable "private_endpoints_subnet_id" {
   description = "Subnet for the Postgres, Key Vault, and Redis private endpoints when joining an existing network. Required with aca_subnet_id, and must have private endpoint network policies disabled. Must not be the ACA subnet: a delegated subnet cannot hold private endpoints."
 }
 
+variable "api_ingress_external" {
+  type        = bool
+  default     = false
+  description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session. Set true only when something outside the environment must call /v1 directly — the Python SDK, a customer's own pipeline, an integration — and narrow it with ingress_allowed_cidrs, which is applied to the api whenever this is true — an empty list is refused at plan, because empty means unrestricted in Azure. On an internal environment (aca_internal_load_balancer) `external` still means \"reachable from the VNet\", not from the internet."
+}
+
 variable "frontend_ingress_external" {
   type        = bool
   default     = true

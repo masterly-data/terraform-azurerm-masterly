@@ -38,3 +38,20 @@ output "readiness_probe" {
   }
   description = "The readiness gate as configured, or null when the app has none. A null tolerance means Azure's default applies."
 }
+
+output "ingress_external" {
+  # Whether this app answers beyond the Container App Environment. A root that reasons about
+  # who can reach an app — or a test that pins it — cannot read it off the resource, because
+  # `ingress` is a dynamic block that is absent entirely on an app with no ingress.
+  value       = var.ingress_enabled ? var.ingress_external : false
+  description = "Whether the app has ingress beyond the environment. False when it has no ingress at all."
+}
+
+output "ingress_allowed_ip_ranges" {
+  # The CIDRs actually applied to this app's ingress. Exposed so a caller can PIN the
+  # allowlist rather than the intent: asserting that a flag is set proves nothing about
+  # whether the restrictions reached the app, and an empty list on an external app means
+  # unrestricted in Azure.
+  value       = [for r in var.ingress_allowed_ip_security_restrictions : r.ip_address_range]
+  description = "CIDRs allowed to reach this app's ingress. Empty means unrestricted when the app is external."
+}
