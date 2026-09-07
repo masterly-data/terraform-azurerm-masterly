@@ -60,7 +60,8 @@ module "workers" {
   # The full api env contract: build_services in the workers process reads the same
   # settings (identity, license, bus, secret store, redis) as the api.
   env             = local.api_env
-  secrets         = local.api_secrets
+  secrets         = local.api_value_secrets
+  secret_refs     = local.api_vault_secret_refs
   env_secret_refs = local.api_env_secret_refs
 
   tags = local.tags

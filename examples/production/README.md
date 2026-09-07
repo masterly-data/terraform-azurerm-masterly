@@ -17,6 +17,11 @@ somewhere else). From your own directory: an app registration for Masterly's sig
 `mode = "production"` is gated at **plan** time. If any of it is missing, Terraform
 refuses before touching Azure and names what is absent.
 
+One of those gates is easy to miss because it is about *you*, not the install: production
+runs the Key Vault private-endpoint-only, and Terraform has to write the install's secrets
+into it. Set `key_vault_deployer_ip_rules` to the egress address of whatever runs the apply,
+or `key_vault_deployer_in_vnet = true` if that already runs inside the VNet.
+
 ## Two applies, not one
 
 Without a custom domain the frontend hostname is an **output** of the first apply, so it
@@ -42,7 +47,9 @@ export TF_VAR_oidc_client_secret='...'
 
 `*.tfvars` is gitignored in this repository on purpose. Note also that **Terraform state
 holds every one of these in plaintext** — treat the state backend as a secrets store:
-Entra-only auth, versioning on, RBAC scoped to the principal that deploys.
+Entra-only auth, versioning on, RBAC scoped to the principal that deploys. The Key Vault
+above narrows who can read these at *runtime*; it does not change what is in state, because
+Terraform is the thing writing them.
 
 ## Reading the plan
 

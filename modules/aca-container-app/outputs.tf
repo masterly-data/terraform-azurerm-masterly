@@ -73,3 +73,25 @@ output "ingress_allow_insecure" {
   value       = var.ingress_enabled ? var.ingress_allow_insecure : false
   description = "Whether the app serves plain HTTP instead of redirecting to HTTPS. False when it has no ingress at all."
 }
+
+# Secret POSTURE, never material — the same reason env_names exists. A test cannot read the
+# `secret` blocks off the resource (they are dynamic, and the value-based ones are marked), so
+# without these two the difference between "this app resolves its secrets from the vault" and
+# "this app carries them in clear where any Contributor can list them" is unassertable.
+output "value_secret_names" {
+  value       = local.value_secret_names
+  description = "Names of the VALUE-based Container App secrets — the material is stored in the app itself and is readable by any principal with containerApps/listSecrets. Empty is the hardened posture."
+}
+
+output "vault_backed_secret_names" {
+  value       = sort(keys(var.secret_refs))
+  description = "Names of the Container App secrets that hold a Key Vault reference rather than a value."
+}
+
+# Which identity each vault reference is resolved with. ACA reads a reference with the identity
+# named on the SECRET, not merely one the app happens to carry, so this is the difference
+# between an app that starts and one whose revision never provisions.
+output "secret_ref_identity_ids" {
+  value       = distinct(sort([for r in values(var.secret_refs) : r.identity_id]))
+  description = "Distinct user-assigned identity resource IDs used to resolve this app's Key Vault references."
+}

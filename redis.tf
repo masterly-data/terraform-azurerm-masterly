@@ -343,10 +343,11 @@ locals {
   # Azure Cache for Redis: rediss:// on the fixed TLS port 6380.
   legacy_redis_url = local.use_legacy_redis ? "rediss://:${azurerm_redis_cache.this[0].primary_access_key}@${azurerm_redis_cache.this[0].hostname}:6380/0" : ""
 
-  # The URL embeds the access key -> Container App secret, never plain env.
-  redis_secrets = local.redis_enabled ? {
-    "redis-url" = local.use_managed_redis ? local.managed_redis_url : local.legacy_redis_url
-  } : {}
+  # The URL embeds the access key -> app secret (Key Vault-backed when the vault is on),
+  # never plain env. Empty when Redis is disabled; the name below is what gates it.
+  redis_url = local.use_managed_redis ? local.managed_redis_url : local.legacy_redis_url
+
+  redis_secret_names = local.redis_enabled ? ["redis-url"] : []
 
   redis_secret_refs = local.redis_enabled ? {
     MASTERLY_REDIS_URL = "redis-url"
@@ -357,7 +358,7 @@ locals {
 # the aca-container-app module's env_names output: it exists so the module's posture is
 # assertable in `terraform test`, and a value here would put a credential into state and test
 # output. Without it the wiring is unobservable: every resource-shaped assertion still passes if
-# the offering ternary in redis_secrets is inverted, because both branches are well-formed —
+# the offering ternary in redis_url is inverted, because both branches are well-formed —
 # the managed path just silently resolves to the legacy path's empty string, and the install
 # ships an empty redis-url secret with MASTERLY_SESSION_REGISTRY = "redis" set.
 # nonsensitive() is deliberate and narrow: the URL embeds an access key, so Terraform refuses an
@@ -365,7 +366,7 @@ locals {
 # nothing about the key. Wrapping the comparison rather than the value keeps the credential out
 # of state and out of test output while making the wiring assertable.
 output "redis_url_wired" {
-  value       = local.redis_enabled ? nonsensitive(local.redis_secrets["redis-url"] != "") : null
+  value       = local.redis_enabled ? nonsensitive(local.redis_url != "") : null
   description = "True when Redis is enabled and its connection URL resolved to a non-empty value. Null when the in-memory registry is used. Never the URL itself, which embeds an access key."
 }
 

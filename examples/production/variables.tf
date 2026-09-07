@@ -103,6 +103,18 @@ variable "external_database_url" {
   description = "Your own Postgres (BYO-DB). The role needs CREATEDB. Null provisions the module's starter server instead."
 }
 
+variable "key_vault_deployer_ip_rules" {
+  type        = list(string)
+  default     = []
+  description = "Public IPv4 address(es) of the machine or runner that applies this — production runs the vault private-endpoint-only, and Terraform still has to write the install's secrets into it. Leave empty only if you apply from INSIDE the install's VNet, and then set key_vault_deployer_in_vnet. Key Vault rejects /31 and /32: give a single address bare (203.0.113.7)."
+}
+
+variable "key_vault_deployer_in_vnet" {
+  type        = bool
+  default     = false
+  description = "True when the apply runs inside the install's VNet (self-hosted runner, jumpbox, VPN), so the vault needs no firewall exception at all. Exactly one of this and key_vault_deployer_ip_rules must be set in production."
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}
