@@ -404,7 +404,9 @@ Seeding those secrets is a Key Vault **data-plane** write, and it needs two thin
 Owner on the subscription does not give you:
 
 1. **A data-plane grant.** The module grants **Key Vault Secrets Officer** on the install
-   vault to the identity running the apply. If **plan and apply run as different service
+   vault to the identity running the apply. (It also grants the *frontend's* identity **Key
+   Vault Secrets User** — read only — when that app carries a secret of its own, because it
+   resolves its own references and runs as `id-<prefix>-frontend`, not the backend identity.) If **plan and apply run as different service
    principals** — a common CI shape, and the one Masterly runs — pin them instead:
    `key_vault_secret_operator_object_ids` for the apply identity, and
    `key_vault_secret_reader_object_ids` (Secrets User) for the planning one, which needs read

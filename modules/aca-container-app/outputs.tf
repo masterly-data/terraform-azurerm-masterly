@@ -87,3 +87,11 @@ output "vault_backed_secret_names" {
   value       = sort(keys(var.secret_refs))
   description = "Names of the Container App secrets that hold a Key Vault reference rather than a value."
 }
+
+# Which identity each vault reference is resolved with. ACA reads a reference with the identity
+# named on the SECRET, not merely one the app happens to carry, so this is the difference
+# between an app that starts and one whose revision never provisions.
+output "secret_ref_identity_ids" {
+  value       = distinct(sort([for r in values(var.secret_refs) : r.identity_id]))
+  description = "Distinct user-assigned identity resource IDs used to resolve this app's Key Vault references."
+}

@@ -505,6 +505,79 @@ run "key_vault_enabled_provisions_vault_and_grant" {
   }
 }
 
+# When the frontend DOES carry secrets, it resolves them itself — so it needs data-plane read
+# on the vault, and that is the one grant the split admits. It must be the NARROWEST one: the
+# frontend never writes sealed material, and it is the app an attacker reaches first. Pinning
+# the role name is the whole point — Secrets Officer would resolve the secrets just as well and
+# hand the public front door write access to every credential the install holds.
+run "the_frontend_reads_its_own_secrets_and_only_reads" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_key_vault      = true
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    registry_username     = "install-puller"
+    registry_password     = "pull-secret"
+  }
+
+  override_module {
+    target = module.apps_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
+      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-apps"
+    }
+  }
+
+  override_module {
+    target = module.frontend_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"
+      principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      client_id    = "ffffffff-ffff-ffff-ffff-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-frontend"
+    }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.kv_secrets_user_frontend) == 1 &&
+      azurerm_role_assignment.kv_secrets_user_frontend[0].role_definition_name == "Key Vault Secrets User" &&
+      azurerm_role_assignment.kv_secrets_user_frontend[0].principal_id == module.frontend_identity.principal_id
+    )
+    error_message = "A frontend carrying vault-backed secrets must get Key Vault Secrets User on its own identity — read, and nothing more."
+  }
+
+  # The Officer grant stays where it was: on the backend apps, never on the public one.
+  assert {
+    condition     = azurerm_role_assignment.kv_secrets_officer[0].principal_id == module.apps_identity.principal_id
+    error_message = "Key Vault Secrets Officer must never reach the frontend's identity."
+  }
+
+  # And the references name the identity that actually holds the grant. ACA resolves a vault
+  # reference with the identity named ON THE SECRET, so a reference pointing at the backend's
+  # identity fails to resolve on an app that does not carry it — the app then never starts,
+  # and with the registry password among those secrets it cannot even pull.
+  assert {
+    condition = (
+      module.frontend.secret_ref_identity_ids == tolist([module.frontend_identity.id]) &&
+      module.api.secret_ref_identity_ids == tolist([module.apps_identity.id])
+    )
+    error_message = "Each app's Key Vault references must name the identity that app runs as."
+  }
+}
+
 # --- The install's secrets live in the vault, not in the apps (finding S2) -----------------
 # A value-based Container App secret is readable in clear by anything holding
 # containerApps/listSecrets, which plain Contributor on the resource group has. With the vault
@@ -1043,15 +1116,18 @@ run "no_data_plane_grant_reaches_the_frontend" {
     error_message = "Key Vault, Service Bus and ACS grants must go to the backend apps' identity."
   }
 
-  # The point of the split: none of those reach the public app's identity.
+  # The point of the split: none of those reach the public app's identity. This run has the
+  # frontend carrying no secret of its own (dev binding, no registry credential), so the
+  # vault read grant is not created either — image pull really is the whole of it here.
   assert {
     condition = (
       azurerm_role_assignment.kv_secrets_officer[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_sender[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_receiver[0].principal_id != module.frontend_identity.principal_id &&
-      azurerm_role_assignment.acs_email_sender[0].principal_id != module.frontend_identity.principal_id
+      azurerm_role_assignment.acs_email_sender[0].principal_id != module.frontend_identity.principal_id &&
+      length(azurerm_role_assignment.kv_secrets_user_frontend) == 0
     )
-    error_message = "No data-plane grant may reach the frontend's identity — image pull is the whole of it."
+    error_message = "No data-plane grant may reach the frontend's identity when it has no secret to resolve."
   }
 
   assert {

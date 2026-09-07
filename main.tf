@@ -863,9 +863,13 @@ module "frontend" {
 
   tags = local.tags
 
-  # The grant must land before the first pull. Nothing else orders them: the app depends on
-  # the identity, not on the role assignment on it, so on a first apply terraform is free to
+  # The grants must land before the first pull. Nothing else orders them: the app depends on
+  # the identity, not on the role assignments on it, so on a first apply terraform is free to
   # create the revision while AcrPull is still in flight — and a revision that cannot pull
-  # fails to provision.
-  depends_on = [azurerm_role_assignment.acr_pull_frontend]
+  # fails to provision. With the vault on, the same is true of the secret read: the registry
+  # password is itself a vault reference, so an unresolvable secret is an unpullable image.
+  depends_on = [
+    azurerm_role_assignment.acr_pull_frontend,
+    azurerm_role_assignment.kv_secrets_user_frontend,
+  ]
 }

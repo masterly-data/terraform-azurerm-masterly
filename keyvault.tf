@@ -297,6 +297,19 @@ resource "azurerm_role_assignment" "kv_secrets_officer_deployer" {
   principal_id         = each.key
 }
 
+# The frontend resolves its own secrets (the OIDC client secret, the registry password), so its
+# identity needs data-plane READ on the vault — and only that. Deliberately Secrets User, not
+# the Officer grant the backend apps hold: the frontend never writes sealed material, and it is
+# the app an attacker reaches first. Only created when the frontend actually has a secret to
+# resolve, so an install with neither oidc nor a registry credential grants nothing.
+resource "azurerm_role_assignment" "kv_secrets_user_frontend" {
+  count = var.enable_key_vault && length(local.frontend_secret_names) > 0 ? 1 : 0
+
+  scope                = azurerm_key_vault.this[0].id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.frontend_identity.principal_id
+}
+
 # Read-only data-plane for a separate planning identity: `plan` refreshes the secrets above.
 resource "azurerm_role_assignment" "kv_secrets_reader" {
   for_each = var.enable_key_vault ? toset(var.key_vault_secret_reader_object_ids) : toset([])
@@ -322,10 +335,13 @@ locals {
     }
   } : {}
 
+  # The FRONTEND's own identity, not the backend's. It carries AcrPull and nothing else by
+  # design — it is the one internet-facing app — so it gets the narrowest thing that lets it
+  # resolve its two secrets: Key Vault Secrets User (read), never Officer.
   frontend_vault_secret_refs = var.enable_key_vault ? {
     for name in local.frontend_secret_names : name => {
       kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id
-      identity_id  = module.apps_identity.id
+      identity_id  = module.frontend_identity.id
     }
   } : {}
 }
