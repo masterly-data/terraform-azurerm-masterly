@@ -292,7 +292,13 @@ module "aca_env" {
   tags                           = local.tags
 }
 
-# --- Image-pull identity ---------------------------------------------------------
+# --- App identities --------------------------------------------------------------
+# One identity per app is the platform's rule, and the reason is the frontend: it is the
+# only internet-facing app in the install, and it needs nothing but image pull. Sharing
+# `apps_identity` with it handed the public front door Key Vault Secrets Officer, Service
+# Bus send + receive and ACS Email Owner — permissions it never uses, on the one app an
+# attacker reaches first. So the backend apps (api, workers) keep `apps_identity` and the
+# data-plane grants that go with it; the frontend gets its own, holding AcrPull alone.
 
 module "apps_identity" {
   source = "./modules/user-assigned-identity"
@@ -303,16 +309,38 @@ module "apps_identity" {
   tags                = local.tags
 }
 
+# The frontend's own identity. Image pull is the whole of it — no Key Vault, no Service Bus,
+# no ACS. Nothing here grows without a reason to give the public app that reach.
+module "frontend_identity" {
+  source = "./modules/user-assigned-identity"
+
+  name                = "id-${var.name_prefix}-frontend"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  tags                = local.tags
+}
+
 # Optional: grant pull on the registry (the deploying principal needs
 # roleAssignments/write on the registry's scope — true for the demo install, where
 # platform-iac's principal manages the shared registry; customers typically grant
 # pull out of band and leave acr_id null).
+#
+# BOTH identities need the grant when acr_id is null and you grant out of band — see the
+# `apps_identity_principal_id` / `frontend_identity_principal_id` outputs.
 resource "azurerm_role_assignment" "acr_pull" {
   count = var.acr_id != null ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"
   principal_id         = module.apps_identity.principal_id
+}
+
+resource "azurerm_role_assignment" "acr_pull_frontend" {
+  count = var.acr_id != null ? 1 : 0
+
+  scope                = var.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = module.frontend_identity.principal_id
 }
 
 # --- Data plane: the starter Postgres Flexible Server (skipped on BYO-DB) --------
@@ -677,7 +705,7 @@ module "frontend" {
   image               = var.frontend_image
 
   acr_login_server           = var.acr_login_server
-  user_assigned_identity_ids = [module.apps_identity.id]
+  user_assigned_identity_ids = [module.frontend_identity.id]
 
   registry_username             = var.registry_username
   registry_password_secret_name = var.registry_username != null ? "registry-password" : null
@@ -779,4 +807,10 @@ module "frontend" {
   readiness_probe_success_count_threshold = 1
 
   tags = local.tags
+
+  # The grant must land before the first pull. Nothing else orders them: the app depends on
+  # the identity, not on the role assignment on it, so on a first apply terraform is free to
+  # create the revision while AcrPull is still in flight — and a revision that cannot pull
+  # fails to provision.
+  depends_on = [azurerm_role_assignment.acr_pull_frontend]
 }

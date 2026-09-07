@@ -55,3 +55,12 @@ output "ingress_allowed_ip_ranges" {
   value       = [for r in var.ingress_allowed_ip_security_restrictions : r.ip_address_range]
   description = "CIDRs allowed to reach this app's ingress. Empty means unrestricted when the app is external."
 }
+
+output "user_assigned_identity_ids" {
+  # The identities actually attached to this app. Same reason as env_names and
+  # ingress_external: which identity an app runs as is a security posture a test must be
+  # able to pin, and it cannot be read off the resource — `identity` is a dynamic block
+  # that is absent entirely on an app with none.
+  value       = var.user_assigned_identity_ids
+  description = "User-assigned managed identity resource IDs attached to the app. Empty when the app has none."
+}

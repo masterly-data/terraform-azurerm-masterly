@@ -719,6 +719,119 @@ run "credential_registry_pull_plans" {
   }
 }
 
+# One identity per app, and the frontend is why. Every data-plane grant in the install —
+# Key Vault Secrets Officer, Service Bus send + receive, ACS Email Owner — belongs to the
+# BACKEND identity; the internet-facing frontend runs as its own, holding image pull alone.
+run "both_app_identities_keep_their_names" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+  }
+
+  # A rename REPLACES the identity, and with it the principal id customers grant AcrPull to
+  # out of band — so the names are contract, not cosmetics.
+  assert {
+    condition = (
+      module.apps_identity.name == "id-masterly-apps" &&
+      module.frontend_identity.name == "id-masterly-frontend"
+    )
+    error_message = "The app identity names must stay id-<prefix>-apps and id-<prefix>-frontend."
+  }
+
+  # Image pull is the one thing the frontend identity gets, so acr_id must grant BOTH
+  # principals or the frontend cannot pull at all.
+  assert {
+    condition     = length(azurerm_role_assignment.acr_pull) == 1 && length(azurerm_role_assignment.acr_pull_frontend) == 1
+    error_message = "acr_id must grant AcrPull to both app identities."
+  }
+}
+
+# The split itself. Identity ids and principal ids are computed, so at plan they are
+# unknown-vs-unknown and assert nothing; `override_module` pins both identities to known,
+# distinct values so the wiring is actually checkable. (apply is not an option — the mock
+# provider hands out ids that the azurerm provider then rejects as unparseable.)
+run "no_data_plane_grant_reaches_the_frontend" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    enable_key_vault      = true
+    enable_service_bus    = true
+    enable_workers        = true
+    email_acs_enabled     = true
+  }
+
+  override_module {
+    target = module.apps_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
+      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-apps"
+    }
+  }
+
+  override_module {
+    target = module.frontend_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"
+      principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      client_id    = "ffffffff-ffff-ffff-ffff-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-frontend"
+    }
+  }
+
+  assert {
+    condition = (
+      one(module.frontend.user_assigned_identity_ids) == module.frontend_identity.id &&
+      !contains(module.frontend.user_assigned_identity_ids, module.apps_identity.id)
+    )
+    error_message = "The frontend must run as its own identity, not the backend apps' identity."
+  }
+
+  assert {
+    condition = (
+      one(module.api.user_assigned_identity_ids) == module.apps_identity.id &&
+      one(module.workers[0].user_assigned_identity_ids) == module.apps_identity.id
+    )
+    error_message = "The api and workers must keep the backend apps' identity."
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.kv_secrets_officer[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.sb_sender[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.sb_receiver[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.acs_email_sender[0].principal_id == module.apps_identity.principal_id
+    )
+    error_message = "Key Vault, Service Bus and ACS grants must go to the backend apps' identity."
+  }
+
+  # The point of the split: none of those reach the public app's identity.
+  assert {
+    condition = (
+      azurerm_role_assignment.kv_secrets_officer[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.sb_sender[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.sb_receiver[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.acs_email_sender[0].principal_id != module.frontend_identity.principal_id
+    )
+    error_message = "No data-plane grant may reach the frontend's identity — image pull is the whole of it."
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.acr_pull[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.acr_pull_frontend[0].principal_id == module.frontend_identity.principal_id
+    )
+    error_message = "AcrPull must be granted to each identity separately."
+  }
+}
+
 # Guard: the credential pair must arrive whole.
 run "registry_password_without_username_is_rejected" {
   command = plan

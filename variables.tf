@@ -163,7 +163,7 @@ variable "registry_password" {
 variable "acr_id" {
   type        = string
   default     = null
-  description = "Resource ID of the registry, for the AcrPull role assignment on the install identity. Null skips the assignment (grant pull access out of band). The deploying principal needs roleAssignments/write on the registry's scope."
+  description = "Resource ID of the registry, for the AcrPull role assignments on the install's two app identities (backend apps + frontend). Null skips them (grant pull access to BOTH principals out of band). The deploying principal needs roleAssignments/write on the registry's scope."
 }
 
 variable "ingress_allowed_cidrs" {
