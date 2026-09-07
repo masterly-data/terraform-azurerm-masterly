@@ -1,0 +1,16 @@
+# Dependabot keeps the pinned action digests and the dependency manifests current.
+# Third-party actions in .github/workflows are pinned by commit SHA (a tag can be
+# moved; a SHA cannot), which makes them invisible to a human reading for staleness —
+# so the github-actions ecosystem below is what actually keeps them from rotting.
+version: 2
+updates:
+  - package-ecosystem: "terraform"
+    directories:
+      - "/**"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
