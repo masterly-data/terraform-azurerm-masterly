@@ -166,7 +166,7 @@ they bite, so confirm them before you plan.
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Service Bus send + receive, ACS Email Owner. Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull and nothing else: `ca-frontend` is the only internet-facing app and needs no data-plane access, so it does not carry the backend's grants |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
-| `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) live as Container App secrets |
+| `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) live as Container App secrets. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
 | Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
@@ -259,6 +259,42 @@ Landing-zone accommodations:
 > Upgrading from v0.1: `infrastructure_subnet_id` is create-time-only, so the apply
 > REPLACES the Container App Environment and the apps — their FQDNs change. The Postgres
 > server (and its data) is untouched.
+
+### Transport security
+
+Everything published by the install is HTTPS-only. `ca-frontend` always redirects `http://`
+to `https://`, and `ca-api` does the same **as soon as `api_ingress_external = true`** — a
+published api trusts a bearer token and nothing else, so serving it on port 80 would put
+the whole credential on the wire for anyone in the path. An IP allowlist bounds who can
+reach an endpoint; it says nothing about what a network in between can read.
+
+While the api stays internal (the default) it keeps serving plain HTTP, because the only
+thing calling it is the frontend's BFF at `http://ca-api` — an app-name address, which is
+the one form that cannot drift, and which no TLS certificate can match. That hop is not
+left in the clear: the Container Apps environment runs with **peer-to-peer encryption**
+on, so Azure encrypts traffic between apps inside the environment with certificates it
+manages and rotates. Applications keep speaking `http://` and the platform encrypts
+underneath — this is Azure's `peerTrafficConfiguration.encryption`, and it is what makes
+the internal `allowInsecure` acceptable rather than merely convenient.
+
+Verify it on a running install:
+
+```bash
+az containerapp env show -n aca-masterly -g rg-masterly-aca \
+  --query properties.peerTrafficConfiguration.encryption.enabled
+```
+
+Check it after an out-of-band change rather than relying on `terraform plan`: the provider
+writes both of Azure's peer settings from one input but refreshes state from only one of
+them, so a console or CLI change to peer-traffic encryption alone shows up as no drift.
+
+Microsoft notes that peer-to-peer encryption may add response latency and lower maximum
+throughput under high load. The module deliberately exposes no input to turn it off: the
+hop it protects is the one carrying every authenticated request in the install, and a knob
+that quietly trades that away is worth less than the throughput it buys back. If you
+measure a real problem, open an issue with the numbers rather than reaching for `az` — an
+out-of-band change to peer-traffic encryption is invisible to `terraform plan` (above),
+which makes it exactly the kind of setting that stops being true without anyone noticing.
 
 ## Scaling
 

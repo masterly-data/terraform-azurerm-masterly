@@ -1656,6 +1656,15 @@ run "the_api_is_internal_by_default" {
     condition     = module.api.ingress_external == false
     error_message = "The api must stay internal unless asked for: it sits behind the BFF."
   }
+
+  # Plain HTTP is deliberate while the api is unreachable from outside: the hop it serves is
+  # the BFF's http://ca-api, and https://ca-api cannot pass hostname verification against the
+  # environment's certificate. What keeps that hop off the wire in the clear is the
+  # environment's peer encryption, asserted below, not this flag.
+  assert {
+    condition     = module.api.ingress_allow_insecure == true
+    error_message = "An internal api must still serve the BFF's http:// hop."
+  }
 }
 
 run "api_ingress_can_be_opted_into_and_is_narrowed" {
@@ -1703,4 +1712,56 @@ run "external_api_without_an_allowlist_is_rejected" {
   }
 
   expect_failures = [azurerm_resource_group.aca]
+}
+
+
+# The finding this closes: `allow_insecure_connections` was hardcoded true, which was
+# defensible while the api was unreachable and stopped being defensible the moment
+# api_ingress_external existed. Port 80 answering without a redirect, for callers whose
+# whole credential is a bearer token, is what the allowlist does not cover.
+run "external_api_refuses_insecure" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_ingress_external  = true
+  }
+
+  assert {
+    condition     = module.api.ingress_allow_insecure == false
+    error_message = "A published api must redirect http:// to https://, not serve it."
+  }
+
+  # The frontend is published in every topology, so it never had a reason to allow insecure.
+  # Pinned anyway: this is the assertion that fails if someone widens the api's flip into a
+  # module-wide default in the wrong direction.
+  assert {
+    condition     = module.frontend.ingress_allow_insecure == false
+    error_message = "The frontend must redirect http:// to https://."
+  }
+}
+
+# The other half of the same finding. Flipping the api to HTTPS-only would push the plaintext
+# problem onto the in-environment hop if this were not on, because the BFF keeps calling
+# http://ca-api by app name — the one address that cannot drift and cannot be verified over
+# TLS by the client. Azure encrypts it below the application instead.
+run "the_environment_encrypts_peer_traffic" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = module.aca_env.mutual_tls_enabled == true
+    error_message = "Traffic between apps inside the environment must be encrypted."
+  }
+
+  # The BFF still addresses the api by app name, so it is still speaking http:// — which is
+  # only safe because of the assertion above. Pinned here rather than in a separate run so
+  # that deleting the encryption and keeping the address cannot pass quietly.
+  assert {
+    condition     = contains(module.frontend.env_names, "MASTERLY_API_BASE_URL")
+    error_message = "The BFF must be told where the api is."
+  }
 }
