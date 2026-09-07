@@ -557,21 +557,53 @@ locals {
     var.license_public_jwk != null ? { MASTERLY_LICENSE_PUBLIC_JWK = var.license_public_jwk } : {},
   )
 
-  # Credential-based image pull (ADR 0067): the SP secret rides as a Container App
-  # secret on every app that pulls.
-  registry_secrets = var.registry_username != null ? { "registry-password" = var.registry_password } : {}
+  # --- The install's secret material -----------------------------------------------
+  #
+  # Named first, valued second, and deliberately in that order: everything downstream —
+  # which app carries which secret, what gets written to the vault, what the plan shows —
+  # is driven by the NAME lists, which are plain strings. Deriving those lists from the
+  # value maps instead would make `for_each` and every precondition operate on a
+  # sensitive collection, which Terraform refuses outright.
+  #
+  # One catalogue of values, indexed only by a name that one of the lists below admits.
+  # Entries whose input is unset are simply never named (indexing an absent name is a
+  # plan-time error, which is the guard).
+  secret_values = {
+    "database-url"            = local.database_url
+    "session-secret"          = random_password.session_secret.result
+    "registry-password"       = var.registry_password
+    "redis-url"               = local.redis_url # embeds the access key (ADR 0066)
+    "license-token"           = var.license_token
+    "breakglass-secret-hash"  = var.breakglass_secret_hash
+    "telemetry-client-secret" = var.telemetry_client_secret
+    "oidc-client-secret"      = var.oidc_client_secret
+  }
 
-  api_secrets = merge(
-    {
-      "database-url"   = local.database_url
-      "session-secret" = random_password.session_secret.result
-    },
-    local.registry_secrets,
-    local.redis_secrets, # the Redis URL embeds the access key (ADR 0066)
-    var.license_token != null ? { "license-token" = var.license_token } : {},
-    var.breakglass_secret_hash != null ? { "breakglass-secret-hash" = var.breakglass_secret_hash } : {},
-    local.telemetry_configured ? { "telemetry-client-secret" = var.telemetry_client_secret } : {},
+  # Credential-based image pull (ADR 0067): the SP secret rides on every app that pulls.
+  registry_secret_names = var.registry_username != null ? ["registry-password"] : []
+
+  # nonsensitive() on the PRESENCE tests, not on any value: `var.license_token != null` is a
+  # bool derived from a sensitive variable, so Terraform marks it, and a marked list cannot
+  # drive for_each (the vault writes) or a precondition. Whether a licence was supplied is not
+  # the secret — the same narrow unmarking, for the same reason, as redis_url_wired.
+  api_secret_names = concat(
+    ["database-url", "session-secret"],
+    local.registry_secret_names,
+    local.redis_secret_names,
+    nonsensitive(var.license_token != null) ? ["license-token"] : [],
+    nonsensitive(var.breakglass_secret_hash != null) ? ["breakglass-secret-hash"] : [],
+    local.telemetry_configured ? ["telemetry-client-secret"] : [],
   )
+
+  # On oidc the frontend is the confidential BFF client: its client secret is used only
+  # server-side at token exchange.
+  frontend_secret_names = concat(
+    local.registry_secret_names,
+    var.identity_binding == "oidc" ? ["oidc-client-secret"] : [],
+  )
+
+  api_secrets      = { for name in local.api_secret_names : name => local.secret_values[name] }
+  frontend_secrets = { for name in local.frontend_secret_names : name => local.secret_values[name] }
 
   api_env_secret_refs = merge(
     {
@@ -660,7 +692,8 @@ module "api" {
   max_replicas = var.api_max_replicas
 
   env             = local.api_env
-  secrets         = local.api_secrets
+  secrets         = local.api_value_secrets
+  secret_refs     = local.api_vault_secret_refs
   env_secret_refs = local.api_env_secret_refs
 
   liveness_probe_path  = "/healthz"
@@ -742,8 +775,8 @@ module "frontend" {
   ]
 
   # On oidc the frontend is the confidential BFF client (authorization-code + PKCE): it
-  # gets the client config; the client secret rides as a Container App secret and is
-  # used only server-side at token exchange.
+  # gets the client config here; the client secret travels as a Container App secret
+  # (see frontend_secret_names above), never as plain env.
   env = merge(
     {
       # By SHORT APP NAME, not by FQDN. ACA resolves `http://<app-name>` for any app in the
@@ -785,10 +818,8 @@ module "frontend" {
     ) : {},
   )
 
-  secrets = merge(
-    local.registry_secrets,
-    var.identity_binding == "oidc" ? { "oidc-client-secret" = var.oidc_client_secret } : {},
-  )
+  secrets     = local.frontend_value_secrets
+  secret_refs = local.frontend_vault_secret_refs
 
   env_secret_refs = var.identity_binding == "oidc" ? {
     MASTERLY_OIDC_CLIENT_SECRET = "oidc-client-secret"

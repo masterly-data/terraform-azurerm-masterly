@@ -1,6 +1,14 @@
 # Vendored from masterly-platform-iac/modules/aca-container-app; SELF-HOSTED EXTENSIONS:
 # value-based secrets, env-from-secret references, HTTP probes.
 
+locals {
+  # Secret NAMES only. keys() of a sensitive map carries the mark, and a mark on a
+  # precondition condition or an output is an error — the names are not the material, so
+  # they are unmarked here once and reused.
+  value_secret_names = nonsensitive(keys(var.secrets))
+  secret_names       = concat(local.value_secret_names, keys(var.secret_refs))
+}
+
 resource "azurerm_container_app" "this" {
   name                         = var.name
   resource_group_name          = var.resource_group_name
@@ -34,6 +42,19 @@ resource "azurerm_container_app" "this" {
     content {
       name  = secret.key
       value = secret.value
+    }
+  }
+
+  # Key Vault-backed secrets: the app stores the reference and ACA resolves the value with
+  # `identity`. A caller passes a name through EITHER this map or var.secrets, never both —
+  # ACA has one secret namespace and a duplicate name is rejected at apply, so the
+  # precondition below refuses it at plan.
+  dynamic "secret" {
+    for_each = var.secret_refs
+    content {
+      name                = secret.key
+      identity            = secret.value.identity_id
+      key_vault_secret_id = secret.value.kv_secret_id
     }
   }
 
@@ -130,8 +151,23 @@ resource "azurerm_container_app" "this" {
     ignore_changes = [template[0].container[0].image, workload_profile_name]
 
     precondition {
-      condition     = alltrue([for s in keys(var.env_secret_refs) : contains(keys(var.secrets), var.env_secret_refs[s])])
-      error_message = "Every env_secret_refs value must name a key of var.secrets."
+      condition     = alltrue([for s in keys(var.env_secret_refs) : contains(local.secret_names, var.env_secret_refs[s])])
+      error_message = "Every env_secret_refs value must name a key of var.secrets or var.secret_refs."
+    }
+
+    # One namespace: ACA rejects two secrets with the same name, and a caller that moved a
+    # secret to the vault without removing the value-based copy would otherwise fail at apply
+    # with an Azure error that names neither map.
+    precondition {
+      condition     = length(setintersection(keys(var.secret_refs), local.value_secret_names)) == 0
+      error_message = "A secret name may appear in var.secrets or var.secret_refs, not both."
+    }
+
+    # Upstream parity: ACA resolves a vault reference with the named identity, which must be
+    # attached to the app.
+    precondition {
+      condition     = alltrue([for s in values(var.secret_refs) : contains(var.user_assigned_identity_ids, s.identity_id)])
+      error_message = "Every secret_refs[*].identity_id must be one of user_assigned_identity_ids."
     }
 
     precondition {
@@ -144,8 +180,8 @@ resource "azurerm_container_app" "this" {
     }
 
     precondition {
-      condition     = var.registry_username == null || contains(keys(var.secrets), coalesce(var.registry_password_secret_name, "-"))
-      error_message = "registry_username requires registry_password_secret_name naming a key of var.secrets."
+      condition     = var.registry_username == null || contains(local.secret_names, coalesce(var.registry_password_secret_name, "-"))
+      error_message = "registry_username requires registry_password_secret_name naming a key of var.secrets or var.secret_refs."
     }
   }
 }

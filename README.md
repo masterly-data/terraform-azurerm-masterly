@@ -72,6 +72,11 @@ module "masterly" {
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
   enable_key_vault = true
+  # The vault is private-endpoint-only in production, and Terraform still has to write the
+  # install's secrets into it. Say how it gets there: the apply runner's egress address, or
+  # key_vault_deployer_in_vnet = true if the apply already runs inside the VNet. Production
+  # refuses to plan with neither. See "Key Vault-backed app secrets".
+  key_vault_deployer_ip_rules = ["203.0.113.7"]
   enable_redis     = true
   # No default: "managed" = Azure Managed Redis (works for every tenant); "cache" only if
   # you already run an Azure Cache for Redis instance. See the Redis row below.
@@ -166,11 +171,11 @@ they bite, so confirm them before you plan.
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Service Bus send + receive, ACS Email Owner. Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull and nothing else: `ca-frontend` is the only internet-facing app and needs no data-plane access, so it does not carry the backend's grants |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
-| `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) live as Container App secrets. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
+| `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
 | Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
-| Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer grant to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. Soft-delete always on; in `mode=production` purge protection is armed and the vault runs **private-endpoint-only** (public access disabled, `privatelink.vaultcore.azure.net`). Required for `mode=production`. |
+| Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer grant to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
 | Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the keyed URL rides as a Container App secret). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
 
@@ -374,19 +379,72 @@ to configure. If you put one in front of the install, the guarantee becomes part
 None of this is Terraform we can write for you, because the fronting layer is yours. It is
 listed here so the decision is visible at the point where it becomes yours to keep.
 
+## Key Vault-backed app secrets
+
+A **value-based** Container App secret is stored in the app itself, and anything holding
+`Microsoft.App/containerApps/listSecrets/action` — which plain **Contributor** on the resource
+group has — can read it back in clear. That covers the DSN, the session secret, the licence
+JWT, the OIDC client secret, the Redis URL (access key and all), the registry password and the
+telemetry secret. Deploy rights and read-every-credential rights were the same thing.
+
+With `enable_key_vault = true` they stop being the same thing. The module writes each secret
+into the install's vault as `install-<name>` and gives the apps a **reference**: the value is
+resolved by the apps' managed identity, `listSecrets` returns the vault URL instead of the
+material, and reading it needs a Key Vault RBAC grant that Contributor does not carry — with
+an audit trail per read. With `enable_key_vault = false` (dev/demo, no vault to put them in)
+the apps carry values exactly as before.
+
+The references are **versionless**, so the vault is genuinely the one place to rotate: change
+a secret there and Container Apps picks it up within 30 minutes, restarting the active
+revisions. No `terraform apply` in the loop.
+
+### Terraform has to reach the vault to write them
+
+Seeding those secrets is a Key Vault **data-plane** write, and it needs two things that being
+Owner on the subscription does not give you:
+
+1. **A data-plane grant.** The module grants **Key Vault Secrets Officer** on the install
+   vault to the identity running the apply. If **plan and apply run as different service
+   principals** — a common CI shape, and the one Masterly runs — pin them instead:
+   `key_vault_secret_operator_object_ids` for the apply identity, and
+   `key_vault_secret_reader_object_ids` (Secrets User) for the planning one, which needs read
+   because `terraform plan` refreshes the seeded secrets. Left implicit in a two-identity
+   setup, state holds the apply identity's grant and every plan proposes destroying it.
+2. **A network path.** In `mode = production` the vault has no public presence, and
+   `bypass = "AzureServices"` does *not* cover a CI runner — the trusted-services list is
+   Azure services, not whoever is holding the token. So state one of:
+
+   - `key_vault_deployer_ip_rules = ["203.0.113.7"]` — the egress address of the machine or
+     runner that applies. This opens the vault's public endpoint **behind its firewall**:
+     `default_action` stays `Deny`, and nothing but the listed addresses (and the private
+     endpoint) gets in. Key Vault rejects `/31` and `/32`, so write a single address bare.
+   - `key_vault_deployer_in_vnet = true` — the apply already runs inside the install's VNet
+     (self-hosted runner, jumpbox, VPN/ExpressRoute), so no exception is needed and the vault
+     keeps no public presence at all.
+
+   Production refuses to plan with neither set. That is deliberate: the alternative is a 403
+   partway through a ten-minute apply, with the install half-built.
+
+Entra RBAC is eventually consistent, so a **first** apply can land inside the propagation
+window of the grant in (1) and fail with `Forbidden` on the first secret. Re-run the apply.
+The module does not pad every apply with a fixed wait for a race only the first one can lose.
+
 ## State security — your tfstate holds secrets in plaintext
 
-Terraform writes **plaintext secrets into your state file**. For this module the state
-contains, among others:
+Terraform writes **plaintext secrets into your state file**, and moving the app secrets into
+Key Vault does not change that: Terraform is the thing writing them, so the values pass
+through — and stay in — state either way. What shrinks is who can read them at *runtime*,
+not what is in the state blob. For this module the state contains, among others:
 
-- the **OIDC client secret** (`oidc_client_secret`)
-- the **license JWT** (`license_token`)
 - the **generated Postgres admin password** (`random_password.postgres_admin` — only its
   hash never leaves; the value is in state and in the app's DSN secret)
 - the **generated session secret** (`random_password.session_secret`)
-- the **Redis primary access key** (embedded in the `redis-url` secret)
-- the **registry pull service-principal secret** (`registry_password`) and any
-  `external_database_url` / break-glass material you pass in
+- the **Redis primary access key** (read back from the cache, embedded in the `redis-url`
+  secret)
+- every secret you pass in: **OIDC client secret**, **license JWT**, **registry pull
+  password**, **telemetry client secret**, `external_database_url`, break-glass material
+- with `enable_key_vault`, a copy of each of the above in the corresponding
+  `azurerm_key_vault_secret` resource
 
 Treat the state backend as a secrets store:
 
@@ -400,7 +458,10 @@ Treat the state backend as a secrets store:
   audit access. Consider a private endpoint / firewall on the storage account.
 - **Rotate** on exposure: the Postgres/session/Redis material is module-generated, so a
   `terraform apply` after tainting the relevant `random_*`/cache regenerates it; the OIDC and
-  license secrets rotate at their source.
+  license secrets rotate at their source. With `enable_key_vault`, a rotation applied straight
+  to the vault reaches the running apps on its own (versionless references, ~30 minutes) — but
+  the next `terraform apply` writes the value it holds in state back over it, so rotate at the
+  input, not only in the vault.
 
 > The demo's own state bootstrap (`.github/workflows/bootstrap-state.yml`) provisions
 > `Standard_LRS` + `--min-tls-version TLS1_2` + `--allow-blob-public-access false`, but does

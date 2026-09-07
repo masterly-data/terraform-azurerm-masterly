@@ -90,6 +90,13 @@ module "masterly" {
   enable_key_vault = true
   enable_redis     = true
 
+  # With the vault on, the install's secrets live IN it and the apps hold references — so a
+  # Contributor on this resource group can no longer read the DSN, the licence, or the Redis
+  # key out of the Container Apps. The price is that Terraform needs a way IN to write them,
+  # and in production the vault has no public presence. State one of the two:
+  key_vault_deployer_ip_rules = var.key_vault_deployer_ip_rules
+  key_vault_deployer_in_vnet  = var.key_vault_deployer_in_vnet
+
   # No default, on purpose. "managed" provisions Azure Managed Redis, which any tenant
   # can create; "cache" keeps an Azure Cache for Redis you already run. Microsoft blocked
   # NEW customers from creating the latter on 1 April 2026, so a tenant that never ran one

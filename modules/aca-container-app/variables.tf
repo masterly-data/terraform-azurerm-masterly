@@ -138,11 +138,30 @@ variable "secrets" {
   description = "Value-based Container App secrets: secret name => value. For installs without a Key Vault; values live encrypted in the app, never in env directly."
 }
 
+# Key Vault-backed app secrets (upstream parity: masterly-platform-iac's copy of this module
+# carries the same input). The app holds a REFERENCE, not the value: ACA resolves it from the
+# vault with the named user-assigned identity, so `az containerapp secret show` (and anything
+# else with containerApps/listSecrets, which Contributor has) returns the vault URL rather than
+# the material. Data-plane read is then a Key Vault RBAC grant, which Contributor does not
+# carry.
+#
+# Not `sensitive`, deliberately: these are resource IDs, not values — marking them would hide
+# the wiring from the plan and from `terraform test`, which is the only thing that can catch a
+# reference pointed at the wrong vault.
+variable "secret_refs" {
+  type = map(object({
+    kv_secret_id = string
+    identity_id  = string
+  }))
+  default     = {}
+  description = "Key Vault-backed Container App secrets: secret name => { kv_secret_id, identity_id }. identity_id must be one of user_assigned_identity_ids. A versionless kv_secret_id lets ACA pick up a rotation on its own (it re-reads within 30 minutes and restarts active revisions); a versioned one pins the value until the next apply. Names must not collide with var.secrets."
+}
+
 # SELF-HOSTED EXTENSION: env vars sourced from app secrets.
 variable "env_secret_refs" {
   type        = map(string)
   default     = {}
-  description = "Environment variables sourced from app secrets: env var name => secret name (a key of var.secrets)."
+  description = "Environment variables sourced from app secrets: env var name => secret name (a key of var.secrets or var.secret_refs)."
 }
 
 # SELF-HOSTED EXTENSION: HTTP probes.

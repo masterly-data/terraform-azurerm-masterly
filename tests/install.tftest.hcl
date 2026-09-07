@@ -19,6 +19,11 @@ variables {
   api_image        = "masterly.azurecr.io/api:v0.0.0"
   frontend_image   = "masterly.azurecr.io/frontend:v0.0.0"
   acr_login_server = ""
+
+  # Every production run needs one of the two deployer paths to the vault stated, the same
+  # as a real production install (see key_vault_deployer_ip_rules). Set file-wide so the
+  # runs that assert something else are not all about this; the guard has its own run below.
+  key_vault_deployer_ip_rules = ["203.0.113.7"]
 }
 
 # Evaluation defaults: dev identity behind an allowlist provisions the starter Postgres,
@@ -136,16 +141,23 @@ run "production_mode_full_wiring_plans" {
     error_message = "Production wiring must provision the vault, Redis, and the workers app."
   }
 
-  # Hardening in production: the vault has purge protection armed, public access disabled,
-  # default-deny ACLs, and a private endpoint (+ its private DNS zone).
+  # Hardening in production: purge protection armed, default-deny ACLs, and a private
+  # endpoint (+ its private DNS zone) that the apps reach it on.
+  #
+  # The endpoint is ENABLED here because this run states a deployer address, which is what
+  # lets Terraform seed the vault's secrets from outside the VNet. That is a firewalled
+  # public endpoint, not an open one: default_action stays Deny and the only address admitted
+  # is the one given. The fully-closed shape is asserted in
+  # production_in_vnet_apply_keeps_the_vault_closed below.
   assert {
     condition = (
       azurerm_key_vault.this[0].purge_protection_enabled == true &&
-      azurerm_key_vault.this[0].public_network_access_enabled == false &&
+      azurerm_key_vault.this[0].network_acls[0].default_action == "Deny" &&
+      azurerm_key_vault.this[0].network_acls[0].ip_rules == toset(["203.0.113.7"]) &&
       length(azurerm_private_endpoint.key_vault) == 1 &&
       length(azurerm_private_dns_zone.key_vault) == 1
     )
-    error_message = "Production Key Vault must have purge protection, no public access, and a private endpoint."
+    error_message = "Production Key Vault must have purge protection, default-deny ACLs admitting only the deployer, and a private endpoint."
   }
 
   # Redis is private-endpoint-only in production too.
@@ -491,6 +503,225 @@ run "key_vault_enabled_provisions_vault_and_grant" {
     )
     error_message = "Diagnostics must be off by default outside production."
   }
+}
+
+# --- The install's secrets live in the vault, not in the apps (finding S2) -----------------
+# A value-based Container App secret is readable in clear by anything holding
+# containerApps/listSecrets, which plain Contributor on the resource group has. With the vault
+# on, every one of them becomes a reference the app resolves with its managed identity, and
+# reading the material needs a Key Vault RBAC grant Contributor does not carry.
+
+run "production_secrets_are_vault_references" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+    registry_username    = "install-puller"
+    registry_password    = "pull-secret"
+    telemetry_url        = "https://cp.masterlydata.com"
+    telemetry_client_id  = "sa_01TEST"
+
+    telemetry_client_secret = "telemetry-secret"
+    breakglass_owner_email  = "owner@example.com"
+    breakglass_secret_hash  = "0000000000000000000000000000000000000000000000000000000000000000"
+    external_database_url   = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  # THE assertion this finding is about: not one app carries a value-based secret.
+  assert {
+    condition = (
+      length(module.api.value_secret_names) == 0 &&
+      length(module.frontend.value_secret_names) == 0 &&
+      length(module.workers[0].value_secret_names) == 0
+    )
+    error_message = "With the Key Vault on, no app may hold a value-based secret — those are readable by any principal with containerApps/listSecrets."
+  }
+
+  # And every secret each app needs is still there, as a reference. Named exhaustively rather
+  # than counted: a count passes just as happily when a secret silently stops being wired.
+  assert {
+    condition = module.api.vault_backed_secret_names == tolist([
+      "breakglass-secret-hash",
+      "database-url",
+      "license-token",
+      "redis-url",
+      "registry-password",
+      "session-secret",
+      "telemetry-client-secret",
+    ])
+    error_message = "The api's full secret set must reach it as Key Vault references."
+  }
+
+  assert {
+    condition     = module.frontend.vault_backed_secret_names == tolist(["oidc-client-secret", "registry-password"])
+    error_message = "The frontend's BFF client secret and registry password must reach it as Key Vault references."
+  }
+
+  # The workers app runs the same env contract as the api, so it needs the same secret set.
+  assert {
+    condition     = module.workers[0].vault_backed_secret_names == module.api.vault_backed_secret_names
+    error_message = "The workers app must carry the same secret set as the api — it builds the same services."
+  }
+
+  # Every one of them is written into the vault, under the install- prefix that keeps the
+  # module's secrets clear of the ones the application seals at runtime (<slug>-<ulid>).
+  assert {
+    condition = (
+      length(azurerm_key_vault_secret.install) == 8 &&
+      azurerm_key_vault_secret.install["database-url"].name == "install-database-url" &&
+      azurerm_key_vault_secret.install["oidc-client-secret"].name == "install-oidc-client-secret"
+    )
+    error_message = "Each distinct install secret must be written to the vault once, under the install- prefix."
+  }
+
+  # The deploying principal's data-plane grant: Contributor and Owner carry no Key Vault data
+  # actions, so without it every write above fails on an RBAC-mode vault.
+  assert {
+    condition     = length(azurerm_role_assignment.kv_secrets_officer_deployer) == 1
+    error_message = "The deploying principal must be granted Key Vault Secrets Officer, or Terraform cannot seed the secrets."
+  }
+}
+
+# The opposite branch, unchanged: with no vault there is nowhere to put them, so the apps
+# carry values exactly as they did before — and nothing is left dangling in between.
+run "key_vault_off_keeps_value_based_secrets" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_redis          = true
+    redis_offering        = "cache"
+  }
+
+  assert {
+    condition = (
+      module.api.value_secret_names == tolist(["database-url", "redis-url", "session-secret"]) &&
+      length(module.api.vault_backed_secret_names) == 0 &&
+      length(azurerm_key_vault_secret.install) == 0
+    )
+    error_message = "Without the vault the apps must keep their value-based secrets and no vault secret may be planned."
+  }
+}
+
+# Two-identity CI: the grants can be pinned to explicit principals instead of whoever is
+# running the apply. Left implicit, state holds the apply identity's grant and every plan run
+# by the OTHER identity proposes destroying it — the churn Layer 1 paid for.
+run "key_vault_grants_can_be_pinned_to_explicit_principals" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs                = ["203.0.113.7/32"]
+    enable_key_vault                     = true
+    key_vault_secret_operator_object_ids = ["11111111-1111-1111-1111-111111111111"]
+    key_vault_secret_reader_object_ids   = ["22222222-2222-2222-2222-222222222222"]
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.kv_secrets_officer_deployer["11111111-1111-1111-1111-111111111111"].role_definition_name == "Key Vault Secrets Officer" &&
+      azurerm_role_assignment.kv_secrets_reader["22222222-2222-2222-2222-222222222222"].role_definition_name == "Key Vault Secrets User"
+    )
+    error_message = "Explicit operator/reader object IDs must be granted Secrets Officer and Secrets User respectively."
+  }
+}
+
+# Production with no deployer path stated: the vault is private-endpoint-only, so Terraform's
+# own writes have nowhere to land. Refused at plan rather than as a 403 partway through the
+# apply, with the install half-built.
+run "production_without_a_deployer_path_is_rejected" {
+  command = plan
+
+  variables {
+    mode                        = "production"
+    identity_binding            = "oidc"
+    oidc_allowed_issuers        = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience               = "api-client-id"
+    oidc_jwks_uri               = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id              = "bff-client-id"
+    oidc_client_secret          = "s3cret"
+    oidc_authority              = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri           = "https://app.example.com/api/auth/callback"
+    license_token               = "eyJ.fake.jwt"
+    license_public_jwk          = "{\"kty\":\"EC\"}"
+    initial_owner_email         = "owner@example.com"
+    enable_key_vault            = true
+    enable_redis                = true
+    redis_offering              = "cache"
+    enable_workers              = true
+    api_max_replicas            = 3
+    external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    key_vault_deployer_ip_rules = []
+  }
+
+  expect_failures = [var.key_vault_deployer_ip_rules]
+}
+
+# The other path: an apply that already runs inside the VNet needs no firewall exception, and
+# the vault keeps no public presence at all.
+run "production_in_vnet_apply_keeps_the_vault_closed" {
+  command = plan
+
+  variables {
+    mode                        = "production"
+    identity_binding            = "oidc"
+    oidc_allowed_issuers        = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience               = "api-client-id"
+    oidc_jwks_uri               = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id              = "bff-client-id"
+    oidc_client_secret          = "s3cret"
+    oidc_authority              = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri           = "https://app.example.com/api/auth/callback"
+    license_token               = "eyJ.fake.jwt"
+    license_public_jwk          = "{\"kty\":\"EC\"}"
+    initial_owner_email         = "owner@example.com"
+    enable_key_vault            = true
+    enable_redis                = true
+    redis_offering              = "cache"
+    enable_workers              = true
+    api_max_replicas            = 3
+    external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    key_vault_deployer_ip_rules = []
+    key_vault_deployer_in_vnet  = true
+  }
+
+  assert {
+    condition = (
+      azurerm_key_vault.this[0].public_network_access_enabled == false &&
+      length(azurerm_key_vault.this[0].network_acls[0].ip_rules) == 0 &&
+      length(azurerm_private_endpoint.key_vault) == 1
+    )
+    error_message = "An in-VNet apply must leave the production vault with no public presence and no firewall exception."
+  }
+}
+
+# Key Vault rejects /31 and /32 prefixes outright, and a rule it rejects is a rule that admits
+# nothing — the failure would surface as an apply-time 400, or worse, as a firewall that looks
+# configured and lets no one through.
+run "single_address_deployer_rule_must_not_be_slash_32" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    key_vault_deployer_ip_rules = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.key_vault_deployer_ip_rules]
 }
 
 run "key_vault_default_off" {
