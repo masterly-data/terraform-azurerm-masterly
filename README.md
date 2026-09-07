@@ -115,7 +115,7 @@ module "masterly" {
   registry_password = var.masterly_pull_secret # from your secret store
   # Option 2, your own ACR: `az acr import` the pinned tags with the same credential,
   # then point acr_login_server at your registry and set acr_id so the module grants
-  # AcrPull to the install identity (managed-identity pull, no credential in the app):
+  # AcrPull to both install identities (managed-identity pull, no credential in the app):
   # acr_login_server = "acme.azurecr.io"
   # acr_id           = "/subscriptions/.../registries/acme"
 
@@ -132,7 +132,9 @@ module "masterly" {
 Outputs include `frontend_url`, the apps resource group, the Container App names (the
 values the app repos' release workflows use to roll images — `DEMO_RG`, `DEMO_APP_API`,
 `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
-`apps_identity_client_id` for out-of-band role grants.
+`apps_identity_client_id` / `frontend_identity_principal_id` for out-of-band role grants.
+The install runs on **two** app identities (see below), so an out-of-band `AcrPull` grant
+has to reach both principals.
 
 ## Preflight
 
@@ -161,7 +163,8 @@ they bite, so confirm them before you plan.
 | `rg-masterly-aca`, `rg-masterly-data` | Customer-naming resource groups (`rg-masterly-<purpose>`) |
 | VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
-| `id-masterly-apps` UAMI (+ optional AcrPull) | Image pull, later install identity work (ADR 0020) |
+| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Service Bus send + receive, ACS Email Owner. Later install identity work (ADR 0020) |
+| `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull and nothing else: `ca-frontend` is the only internet-facing app and needs no data-plane access, so it does not carry the backend's grants |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) live as Container App secrets |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
@@ -184,7 +187,10 @@ install bundle, `AcrPull` only). Two ways to consume it:
    masterly.azurecr.io/api:vX.Y.Z --username <appId> --password <secret>` per image, then
    `acr_login_server`/`acr_id` at your registry: managed-identity pull, no Masterly
    credential in the install. Recommended for regulated environments; required for air gap
-   (with an offline image bundle instead of the import).
+   (with an offline image bundle instead of the import). `acr_id` grants `AcrPull` to both
+   app identities; if you leave it null and grant out of band, grant both
+   `apps_identity_principal_id` and `frontend_identity_principal_id` — miss the second and
+   the frontend cannot pull.
 
 Rotation: the SP carries up to two active secrets — switch `registry_password` to the new
 one and apply.

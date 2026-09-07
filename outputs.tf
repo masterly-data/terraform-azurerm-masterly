@@ -15,12 +15,17 @@ output "postgres_fqdn" {
 
 output "apps_identity_principal_id" {
   value       = module.apps_identity.principal_id
-  description = "Principal (object) id of the apps' user-assigned identity — grant AcrPull on your registry scope to this principal when acr_id is left null."
+  description = "Principal (object) id of the BACKEND apps' user-assigned identity (api + workers) — grant AcrPull on your registry scope to this principal when acr_id is left null. The frontend has its own; grant both."
 }
 
 output "apps_identity_client_id" {
   value       = module.apps_identity.client_id
-  description = "Client id of the apps' user-assigned identity (DefaultAzureCredential's AZURE_CLIENT_ID)."
+  description = "Client id of the backend apps' user-assigned identity (DefaultAzureCredential's AZURE_CLIENT_ID)."
+}
+
+output "frontend_identity_principal_id" {
+  value       = module.frontend_identity.principal_id
+  description = "Principal (object) id of the frontend's own user-assigned identity — image pull only. Grant AcrPull on your registry scope to this principal too when acr_id is left null."
 }
 
 output "resource_group_aca" {
