@@ -11,12 +11,12 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.13"
+  version = "~> 0.14"
 }
 ```
 
-Pin a version — `~> 0.13` takes patches, `= 0.13.0` pins exactly. Sourcing straight from
-GitHub also works (`github.com/masterly-data/terraform-azurerm-masterly?ref=v0.13.0`) and is
+Pin a version — `~> 0.14` takes patches, `= 0.14.0` pins exactly. Sourcing straight from
+GitHub also works (`github.com/masterly-data/terraform-azurerm-masterly?ref=v0.14.0`) and is
 what air-gapped mirrors do, but the registry gives you version constraints and needs no
 `git` on the runner.
 
@@ -48,7 +48,7 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.13"
+  version = "~> 0.14"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
