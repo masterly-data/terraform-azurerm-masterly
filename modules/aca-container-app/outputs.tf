@@ -64,3 +64,12 @@ output "user_assigned_identity_ids" {
   value       = var.user_assigned_identity_ids
   description = "User-assigned managed identity resource IDs attached to the app. Empty when the app has none."
 }
+
+output "ingress_allow_insecure" {
+  # Whether port 80 is served rather than redirected to 443. Same reason as the ones above:
+  # `ingress` is a dynamic block, absent entirely on an app with no ingress, so a test that
+  # pins the app's TLS posture cannot read it off the resource. False when there is no
+  # ingress at all — nothing is served insecurely because nothing is served.
+  value       = var.ingress_enabled ? var.ingress_allow_insecure : false
+  description = "Whether the app serves plain HTTP instead of redirecting to HTTPS. False when it has no ingress at all."
+}

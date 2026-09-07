@@ -617,9 +617,27 @@ module "api" {
   # session COOKIES and short-circuits unauthenticated requests without forwarding, so it is
   # not a substitute for a bearer-token client). Until this input existed, an install could
   # not be reached by the SDK we publish and document.
-  ingress_external       = var.api_ingress_external
-  ingress_target_port    = 8001
-  ingress_allow_insecure = true # in-environment hop; TLS hardening with VNet later
+  ingress_external    = var.api_ingress_external
+  ingress_target_port = 8001
+
+  # Plain HTTP is allowed only while the api is unreachable from outside the environment.
+  #
+  # `allowInsecure` is one app-wide flag — Azure has no way to say "HTTPS-only for callers
+  # outside, plain HTTP for the hop inside" — so it has to follow the wider of the two
+  # surfaces. Left true on a published api it would leave port 80 answering, without a
+  # redirect, for allowlisted callers holding a BEARER TOKEN: an allowlist bounds who can
+  # reach it, not what a network in between can read, and the token is the whole credential.
+  #
+  # False means Azure's edge proxy redirects http:// to https:// (301) instead of serving it.
+  # Ingress settings apply to every revision at once and generate no new revision, so this
+  # costs no roll on an existing install.
+  #
+  # The in-environment hop is not left plaintext in exchange: module.aca_env encrypts it at
+  # the environment level (mutual_tls_enabled), which is why MASTERLY_API_BASE_URL below
+  # stays http://ca-api rather than moving to https:// — an app-name call cannot present a
+  # hostname the environment's certificate matches, so https://ca-api would fail
+  # verification. Azure encrypts that hop underneath the http:// scheme instead.
+  ingress_allow_insecure = !var.api_ingress_external
 
   # The SAME allowlist the frontend gets. Until api_ingress_external existed this list was
   # frontend-only, which was fine while the api was unreachable — exposing it without also
@@ -737,6 +755,12 @@ module "frontend" {
       # so an internal-ingress app addressed by the external-form hostname is not found and
       # the proxy answers 404 "This Container App is stopped or does not exist" — which the
       # frontend's BFF then relayed for every /api/auth/login on the live demo.
+      #
+      # http, not https, and it stays http now that the environment encrypts peer traffic.
+      # The certificate the platform manages is issued for the environment's domain, so
+      # https://ca-api would fail hostname verification on the very name chosen because it
+      # cannot drift. The scheme here says what the BFF speaks, not what crosses the wire:
+      # with mutual_tls_enabled on module.aca_env, Azure encrypts the hop underneath it.
       MASTERLY_API_BASE_URL = "http://${module.api.name}"
       MASTERLY_REGION       = var.masterly_region
       MASTERLY_IDP_BINDING  = var.identity_binding
