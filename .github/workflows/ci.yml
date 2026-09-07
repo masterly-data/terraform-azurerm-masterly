@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd  # v3, pinned by digest
         with:
           # At or above the module's required_version (>= 1.10) — cross-resource
           # preconditions and the test framework both depend on it.
