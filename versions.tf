@@ -16,7 +16,7 @@ terraform {
       # was ever inspected directly. Left conservative rather than lowered to 4.53 on an
       # untested version. Not 5.x: outside the module's tested surface, and azurerm 5 defaults
       # resource_provider_registrations to none.
-      version = "~> 4.61"
+      version = "~> 5.4"
     }
     random = {
       source  = "hashicorp/random"
