@@ -2,6 +2,12 @@
 # Third-party actions in .github/workflows are pinned by commit SHA (a tag can be
 # moved; a SHA cannot), which makes them invisible to a human reading for staleness —
 # so the github-actions ecosystem below is what actually keeps them from rotting.
+#
+# Grouping (MAS-126): a wall of PRs each week gets skimmed, and a skimmed wall is how
+# a real one goes through unread. Actions group at every level, because actions/* ride
+# major tags deliberately and third-party ones are pinned by SHA, so the diff is a
+# digest either way and the version that changed is in the title. Code dependencies
+# group minor and patch only, so a major always arrives as its own readable PR.
 version: 2
 updates:
   - package-ecosystem: "terraform"
@@ -9,8 +15,22 @@ updates:
       - "/**"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
+    # The module customers consume at a semver tag: a provider major is a release
+    # decision needing a live plan before a tag, not a weekly proposal (MAS-126).
+    ignore:
+      - dependency-name: "hashicorp/azurerm"
+        update-types: ["version-update:semver-major"]
+    groups:
+      terraform-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
