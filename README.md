@@ -398,10 +398,40 @@ The references are **versionless**, so the vault is genuinely the one place to r
 a secret there and Container Apps picks it up within 30 minutes, restarting the active
 revisions. No `terraform apply` in the loop.
 
-### Terraform has to reach the vault to write them
+Container Apps resolves those references against a vault with **`publicNetworkAccess` disabled**
+— verified on Azure with the vault in exactly this module's production shape (RBAC, default-deny
+ACLs, private endpoint, private DNS): a forced revision provisioned `Healthy` with no
+provisioning error, while a caller outside the VNet was refused by the same vault in the same
+minute. The app's path in and yours are not the same path, which is the entire point.
+
+### Terraform has to reach the vault — for every operation, not just the first
 
 Seeding those secrets is a Key Vault **data-plane** write, and it needs two things that being
-Owner on the subscription does not give you:
+Owner on the subscription does not give you. Both are standing requirements: once the vault is
+closed, **every** later `plan`, `apply` and `destroy` refreshes those secret resources and fails
+without them. Verified against Azure — a `terraform destroy` run from outside the VNet against a
+fully private vault answers:
+
+```text
+403 Forbidden — ForbiddenByConnection
+Public network access is disabled and request is not from a trusted service
+nor via an approved private link.
+```
+
+That is the *destroy* failing on a **read**, with the vault otherwise untouched. Plan on it.
+
+**And Terraform cannot get itself out of that.** Refresh runs *before* the changes it planned, so
+an apply that would reopen the firewall fails on the refresh that precedes it — the configuration
+is locked out of its own state. The way back is out of band, because the vault's network rules are
+a **control-plane** setting and are not subject to the data-plane firewall:
+
+```bash
+az keyvault update --name <vault> --public-network-access Enabled
+az keyvault network-rule add --name <vault> --ip-address <your egress address>
+```
+
+Then `terraform plan` works again, and putting `key_vault_deployer_ip_rules` in the configuration
+makes the change durable rather than a manual patch the next apply reverts.
 
 1. **A data-plane grant.** The module grants **Key Vault Secrets Officer** on the install
    vault to the identity running the apply. (It also grants the *frontend's* identity **Key
@@ -422,7 +452,9 @@ Owner on the subscription does not give you:
      endpoint) gets in. Key Vault rejects `/31` and `/32`, so write a single address bare.
    - `key_vault_deployer_in_vnet = true` — the apply already runs inside the install's VNet
      (self-hosted runner, jumpbox, VPN/ExpressRoute), so no exception is needed and the vault
-     keeps no public presence at all.
+     keeps no public presence at all. This is a claim about **every** future run, including the
+     one that tears the install down. An operator who sets it and then plans from a laptop gets
+     the 403 above, on an install Terraform can no longer fully manage until the path exists.
 
    Production refuses to plan with neither set. That is deliberate: the alternative is a 403
    partway through a ten-minute apply, with the install half-built.

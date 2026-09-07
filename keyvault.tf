@@ -128,7 +128,7 @@ variable "key_vault_deployer_ip_rules" {
 variable "key_vault_deployer_in_vnet" {
   type        = bool
   default     = false
-  description = "Declare that `terraform apply` runs from inside the install's VNet (self-hosted runner, jumpbox, VPN/ExpressRoute), so the vault needs no public firewall exception in production. Purely an assertion by the operator — Terraform cannot verify it — and it changes no resource: it satisfies the guard on key_vault_deployer_ip_rules and nothing else."
+  description = "Declare that `terraform apply` runs from inside the install's VNet (self-hosted runner, jumpbox, VPN/ExpressRoute), so the vault needs no public firewall exception in production. Purely an assertion by the operator — Terraform cannot verify it — and it changes no resource: it satisfies the guard on key_vault_deployer_ip_rules and nothing else. It is a claim about EVERY run, not just the first: plan, apply and destroy all refresh the vault secrets, and from outside the VNet a closed vault answers 403 ForbiddenByConnection to all three (verified on Azure — a destroy failed on the refresh alone)."
 }
 
 data "azurerm_client_config" "current" {}
