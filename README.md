@@ -209,6 +209,11 @@ one and apply.
   confidential client (`oidc_client_id`/`oidc_client_secret`/`oidc_authority`/
   `oidc_redirect_uri`). Optional break-glass local Owner via
   `breakglass_owner_email` + `breakglass_secret_hash` (sha256, never the secret).
+
+  `oidc_allowed_issuers` normally holds **one** entry — this install's own issuer. Every
+  issuer listed here is trusted **install-wide**, so it is not the way to onboard an
+  additional organization onto one install: register an org-scoped SSO connection in the
+  product instead, which is bound to the Organizations that registered it.
 - **`dev`** — evaluation only. The module **refuses** `dev` with an open ingress:
   set `ingress_allowed_cidrs` (an IP allowlist) or switch to `oidc`.
 
