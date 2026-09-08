@@ -145,6 +145,11 @@ resource "azurerm_resource_group" "aca" {
     }
 
     precondition {
+      condition     = var.license_issuer_url == null || (var.telemetry_client_id != null && var.telemetry_client_secret != null)
+      error_message = "license_issuer_url requires telemetry_client_id and telemetry_client_secret: the licence refresh authenticates with that same install service account, and the application keeps refresh OFF without a credential — so setting the URL alone produces an install that looks configured and never refreshes. Set all three (from your install bundle), or none."
+    }
+
+    precondition {
       condition     = (var.aca_subnet_id == null) == (var.private_endpoints_subnet_id == null)
       error_message = "aca_subnet_id and private_endpoints_subnet_id go together: either the module builds the whole network, or the platform team supplies both subnets. Half of an injected network is a topology nobody asked for."
     }
@@ -553,6 +558,7 @@ locals {
     local.redis_env,             # redis session registry when Redis is enabled (ADR 0066)
     local.workers_inprocess_env, # the api hands the loop to ca-workers when enabled (ADR 0066)
     local.telemetry_env,         # usage reporting to the control plane, off unless configured
+    local.license_refresh_env,   # daily licence refresh from the control plane (ADR 0074), off unless configured
     # The license verification key (ADR 0013) is public material — plain env.
     var.license_public_jwk != null ? { MASTERLY_LICENSE_PUBLIC_JWK = var.license_public_jwk } : {},
   )
@@ -624,6 +630,16 @@ locals {
   telemetry_env = local.telemetry_configured ? {
     MASTERLY_TELEMETRY_URL       = var.telemetry_url
     MASTERLY_TELEMETRY_CLIENT_ID = var.telemetry_client_id
+  } : {}
+
+  # Licence refresh (ADR 0074): the URL is the only new input — the credential is the
+  # install service account above (telemetry_client_id / _secret, scope license:refresh),
+  # which the precondition requires alongside it. The application additionally requires a
+  # verifiable licence (license_token + license_public_jwk) before it switches refresh on.
+  license_refresh_configured = var.license_issuer_url != null && var.telemetry_client_id != null
+
+  license_refresh_env = local.license_refresh_configured ? {
+    MASTERLY_LICENSE_ISSUER_URL = var.license_issuer_url
   } : {}
 }
 

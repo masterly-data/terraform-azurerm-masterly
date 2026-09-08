@@ -1946,6 +1946,93 @@ run "telemetry_without_secret_is_rejected" {
   expect_failures = [azurerm_resource_group.aca]
 }
 
+# --- Licence refresh (ADR 0074): one input, off unless the credential is beside it ----------
+
+run "license_refresh_is_off_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = local.license_refresh_configured == false
+    error_message = "license_refresh_configured must be false when license_issuer_url is unset."
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_LICENSE_ISSUER_URL")
+    error_message = "An unset license_issuer_url must not reach the apps — the offline posture makes no outbound call."
+  }
+}
+
+run "license_refresh_wires_the_url_beside_the_install_credential" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    license_issuer_url      = "https://cp.masterlydata.com/v1/licenses/refresh"
+    telemetry_url           = "https://cp.masterlydata.com"
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_LICENSE_ISSUER_URL"] == "https://cp.masterlydata.com/v1/licenses/refresh"
+    error_message = "license_issuer_url must reach the apps verbatim — it is a full URL, not an origin."
+  }
+
+  # The workers app runs the refresh loop on a scaled install, so it must see the same env.
+  assert {
+    condition     = local.api_env["MASTERLY_TELEMETRY_CLIENT_ID"] == "sa_01TEST"
+    error_message = "The install credential must reach the apps alongside the refresh URL."
+  }
+}
+
+# Guard: the URL without the credential looks configured and never refreshes.
+run "license_refresh_without_the_credential_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    license_issuer_url    = "https://cp.masterlydata.com/v1/licenses/refresh"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Not a production requirement (ADR 0074 §2: refresh is optional; air-gapped stays first-class).
+run "production_does_not_require_license_refresh" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition     = local.license_refresh_configured == false
+    error_message = "mode=production must plan without license_issuer_url — refresh is optional by decision, not a production requirement."
+  }
+}
+
 # --- The api's ingress: internal by default, opt-out, never unrestricted --------------------
 # The published Python SDK talks to the api directly (bearer token to /v1), not through the
 # frontend's BFF — which proxies /api/proxy/... with session cookies and short-circuits

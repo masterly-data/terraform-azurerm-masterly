@@ -318,6 +318,24 @@ variable "license_public_jwk" {
   description = "The license issuer's public JWK (JSON) used to verify license_token. Public material — plain env, not a secret."
 }
 
+# --- Licence refresh (ADR 0074) ---------------------------------------------------------
+# With this set, the application refreshes its licence from Masterly's control plane once a
+# day and re-verifies what comes back against license_public_jwk before adopting it. The
+# install authenticates with the same service account it reports telemetry as (the bundle's
+# install credential), so refresh is on only when this AND telemetry_client_id +
+# telemetry_client_secret are all set — the module refuses the half-configuration at plan.
+#
+# Unset = the offline posture: no outbound call, and the licence is governed by its own
+# expiry and grace alone. Air-gapped installs leave it unset and lose nothing. Where it is
+# set, seven days without a successful refresh puts the install in read-only mode (reads,
+# exports and sign-in continue; writes are refused) until refresh succeeds again.
+
+variable "license_issuer_url" {
+  type        = string
+  default     = null
+  description = "The licence refresh endpoint of Masterly's control plane, verbatim from the install bundle (a full URL, not an origin). Leave unset for an offline install — no outbound call is made. Requires telemetry_client_id and telemetry_client_secret (the install credential); refresh stays off unless all are present, and the module refuses a partial set at plan."
+}
+
 # --- Data plane seam (ADR 0065) -----------------------------------------------------
 
 variable "external_database_url" {
