@@ -213,7 +213,7 @@ variable "identity_binding" {
 variable "oidc_allowed_issuers" {
   type        = string
   default     = null
-  description = "Comma-separated allowlist of acceptable token `iss` values — the trust boundary. Entra v2.0: https://login.microsoftonline.com/{tenant_id}/v2.0, one per trusted tenant."
+  description = "Comma-separated allowlist of acceptable token `iss` values — the trust boundary. Entra v2.0: https://login.microsoftonline.com/{tenant_id}/v2.0. Normally ONE entry: this install's own issuer. Every entry is trusted install-wide, so do not add a customer tenant here to onboard them — register an org-scoped SSO connection in the product instead, which is bound to the Organizations that registered it."
 }
 
 variable "oidc_audience" {
