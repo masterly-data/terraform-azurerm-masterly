@@ -65,3 +65,32 @@ jobs:
 
       - name: Test the module (mock providers — guards, residency, conditional branches)
         run: terraform test
+
+  # A release states its version and its tested image pair once, in MANIFEST.json, and what
+  # changed once, in CHANGELOG.md. This job is what makes that unforgettable rather than
+  # well-intentioned: on a pull request it fails when the manifest, the changelog and the README
+  # stop agreeing, so the commit that bumps them is validated before it merges; on a tag push it
+  # additionally fails when the tag is not the version the manifest publishes, so a tag cut
+  # without its entries goes red at once instead of surfacing a release later. MAS-239.
+  release-metadata:
+    name: Manifest, changelog and README agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # Standard library only — release metadata should not depend on anything resolving, and
+      # this repo ships no Python dependencies to resolve.
+      - name: Check the release manifest, changelog and README
+        run: python3 scripts/check_release_manifest.py
+
+      # github.ref_name is the tag itself on a tag push. Split out so the failure message says
+      # which of the two questions was being asked.
+      - name: The tag is the version the manifest publishes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python3 scripts/check_release_manifest.py --tag "${{ github.ref_name }}"
