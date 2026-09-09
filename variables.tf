@@ -321,9 +321,14 @@ variable "license_public_jwk" {
 # --- Licence refresh (ADR 0074) ---------------------------------------------------------
 # With this set, the application refreshes its licence from Masterly's control plane once a
 # day and re-verifies what comes back against license_public_jwk before adopting it. The
-# install authenticates with the same service account it reports telemetry as (the bundle's
-# install credential), so refresh is on only when this AND telemetry_client_id +
-# telemetry_client_secret are all set — the module refuses the half-configuration at plan.
+# install authenticates as the same service account it reports telemetry as (the bundle's
+# install credential), and that account reaches the control plane through the telemetry
+# inputs — so refresh is on only when this AND telemetry_url + telemetry_client_id +
+# telemetry_client_secret are all set. The module refuses the half-configuration at plan.
+#
+# Because the credential and the URL are shared, an install configured for refresh today is
+# also an install that reports usage hourly. The two are separable in principle (ADR 0074
+# §2) and are not yet separated in the module; separating them is a known follow-up.
 #
 # Unset = the offline posture: no outbound call, and the licence is governed by its own
 # expiry and grace alone. Air-gapped installs leave it unset and lose nothing. Where it is
@@ -333,7 +338,7 @@ variable "license_public_jwk" {
 variable "license_issuer_url" {
   type        = string
   default     = null
-  description = "The licence refresh endpoint of Masterly's control plane, verbatim from the install bundle (a full URL, not an origin). Leave unset for an offline install — no outbound call is made. Requires telemetry_client_id and telemetry_client_secret (the install credential); refresh stays off unless all are present, and the module refuses a partial set at plan."
+  description = "The licence refresh endpoint of Masterly's control plane, verbatim from the install bundle (a full URL, not an origin). Leave unset for an offline install — no outbound call is made. Requires telemetry_url, telemetry_client_id and telemetry_client_secret: refresh authenticates as that install service account, so setting it also turns hourly usage reporting on. Refresh stays off unless all are present, and the module refuses a partial set at plan."
 }
 
 # --- Data plane seam (ADR 0065) -----------------------------------------------------

@@ -2001,6 +2001,25 @@ run "license_refresh_without_the_credential_is_rejected" {
   expect_failures = [azurerm_resource_group.aca]
 }
 
+# The requirement the docs state must be the requirement the module enforces. The credential
+# alone does not reach the control plane — telemetry_url is how it gets there — so a set that
+# omits it is refused, and refused by the LICENCE precondition (it is evaluated first, so the
+# one message Terraform prints names refresh rather than a telemetry pairing the customer
+# never asked for). Without this run, following the README produced a plan failure about a
+# feature the customer had not enabled.
+run "license_refresh_without_telemetry_url_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    license_issuer_url      = "https://cp.masterlydata.com/v1/licenses/refresh"
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
 # Not a production requirement (ADR 0074 §2: refresh is optional; air-gapped stays first-class).
 run "production_does_not_require_license_refresh" {
   command = plan

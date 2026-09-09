@@ -134,6 +134,14 @@ resource "azurerm_resource_group" "aca" {
       error_message = "api_ingress_external = true with an empty ingress_allowed_cidrs would publish /v1 to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. The api holds no session of its own — it trusts a bearer token — so it is the surface least able to survive being open. Name the CIDRs that may reach it."
     }
 
+    # Ahead of the two telemetry preconditions on purpose: Terraform reports the FIRST
+    # failing precondition only, and a customer who set license_issuer_url must be told
+    # about licence refresh rather than about a telemetry pairing they never asked for.
+    precondition {
+      condition     = var.license_issuer_url == null || (var.telemetry_url != null && var.telemetry_client_id != null && var.telemetry_client_secret != null)
+      error_message = "license_issuer_url requires telemetry_url, telemetry_client_id and telemetry_client_secret: the licence refresh authenticates as the install service account, and that account reaches the control plane through the telemetry inputs — the application keeps refresh OFF without all of them, so a partial set produces an install that looks configured and never refreshes. Set all four (they come together in your install bundle), or none. Note what that means today: an install that refreshes its licence also reports usage hourly; the two share one credential and one control-plane URL."
+    }
+
     precondition {
       condition     = (var.telemetry_url == null) == (var.telemetry_client_id == null)
       error_message = "telemetry_url and telemetry_client_id go together: the application gates reporting on BOTH, so setting one alone produces an install that looks configured and reports nothing. Set both, or neither."
@@ -142,11 +150,6 @@ resource "azurerm_resource_group" "aca" {
     precondition {
       condition     = !(var.telemetry_url != null && var.telemetry_client_id != null) || var.telemetry_client_secret != null
       error_message = "telemetry_client_secret is required once telemetry_url and telemetry_client_id are set: the report authenticates with that service account, and without the secret every hourly report fails against the control plane rather than failing here."
-    }
-
-    precondition {
-      condition     = var.license_issuer_url == null || (var.telemetry_client_id != null && var.telemetry_client_secret != null)
-      error_message = "license_issuer_url requires telemetry_client_id and telemetry_client_secret: the licence refresh authenticates with that same install service account, and the application keeps refresh OFF without a credential — so setting the URL alone produces an install that looks configured and never refreshes. Set all three (from your install bundle), or none."
     }
 
     precondition {
