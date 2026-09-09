@@ -177,6 +177,30 @@ run "production_mode_full_wiring_plans" {
     )
     error_message = "Production must wire diagnostics for the enabled data-plane resources and the app 5xx alerts (Postgres absent on BYO-DB)."
   }
+
+  # Availability, the other half of the catalogue (MAS-263). Both apps declare a replica floor
+  # in production, so both get the "no running replica" alert. The database alerts are absent
+  # here for the same reason the diagnostic setting is: on BYO-DB the module wires no telemetry
+  # for a server it does not provision, so it has no stream whose end it could notice.
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.app_unavailable) == 2 &&
+      length(azurerm_monitor_metric_alert.postgres_unavailable) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0
+    )
+    error_message = "Production must alert on both apps having no replica, and must not claim database availability coverage on BYO-DB."
+  }
+
+  # Severity is what tells an operator "down" from "strained" in the notification itself: every
+  # saturation alert in this module is 1 or 2, every availability alert is 0. If these converge
+  # the distinction the alert set exists to draw stops being visible without opening the portal.
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.app_unavailable["api"].severity == 0 &&
+      azurerm_monitor_metric_alert.app_5xx["api"].severity == 1
+    )
+    error_message = "An availability alert must outrank a saturation alert (severity 0 vs 1) — the severity is how the two states are told apart."
+  }
 }
 
 # mode=production on the PROVISIONED starter server: the data-plane defaults must be
@@ -231,6 +255,49 @@ run "production_starter_postgres_grade_plans" {
     )
     error_message = "Production starter server must wire Postgres diagnostics + storage alert (no CPU-credit alert on GP) and an action group when alert_email is set."
   }
+
+  # The provisioned server gets both database availability alerts (MAS-263): the fast one that
+  # reads the platform's own is_db_alive, and the slow one that fires on the ABSENCE of that
+  # metric — the state a stopped server leaves behind, which no metric alert can see.
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.postgres_unavailable) == 1 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 1
+    )
+    error_message = "A provisioned starter server must carry both the is_db_alive alert and the no-telemetry alert."
+  }
+
+  # is_db_alive is 1 up / 0 down and Learn documents MAX() as the way to ask whether the server
+  # was up in the last minute. Average would let a mostly-up server average a hard minute away;
+  # Minimum would fire on every failover blip. Pinned because either substitution still plans.
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.postgres_unavailable[0].criteria[0].metric_name == "is_db_alive" &&
+      azurerm_monitor_metric_alert.postgres_unavailable[0].criteria[0].aggregation == "Maximum" &&
+      azurerm_monitor_metric_alert.postgres_unavailable[0].criteria[0].operator == "LessThan" &&
+      azurerm_monitor_metric_alert.postgres_unavailable[0].criteria[0].threshold == 1
+    )
+    error_message = "The database availability alert must read is_db_alive with Maximum aggregation below 1."
+  }
+
+  # The whole point of the log rule: SILENCE has to be the firing condition. Counting rows and
+  # firing below one is what makes an empty result an alert rather than a quiet evaluation — the
+  # property a metric alert cannot have. GreaterThan here would invert the alert into a
+  # permanently-firing one and still plan cleanly, so it is pinned.
+  assert {
+    condition = (
+      azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent[0].criteria[0].time_aggregation_method == "Count" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent[0].criteria[0].operator == "LessThan" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent[0].criteria[0].threshold == 1
+    )
+    error_message = "The no-telemetry alert must fire when the query returns NO rows (Count < 1) — otherwise silence stays quiet."
+  }
+
+  # Not asserted here, and worth naming rather than leaving as a silent gap: that the rule's
+  # scope is the install's own workspace and its query names the install's own server. Both are
+  # built from resource ids, which are unknown until apply, so under mock providers the
+  # condition is unknowable rather than false. Reviewing the interpolation in diagnostics.tf is
+  # what covers it.
 }
 
 # Guard: mode=production refuses the burstable Postgres default on the provisioned starter
@@ -499,7 +566,10 @@ run "key_vault_enabled_provisions_vault_and_grant" {
   assert {
     condition = (
       length(azurerm_monitor_diagnostic_setting.key_vault) == 0 &&
-      length(azurerm_monitor_metric_alert.app_5xx) == 0
+      length(azurerm_monitor_metric_alert.app_5xx) == 0 &&
+      length(azurerm_monitor_metric_alert.app_unavailable) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_unavailable) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0
     )
     error_message = "Diagnostics must be off by default outside production."
   }
@@ -2176,5 +2246,40 @@ run "the_environment_encrypts_peer_traffic" {
   assert {
     condition     = contains(module.frontend.env_names, "MASTERLY_API_BASE_URL")
     error_message = "The BFF must be told where the api is."
+  }
+}
+
+# An app that is ALLOWED to sit at zero replicas gets no replica-availability alert, because on
+# such an install zero replicas is the intended state and the alert would page every idle night.
+# The gate is per app, not per install: turn diagnostics on for an evaluation install that
+# scales the api to zero and the frontend still keeps its floor, so it still keeps its alert.
+# Asserting the shape of the map, not just its size — a regression that alerted on the api and
+# skipped the frontend would keep the count at one (MAS-263).
+run "scale_to_zero_apps_get_no_replica_alert" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = true
+    api_min_replicas      = 0
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.app_unavailable) == 1 &&
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "frontend")
+    )
+    error_message = "Only the app that declares a replica floor may carry a no-replica alert; a scale-to-zero app must not."
+  }
+
+  # The database alerts do not depend on replica counts at all, so enabling diagnostics on an
+  # evaluation install still buys the availability coverage that matters most: this install
+  # provisions the starter server, so both database alerts are present.
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.postgres_unavailable) == 1 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 1
+    )
+    error_message = "Enabling diagnostics outside production must still bring the database availability alerts."
   }
 }
