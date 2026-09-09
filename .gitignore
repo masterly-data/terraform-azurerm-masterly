@@ -15,5 +15,6 @@
 .terraform.lock.hcl
 .terraform/
 .vscode/
+__pycache__/
 crash.log
 tfplan

@@ -1,0 +1,54 @@
+# Do the public self-hosted docs still tell a customer to install the module we publish?
+#
+# masterlydata.com/docs/self-hosted carries two copy-paste module pins — the module call on
+# the deploy page and the tested-combination table on the install page. Nothing links either
+# to a release here, so a version can be tagged, published and forgotten while every new
+# install is still built from what the pages last named. That is not hypothetical: the docs
+# sat on 0.11.0 while the registry served 0.15.0, four releases and two security fixes
+# behind (MAS-199).
+#
+# The check lives here because this is where the drift is made — a release is cut in this
+# repo, and nothing about that event reaches the docs. It also asks the question in the
+# direction that costs nothing: the site is public and so is the Terraform Registry, so this
+# job holds no credential to expire, which is the failure mode masterly-application-backend's
+# public-docs-contract.yml exists to avoid rather than repeat. It reads the published pages,
+# not masterly-web's source, so it answers about what a customer can copy today.
+#
+# SCHEDULED, not on tag push, on purpose: at the moment a version is tagged the docs have
+# not been updated yet and never could be, and the registry has not ingested it either. A
+# daily check turns a release-time gate that would be red by construction into what this
+# actually is — a reminder with a deadline of "before tomorrow morning".
+
+name: public docs module pin
+
+on:
+  schedule:
+    - cron: "31 6 * * 1-5" # weekday mornings, UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-docs-module-pin
+  cancel-in-progress: true
+
+jobs:
+  published-docs-pin-is-current:
+    name: Self-hosted docs pin the newest published module
+    runs-on: ubuntu-latest
+    steps:
+      # persist-credentials: false — actions/checkout otherwise leaves the job's
+      # GITHUB_TOKEN in .git/config for the rest of the run. This job pushes nothing and
+      # reads only public endpoints, so the token has no job to do after the checkout.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # Standard library only — a staleness reminder should not depend on anything
+      # resolving, and this repo ships no Python dependencies to resolve.
+      - run: python3 scripts/check_docs_module_pin.py
