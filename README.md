@@ -360,14 +360,56 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   Postgres, Redis, Key Vault, and Service Bus (each only when that resource exists). On
   `redis_offering = "managed"` this is two settings, not one: metrics are cluster-level but
   the connection log lives on the `redisEnterprise/databases` child.
-- **Metric alerts** for the page-an-operator failure modes: Postgres storage nearly full,
-  B-series CPU-credit exhaustion (burstable installs only), Redis memory nearly full, Redis
-  key evictions (which under the no-eviction policy mean the policy has been changed out from
-  under the install, not that the cache is small), and `ca-api` / `ca-frontend` 5xx.
+- **Saturation alerts** — the install is under strain. Postgres storage nearly full, B-series
+  CPU-credit exhaustion (burstable installs only), Redis memory nearly full, Redis key evictions
+  (which under the no-eviction policy mean the policy has been changed out from under the
+  install, not that the cache is small), and `ca-api` / `ca-frontend` 5xx. Severity 1–2.
+- **Availability alerts** — the install is not serving at all. Severity 0, so a notification
+  tells you which of the two states you are in without opening the portal.
 
 Alerts fire and record with no notification target; to be paged, set `alert_email` (the
 module creates an action group) or point `alert_action_group_id` at an existing group
 (a shared ops group, a PagerDuty webhook group).
+
+### What the alerts detect, and what they do not
+
+Every saturation alert needs the resource running, publishing metrics, and taking traffic. That
+is the right shape for "under strain" and the wrong shape for "gone": a stopped database
+publishes no storage figure, an app that hangs returns no 5xx, and an idle scale-to-zero install
+reports no requests at all. The availability alerts exist to close that, and it is worth being
+precise about how far they reach.
+
+| Failure mode | Detected by | Notes |
+|---|---|---|
+| Database reports itself down | `postgres-unavailable` | Reads the platform's own `is_db_alive`. Fastest signal here: 5-minute window. |
+| Database stopped, deleted, or its telemetry broke | `postgres-silent` | Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. ~40 minutes to page, deliberately. On a brand-new install it can fire once before the first metrics land; it clears itself when they do. |
+| An app has no running replica | `<app>-unavailable` | Only created for an app whose `min_replicas` is 1 or more. Counts replicas, not readiness — see the first "not detected" entry below. |
+| Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. |
+
+Not detected, and no alert here should be read as covering it:
+
+- **An app that is running but never becomes ready.** This is the widest gap in the set, and the
+  one to plan around. A replica that starts, fails its readiness probe, and is therefore never
+  routed to still counts toward `Replicas` — so on an install with a replica floor,
+  `<app>-unavailable` reads a healthy 1 while the install serves nothing. `<app>-5xx` does not
+  cover it either: it needs more than five requests in its window, and an install nobody can
+  reach receives none. A synthetic check against the install's own URL, run from wherever you
+  already monitor, is what closes this; the module ships none, for the reason in the next entry.
+- **A BYO-DB install's database.** With `external_database_url` set, the module wires no
+  diagnostic setting to a server it does not own, so it has no telemetry stream whose end it
+  could notice. Alert on your own database from wherever it runs.
+- **An app that is up, answering, and wrong.** Replicas running and no 5xx is the shape of a
+  healthy app and also of one serving stale or empty data. Nothing in the module probes the
+  application's `/readyz` from outside — that is a synthetic check, and the module deliberately
+  ships none, because on the private-ingress and injected-network topologies there is no vantage
+  point it could run from without assuming a network it does not own.
+- **An app on a scale-to-zero install.** With `min_replicas = 0`, zero replicas is the intended
+  state, so no replica alert is created for that app. This is an evaluation cost posture;
+  `mode = "production"` requires a floor of at least one replica on both apps.
+- **Anything, on an install with no notification target.** Alerts still fire and record, but
+  nobody is told. Set `alert_email` or `alert_action_group_id`.
+- **Anything, on an install with `enable_diagnostics = false`** — the default outside
+  `mode = "production"`.
 
 ## If you front this install with a WAF, CDN, or gateway
 

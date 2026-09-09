@@ -18,6 +18,16 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
 - `license_issuer_url` — the licence refresh endpoint reaches the apps, so an install can
   re-fetch and re-verify its licence daily instead of waiting for the next apply. Optional, and
   it requires the three telemetry inputs (MAS-98).
+- Availability alerts, alongside the saturation alerts that were the whole catalogue until now.
+  An install that has stopped serving now raises a severity-0 alert — the database reporting
+  itself unavailable, an app left with no running replica, or the database's telemetry stopping
+  altogether, which is the one a stopped server produces and which no metric alert can see. They
+  are distinguishable from a strained install by severity and name, and they arrive with the rest
+  of diagnostics: no new input, and no change to the five existing alerts. One failure mode they
+  do **not** cover is written down rather than implied: an app whose replica is running but never
+  passes its readiness probe still counts toward `Replicas`, so it reads as available — see "What
+  the alerts detect, and what they do not" in the [README](README.md) for what covers it
+  (MAS-263).
 
 ### Changed
 
