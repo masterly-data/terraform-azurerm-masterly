@@ -519,6 +519,11 @@ Semver tags; consumers pin `?ref=vX.Y.Z`. Breaking input/output changes bump the
 CI checks `terraform fmt` + `validate` + `terraform test` (mock providers exercise the
 variable guards and both data-plane branches) on every change.
 
+A scheduled check (`.github/workflows/public-docs-module-pin.yml`) compares the version the
+public [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) tell customers
+to install against the newest version on the registry, so a release cannot quietly leave the
+walkthrough a customer follows behind. It reads two public endpoints and holds no credential.
+
 ## Provider versions and the lock file
 
 Terraform consults the dependency lock file in the **root configuration's** working directory
