@@ -134,6 +134,14 @@ resource "azurerm_resource_group" "aca" {
       error_message = "api_ingress_external = true with an empty ingress_allowed_cidrs would publish /v1 to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. The api holds no session of its own — it trusts a bearer token — so it is the surface least able to survive being open. Name the CIDRs that may reach it."
     }
 
+    # Ahead of the two telemetry preconditions on purpose: Terraform reports the FIRST
+    # failing precondition only, and a customer who set license_issuer_url must be told
+    # about licence refresh rather than about a telemetry pairing they never asked for.
+    precondition {
+      condition     = var.license_issuer_url == null || (var.telemetry_url != null && var.telemetry_client_id != null && var.telemetry_client_secret != null)
+      error_message = "license_issuer_url requires telemetry_url, telemetry_client_id and telemetry_client_secret: the licence refresh authenticates as the install service account, and that account reaches the control plane through the telemetry inputs — the application keeps refresh OFF without all of them, so a partial set produces an install that looks configured and never refreshes. Set all four (they come together in your install bundle), or none. Note what that means today: an install that refreshes its licence also reports usage hourly; the two share one credential and one control-plane URL."
+    }
+
     precondition {
       condition     = (var.telemetry_url == null) == (var.telemetry_client_id == null)
       error_message = "telemetry_url and telemetry_client_id go together: the application gates reporting on BOTH, so setting one alone produces an install that looks configured and reports nothing. Set both, or neither."
@@ -553,6 +561,7 @@ locals {
     local.redis_env,             # redis session registry when Redis is enabled (ADR 0066)
     local.workers_inprocess_env, # the api hands the loop to ca-workers when enabled (ADR 0066)
     local.telemetry_env,         # usage reporting to the control plane, off unless configured
+    local.license_refresh_env,   # daily licence refresh from the control plane (ADR 0074), off unless configured
     # The license verification key (ADR 0013) is public material — plain env.
     var.license_public_jwk != null ? { MASTERLY_LICENSE_PUBLIC_JWK = var.license_public_jwk } : {},
   )
@@ -624,6 +633,16 @@ locals {
   telemetry_env = local.telemetry_configured ? {
     MASTERLY_TELEMETRY_URL       = var.telemetry_url
     MASTERLY_TELEMETRY_CLIENT_ID = var.telemetry_client_id
+  } : {}
+
+  # Licence refresh (ADR 0074): the URL is the only new input — the credential is the
+  # install service account above (telemetry_client_id / _secret, scope license:refresh),
+  # which the precondition requires alongside it. The application additionally requires a
+  # verifiable licence (license_token + license_public_jwk) before it switches refresh on.
+  license_refresh_configured = var.license_issuer_url != null && var.telemetry_client_id != null
+
+  license_refresh_env = local.license_refresh_configured ? {
+    MASTERLY_LICENSE_ISSUER_URL = var.license_issuer_url
   } : {}
 }
 

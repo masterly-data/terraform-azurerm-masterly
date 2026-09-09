@@ -110,6 +110,13 @@ module "masterly" {
   # telemetry_client_id     = var.telemetry_client_id
   # telemetry_client_secret = var.telemetry_client_secret # from your secret store
 
+  # Licence refresh (optional, same credential): the install re-fetches its licence from
+  # Masterly daily and re-verifies it before adopting it. Leave unset on an offline
+  # install — no outbound call is made. Requires all THREE telemetry inputs above
+  # (telemetry_url included — refresh authenticates as that same install service account),
+  # so an install that refreshes its licence also reports usage hourly.
+  # license_issuer_url      = "<licence refresh URL from your install bundle>"
+
   # BYO-DB (ADR 0065): your own Postgres. Omit to provision the starter server instead.
   external_database_url = var.masterly_database_url # from your secret store
 

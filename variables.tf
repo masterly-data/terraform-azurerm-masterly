@@ -318,6 +318,29 @@ variable "license_public_jwk" {
   description = "The license issuer's public JWK (JSON) used to verify license_token. Public material — plain env, not a secret."
 }
 
+# --- Licence refresh (ADR 0074) ---------------------------------------------------------
+# With this set, the application refreshes its licence from Masterly's control plane once a
+# day and re-verifies what comes back against license_public_jwk before adopting it. The
+# install authenticates as the same service account it reports telemetry as (the bundle's
+# install credential), and that account reaches the control plane through the telemetry
+# inputs — so refresh is on only when this AND telemetry_url + telemetry_client_id +
+# telemetry_client_secret are all set. The module refuses the half-configuration at plan.
+#
+# Because the credential and the URL are shared, an install configured for refresh today is
+# also an install that reports usage hourly. The two are separable in principle (ADR 0074
+# §2) and are not yet separated in the module; separating them is a known follow-up.
+#
+# Unset = the offline posture: no outbound call, and the licence is governed by its own
+# expiry and grace alone. Air-gapped installs leave it unset and lose nothing. Where it is
+# set, seven days without a successful refresh puts the install in read-only mode (reads,
+# exports and sign-in continue; writes are refused) until refresh succeeds again.
+
+variable "license_issuer_url" {
+  type        = string
+  default     = null
+  description = "The licence refresh endpoint of Masterly's control plane, verbatim from the install bundle (a full URL, not an origin). Leave unset for an offline install — no outbound call is made. Requires telemetry_url, telemetry_client_id and telemetry_client_secret: refresh authenticates as that install service account, so setting it also turns hourly usage reporting on. Refresh stays off unless all are present, and the module refuses a partial set at plan."
+}
+
 # --- Data plane seam (ADR 0065) -----------------------------------------------------
 
 variable "external_database_url" {
