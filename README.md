@@ -15,10 +15,12 @@ module "masterly" {
 }
 ```
 
-Pin a version — `~> 0.15` takes patches, `= 0.15.0` pins exactly. Sourcing straight from
-GitHub also works (`github.com/masterly-data/terraform-azurerm-masterly?ref=v0.15.0`) and is
-what air-gapped mirrors do, but the registry gives you version constraints and needs no
-`git` on the runner.
+Pin a version — a `~>` constraint takes patches within a minor, `=` pins one release
+exactly. Sourcing straight from GitHub also works
+(`github.com/masterly-data/terraform-azurerm-masterly?ref=v<version>`) and is what air-gapped
+mirrors do, but the registry gives you version constraints and needs no `git` on the runner.
+Which version is current, and which images go with it, is [`MANIFEST.json`](MANIFEST.json) —
+see [Versioning](#versioning).
 
 No credential is needed to fetch this module. Running Masterly does need two things it does not
 contain: the **container images**, pulled with the registry credential in your install bundle, and
@@ -62,10 +64,10 @@ module "masterly" {
   # the only geo a single data plane can hold. The module refuses at plan an install whose
   # declared geo contradicts its Azure location, or that permits a geo it cannot honour.
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
-  # The pair each release names in What's new (masterlydata.com/docs/whats-new). Floors:
-  # api v0.132.2 (below it ca-workers registers no job handlers, silently) and frontend
-  # v0.138.2 (below it a fresh install cannot create its first Environment). api v0.133.1
-  # has no published image — pin v0.133.2.
+  # The pair this module version was released against, from MANIFEST.json (see Versioning).
+  # Two floors sit below it: an api older than v0.132.2 registers no job handlers on
+  # ca-workers, silently, and a frontend older than v0.138.2 leaves a fresh install unable to
+  # create its first Environment. api v0.133.1 has no published image.
   api_image           = "masterly.azurecr.io/api:v0.133.2"
   frontend_image      = "masterly.azurecr.io/frontend:v0.138.2"
 
@@ -522,14 +524,52 @@ Custom domains · the per-install Entra identity toward Masterly's control plane
 
 ## Versioning
 
-Semver tags; consumers pin `?ref=vX.Y.Z`. Breaking input/output changes bump the major.
-CI checks `terraform fmt` + `validate` + `terraform test` (mock providers exercise the
-variable guards and both data-plane branches) on every change.
+Semver tags; consumers pin a registry `version` constraint, or `?ref=vX.Y.Z` from GitHub.
+Breaking input/output changes bump the major. The module version is the one customer-facing
+version (ADR 0062): the tag, the registry version and the pin in the docs are all the same
+number.
+
+[`MANIFEST.json`](MANIFEST.json) is the machine-readable statement of what each published
+version was released against, and [`CHANGELOG.md`](CHANGELOG.md) is what changed. Read the
+manifest rather than copying out of this table — the table itself is generated from it:
+
+<!-- release-manifest:begin -->
+| Module version | `api_image` | `frontend_image` | Released |
+|---|---|---|---|
+| `0.15.0` | `masterly.azurecr.io/api:v0.133.2` | `masterly.azurecr.io/frontend:v0.138.2` | 2026-09-07 |
+<!-- release-manifest:end -->
+
+The image pair is what the module version was released against — the pair Masterly's own
+install ran when the version was tagged. Your install's running tags move on from it: the
+module seeds a newly created app and then ignores image drift, so CD owns the tag thereafter.
+
+CI checks `terraform fmt` + `validate` + `terraform test` (mock providers exercise the variable
+guards and both data-plane branches) on every change, and
+`scripts/check_release_manifest.py` fails any change where the manifest, the changelog and this
+README stop agreeing.
 
 A scheduled check (`.github/workflows/public-docs-module-pin.yml`) compares the version the
 public [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) tell customers
 to install against the newest version on the registry, so a release cannot quietly leave the
 walkthrough a customer follows behind. It reads two public endpoints and holds no credential.
+
+### Cutting a release
+
+Release-please is deliberately not used here: the module's version is a release decision, not
+one computed from commit messages. So the bump is made by hand — but not the copies of it. In
+one commit, on `main`, before the tag:
+
+1. Add the version to `MANIFEST.json` (`releases`, plus `latest`), naming the `api` and
+   `frontend` images the release is tested against. That pair is what Masterly's own install
+   has applied — take it from the install, not from prose.
+2. Rename the changelog's `Unreleased` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a fresh
+   `Unreleased`.
+3. Run `python3 scripts/check_release_manifest.py --write` to bring this README into line, and
+   `python3 scripts/check_release_manifest.py` to check the result.
+4. Merge, then tag `vX.Y.Z` on that commit.
+
+CI runs the same check on the tag build with `--tag`, so a tag pushed without its manifest and
+changelog entries fails immediately rather than being noticed a release later.
 
 ## Provider versions and the lock file
 
