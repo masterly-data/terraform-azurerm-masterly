@@ -382,12 +382,19 @@ precise about how far they reach.
 | Failure mode | Detected by | Notes |
 |---|---|---|
 | Database reports itself down | `postgres-unavailable` | Reads the platform's own `is_db_alive`. Fastest signal here: 5-minute window. |
-| Database stopped, deleted, or its telemetry broke | `postgres-silent` | Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. ~40 minutes to page, deliberately. |
-| An app has no running replica | `<app>-unavailable` | Only created for an app whose `min_replicas` is 1 or more. |
+| Database stopped, deleted, or its telemetry broke | `postgres-silent` | Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. ~40 minutes to page, deliberately. On a brand-new install it can fire once before the first metrics land; it clears itself when they do. |
+| An app has no running replica | `<app>-unavailable` | Only created for an app whose `min_replicas` is 1 or more. Counts replicas, not readiness — see the first "not detected" entry below. |
 | Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. |
 
 Not detected, and no alert here should be read as covering it:
 
+- **An app that is running but never becomes ready.** This is the widest gap in the set, and the
+  one to plan around. A replica that starts, fails its readiness probe, and is therefore never
+  routed to still counts toward `Replicas` — so on an install with a replica floor,
+  `<app>-unavailable` reads a healthy 1 while the install serves nothing. `<app>-5xx` does not
+  cover it either: it needs more than five requests in its window, and an install nobody can
+  reach receives none. A synthetic check against the install's own URL, run from wherever you
+  already monitor, is what closes this; the module ships none, for the reason in the next entry.
 - **A BYO-DB install's database.** With `external_database_url` set, the module wires no
   diagnostic setting to a server it does not own, so it has no telemetry stream whose end it
   could notice. Alert on your own database from wherever it runs.

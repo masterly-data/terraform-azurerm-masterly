@@ -23,7 +23,11 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
   itself unavailable, an app left with no running replica, or the database's telemetry stopping
   altogether, which is the one a stopped server produces and which no metric alert can see. They
   are distinguishable from a strained install by severity and name, and they arrive with the rest
-  of diagnostics: no new input, and no change to the five existing alerts (MAS-263).
+  of diagnostics: no new input, and no change to the five existing alerts. One failure mode they
+  do **not** cover is written down rather than implied: an app whose replica is running but never
+  passes its readiness probe still counts toward `Replicas`, so it reads as available — see "What
+  the alerts detect, and what they do not" in the [README](README.md) for what covers it
+  (MAS-263).
 
 ### Changed
 

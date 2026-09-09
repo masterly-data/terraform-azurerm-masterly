@@ -298,6 +298,16 @@ run "production_starter_postgres_grade_plans" {
   # built from resource ids, which are unknown until apply, so under mock providers the
   # condition is unknowable rather than false. Reviewing the interpolation in diagnostics.tf is
   # what covers it.
+  #
+  # The same limit swallows anything else about the query TEXT, and one thing in it deserves to
+  # be named because it reads as decoration and is not: the union's empty-`datatable` anchor.
+  # `union isfuzzy=true` alone does NOT survive an operand that fails to resolve — a fuzzy union
+  # whose only operand is missing dies with SEM0104, measured against a live workspace on
+  # 2026-09-09 (see the comment on the resource). Deleting the anchor as redundant leaves a query
+  # that still plans, still applies, and only fails at evaluation. An assert on
+  # `criteria[0].query` was written and removed: interpolating the server id makes the whole
+  # string unknown at plan time, so terraform test rejects the condition as unevaluable rather
+  # than failing it. Only an apply-mode run against real Azure could pin it.
 }
 
 # Guard: mode=production refuses the burstable Postgres default on the provisioned starter

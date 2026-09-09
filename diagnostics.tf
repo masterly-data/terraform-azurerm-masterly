@@ -430,6 +430,40 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 # learns to ignore, which leaves them worse off than not shipping it. mode=production requires
 # api_min_replicas >= 1 and frontend_min_replicas >= 1 (validations on those variables), so on
 # every install where diagnostics is on by default both alerts exist.
+#
+# What this alert CANNOT see, recorded here because the gap is invisible from the resource: a
+# replica that starts, never passes its readiness probe, and is never routed to still counts
+# toward `Replicas`. On an install with a replica floor — which is every production install, and
+# the only kind this alert is created on — a wedged app therefore reads 1 and this stays green
+# while the install serves nothing. app_5xx does not cover it either: that alert needs more than
+# five requests in its window, and an install nobody can reach receives none.
+#
+# Two candidate signals for closing that were checked against the code and against real
+# telemetry, and neither ports into this module:
+#
+#  * The app's own words. Layer 2 (masterly-platform-iac, MAS-260) alerts on the string
+#    `readiness check failed`, written by common/app_factory.py's /readyz handler — but that
+#    factory belongs to masterly-platform-backend, which never ships to a customer. The api this
+#    module runs is masterly-application-backend, whose /readyz logs NOTHING on failure
+#    (api/routes/health.py catches the dependency error and answers 503 without a log record) and
+#    whose request-log middleware excludes /readyz and /healthz by name. A rule ported on that
+#    string would be an alert that can never fire — worse than shipping none, because the README
+#    would then claim coverage that does not exist.
+#
+#  * The platform's own words. ContainerAppSystemLogs_CL does carry the failure
+#    (`Reason_s == "ProbeFailed"`, e.g. "Container ca-api failed readiness probe"), and it is
+#    populated in every install because modules/aca-env-consumption sets logs_destination to
+#    module.logs unconditionally. It caught exactly this shape on the demo install on 2026-09-07.
+#    But replaying a sustained-window rule over 30 days of that workspace fires on roughly a
+#    dozen occasions per app, most of them ordinary deploy churn, and separating a wedged app
+#    from a rolling one needs a rate threshold that depends on readiness_probe_interval_seconds —
+#    a per-install input this module lets the caller set. An alert shipped to customers on a
+#    threshold tuned against one atypical install is one an operator mutes, which leaves them
+#    worse off than a documented gap.
+#
+# So the gap is disclosed in the README ("What the alerts detect, and what they do not") rather
+# than papered over, and what actually covers it is a synthetic check against the install's own
+# URL, run from wherever the customer already monitors.
 resource "azurerm_monitor_metric_alert" "app_unavailable" {
   for_each = local.availability_alertable_apps
 
@@ -471,10 +505,22 @@ resource "azurerm_monitor_metric_alert" "app_unavailable" {
 # count as the measure and LessThan 1 as the condition, silence is the firing state. That is
 # the property the metric alerts cannot have.
 #
-# `union isfuzzy=true` rather than a bare `AzureMetrics`: until the first metric lands the table
-# does not exist in a new workspace, and a query against a missing table FAILS rather than
-# returning nothing — which would leave the rule unhealthy (and, after a week of failures,
-# disabled by Azure) precisely during the window when a fresh install is least proven.
+# The empty `datatable` anchor on the union, and why `isfuzzy` alone is not the protection it
+# looks like. The hazard is real: a query whose source table does not resolve FAILS rather than
+# returning nothing, which would leave the rule unhealthy — and, after a week of failures,
+# disabled by Azure — precisely during the window when a fresh install is least proven.
+# `union isfuzzy=true` is the usual answer to that and it is NOT sufficient on its own: measured
+# against this module's own install workspace (log-masterly, msly-demo-01-eu) on 2026-09-09, a
+# fuzzy union whose ONLY operand is a missing table still dies with SEM0104 ("Operator source
+# expression should be table or column"). Anchoring the union with an empty literal of the right
+# shape gives it a schema that always resolves, and the same missing operand then degrades to a
+# partial-result warning and an empty answer — measured the same day, same workspace.
+#
+# For AzureMetrics specifically the anchor is belt-and-braces rather than load-bearing: it is a
+# built-in table that resolves even when it holds nothing, which was checked by running the
+# un-anchored query against that workspace, where AzureMetrics had no rows for the whole 30-day
+# retention — it returned an empty result, not an error. The anchor is here so the idiom in this
+# file is the one that is true in general, because these queries get copied.
 #
 # Two consecutive failing 30-minute evaluations before it pages — roughly 40 minutes of true
 # silence. Deliberately slower than the metric alerts: Learn is explicit that log data is more
@@ -518,7 +564,9 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "postgres_silent" {
 
   criteria {
     query = <<-KQL
-      union isfuzzy=true (AzureMetrics | where _ResourceId =~ "${azurerm_postgresql_flexible_server.this[0].id}")
+      union isfuzzy=true
+        (datatable(TimeGenerated:datetime, _ResourceId:string)[]),
+        (AzureMetrics | where _ResourceId =~ "${azurerm_postgresql_flexible_server.this[0].id}")
       | summarize Samples = count()
       | where Samples > 0
     KQL
