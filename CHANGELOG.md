@@ -15,6 +15,18 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
 
 ### Added
 
+- `app-not-ready` — an availability alert for the failure that every other alert in the set
+  structurally cannot see: a replica that starts, never passes its readiness probe, and is
+  therefore never routed to, while still counting toward the platform's replica metric. Until
+  now `<app>-unavailable` read a healthy 1 on exactly that install and `<app>-5xx` saw no
+  requests to fail, so the install served nothing with the whole catalogue green — the shape of
+  the one outage on record. `ca-api` and `ca-frontend` each log one line per **failing**
+  readiness probe (nothing on a passing one), and one log-search rule reads both, split by app
+  name; it fires when an app has failed readiness in at least 30 of the last 60 minutes, so a
+  cold start — which legitimately fails readiness for minutes at a time — stays under the bar
+  while a genuine wedge pages in 30–40 minutes. Severity 0, like the other availability alerts.
+  No new input: it arrives with diagnostics, and it is not gated on `min_replicas`, because an
+  app scaled to zero runs no probe and so simply says nothing (MAS-318).
 - `scripts/diagnostic-bundle.sh` — the diagnostic bundle in one action. Run from your own
   workstation with your `az` login, it writes a directory you read before you send: the apps'
   configuration state (secrets by name, environment values only from an allow-list),
@@ -37,11 +49,9 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
   itself unavailable, an app left with no running replica, or the database's telemetry stopping
   altogether, which is the one a stopped server produces and which no metric alert can see. They
   are distinguishable from a strained install by severity and name, and they arrive with the rest
-  of diagnostics: no new input, and no change to the five existing alerts. One failure mode they
-  do **not** cover is written down rather than implied: an app whose replica is running but never
-  passes its readiness probe still counts toward `Replicas`, so it reads as available — see "What
-  the alerts detect, and what they do not" in the [README](README.md) for what covers it
-  (MAS-263).
+  of diagnostics: no new input, and no change to the five existing alerts. What they count is
+  replicas, not readiness — the app whose replica is running but never passes its probe is
+  covered by `app-not-ready`, below (MAS-263).
 - `ca-workers` gets the same no-replica availability alert the serving apps carry, on installs
   that run it with a replica floor. It is the failure the rest of the set structurally cannot
   see: the workers app has no ingress, so it emits no requests, and a dead one leaves the

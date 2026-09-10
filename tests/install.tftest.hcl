@@ -242,6 +242,78 @@ run "production_mode_full_wiring_plans" {
     )
     error_message = "An availability alert must outrank a saturation alert (severity 0 vs 1) — the severity is how the two states are told apart."
   }
+
+  # The wedged-replica alert (MAS-318): present, and present for the right reason. It is NOT
+  # gated on a replica floor the way app_unavailable is — an app scaled to zero runs no probe
+  # and writes no line, so the rule is silent there rather than noisy — and it carries the
+  # availability severity, because this module's severity band separates the QUESTION (is the
+  # install serving?) from strain, which is what the README sells to operators.
+  assert {
+    condition = (
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].severity == 0
+    )
+    error_message = "Production must carry the readiness alert, at the availability severity."
+  }
+
+  # The criteria triple, pinned for the reason MAS-307 exists: the provider validates none of
+  # these against each other or against the query, so every wrong combination below plans and
+  # applies exactly as cleanly as the right one and then behaves like a healthy install.
+  # `LessThan` here would invert the rule into one that fires whenever every app is ready.
+  assert {
+    condition = (
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].time_aggregation_method == "Count" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].operator == "GreaterThan" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].threshold == 0 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].dimension[0].name == "ContainerAppName_s"
+    )
+    error_message = "The readiness alert must fire when the query returns at least one row, split by app."
+  }
+
+  # The QUERY, which nothing else in this repo can check. `terraform validate` does not parse
+  # KQL and neither does the provider; only Azure does, at create time, which this repo has no
+  # credentials to reach (ADR 0067 — CI is mock-provider only). What IS checkable here is that
+  # the load-bearing tokens are all still in the string, and each one of them is load-bearing:
+  #
+  #  * the shared prefix — the whole reason one rule covers both this module's apps and
+  #    Masterly's own control plane. Reword it and the rule matches nothing, forever, silently.
+  #  * both app names, so a rename cannot leave the filter pointing at an app that is gone.
+  #  * the minute-bucket count and its threshold — what makes the rule sustained rather than
+  #    edge-triggered, and what keeps a cold start (485s of legitimate probe failure, main.tf)
+  #    under the bar.
+  #  * the empty-datatable anchor, which reads as redundant next to `isfuzzy` and is not: a
+  #    fuzzy union whose only operand is a missing table still fails with SEM0104, so deleting
+  #    the anchor leaves a query that plans, applies, and only breaks at evaluation time on a
+  #    fresh install.
+  #
+  # This is assertable at all only because the query interpolates configured NAMES; the
+  # postgres_silent query interpolates a resource id, which is unknown at plan, and its text is
+  # therefore unreachable from here (see the note in the starter-server run below).
+  assert {
+    condition = (
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "readiness check failed") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "ContainerAppConsoleLogs_CL") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "\"ca-api\", \"ca-frontend\"") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "dcount(bin(TimeGenerated, 1m))") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "FailingMinutes >= 30") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "union isfuzzy=true") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]")
+    )
+    error_message = "The readiness query must filter ContainerAppConsoleLogs_CL for both serving apps on the shared prefix, count distinct failing minutes against a 30-minute bar, and keep the union's empty-datatable anchor."
+  }
+
+  # The query's one premise, enforced rather than remembered: it counts distinct MINUTES in
+  # which a failing probe was logged, so it needs at least one probe per minute to read a wedge
+  # at full speed. The module fixes both apps at 10 seconds. A future change past 60 seconds
+  # would not break the rule — it degrades to firing later, never to silence — but it would make
+  # the 30-of-60 bar mean something other than what the comment on the resource says it means.
+  assert {
+    condition = (
+      module.api.readiness_probe.interval_seconds <= 60 &&
+      module.frontend.readiness_probe.interval_seconds <= 60
+    )
+    error_message = "The readiness alert counts failing minutes, so both serving apps must probe at least once a minute."
+  }
 }
 
 # mode=production on the PROVISIONED starter server: the data-plane defaults must be
@@ -620,7 +692,8 @@ run "key_vault_enabled_provisions_vault_and_grant" {
       length(azurerm_monitor_metric_alert.app_5xx) == 0 &&
       length(azurerm_monitor_metric_alert.app_unavailable) == 0 &&
       length(azurerm_monitor_metric_alert.postgres_unavailable) == 0 &&
-      length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 0
     )
     error_message = "Diagnostics must be off by default outside production."
   }
