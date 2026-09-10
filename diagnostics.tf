@@ -56,6 +56,13 @@ locals {
     var.enable_workers && var.workers_min_replicas >= 1 ? { workers = module.workers[0].id } : {},
   ) : {}
 
+  # Which apps emit the readiness signal the wedged-replica alert reads. Both serving apps do
+  # and only they: ca-workers has no ingress, no /readyz and no probes (workers.tf), so there is
+  # no failing probe for it to write a line about. Named from the module outputs rather than
+  # retyped, so a rename of either app cannot leave the query filtering on a name that no longer
+  # exists — the failure mode where an alert stays green because it matches nothing.
+  readiness_alertable_apps = local.diagnostics_enabled ? [module.api.name, module.frontend.name] : []
+
   # What a missing replica MEANS, per app. The severity is the same for all three — this
   # module's severity band marks ABSENCE, not "HTTP is down" — but the sentence an operator
   # reads at 03:00 should not claim the install is unreachable when what actually stopped is
@@ -483,39 +490,42 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 # an ingress-less polling loop, so a workers app at zero replicas is a stalled pipeline whoever
 # configured it chose, not a fault this alert should page about.
 #
-# What this alert CANNOT see, recorded here because the gap is invisible from the resource: a
-# replica that starts, never passes its readiness probe, and is never routed to still counts
-# toward `Replicas`. On an install with a replica floor — which is every production install, and
-# the only kind this alert is created on — a wedged app therefore reads 1 and this stays green
-# while the install serves nothing. app_5xx does not cover it either: that alert needs more than
-# five requests in its window, and an install nobody can reach receives none.
+# What this alert cannot see on its own, and what now does. A replica that starts, never passes
+# its readiness probe, and is never routed to still counts toward `Replicas`. On an install with
+# a replica floor — which is every production install, and the only kind this alert is created
+# on — a wedged app therefore reads 1 and this stays green while the install serves nothing.
+# app_5xx does not cover it either: that alert needs more than five requests in its window, and
+# an install nobody can reach receives none. That is the shape of MAS-90, the one outage on
+# record here: the install served nothing for hours, every platform signal read normal, and a
+# human found it by opening the page.
 #
-# Two candidate signals for closing that were checked against the code and against real
-# telemetry, and neither ports into this module:
+# That gap used to be disclosed in the README rather than closed, because the signal did not
+# exist. It does now, and app_not_ready below reads it. What changed, and what did not:
 #
-#  * The app's own words. Layer 2 (masterly-platform-iac, MAS-260) alerts on the string
-#    `readiness check failed`, written by common/app_factory.py's /readyz handler — but that
-#    factory belongs to masterly-platform-backend, which never ships to a customer. The api this
-#    module runs is masterly-application-backend, whose /readyz logs NOTHING on failure
-#    (api/routes/health.py catches the dependency error and answers 503 without a log record) and
-#    whose request-log middleware excludes /readyz and /healthz by name. A rule ported on that
-#    string would be an alert that can never fire — worse than shipping none, because the README
-#    would then claim coverage that does not exist.
+#  * The app's own words — available in this module's apps since 2026-09, and not before.
+#    Masterly's own control plane (masterly-platform-iac) has alerted on the string
+#    `readiness check failed` since its backends' /readyz began writing it. The api
+#    this module runs is a different codebase, and its /readyz used to answer 503 with no log
+#    record at all while the request log excluded the probe paths by name — so that string was
+#    unfireable here, and porting the rule would have claimed coverage that did not exist. Both
+#    serving apps now write one WARNING line per FAILING probe, carrying that same
+#    `readiness check failed: ` prefix deliberately, so that one rule shape covers every app in
+#    both layers. A passing probe still writes nothing, which is what keeps a 10-second probe
+#    interval from billing the customer for a log line every ten seconds.
 #
-#  * The platform's own words. ContainerAppSystemLogs_CL does carry the failure
-#    (`Reason_s == "ProbeFailed"`, e.g. "Container ca-api failed readiness probe"), and it is
-#    populated in every install because modules/aca-env-consumption sets logs_destination to
-#    module.logs unconditionally. It caught exactly this shape on the demo install on 2026-09-07.
-#    But replaying a sustained-window rule over 30 days of that workspace fires on roughly a
-#    dozen occasions per app, most of them ordinary deploy churn, and separating a wedged app
-#    from a rolling one needs a rate threshold that depends on readiness_probe_interval_seconds —
-#    a per-install input this module lets the caller set. An alert shipped to customers on a
-#    threshold tuned against one atypical install is one an operator mutes, which leaves them
-#    worse off than a documented gap.
+#  * The platform's own words — still rejected, and the measurement that rejected them stands.
+#    ContainerAppSystemLogs_CL does carry the failure (`Reason_s == "ProbeFailed"`, e.g.
+#    "Container ca-api failed readiness probe") and it is populated in every install, because
+#    modules/aca-env-consumption sets logs_destination to module.logs unconditionally. It caught
+#    exactly this shape on Masterly's own reference install on 2026-09-07. But replaying a
+#    sustained-window rule over 30 days of that workspace fires on roughly a dozen occasions per
+#    app, most of them ordinary deploy churn, and separating a wedged app from a rolling one
+#    there needs a rate threshold tied to the probe interval. The app-emitted line is the better
+#    source precisely because it is the application's own conclusion rather than the platform's
+#    retry count.
 #
-# So the gap is disclosed in the README ("What the alerts detect, and what they do not") rather
-# than papered over, and what actually covers it is a synthetic check against the install's own
-# URL, run from wherever the customer already monitors.
+# What is still not covered — an app with no readiness probe at all (ca-workers), and a wedge
+# that clears inside the rule's window — is disclosed in the README rather than implied.
 resource "azurerm_monitor_metric_alert" "app_unavailable" {
   for_each = local.availability_alertable_apps
 
@@ -541,6 +551,155 @@ resource "azurerm_monitor_metric_alert" "app_unavailable" {
       action_group_id = action.value
     }
   }
+
+  tags = local.tags
+}
+
+# The wedged-replica alert: the install is present, counted, and not serving. It is the other
+# half of the alert above — that one asks whether the app is THERE, this one asks whether it is
+# READY — and it is a log search alert for the same reason postgres_silent is: the state it
+# looks for produces no metric anywhere. An unready replica is deliberately not routed to, so it
+# emits no requests and no 5xx, while the platform keeps counting it as a replica.
+#
+# ONE query, three apps, two layers — which is the whole point of the string it keys on. Both
+# apps this module runs write `readiness check failed: <cause>` at WARNING on a failing probe,
+# and so do the apps in Masterly's own control plane, whose rule this one is ported from. The
+# filter is the shared prefix rather than any per-app wording, so a rule written once
+# covers every app that adopts the line. The app is named by the `ContainerAppName_s` dimension
+# rather than by a rule per app, so two failing apps arrive as two incidents, not one.
+#
+# Reading the LINE, not the probe. What the query counts is distinct MINUTES in which a failing
+# probe was logged, not lines: `dcount(bin(TimeGenerated, 1m))`. That is what keeps the rule
+# free of the probe-rate dependency that disqualified the ContainerAppSystemLogs_CL alternative
+# above. The module fixes both apps' readiness interval at 10 seconds (main.tf), so a failing
+# minute carries about six lines — but the rule would read the same at 30 or 60 seconds, and it
+# degrades gracefully rather than silently if that ever changes: a longer interval makes the
+# rule slower to fire, never blind to a wedge. tests/install.tftest.hcl pins the interval at or
+# below 60 seconds so the premise stays a checked one rather than a remembered one.
+#
+# Thirty of the last sixty minutes, and the threshold is set by what a healthy install does, not
+# by taste. A cold start legitimately fails readiness for a while: main.tf budgets 5 + 48 x 10 =
+# 485 seconds of continuous failure per replica attempt before ACA pulls it, sized past a
+# customer's first image pull onto a cold node, and the frontend's probe waits on the api's. So
+# an install coming up writes this line for minutes at a time while nothing is wrong. Requiring
+# it in half of a rolling hour puts a first apply comfortably under the bar while a genuine
+# wedge — which does not clear on its own — sails past it in the first hour. The sustained-ness
+# lives in the query rather than in `failing_periods` because the two would compound: one
+# failing evaluation of THIS query already means half an hour of unreadiness.
+#
+# Detection is therefore ~30-40 minutes, slower than every metric alert here and deliberately
+# so. The comparison that matters is not against the metric alerts, which cannot see this state
+# at all, but against MAS-90's actual detection time, which was hours and required a human to
+# open the page.
+#
+# Severity 0, unlike the control-plane rule this is ported from, and the divergence is
+# deliberate. There, severity separates certainty: "certainly down" from "possibly degraded".
+# Here it separates the QUESTION — every saturation alert in this module is severity 1-2 and every
+# availability alert is 0, and the README sells that band to operators as the thing that tells
+# them which of the two states they are in without opening the portal. An app that has failed
+# readiness for half an hour is an availability incident on any reading, so it takes the
+# availability severity; what it does NOT claim is which replicas, and the description says so.
+#
+# Not gated on min_replicas, unlike app_unavailable. That gate exists because zero replicas is
+# the INTENDED state on a scale-to-zero install, so alerting on it would page every idle night.
+# Unreadiness is never an intended state: an app that is scaled to zero runs no probe and writes
+# no line, so this rule is simply silent there rather than noisy.
+#
+# ca-workers is absent for a reason that is not an oversight: it has no ingress, no /readyz and
+# no probes at all (workers.tf), so it emits nothing this rule could read. What covers it is the
+# replica alert above, and what does not cover it — a workers replica that is up but whose
+# consume loop is stuck — is disclosed in the README.
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
+  count = local.diagnostics_enabled ? 1 : 0
+
+  name = "alert-${var.name_prefix}-app-not-ready"
+
+  # Filed with the workspace it queries rather than with the apps it is about, for the reason
+  # postgres_silent is: a rule that sits with its scope is the one an operator can find from
+  # either end. module.logs lives in the ACA resource group.
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  scopes              = [module.logs.id]
+
+  description = "A serving app has failed its readiness probe for at least half of the last hour — it is running and counted as a replica, but never routed to, so this install is NOT serving even though the replica alerts read healthy."
+  severity    = 0
+
+  evaluation_frequency = "PT10M"
+  window_duration      = "PT1H"
+
+  # Resolve itself once readiness comes back. Without this the rule fires once and stays fired,
+  # and every later wedge is swallowed as a duplicate of an incident nobody closed — the failure
+  # mode where a control looks green precisely because it already fired.
+  auto_mitigation_enabled = true
+
+  criteria {
+    # The empty `datatable` anchor is load-bearing, and `isfuzzy` alone would not do its job.
+    # ContainerAppConsoleLogs_CL is a CUSTOM table that does not exist in a workspace until the
+    # first console line lands, and a query against a missing table FAILS rather than returning
+    # nothing — which would fail this rule's creation on a fresh install, or leave it unhealthy
+    # and, after a week of failures, disabled by Azure. `union isfuzzy=true` is the usual answer
+    # and it is NOT sufficient on its own: a fuzzy union whose only operand is missing still dies
+    # with SEM0104 ("Operator source expression should be table or column"), measured against a
+    # live workspace on 2026-09-09. Anchoring the union with an empty literal of the right shape
+    # gives it a schema that always resolves, so a missing table degrades to a partial-result
+    # warning and an empty answer instead. With the table present both operands resolve and the
+    # anchor contributes nothing.
+    #
+    # `contains` rather than `startswith`: the api writes the line through a JSON log handler, so
+    # the prefix sits inside an envelope in Log_s, while the frontend writes it bare. One
+    # operator reads both.
+    query = <<-KQL
+      union isfuzzy=true
+        (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),
+        (
+          ContainerAppConsoleLogs_CL
+          | where ContainerAppName_s in (${join(", ", [for name in local.readiness_alertable_apps : "\"${name}\""])})
+          | where Log_s contains "readiness check failed"
+        )
+      | summarize FailingMinutes = dcount(bin(TimeGenerated, 1m)) by ContainerAppName_s
+      | where FailingMinutes >= 30
+    KQL
+
+    # Count of RESULT ROWS, above zero: one row per app that cleared the half-hour bar, and no
+    # rows at all on a healthy install, because `summarize ... by` over an empty input returns
+    # none. These three fields are not validated against each other or against the query by the
+    # provider — LessThan here would invert the rule into one that fires whenever every app is
+    # healthy, and it would plan and apply exactly as cleanly. Change them together or not at
+    # all; tests/install.tftest.hcl pins them.
+    time_aggregation_method = "Count"
+    operator                = "GreaterThan"
+    threshold               = 0
+
+    # One failing evaluation is enough BECAUSE the query already demands thirty failing minutes.
+    # Stacking consecutive periods on top of that would push detection past an hour to re-prove
+    # something the query has proven.
+    failing_periods {
+      number_of_evaluation_periods             = 1
+      minimum_failing_periods_to_trigger_alert = 1
+    }
+
+    # No `resource_id_column`. ACA writes console logs to the workspace through the custom-table
+    # path, where `_ResourceId` is present in the schema but empty on every row — pointing the
+    # rule at it would file the alert against nothing. The dimension identifies the app instead.
+    dimension {
+      name     = "ContainerAppName_s"
+      operator = "Include"
+      values   = ["*"]
+    }
+  }
+
+  dynamic "action" {
+    for_each = length(local.alert_action_group_ids) > 0 ? [1] : []
+    content {
+      action_groups = local.alert_action_group_ids
+    }
+  }
+
+  # Let Azure validate the KQL when the rule is created. Nothing before apply can: `terraform
+  # validate` does not parse KQL, and the provider does not either — a query with a typo in it
+  # plans and applies clean, then never fires, which is indistinguishable from a healthy install.
+  # This is the only gate that reads the query as a query, so it stays on.
+  skip_query_validation = false
 
   tags = local.tags
 }

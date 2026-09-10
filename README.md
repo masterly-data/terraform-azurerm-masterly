@@ -365,10 +365,11 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   (which under the no-eviction policy mean the policy has been changed out from under the
   install, not that the cache is small), and `ca-api` / `ca-frontend` 5xx. Severity 1–2.
 - **Availability alerts** — something has stopped rather than strained: the install is not
-  serving, or the async pipeline behind it is not running. Severity 0 on all of them, so a
-  notification tells you which of the two states you are in without opening the portal; the
-  alert's own description says what stopped, because a dead `ca-workers` leaves the install
-  answering every request perfectly while no job in it makes progress.
+  serving, the app that should serve it is running but never becomes ready, or the async
+  pipeline behind it is not running. Severity 0 on all of them, so a notification tells you
+  which of the two states you are in without opening the portal; the alert's own description
+  says what stopped, because a dead `ca-workers` leaves the install answering every request
+  perfectly while no job in it makes progress.
 
 Alerts fire and record with no notification target; to be paged, set `alert_email` (the
 module creates an action group) or point `alert_action_group_id` at an existing group
@@ -386,22 +387,26 @@ precise about how far they reach.
 |---|---|---|
 | Database reports itself down | `postgres-unavailable` | Reads the platform's own `is_db_alive`. Fastest signal here: 5-minute window. |
 | Database stopped, deleted, or its telemetry broke | `postgres-silent` | Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. ~40 minutes to page, deliberately. On a brand-new install it can fire once before the first metrics land; it clears itself when they do. |
-| An app has no running replica | `<app>-unavailable` | One per Container App the install runs — `api`, `frontend` and, with `enable_workers`, `workers`. Only created for an app whose `min_replicas` is 1 or more. Counts replicas, not readiness — see the first "not detected" entry below. |
+| An app has no running replica | `<app>-unavailable` | One per Container App the install runs — `api`, `frontend` and, with `enable_workers`, `workers`. Only created for an app whose `min_replicas` is 1 or more. Counts replicas, not readiness — the alert below is what reads readiness. |
+| An app is running but never becomes ready | `app-not-ready` | One rule for both serving apps, split by app name. `ca-api` and `ca-frontend` each log one line per **failing** readiness probe (and nothing on a passing one); the rule fires when an app has failed readiness in at least 30 of the last 60 minutes, so ~30–40 minutes to page. That is the case `<app>-unavailable` structurally cannot see — an unready replica is never routed to, but it still counts as a replica. A cold start legitimately fails readiness for minutes at a time, which is why the bar is half an hour rather than a single failure. Needs no input beyond diagnostics being on. |
 | The async pipeline has no worker running | `workers-unavailable` | The same alert, and the one nothing else in the set can stand in for: `ca-workers` has no ingress, so it emits no requests and `<app>-5xx` is blind to it by construction. Without this, a dead workers app is silent — the install keeps answering, the queue keeps growing, and the first signal is somebody asking why yesterday's ingest never landed. |
 | Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. |
 
 Not detected, and no alert here should be read as covering it:
 
-- **An app that is running but never becomes ready.** This is the widest gap in the set, and the
-  one to plan around. A replica that starts, fails its readiness probe, and is therefore never
-  routed to still counts toward `Replicas` — so on an install with a replica floor,
-  `<app>-unavailable` reads a healthy 1 while the install serves nothing. `<app>-5xx` does not
-  cover it either: it needs more than five requests in its window, and an install nobody can
-  reach receives none. A synthetic check against the install's own URL, run from wherever you
-  already monitor, is what closes this; the module ships none, for the reason in the next entry.
-- **A workers app that is running but wedged.** The same shape, one layer down and with no
-  synthetic check available: a `ca-workers` replica that is up but whose consume loop is stuck
-  still counts toward `Replicas`, so `workers-unavailable` reads 1. What the module can see is
+- **A serving app that is unready for less than half an hour.** `app-not-ready` covers the
+  sustained case — the wedged replica that `<app>-unavailable` reads as a healthy 1 — but it is
+  deliberately slow, because a cold start fails readiness legitimately for minutes at a time and
+  an alert that pages on every deploy is one you learn to mute. A wedge that clears inside the
+  window is invisible here; it is visible in the workspace, in `ContainerAppConsoleLogs_CL`,
+  where the same line the alert reads is queryable at any resolution you like. A synthetic check
+  against the install's own URL, run from wherever you already monitor, is still the faster
+  signal and still worth having; the module ships none, for the vantage-point reason given in
+  "An app that is up, answering, and wrong" below.
+- **A workers app that is running but wedged.** The wedged shape again, one layer down, and here
+  nothing reads it at all: `ca-workers` has no ingress, no `/readyz` and no probe, so it writes
+  no readiness line for `app-not-ready` to see, and a replica whose consume loop is stuck still
+  counts toward `Replicas`, so `workers-unavailable` reads 1. What the module can see is
   that the app is *there*; whether it is *draining* lives in the install's own job tables, which
   the module provisions and never reads. Alert on queue depth or on the age of the oldest
   unclaimed job from the application side if you need that, and keep this alert for the case it
@@ -411,9 +416,10 @@ Not detected, and no alert here should be read as covering it:
   could notice. Alert on your own database from wherever it runs.
 - **An app that is up, answering, and wrong.** Replicas running and no 5xx is the shape of a
   healthy app and also of one serving stale or empty data. Nothing in the module probes the
-  application's `/readyz` from outside — that is a synthetic check, and the module deliberately
-  ships none, because on the private-ingress and injected-network topologies there is no vantage
-  point it could run from without assuming a network it does not own.
+  application's `/readyz` from outside — `app-not-ready` reads what the app itself said about
+  its last probe, which is a different thing. An outside probe is a synthetic check, and the
+  module deliberately ships none, because on the private-ingress and injected-network topologies
+  there is no vantage point it could run from without assuming a network it does not own.
 - **An app on a scale-to-zero install.** With `min_replicas = 0`, zero replicas is the intended
   state, so no replica alert is created for that app. This is an evaluation cost posture;
   `mode = "production"` requires a floor of at least one replica on both apps.
