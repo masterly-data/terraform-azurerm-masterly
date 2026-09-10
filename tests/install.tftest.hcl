@@ -178,17 +178,58 @@ run "production_mode_full_wiring_plans" {
     error_message = "Production must wire diagnostics for the enabled data-plane resources and the app 5xx alerts (Postgres absent on BYO-DB)."
   }
 
-  # Availability, the other half of the catalogue (MAS-263). Both apps declare a replica floor
-  # in production, so both get the "no running replica" alert. The database alerts are absent
-  # here for the same reason the diagnostic setting is: on BYO-DB the module wires no telemetry
-  # for a server it does not provision, so it has no stream whose end it could notice.
+  # Availability, the other half of the catalogue (MAS-263). All THREE apps declare a replica
+  # floor in production, so all three get the "no running replica" alert. The database alerts
+  # are absent here for the same reason the diagnostic setting is: on BYO-DB the module wires no
+  # telemetry for a server it does not provision, so it has no stream whose end it could notice.
+  #
+  # The key set is asserted, not just the count (MAS-305): ca-workers is the one that cannot be
+  # covered by anything else in the file — it serves no traffic, so the 5xx alert reads the two
+  # apps that keep answering fine while the queue behind them grows. A regression that dropped
+  # workers and picked up some other app would hold the count at three.
   assert {
     condition = (
-      length(azurerm_monitor_metric_alert.app_unavailable) == 2 &&
+      length(azurerm_monitor_metric_alert.app_unavailable) == 3 &&
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "api") &&
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "frontend") &&
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "workers") &&
       length(azurerm_monitor_metric_alert.postgres_unavailable) == 0 &&
       length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0
     )
-    error_message = "Production must alert on both apps having no replica, and must not claim database availability coverage on BYO-DB."
+    error_message = "Production must alert on all three apps having no replica — api, frontend AND workers — and must not claim database availability coverage on BYO-DB."
+  }
+
+  # The workers alert must read the same metric as its siblings, and read it the same way.
+  # Every one of these still plans if it is wrong: a Minimum aggregation would fire on every
+  # ordinary revision roll, and GreaterThan would invert the alert into one that fires whenever
+  # the pipeline is healthy. Pinned for the reason the is_db_alive criteria are pinned below.
+  #
+  # `Replicas` on the Microsoft.App/containerapps namespace is read off Learn's supported-metrics
+  # reference for the resource type, which documents it as "Replica Count — number of replicas
+  # count of container app", Average/Total/Maximum/Minimum, PT1M. Count is NOT among them, which
+  # is why absence detection here is a floor-gated Maximum and not a Count-aggregation rule.
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.app_unavailable["workers"].criteria[0].metric_namespace == "Microsoft.App/containerapps" &&
+      azurerm_monitor_metric_alert.app_unavailable["workers"].criteria[0].metric_name == "Replicas" &&
+      azurerm_monitor_metric_alert.app_unavailable["workers"].criteria[0].aggregation == "Maximum" &&
+      azurerm_monitor_metric_alert.app_unavailable["workers"].criteria[0].operator == "LessThan" &&
+      azurerm_monitor_metric_alert.app_unavailable["workers"].criteria[0].threshold == 1
+    )
+    error_message = "The workers availability alert must read Replicas (Microsoft.App/containerapps) with Maximum aggregation below 1."
+  }
+
+  # An operator paged for ca-workers must not be told the install is unreachable — it is not.
+  # The severity band in this module marks ABSENCE, so workers keeps severity 0 alongside the
+  # serving apps; what differs is the sentence, and a copy-paste that gave workers the serving
+  # apps' wording would page somebody to check a front door that is working.
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.app_unavailable["workers"].severity == 0 &&
+      strcontains(azurerm_monitor_metric_alert.app_unavailable["workers"].description, "async pipeline has STOPPED") &&
+      strcontains(azurerm_monitor_metric_alert.app_unavailable["api"].description, "this install is DOWN")
+    )
+    error_message = "The workers alert must carry the availability severity and say the pipeline stopped, not that the install is down."
   }
 
   # Severity is what tells an operator "down" from "strained" in the notification itself: every
@@ -2274,12 +2315,15 @@ run "scale_to_zero_apps_get_no_replica_alert" {
     api_min_replicas      = 0
   }
 
+  # This run also exercises the enable_workers=false branch of the map (MAS-305): with no
+  # workers app there is no id to index, and the alert must simply not be created rather than
+  # the plan failing on a missing element.
   assert {
     condition = (
       length(azurerm_monitor_metric_alert.app_unavailable) == 1 &&
       contains(keys(azurerm_monitor_metric_alert.app_unavailable), "frontend")
     )
-    error_message = "Only the app that declares a replica floor may carry a no-replica alert; a scale-to-zero app must not."
+    error_message = "Only the app that declares a replica floor may carry a no-replica alert; a scale-to-zero app must not, and an install with no workers app must not claim workers coverage."
   }
 
   # The database alerts do not depend on replica counts at all, so enabling diagnostics on an
@@ -2291,5 +2335,67 @@ run "scale_to_zero_apps_get_no_replica_alert" {
       length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 1
     )
     error_message = "Enabling diagnostics outside production must still bring the database availability alerts."
+  }
+}
+
+# ca-workers earns a no-replica alert on the same terms as the serving apps, and outside
+# production too (MAS-305). This is the case the rest of the alert set structurally cannot
+# reach: the workers app has no ingress, so it emits no Requests on any dimension and the 5xx
+# alert is blind to it by construction — the api and the frontend go on answering normally
+# while every ingest run, scan and materialization job behind them stalls.
+run "workers_gets_a_no_replica_alert_when_enabled" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = true
+    enable_workers        = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.app_unavailable) == 3 &&
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "workers")
+    )
+    error_message = "An install running ca-workers must carry a no-replica alert for it, not only for the two serving apps."
+  }
+
+  # Two properties are NOT asserted here, named rather than left as silent gaps — the same limit
+  # the database availability alerts hit further up this file. Both are built from resource ids,
+  # which are unknown until apply, so under mock providers the condition is unknowable and the
+  # run errors instead of failing:
+  #
+  #  * that the alert's SCOPE is the ca-workers app rather than one of its siblings. A scope
+  #    copied from the api would give a correctly-named alert watching the wrong resource —
+  #    green forever while the pipeline is dead.
+  #  * that it ROUTES to the install's action group when one is configured. `action` is a set of
+  #    objects whose action_group_id is unknown at plan, which makes even its length unknown.
+  #
+  # What covers both is that this alert is the SAME resource block as the serving apps' — one
+  # for_each over local.availability_alertable_apps, where the map value IS the scope and the
+  # action block is the shared dynamic. Reviewing diagnostics.tf is what checks it; splitting
+  # workers into a resource of its own is the change that would need a new gate here.
+}
+
+# The floor gate applies to workers exactly as it applies to the serving apps. An install that
+# has deliberately set workers_min_replicas = 0 has chosen a stalled pipeline while idle —
+# nothing HTTP-wakes an ingress-less polling loop — and paging it every night would teach the
+# operator to mute the one alert that says the pipeline is gone.
+run "workers_at_zero_floor_gets_no_replica_alert" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = true
+    enable_workers        = true
+    workers_min_replicas  = 0
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.app_unavailable) == 2 &&
+      !contains(keys(azurerm_monitor_metric_alert.app_unavailable), "workers")
+    )
+    error_message = "A workers app allowed to sit at zero replicas must not carry a no-replica alert; the serving apps still must."
   }
 }

@@ -53,7 +53,19 @@ locals {
   availability_alertable_apps = local.diagnostics_enabled ? merge(
     var.api_min_replicas >= 1 ? { api = module.api.id } : {},
     var.frontend_min_replicas >= 1 ? { frontend = module.frontend.id } : {},
+    var.enable_workers && var.workers_min_replicas >= 1 ? { workers = module.workers[0].id } : {},
   ) : {}
+
+  # What a missing replica MEANS, per app. The severity is the same for all three — this
+  # module's severity band marks ABSENCE, not "HTTP is down" — but the sentence an operator
+  # reads at 03:00 should not claim the install is unreachable when what actually stopped is
+  # the pipeline behind it. The api and the frontend take the install off the air; ca-workers
+  # leaves it answering every request while no job in it makes progress.
+  app_unavailable_effect = {
+    api      = "this install is DOWN, not merely under strain"
+    frontend = "this install is DOWN, not merely under strain"
+    workers  = "the async pipeline has STOPPED — ingest runs, scans, materialization and the fleet snapshot loop make no progress, while the install keeps answering requests as if nothing were wrong"
+  }
 }
 
 # --- Diagnostic settings -> the install's Log Analytics workspace -------------------
@@ -414,7 +426,8 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
   tags = local.tags
 }
 
-# App availability. The apps have no availability metric of their own, and no platform health
+# App availability, for every Container App this install runs — ca-api, ca-frontend, and
+# ca-workers. The apps have no availability metric of their own, and no platform health
 # event either: Microsoft.App/containerApps is absent from the resource types Azure Resource
 # Health covers (checked against Learn's resource-health resource-type reference, which does
 # list Microsoft.Cache/Redis and Microsoft.DBforPostgreSQL/flexibleservers). Replica count is
@@ -429,7 +442,46 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 # posture the variable exists for — and an alert that pages every idle night is one an operator
 # learns to ignore, which leaves them worse off than not shipping it. mode=production requires
 # api_min_replicas >= 1 and frontend_min_replicas >= 1 (validations on those variables), so on
-# every install where diagnostics is on by default both alerts exist.
+# every install where diagnostics is on by default those two alerts exist.
+#
+# ca-workers is here for the reason the serving apps are, and it is the sharpest case of it
+# (MAS-305). It does not serve, so no request-path alert can ever notice it is gone: the 5xx
+# alert reads the api and the frontend, both of which keep answering perfectly while the queue
+# behind them grows. A dead workers app is therefore SILENT by construction, and the first
+# signal without this alert is somebody asking why yesterday's ingest never landed.
+#
+# Three other candidate signals were considered and are not what shipped:
+#
+#  * RestartCount. Learn's supported-metrics reference does carry it for
+#    Microsoft.App/containerapps, and a crashlooping workers app is a real failure shape. But
+#    the same reference defines it as "the CUMULATIVE number of times the replica has restarted
+#    since it was created", so a threshold over it latches: once a long-lived replica has
+#    restarted N times it stays above N until the replica is replaced, and the alert never
+#    clears. An alert that cannot clear is muted within a week. Rate-of-change over a cumulative
+#    counter is expressible, but not without a threshold nobody here can calibrate against a
+#    real install.
+#
+#  * Absence of the workers app's own log lines, the ContainerAppConsoleLogs_CL analogue of the
+#    postgres_silent rule below. Checked against the code rather than assumed, and it does not
+#    hold: masterly_app.workers logs once at startup ("workers ready: … starting … consume
+#    loop") and then only per job (core/jobqueue.py). It emits NO periodic heartbeat, so on a
+#    correctly-running install with an empty queue the workers app is legitimately silent for
+#    hours. Silence there means "no work", not "no worker", and a rule that cannot tell those
+#    apart pages every quiet night.
+#
+#  * Job-completion staleness — queue depth, oldest-unclaimed age. That is the signal an
+#    operator actually wants, and it lives in the install's own Postgres job tables, which this
+#    module provisions but never reads. Expressing it here would mean the module querying
+#    application data, which it does not do and should not start doing. The Service Bus
+#    alternative (ActiveMessages climbing) is a saturation threshold in absence's clothing: it
+#    needs a per-install baseline, and it is exactly the kind of alert MAS-263 set out to stop
+#    adding.
+#
+# So the shipped signal is the same one the serving apps carry, and it detects the same class
+# of failure: the app is not there. The floor gate is workers_min_replicas >= 1, which is its
+# default and which the variable's own description tells the caller to keep — nothing HTTP-wakes
+# an ingress-less polling loop, so a workers app at zero replicas is a stalled pipeline whoever
+# configured it chose, not a fault this alert should page about.
 #
 # What this alert CANNOT see, recorded here because the gap is invisible from the resource: a
 # replica that starts, never passes its readiness probe, and is never routed to still counts
@@ -470,7 +522,7 @@ resource "azurerm_monitor_metric_alert" "app_unavailable" {
   name                = "alert-${var.name_prefix}-${each.key}-unavailable"
   resource_group_name = azurerm_resource_group.aca.name
   scopes              = [each.value]
-  description         = "The ${each.key} Container App has no running replica — this install is DOWN, not merely under strain."
+  description         = "The ${each.key} Container App has no running replica — ${local.app_unavailable_effect[each.key]}."
   severity            = 0
   frequency           = "PT5M"
   window_size         = "PT15M"
