@@ -82,6 +82,20 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- `breakglass_secret_hash` says what the api actually accepts. The input has held a **salted
+  Argon2id** value since the api change that made it one; this repo still described a sha256
+  digest, and `examples/production` still told an operator to produce one with `shasum -a 256`.
+  That is not a stale sentence but an instruction that crash-loops the install — an api on that
+  release refuses to start on a bare digest, so `ca-api` and `ca-workers` fail on exactly the
+  credential configured for the day the IdP is down, and the module is the interface an operator
+  reads (a variable description in an editor, `terraform-docs` output) without ever opening the
+  docs site. The descriptions now name the stored form and point at the command that mints it
+  **inside the api image** — the image that verifies a value is the image that should produce it
+  — rather than restating the encoding in a third place that nothing checks against the code. No
+  HCL change: the module passes the value through as a Container App secret exactly as before.
+  The module version that ships this must be released against an api image that carries the
+  Argon2id change; against an older api the description would be wrong in the other direction
+  (MAS-451).
 - CI cancels a superseded pull-request run rather than paying for a result nobody reads
   (MAS-174), and no longer leaves the job's `GITHUB_TOKEN` in `.git/config` after checkout
   (MAS-171). Dependabot updates are grouped, and the GitHub Actions majors were taken (MAS-126).

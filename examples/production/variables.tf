@@ -93,7 +93,7 @@ variable "breakglass_secret_hash" {
   type        = string
   sensitive   = true
   default     = null
-  description = "SHA-256 of a strong secret: printf %s '<secret>' | shasum -a 256. Break-glass needs this AND breakglass_owner_email; the email alone arms nothing."
+  description = "A strong secret in the stored form the api verifies: a salted Argon2id value, minted inside the api image with `python -m masterly_app.core.breakglass_credential` (it prompts, so the secret never reaches shell history). A bare sha256 digest is refused at startup. Break-glass needs this AND breakglass_owner_email; the email alone arms nothing."
 }
 
 variable "external_database_url" {

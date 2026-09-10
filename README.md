@@ -217,7 +217,10 @@ one and apply.
   `oidc_allowed_issuers`/`oidc_audience`/`oidc_jwks_uri`; the frontend BFF is the
   confidential client (`oidc_client_id`/`oidc_client_secret`/`oidc_authority`/
   `oidc_redirect_uri`). Optional break-glass local Owner via
-  `breakglass_owner_email` + `breakglass_secret_hash` (sha256, never the secret).
+  `breakglass_owner_email` + `breakglass_secret_hash` — a salted Argon2id value minted
+  inside the api image with `python -m masterly_app.core.breakglass_credential`, never the
+  secret and never a sha256 digest, which the api refuses at startup. See
+  [Access and identity](https://masterlydata.com/docs/self-hosted/install/#access-and-identity).
 
   `oidc_allowed_issuers` normally holds **one** entry — this install's own issuer. Every
   issuer listed here is trusted **install-wide**, so it is not the way to onboard an
