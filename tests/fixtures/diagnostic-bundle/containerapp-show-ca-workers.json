@@ -1,0 +1,36 @@
+{
+  "name": "ca-workers",
+  "location": "swedencentral",
+  "identity": { "type": "UserAssigned", "userAssignedIdentities": { "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps": {} } },
+  "properties": {
+    "provisioningState": "Succeeded",
+    "runningStatus": "Running",
+    "latestRevisionName": "ca-workers--0000042",
+    "latestReadyRevisionName": "ca-workers--0000042",
+    "configuration": {
+      "activeRevisionsMode": "Single",
+      "ingress": null,
+      "registries": [ { "server": "masterly.azurecr.io", "username": "customer-pull-token", "passwordSecretRef": "registry-password", "identity": "" } ],
+      "secrets": [
+        { "name": "database-url", "value": "postgresql+asyncpg://masterly_admin:CANARY-SECRET-VALUE-9c1d@psql-masterly-x7k2q.postgres.database.azure.com:5432/postgres?ssl=require" },
+        { "name": "registry-password", "value": null }
+      ]
+    },
+    "template": {
+      "revisionSuffix": "",
+      "scale": { "minReplicas": 1, "maxReplicas": 1 },
+      "containers": [
+        {
+          "name": "workers",
+          "image": "masterly.azurecr.io/api:v0.133.2",
+          "resources": { "cpu": 0.5, "memory": "1Gi" },
+          "probes": [],
+          "env": [
+            { "name": "MASTERLY_MODE", "value": "production" },
+            { "name": "MASTERLY_DATABASE_URL", "secretRef": "database-url" }
+          ]
+        }
+      ]
+    }
+  }
+}

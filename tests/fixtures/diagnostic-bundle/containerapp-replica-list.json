@@ -1,0 +1,4 @@
+[
+  { "name": "ca-app--0000042-7d9f8", "properties": { "createdTime": "2026-09-07T10:00:12+00:00", "runningState": "Running", "containers": [ { "name": "api", "ready": true, "started": true, "restartCount": 0, "runningState": "Running", "runningStateDetails": "" } ] } },
+  { "name": "ca-app--0000042-b2c1e", "properties": { "createdTime": "2026-09-07T10:00:12+00:00", "runningState": "Running", "containers": [ { "name": "api", "ready": false, "started": true, "restartCount": 3, "runningState": "Waiting", "runningStateDetails": "readiness probe failed" } ] } }
+]

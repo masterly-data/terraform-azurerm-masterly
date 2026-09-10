@@ -1,0 +1,4 @@
+[
+  { "name": "alert-masterly-api-5xx", "enabled": true, "severity": 1, "windowSize": "PT15M", "evaluationFrequency": "PT5M", "description": "The api Container App is returning 5xx responses.", "actions": [ { "actionGroupId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/microsoft.insights/actionGroups/ag-masterly-alerts" } ], "scopes": [ "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api" ] },
+  { "name": "alert-masterly-api-unavailable", "enabled": true, "severity": 0, "windowSize": "PT15M", "evaluationFrequency": "PT5M", "description": "no running replica", "actions": [], "scopes": [ "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api" ] }
+]

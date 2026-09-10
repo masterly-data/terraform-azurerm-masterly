@@ -1,0 +1,13 @@
+{
+  "name": "aca-masterly",
+  "location": "swedencentral",
+  "properties": {
+    "provisioningState": "Succeeded",
+    "defaultDomain": "gentlefield-0a1b2c3d.swedencentral.azurecontainerapps.io",
+    "staticIp": "10.0.0.250",
+    "vnetConfiguration": { "internal": false, "infrastructureSubnetId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-aca" },
+    "peerTrafficConfiguration": { "encryption": { "enabled": true } },
+    "appLogsConfiguration": { "destination": "log-analytics", "logAnalyticsConfiguration": { "customerId": "22222222-2222-2222-2222-222222222222", "sharedKey": "CANARY-WORKSPACE-SHARED-KEY-0d1c" } },
+    "workloadProfiles": [ { "name": "Consumption", "workloadProfileType": "Consumption" } ]
+  }
+}

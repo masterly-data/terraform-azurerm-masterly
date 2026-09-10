@@ -1,0 +1,1 @@
+{ "tables": [ { "name": "PrimaryResult", "columns": [ { "name": "ContainerAppName_s", "type": "string" }, { "name": "logger", "type": "string" }, { "name": "events", "type": "long" }, { "name": "latest", "type": "datetime" } ], "rows": [ [ "ca-workers", "masterly_app.modules.stream.delivery", 7, "2026-09-10T00:42:11Z" ] ] } ] }

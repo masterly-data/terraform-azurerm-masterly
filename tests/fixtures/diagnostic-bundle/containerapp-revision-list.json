@@ -1,0 +1,4 @@
+[
+  { "name": "ca-app--0000041", "properties": { "createdTime": "2026-09-01T08:00:00+00:00", "active": false, "provisioningState": "Provisioned", "healthState": "None", "runningState": "Stopped", "trafficWeight": 0, "replicas": 0, "lastActiveTime": "2026-09-07T10:00:00+00:00", "template": { "containers": [ { "image": "masterly.azurecr.io/api:v0.133.1" } ] } } },
+  { "name": "ca-app--0000042", "properties": { "createdTime": "2026-09-07T10:00:00+00:00", "active": true, "provisioningState": "Provisioned", "healthState": "Healthy", "runningState": "Running", "trafficWeight": 100, "replicas": 2, "lastActiveTime": null, "template": { "containers": [ { "image": "masterly.azurecr.io/api:v0.133.2" } ] } } }
+]

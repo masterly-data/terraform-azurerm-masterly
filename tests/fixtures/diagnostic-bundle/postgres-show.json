@@ -1,0 +1,15 @@
+{
+  "name": "psql-masterly-x7k2q",
+  "location": "swedencentral",
+  "state": "Ready",
+  "version": "16",
+  "sku": { "name": "Standard_D2ds_v5", "tier": "GeneralPurpose" },
+  "storage": { "storageSizeGb": 128, "tier": "P10", "autoGrow": "Enabled" },
+  "highAvailability": { "mode": "ZoneRedundant", "state": "Healthy", "standbyAvailabilityZone": "2" },
+  "backup": { "backupRetentionDays": 14, "geoRedundantBackup": "Disabled" },
+  "availabilityZone": "1",
+  "network": { "publicNetworkAccess": "Disabled" },
+  "fullyQualifiedDomainName": "psql-masterly-x7k2q.postgres.database.azure.com",
+  "administratorLogin": "masterly_admin",
+  "administratorLoginPassword": "CANARY-PG-ADMIN-PASSWORD-e5f6"
+}
