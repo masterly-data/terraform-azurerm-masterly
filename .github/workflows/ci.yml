@@ -67,12 +67,16 @@ jobs:
         run: terraform test
 
   # The diagnostic bundle (scripts/diagnostic-bundle.sh) is the primary support channel for a
-  # self-hosted install, and its one load-bearing promise is that it carries no record data,
-  # attribute values or secrets. That promise is a test, not a comment: the harness runs the
-  # real script against a fake `az` whose answers are seeded with values that must never
-  # reach the bundle, and asserts each is absent. The selftest runs FIRST, and breaks the
-  # script three ways to insist the harness notices — a detector nobody has watched fail is
-  # a hypothesis, and this repo's characteristic defect is a rule with nothing enforcing it.
+  # self-hosted install, and it makes two promises of different strengths. It carries no
+  # secret values, credentials, addresses or key material — asserted as absence, canary by
+  # canary. And it carries no record data from the applications' own log lines, but CAN carry
+  # it in logs/q6-postgres-logs.json, the starter server's own Postgres log stream, which
+  # echoes a failing statement and the values on its DETAIL: line — so for that class the
+  # promise is that the file is FLAGGED, and that is what is asserted. Both are tests, not
+  # comments: the harness runs the real script against a fake `az` whose answers are seeded
+  # with both classes of value. The selftest runs FIRST, and breaks the script four ways to
+  # insist the harness notices — a detector nobody has watched fail is a hypothesis, and this
+  # repo's characteristic defect is a rule with nothing enforcing it.
   # No cloud, no credential: safe on a pull request from a fork. MAS-343.
   diagnostic-bundle:
     name: The diagnostic bundle carries no secrets
@@ -85,7 +89,7 @@ jobs:
       - name: The detector still detects (a broken script must fail the suite)
         run: bash tests/diagnostic_bundle_test.sh --selftest
 
-      - name: No record data, attribute values or secrets in the bundle
+      - name: No secrets or credentials, and record data flagged where it is not guaranteed absent
         run: bash tests/diagnostic_bundle_test.sh
 
   # A release states its version and its tested image pair once, in MANIFEST.json, and what

@@ -12,16 +12,31 @@
 #   * no secret values — Container App secrets are listed by NAME only, and an environment
 #     variable's value is copied only when its name is on the allow-list below (the install's
 #     mode, ids, bindings and endpoints); every other value is omitted, not masked;
-#   * no record data or attribute values — the log lines it exports are the ones the apps
-#     already redact at the formatter (identifiers, counts, durations), and nothing here
-#     reads a database or an API that serves records;
 #   * no credential of yours — the API token for /v1/ops/metrics is read from the
-#     environment, sent once, and written nowhere.
+#     environment, sent once, and written nowhere;
+#   * nothing read from a database or from an API that serves records — this script queries
+#     Azure Resource Manager, Log Analytics and /v1/ops/metrics, and none of those return
+#     master data.
+#
+# Record data: guaranteed for the application's own log lines, NOT for logs/q6.
+#   The app queries (q1..q3, q5) export lines the apps already redact at the formatter —
+#   identifiers, counts and durations. logs/q6-postgres-logs.json is a different thing: it is
+#   the starter Postgres server's OWN log stream (AzureDiagnostics / PostgreSQLLogs), which no
+#   Masterly formatter touches. At Postgres defaults a failing statement is logged with its
+#   text, and a constraint violation carries the conflicting values on its DETAIL: line — so
+#   q6 CAN echo attribute values from your data. logs/q4-request-trace.json projects an
+#   exception string, which carries the same text when the error came from the database.
+#   The script flags those files by name at the end of the run and in manifest.json, and asks
+#   you to read them line by line before you send the bundle. It does not delete them: the
+#   Postgres log stream is often the only place an incident's cause is visible.
+#
 # Before it finishes it scans everything it wrote for secret-shaped content (a URL with
 # credentials, a JWT, a private key, a key=value that looks like a password) and REFUSES to
-# hand over a bundle that trips the scan — that is the last line, not the first. The scan and
-# the allow-list are exercised by tests/diagnostic_bundle_test.sh, which is what makes the
-# sentence above checkable rather than hopeful.
+# hand over a bundle that trips the scan — that is the last line, not the first. Statement
+# echo is a WARNING, not a refusal: refusing a legitimate diagnostic line would make the tool
+# useless in the incident it exists to shorten. The scan, the allow-list and the warning are
+# exercised by tests/diagnostic_bundle_test.sh, which is what makes the sentences above
+# checkable rather than hopeful.
 #
 # READ-ONLY. Nothing is sent anywhere: this is an export you perform, not reporting the
 # install performs. Masterly cannot run it, cannot fetch its output, and receives it only
@@ -147,8 +162,14 @@ item "ok" "subscription $SUBSCRIPTION is readable and Enabled"
 
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 BUNDLE="${OUT_PARENT%/}/masterly-diagnostics-${NAME_PREFIX}-${STAMP}"
+# Owner-only from the first byte. The bundle can hold a Postgres log line echoing a failing
+# statement (see the header), so a world-readable directory on a shared workstation would
+# widen the disclosure this script exists to keep narrow. umask before mkdir, not chmod
+# after, so no file is ever briefly readable.
+umask 077
 mkdir -p "$BUNDLE/apps" "$BUNDLE/logs"
-item "ok" "writing to $BUNDLE"
+chmod 700 "$BUNDLE" "$BUNDLE/apps" "$BUNDLE/logs"
+item "ok" "writing to $BUNDLE (owner-only, mode 700)"
 
 # azj <item> <outfile> <jq filter> -- <az args…>
 # Runs an az command with JSON output, projects it through the jq filter, and writes the
@@ -440,6 +461,42 @@ else
   record "ops-metrics" false "not collected — pass --api-url with MASTERLY_API_TOKEN set, or --ops-metrics <file>"
 fi
 
+# --- 5b. Statement-echo review flag -------------------------------------------------------
+# The one place this bundle can carry your data is a log line that echoes a statement: the
+# starter Postgres server logs a failing statement's text at its own defaults, and a
+# constraint violation puts the conflicting values on the DETAIL: line. That reaches
+# logs/q6-postgres-logs.json verbatim, and reaches logs/q4-request-trace.json when the same
+# error arrives as a Python exception string. No allow-list can see it — an attribute value
+# has no shape to match on — so the honest answer is to NAME THE FILES and make "read it
+# before you send it" a specific instruction rather than a general one.
+#
+# A warning, deliberately, and not a refusal: the statement that failed is very often the
+# whole diagnosis, and a tool that refuses to hand over the evidence during the incident it
+# exists to shorten would simply not be used.
+head2 "Statement echo"
+REVIEW_PATTERNS=(
+  'DETAIL:[[:space:]]*Key[[:space:]]*\('        # a unique/foreign-key violation and its values
+  'DETAIL:[[:space:]]*Failing row contains'     # a check/not-null violation and the whole row
+  '^[[:space:]]*STATEMENT:'                     # Postgres echoing the statement that failed
+  'STATEMENT:[[:space:]]*(INSERT|UPDATE|DELETE|SELECT|MERGE)'
+  'PARAMETERS:[[:space:]]*\$1'                  # bound parameter values
+)
+REVIEW_FILES=""
+for pat in "${REVIEW_PATTERNS[@]}"; do
+  hit=$(grep -rlEI --ignore-case "$pat" "$BUNDLE" 2>/dev/null || true)
+  [[ -n "$hit" ]] && REVIEW_FILES="${REVIEW_FILES}${hit}"$'\n'
+done
+REVIEW_FILES=$(printf '%s' "$REVIEW_FILES" | sed "s#^$BUNDLE/##" | sort -u | sed '/^$/d')
+if [[ -n "$REVIEW_FILES" ]]; then
+  item "REVIEW" "statement text found — read these line by line before you send the bundle:"
+  printf '%s\n' "$REVIEW_FILES" | sed 's/^/            /'
+  say "            A failing statement can carry attribute values from your own records."
+  say "            Delete any line you are not willing to send, and say that you did."
+else
+  item "ok" "no statement text found in the log answers collected"
+fi
+REVIEW_JSON=$(printf '%s' "$REVIEW_FILES" | jq -R -s 'split("\n") | map(select(length > 0))')
+
 # --- 6. Manifest and cover note ----------------------------------------------------------
 head2 "Manifest"
 az_version=$(az version --query '"azure-cli"' -o tsv 2>/dev/null || echo "unknown")
@@ -457,6 +514,7 @@ jq -n \
   --arg workspace "$WORKSPACE" --arg workspace_id "$WORKSPACE_CUSTOMER_ID" \
   --arg data_plane "$DATA_PLANE" --arg postgres "$POSTGRES_NAME" \
   --arg request_id "$REQUEST_ID" --arg since "$SINCE" \
+  --argjson review "$REVIEW_JSON" \
   --argjson items "$MANIFEST_ITEMS" '{
     generated_at: $generated_at, tool: $tool, azure_cli: $az,
     install: {subscription: $subscription, name_prefix: $prefix,
@@ -467,7 +525,14 @@ jq -n \
     request_id: (if $request_id == "" then null else $request_id end),
     window: $since,
     carries: "identifiers, counts, durations, versions and configuration state",
-    omits: "record data, attribute values, connection strings, secret values, credentials",
+    omits: "connection strings, secret values, credentials, and every environment variable value not on the allow-list in the script",
+    record_data: {
+      guaranteed_absent_in: "the log lines the applications themselves write (logs/q1, q2, q3, q5), redacted at the formatter to identifiers, counts and durations, plus every file this script builds from Azure Resource Manager or /v1/ops/metrics",
+      not_guaranteed_in: ["logs/q6-postgres-logs.json", "logs/q4-request-trace.json"],
+      why: "q6 is the log stream of the Postgres server itself, which no Masterly formatter touches: at Postgres defaults a failing statement is logged with its text, and a constraint violation carries the conflicting values on its DETAIL: line. q4 projects an exception string, which carries the same text when the error came from the database.",
+      needs_line_by_line_review: $review,
+      what_to_do: "Read the files listed in needs_line_by_line_review before sending this bundle. Delete any line you are not willing to send, and say in your message that you did."
+    },
     items: $items
   }' > "$BUNDLE/manifest.json"
 
@@ -493,14 +558,30 @@ What is here
 
 What is not here, by construction
   No secret values, no connection strings, no credentials — including the API token this
-  script may have used. No record data and no attribute values: the log lines are the ones
-  the apps redact at the formatter, and nothing here reads a database.
+  script may have used. Nothing here reads a database or an API that serves records: the
+  sources are Azure Resource Manager, Log Analytics and GET /v1/ops/metrics.
+
+Record data — what is guaranteed, and where it is not
+  logs/q1, q2, q3 and q5 are the applications' own log lines, redacted at the formatter to
+  identifiers, counts and durations. Those carry no attribute values.
+
+  logs/q6-postgres-logs.json is NOT one of those. It is the starter Postgres server's own
+  log stream, which no Masterly formatter touches: at Postgres defaults a failing statement
+  is logged with its text, and a constraint violation puts the conflicting values on its
+  DETAIL: line. logs/q4-request-trace.json projects an exception string, which carries the
+  same text when the error came from the database. Either file CAN therefore contain values
+  from your own records. They are kept because the failing statement is often the whole
+  diagnosis.
+
+  manifest.json -> record_data.needs_line_by_line_review names the files in THIS bundle
+  where statement text was actually found. Read those files line by line.
 
 Before you send it
-  Read it. It is plain JSON. If a log line looks like it carries customer data, that is a
-  defect to report to Masterly, not a line to forward — delete it from the file and say so.
-  Then attach the bundle to your message to support@masterlydata.com. The X-Request-Id and a
-  UTC timestamp of the failing call are the two things most worth adding in the text.
+  Read it. It is plain JSON, and it is owner-only (mode 700) where it was written. Start
+  with the files named in record_data.needs_line_by_line_review — delete any line you are
+  not willing to send, and say in your message that you did. Then attach the bundle to
+  support@masterlydata.com. The X-Request-Id and a UTC timestamp of the failing call are the
+  two things most worth adding in the text.
 EOF
 record "manifest" true "manifest.json"
 
@@ -542,6 +623,12 @@ missing=$(jq -r '[.items[] | select(.collected == false) | .item] | join(", ")' 
 say "  Bundle:  $BUNDLE"
 [[ -n "$missing" ]] && say "  Missing: $missing (see manifest.json for why)"
 say ""
+if [[ -n "$REVIEW_FILES" ]]; then
+  say "  READ FIRST, line by line — these carry statement text, which can echo your own"
+  say "  record values. They are listed in manifest.json under record_data:"
+  printf '%s\n' "$REVIEW_FILES" | sed 's/^/    /'
+  say ""
+fi
 say "  Read it before you send it, then package it:"
 say "    tar -czf ${BUNDLE##*/}.tar.gz -C $(dirname "$BUNDLE") ${BUNDLE##*/}"
 say "  and attach the archive to support@masterlydata.com with the X-Request-Id and a UTC"

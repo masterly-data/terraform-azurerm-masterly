@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
-# Does the diagnostic bundle carry a secret, an address, or a credential? This is the test
-# that makes "no record data, attribute values or secrets" a checked property of
-# scripts/diagnostic-bundle.sh rather than a sentence in its header.
+# Does the diagnostic bundle carry a secret, an address, or a credential — and does it say
+# the truth about record data? This is the test that makes the claims in
+# scripts/diagnostic-bundle.sh's header checked properties rather than sentences.
+#
+# It tests two DIFFERENT claims, and they are not the same strength:
+#
+#   1. Secrets, credentials, addresses and key material are absent. That is a guarantee, and
+#      it is asserted as absence, canary by canary.
+#   2. Record data is absent from the applications' own log lines and from everything built
+#      from Azure Resource Manager — but NOT from logs/q6-postgres-logs.json, which is the
+#      Postgres server's own log stream, nor from logs/q4-request-trace.json, which projects
+#      an exception string. Those can echo a failing statement and its values. For those the
+#      documented behaviour is a WARNING, not a refusal, so that is what is asserted: the
+#      value is present, the file is named in manifest.json under
+#      record_data.needs_line_by_line_review, and the operator is told on stderr/stdout.
+#      Asserting absence there would be asserting something the script does not do.
 #
 # It runs the real script against a fake `az` and a fake `curl` (tests/fixtures/
 # diagnostic-bundle/) whose answers are SEEDED with values that must never reach the bundle:
@@ -10,18 +23,20 @@
 # key, an action group's receiver address and webhook key, and the API token the script is
 # handed. Then it reads every file the script wrote and asserts each canary is absent — and,
 # so that a script that wrote nothing cannot pass, that the allow-listed configuration values
-# and the secret NAMES are present.
+# and the secret NAMES are present. The q6 fixture additionally seeds a realistic unique-key
+# violation carrying a synthetic address and business key, which is the record-data class.
 #
 # A second scenario seeds a credential-bearing DSN into a log query's answer, which the
 # allow-list cannot see, and asserts the refusal gate fires: exit 3, the directory renamed
 # `-REFUSED`, the finding reported by file and line and never by content.
 #
-# `--selftest` is the part that keeps this honest. It copies the script, breaks it three ways
-# a real regression would — keep every env value, keep secret values, disable the gate — and
-# asserts that THIS harness fails against each broken copy. A test nobody has watched fail is
-# a hypothesis; CI runs the selftest first so that a detector that has quietly stopped
-# detecting fails the build instead of passing it. Each break is checked to have actually
-# changed the copy, so a stale sed cannot turn the selftest vacuous.
+# `--selftest` is the part that keeps this honest. It copies the script, breaks it four ways
+# a real regression would — keep every env value, keep secret values, disable the gate,
+# disable the statement-echo warning — and asserts that THIS harness fails against each
+# broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
+# that a detector that has quietly stopped detecting fails the build instead of passing it.
+# Each break is checked to have actually changed the copy, so a stale sed cannot turn the
+# selftest vacuous.
 #
 # Needs bash, jq, and nothing else — no cloud, no credential. Run: bash tests/diagnostic_bundle_test.sh
 
@@ -51,6 +66,17 @@ CANARIES=(
   "CANARY-API-TOKEN-2e77"               # the bearer token the script is handed
   "customer-pull-token"                 # the registry credential's username
   "203.0.113.7"                         # an ingress allowlist entry
+)
+
+# The record-data class. These are seeded into the q6 fixture as a realistic unique-key
+# violation — the shape a Postgres server logs at its own defaults — and they are NOT in
+# CANARIES, because the script does not remove them and claiming otherwise is the defect
+# this block exists to prevent. What is asserted instead is the documented behaviour: the
+# value reaches logs/q6-postgres-logs.json, the file is named in manifest.json, and the
+# operator is told on the terminal. Both values are synthetic (@example.invalid, CANARY-…).
+RECORD_DATA_CANARIES=(
+  "canary.record@example.invalid"       # an attribute value on a DETAIL: Key (…)=(…) line
+  "CANARY-SOURCE-KEY-3f2a"              # a business key on the same line
 )
 
 failures=0
@@ -181,6 +207,46 @@ scenario_clean() { # scenario_clean <script>
       fail "LEAKED: $canary in $(printf '%s' "$hits" | sed "s#$tmp/##g" | tr '\n' ' ')"
     fi
   done
+
+  # --- The record-data class: present, flagged, and the operator told ---------------------
+  # The reviewer's demonstration, turned into a standing assertion. A constraint violation
+  # in the Postgres log stream carries attribute values, the script keeps it, and everything
+  # here is about whether the script SAYS SO. If a future change starts deleting the line,
+  # these fail too — which is correct: the claim and the behaviour must move together.
+  local rc_canary
+  for rc_canary in "${RECORD_DATA_CANARIES[@]}"; do
+    if grep -qF -- "$rc_canary" "$bundle/logs/q6-postgres-logs.json" 2>/dev/null; then
+      pass "record data reaches q6 as documented (so the flag below is a real flag): $rc_canary"
+    else
+      fail "the q6 fixture no longer seeds $rc_canary — the record-data assertions below are vacuous"
+    fi
+    if grep -qF -- "$rc_canary" "$bundle/manifest.json" "$bundle/README.txt" 2>/dev/null; then
+      fail "the manifest or README quotes the record value $rc_canary instead of naming the file"
+    else
+      pass "the flag names the file, not the value: $rc_canary"
+    fi
+  done
+  jq -e '.record_data.needs_line_by_line_review | index("logs/q6-postgres-logs.json")' \
+    "$bundle/manifest.json" >/dev/null \
+    && pass "manifest flags logs/q6-postgres-logs.json for line-by-line review" \
+    || fail "manifest does not flag logs/q6-postgres-logs.json: $(jq -c '.record_data.needs_line_by_line_review' "$bundle/manifest.json" 2>/dev/null)"
+  jq -e '.record_data.not_guaranteed_in | index("logs/q6-postgres-logs.json")' \
+    "$bundle/manifest.json" >/dev/null \
+    && pass "manifest names q6 as the exception to the record-data claim" \
+    || fail "manifest's record_data does not name q6 as the exception"
+  jq -e '.omits | test("record data|attribute value") | not' "$bundle/manifest.json" >/dev/null \
+    && pass "manifest does not claim record data is omitted outright" \
+    || fail "manifest's omits still claims record data or attribute values are omitted"
+  grep -qF "q6-postgres-logs.json" "$tmp/stdout" "$tmp/stderr" \
+    && pass "the run tells the operator which file to read line by line" \
+    || fail "the run never names q6-postgres-logs.json on stdout or stderr"
+  [[ $rc -eq 0 ]] && pass "statement echo warns, it does not refuse (exit 0)" \
+    || fail "statement echo must warn, not refuse — exit was $rc"
+  local bundle_mode
+  bundle_mode=$(ls -ld "$bundle" | cut -c1-10)
+  [[ "$bundle_mode" == "drwx------" ]] && pass "bundle directory is owner-only ($bundle_mode)" \
+    || fail "bundle directory is $bundle_mode, expected drwx------"
+
   rm -rf "$tmp"
   [[ $failures -eq 0 ]]
 }
@@ -245,18 +311,21 @@ selftest() {
     'keep every env value (allow-list bypassed)'
     'keep secret values (names-only projection dropped)'
     'refusal gate disabled'
+    'statement-echo warning disabled (record data reaches the bundle unflagged)'
   )
   local exprs=(
     's/elif (\.name as \$n | \$allow | index(\$n)) != null then/elif true then/'
     's/secrets: \[\.properties\.configuration\.secrets\[\]? | \.name\]/secrets: [.properties.configuration.secrets[]?]/'
     's/^if \[\[ -n "\$findings" \]\]; then$/if false; then/'
+    's/^REVIEW_FILES=\$(printf/REVIEW_FILES=""; : $(printf/'
   )
   local gones=(
     'index($n)) != null then'
     'secrets[]? | .name]'
     'if [[ -n "$findings" ]]; then'
+    'REVIEW_FILES=$(printf'
   )
-  for n in 0 1 2; do
+  for n in 0 1 2 3; do
     total=$((total + 1))
     broken="$tmp/broken-$total.sh"
     sed -e "${exprs[$n]}" "$SCRIPT" > "$broken"
@@ -286,7 +355,8 @@ if [[ "${1:-}" == "--selftest" ]]; then
   exit $?
 fi
 
-echo "== diagnostic bundle: no record data, attribute values or secrets"
+echo "== diagnostic bundle: no secrets, credentials or key material; record data flagged where"
+echo "                      it is not guaranteed absent (logs/q6, logs/q4)"
 if run_suite "$SCRIPT"; then
   echo "== all assertions passed"
   exit 0

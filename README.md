@@ -462,8 +462,26 @@ What it never carries, by construction:
 - **No credential of yours.** The API token is read from the environment, sent once, and
   written nowhere. Registry credentials appear as "credential" or "managed-identity".
   Action-group receivers are counted, never listed.
-- **No record data or attribute values.** The log lines are the ones the apps redact at the
-  formatter; nothing here reads a database.
+- **Nothing read from a database, or from an API that serves records.** The sources are Azure
+  Resource Manager, Log Analytics and `GET /v1/ops/metrics`. The bundle directory is written
+  owner-only (mode 700).
+
+**Record data: guaranteed for the apps' own log lines, and not for `logs/q6`.** `q1`, `q2`,
+`q3` and `q5` export lines the applications redact at the formatter — identifiers, counts and
+durations, no attribute values. `logs/q6-postgres-logs.json` is not one of those: it is the
+**starter Postgres server's own log stream** (`AzureDiagnostics` / `PostgreSQLLogs`), which no
+Masterly formatter touches. At Postgres defaults a failing statement is logged with its text,
+and a constraint violation puts the conflicting values on its `DETAIL:` line — so `q6` can
+echo values from your own records. `logs/q4-request-trace.json` projects an exception string,
+which carries the same text when the error came from the database.
+
+The script does not delete those lines — the statement that failed is often the whole
+diagnosis — and it does not refuse the bundle over them either, because a tool that refuses to
+hand over the evidence during an incident does not get used. It **names the files**: on the
+terminal at the end of the run, and in `manifest.json` under
+`record_data.needs_line_by_line_review`, which lists the files in *that* bundle where
+statement text was actually found. Read those files line by line, delete any line you are not
+willing to send, and say in your message that you did.
 
 Before it finishes it scans everything it wrote for anything shaped like a secret — a URL
 with credentials, a JWT, a private key, a `password=` — and **refuses** a bundle that trips
@@ -471,10 +489,13 @@ the scan: exit 3, the directory renamed `-REFUSED` and kept for you to inspect, 
 reported by file and line and never by content. A log line carrying a secret is a defect to
 report, not a line to forward.
 
-`tests/diagnostic_bundle_test.sh` is what makes those sentences checkable: it runs the real
-script against a fake `az` seeded with values that must never reach the bundle and asserts
-each is absent, and its `--selftest` breaks the script three ways to insist the harness
-notices. CI runs both on every change.
+`tests/diagnostic_bundle_test.sh` is what makes those sentences checkable, and it keeps the
+two strengths of claim apart rather than blurring them: each seeded secret, credential,
+address and key is asserted **absent**, and the record-data class is asserted **present in
+`q6` and flagged** — the value in the file, the file named in `manifest.json`, the operator
+told on the terminal, and the run still exiting 0. Its `--selftest` breaks the script four
+ways — allow-list bypassed, secret values kept, refusal gate disabled, statement-echo warning
+disabled — to insist the harness notices. CI runs both on every change.
 
 ## If you front this install with a WAF, CDN, or gateway
 

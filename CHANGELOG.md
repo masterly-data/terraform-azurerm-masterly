@@ -20,10 +20,15 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
   configuration state (secrets by name, environment values only from an allow-list),
   revisions and replicas, the alert set and its receivers counted, the six published Log
   Analytics queries through `az rest` (no CLI extension), the starter server's shape, and
-  `GET /v1/ops/metrics` when given a token. It sends nothing and refuses a bundle that carries
-  anything shaped like a secret. `tests/diagnostic_bundle_test.sh` proves the bundle carries no
-  record data, attribute values or secrets, and its `--selftest` proves the test still fails
-  when the script is broken; CI runs both (MAS-343).
+  `GET /v1/ops/metrics` when given a token. It sends nothing, writes the directory owner-only,
+  and refuses a bundle that carries anything shaped like a secret.
+  `tests/diagnostic_bundle_test.sh` proves the bundle carries no secret values, credentials,
+  addresses or key material, and that record data is **flagged** where it is not guaranteed
+  absent: `logs/q6-postgres-logs.json` is the starter Postgres server's own log stream, which
+  can echo a failing statement and the values on its `DETAIL:` line, so the script names that
+  file on the terminal and in `manifest.json` for line-by-line review rather than claiming it
+  carries none. `--selftest` proves the test still fails when the script is broken; CI runs
+  both (MAS-343).
 - `license_issuer_url` — the licence refresh endpoint reaches the apps, so an install can
   re-fetch and re-verify its licence daily instead of waiting for the next apply. Optional, and
   it requires the three telemetry inputs (MAS-98).
