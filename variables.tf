@@ -269,7 +269,7 @@ variable "breakglass_secret_hash" {
   type        = string
   default     = null
   sensitive   = true
-  description = "sha256 hash of the break-glass secret (never the secret itself)."
+  description = "The break-glass secret in the stored form the api verifies (ADR 0024): a salted Argon2id value, never the secret itself. A bare sha256 digest is no longer accepted — the api refuses one at startup, so ca-api and ca-workers crash-loop until it is replaced. Mint the value inside the api image this install runs, with `python -m masterly_app.core.breakglass_credential`: that image is where the accepted parameters live, so a value minted there is one it verifies. https://masterlydata.com/docs/self-hosted/install/#access-and-identity"
 }
 
 # --- License (ADR 0013/0018) --------------------------------------------------------
