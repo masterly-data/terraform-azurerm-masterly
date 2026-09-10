@@ -1,5 +1,5 @@
 {
-  "$comment": "The release manifest for terraform-azurerm-masterly. One entry per published module version, keyed by that version - the module version is the one customer-facing version (ADR 0062). Each entry names the api and frontend images that module version was released against: the pair Masterly's own reference install had applied when the version was tagged. Machine-readable on purpose - the README, the public docs and any pinned install are meant to READ this, never to retype it. Checked by scripts/check_release_manifest.py; see 'Cutting a release' in the README.",
+  "$comment": "The release manifest for terraform-azurerm-masterly. One entry per published module version, keyed by that version - the module version is the one customer-facing version (ADR 0062). Each entry names the api and frontend images that module version was released against: the pair Masterly's own reference install had applied when the version was tagged. Machine-readable on purpose - the README, the public docs and any pinned install are meant to READ this, never to retype it. The shape is a published contract: docs/release-manifest.md documents every field, what is stable and what may be added. Checked by scripts/check_release_manifest.py; see 'Cutting a release' in the README.",
   "schema_version": 1,
   "module": "masterly-data/masterly/azurerm",
   "latest": "0.15.0",

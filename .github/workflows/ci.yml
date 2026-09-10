@@ -101,6 +101,13 @@ jobs:
   # stop agreeing, so the commit that bumps them is validated before it merges; on a tag push it
   # additionally fails when the tag is not the version the manifest publishes, so a tag cut
   # without its entries goes red at once instead of surfacing a release later. MAS-239.
+  #
+  # The selftest runs FIRST, for the reason the diagnostic-bundle job runs its own first: a
+  # checker nobody has watched reject anything is a hypothesis, and this repo's characteristic
+  # defect is a rule with nothing enforcing it. It stages synthetic module trees where the
+  # manifest is missing, malformed or disagrees with the tag, and fails unless each is still
+  # rejected by name — so a check that has quietly stopped checking goes red instead of passing
+  # every release for the wrong reason. MAS-441.
   release-metadata:
     name: Manifest, changelog and README agree
     runs-on: ubuntu-latest
@@ -112,6 +119,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+
+      - name: The check still rejects a missing, malformed or mis-tagged release
+        run: python3 scripts/check_release_manifest.py --selftest
 
       # Standard library only — release metadata should not depend on anything resolving, and
       # this repo ships no Python dependencies to resolve.

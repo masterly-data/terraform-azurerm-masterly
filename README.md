@@ -675,6 +675,11 @@ The image pair is what the module version was released against — the pair Mast
 install ran when the version was tagged. Your install's running tags move on from it: the
 module seeds a newly created app and then ignores image drift, so CD owns the tag thereafter.
 
+If you are reading the manifest from a program rather than from this page,
+[docs/release-manifest.md](docs/release-manifest.md) is the contract: where to fetch it, every
+field with its type, which of them are stable and which may be added without warning. Parse
+that shape; do not scrape this table.
+
 CI checks `terraform fmt` + `validate` + `terraform test` (mock providers exercise the variable
 guards and both data-plane branches) on every change, and
 `scripts/check_release_manifest.py` fails any change where the manifest, the changelog and this
