@@ -422,6 +422,60 @@ Not detected, and no alert here should be read as covering it:
 - **Anything, on an install with `enable_diagnostics = false`** — the default outside
   `mode = "production"`.
 
+## Diagnostic bundle
+
+When you contact Masterly about an install, the conversation starts from what you send:
+the install runs in your subscription, and Masterly can read nothing in it.
+`scripts/diagnostic-bundle.sh` produces that in one action, from your own workstation, with
+the `az` login you already have. It is the primary support channel for a self-hosted install
+— an export you perform, not reporting the install performs. It sends nothing, nothing in
+the install can be asked for one, and no telemetry setting is involved.
+
+```bash
+export MASTERLY_API_TOKEN=<an Organization-scoped token with ops:read>   # optional
+./scripts/diagnostic-bundle.sh --subscription <id> \
+  --request-id <the X-Request-Id of the failing call> \
+  --api-url https://<the install's URL>
+```
+
+It needs `az` and `jq`, Reader on `rg-masterly-aca` and `rg-masterly-data`, and Log
+Analytics Reader on the workspace. `--api-url` is the **api's** URL: reachable from your
+workstation only when `api_ingress_external = true`, or from inside the VNet on the private
+topologies — the frontend proxies `/v1` behind its own session cookie, not a bearer token.
+Otherwise leave it out and attach the body from wherever your monitoring already polls it,
+with `--ops-metrics <file>`. It writes a directory, `masterly-diagnostics-<prefix>-<timestamp>/`,
+of plain JSON that you **read before you send**: the apps' configuration state, revisions and
+replicas (the image tags actually running, which Terraform cannot tell you), the alert set
+and whether anyone is listening to it, the six Log Analytics queries the public
+[operations page](https://masterlydata.com/docs/self-hosted/operations/#before-you-contact-us)
+publishes, the starter server's shape, and `GET /v1/ops/metrics` when you give it a token or
+a file. `manifest.json` says what was collected and what was not, and why — a denied
+permission is a named gap, never a silently empty file. Log Analytics is queried through
+`az rest`, which is in the core CLI, so no extension has to be installable on the machine.
+
+What it never carries, by construction:
+
+- **No secret values.** Container App secrets are listed by name. An environment variable's
+  value is copied only when its name is on the script's allow-list — the install's mode, ids,
+  bindings and endpoints; every other value is omitted, not masked, including addresses,
+  client ids and public key material.
+- **No credential of yours.** The API token is read from the environment, sent once, and
+  written nowhere. Registry credentials appear as "credential" or "managed-identity".
+  Action-group receivers are counted, never listed.
+- **No record data or attribute values.** The log lines are the ones the apps redact at the
+  formatter; nothing here reads a database.
+
+Before it finishes it scans everything it wrote for anything shaped like a secret — a URL
+with credentials, a JWT, a private key, a `password=` — and **refuses** a bundle that trips
+the scan: exit 3, the directory renamed `-REFUSED` and kept for you to inspect, the finding
+reported by file and line and never by content. A log line carrying a secret is a defect to
+report, not a line to forward.
+
+`tests/diagnostic_bundle_test.sh` is what makes those sentences checkable: it runs the real
+script against a fake `az` seeded with values that must never reach the bundle and asserts
+each is absent, and its `--selftest` breaks the script three ways to insist the harness
+notices. CI runs both on every change.
+
 ## If you front this install with a WAF, CDN, or gateway
 
 Masterly addresses **name things, they never quote them** — no customer value, filter, or

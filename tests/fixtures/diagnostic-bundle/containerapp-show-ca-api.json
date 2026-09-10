@@ -1,0 +1,74 @@
+{
+  "name": "ca-api",
+  "location": "swedencentral",
+  "identity": {
+    "type": "UserAssigned",
+    "userAssignedIdentities": {
+      "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps": {}
+    }
+  },
+  "properties": {
+    "provisioningState": "Succeeded",
+    "runningStatus": "Running",
+    "latestRevisionName": "ca-api--0000042",
+    "latestReadyRevisionName": "ca-api--0000042",
+    "configuration": {
+      "activeRevisionsMode": "Single",
+      "ingress": {
+        "external": false,
+        "targetPort": 8001,
+        "transport": "Auto",
+        "allowInsecure": true,
+        "ipSecurityRestrictions": [
+          { "name": "office", "ipAddressRange": "203.0.113.7/32", "action": "Allow" }
+        ],
+        "traffic": [ { "latestRevision": true, "weight": 100 } ]
+      },
+      "registries": [
+        { "server": "masterly.azurecr.io", "username": "customer-pull-token", "passwordSecretRef": "registry-password", "identity": "" }
+      ],
+      "secrets": [
+        { "name": "database-url", "value": "postgresql+asyncpg://masterly_admin:CANARY-SECRET-VALUE-9c1d@psql-masterly-x7k2q.postgres.database.azure.com:5432/postgres?ssl=require" },
+        { "name": "session-secret", "value": "CANARY-SESSION-SECRET-VALUE-1a2b" },
+        { "name": "license-token", "value": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNhbmFyeSJ9.eyJzdWIiOiJvcmdfY2FuYXJ5IiwiZXhwIjo0MTAyNDQ0ODAwfQ.CANARYSIGNATURE" },
+        { "name": "registry-password", "value": null }
+      ]
+    },
+    "template": {
+      "revisionSuffix": "",
+      "scale": { "minReplicas": 2, "maxReplicas": 4 },
+      "containers": [
+        {
+          "name": "api",
+          "image": "masterly.azurecr.io/api:v0.133.2",
+          "resources": { "cpu": 1.0, "memory": "2Gi" },
+          "probes": [
+            { "type": "Liveness", "httpGet": { "path": "/healthz", "port": 8001 }, "periodSeconds": 10, "failureThreshold": 3 },
+            { "type": "Readiness", "httpGet": { "path": "/readyz", "port": 8001 }, "periodSeconds": 10, "failureThreshold": 3 }
+          ],
+          "env": [
+            { "name": "MASTERLY_MODE", "value": "production" },
+            { "name": "MASTERLY_REGION", "value": "eu" },
+            { "name": "MASTERLY_ORG_ID", "value": "org_fixture" },
+            { "name": "MASTERLY_INSTALL_ID", "value": "prod" },
+            { "name": "MASTERLY_ALLOWED_REGIONS", "value": "eu" },
+            { "name": "MASTERLY_CONTROLPLANE_STORE", "value": "postgres" },
+            { "name": "MASTERLY_IDENTITY_BINDING", "value": "oidc" },
+            { "name": "MASTERLY_OIDC_ALLOWED_ISSUERS", "value": "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0" },
+            { "name": "MASTERLY_OIDC_AUDIENCE", "value": "api://masterly-fixture" },
+            { "name": "MASTERLY_OIDC_JWKS_URI", "value": "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/discovery/v2.0/keys" },
+            { "name": "MASTERLY_INITIAL_OWNER_EMAIL", "value": "canary.owner@example.invalid" },
+            { "name": "MASTERLY_BREAKGLASS_OWNER_EMAIL", "value": "canary.breakglass@example.invalid" },
+            { "name": "MASTERLY_LICENSE_PUBLIC_JWK", "value": "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"CANARY-JWK-X\",\"y\":\"CANARY-JWK-Y\",\"kid\":\"fixture\"}" },
+            { "name": "MASTERLY_TELEMETRY_CLIENT_ID", "value": "CANARY-TELEMETRY-CLIENT-ID-5d6e" },
+            { "name": "SOME_CUSTOM_VAR", "value": "CANARY-PLAIN-ENV-VALUE-4b1e" },
+            { "name": "MASTERLY_DATABASE_URL", "secretRef": "database-url" },
+            { "name": "MASTERLY_SESSION_SECRET", "secretRef": "session-secret" },
+            { "name": "MASTERLY_LICENSE_TOKEN", "secretRef": "license-token" },
+            { "name": "MASTERLY_INPROCESS_WORKER", "value": "false" }
+          ]
+        }
+      ]
+    }
+  }
+}

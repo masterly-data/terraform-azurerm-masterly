@@ -1,0 +1,6 @@
+[
+  { "name": "ag-masterly-alerts", "enabled": true,
+    "emailReceivers": [ { "name": "ops", "emailAddress": "canary.ops@example.invalid", "status": "Enabled" } ],
+    "smsReceivers": [], "webhookReceivers": [ { "name": "pd", "serviceUri": "https://events.pagerduty.example.invalid/integration/CANARY-WEBHOOK-KEY-7b8c/enqueue" } ],
+    "armRoleReceivers": [], "azureFunctionReceivers": [], "logicAppReceivers": [], "eventHubReceivers": [] }
+]

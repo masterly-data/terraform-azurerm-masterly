@@ -1,0 +1,43 @@
+{
+  "name": "ca-frontend",
+  "location": "swedencentral",
+  "identity": { "type": "UserAssigned", "userAssignedIdentities": { "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend": {} } },
+  "properties": {
+    "provisioningState": "Succeeded",
+    "runningStatus": "Running",
+    "latestRevisionName": "ca-frontend--0000017",
+    "latestReadyRevisionName": "ca-frontend--0000017",
+    "configuration": {
+      "activeRevisionsMode": "Single",
+      "ingress": { "external": true, "targetPort": 3000, "transport": "Auto", "allowInsecure": false, "ipSecurityRestrictions": [], "traffic": [ { "latestRevision": true, "weight": 100 } ] },
+      "registries": [ { "server": "masterly.azurecr.io", "username": "customer-pull-token", "passwordSecretRef": "registry-password", "identity": "" } ],
+      "secrets": [
+        { "name": "oidc-client-secret", "value": "CANARY-OIDC-CLIENT-SECRET-8f9a" },
+        { "name": "registry-password", "value": null }
+      ]
+    },
+    "template": {
+      "revisionSuffix": "",
+      "scale": { "minReplicas": 1, "maxReplicas": 2 },
+      "containers": [
+        {
+          "name": "frontend",
+          "image": "masterly.azurecr.io/frontend:v0.138.2",
+          "resources": { "cpu": 0.5, "memory": "1Gi" },
+          "probes": [
+            { "type": "Readiness", "httpGet": { "path": "/api/readyz", "port": 3000 }, "periodSeconds": 10, "failureThreshold": 6 }
+          ],
+          "env": [
+            { "name": "MASTERLY_API_BASE_URL", "value": "http://ca-api" },
+            { "name": "MASTERLY_REGION", "value": "eu" },
+            { "name": "MASTERLY_IDP_BINDING", "value": "oidc" },
+            { "name": "MASTERLY_OIDC_CLIENT_ID", "value": "CANARY-OIDC-CLIENT-ID-3c4d" },
+            { "name": "MASTERLY_OIDC_AUTHORITY", "value": "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0" },
+            { "name": "MASTERLY_OIDC_REDIRECT_URI", "value": "https://masterly.example.invalid/api/auth/callback" },
+            { "name": "MASTERLY_OIDC_CLIENT_SECRET", "secretRef": "oidc-client-secret" }
+          ]
+        }
+      ]
+    }
+  }
+}

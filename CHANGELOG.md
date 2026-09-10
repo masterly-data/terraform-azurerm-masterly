@@ -15,6 +15,15 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
 
 ### Added
 
+- `scripts/diagnostic-bundle.sh` — the diagnostic bundle in one action. Run from your own
+  workstation with your `az` login, it writes a directory you read before you send: the apps'
+  configuration state (secrets by name, environment values only from an allow-list),
+  revisions and replicas, the alert set and its receivers counted, the six published Log
+  Analytics queries through `az rest` (no CLI extension), the starter server's shape, and
+  `GET /v1/ops/metrics` when given a token. It sends nothing and refuses a bundle that carries
+  anything shaped like a secret. `tests/diagnostic_bundle_test.sh` proves the bundle carries no
+  record data, attribute values or secrets, and its `--selftest` proves the test still fails
+  when the script is broken; CI runs both (MAS-343).
 - `license_issuer_url` — the licence refresh endpoint reaches the apps, so an install can
   re-fetch and re-verify its licence daily instead of waiting for the next apply. Optional, and
   it requires the three telemetry inputs (MAS-98).
