@@ -3,13 +3,22 @@
 Notable changes to the `masterly-data/masterly/azurerm` Terraform module.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
-[semver](https://semver.org/). Every published version here also has an entry in
+[semver](https://semver.org/). Every version published since 0.15.0 also has an entry in
 [`MANIFEST.json`](MANIFEST.json), which names the `api` / `frontend` image pair that version was
-released against — `scripts/check_release_manifest.py` fails the build if the two disagree.
+released against — `scripts/check_release_manifest.py` fails the build if the two disagree. The
+shape a program can rely on when it parses that manifest is
+[docs/release-manifest.md](docs/release-manifest.md).
 
 Write new entries under **Unreleased**. Cutting a release renames that heading to the version and
 adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a release" in the
-[README](README.md#cutting-a-release). Releases before 0.15.0 predate this file — see the git tags.
+[README](README.md#cutting-a-release).
+
+Releases before 0.15.0 predate this file. Their entries below were reconstructed after the fact
+from the git tag messages and the pull-request titles those tags carry, so they say what each
+release was *for* rather than giving a line-by-line account of what it contained — read the tag
+and the commits between it and its predecessor if you need that. They also have no
+`MANIFEST.json` entry: the image pair each was tested against was never recorded at the time, and
+inventing one now would be exactly the retyped-value failure the manifest exists to end.
 
 ## [Unreleased]
 
@@ -49,6 +58,17 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
   stalls. Same severity as the other availability alerts, and its description says the pipeline
   stopped rather than that the install is down, because those are different things to be woken
   for. No new input (MAS-305).
+- `python3 scripts/check_release_manifest.py --selftest` — the release check is now itself
+  checked. It stages 25 synthetic module trees and asserts both halves of what it claims: a
+  well-formed release passes, and every way a release can be wrong is rejected *by name* — the
+  manifest missing, unparseable, a JSON array, missing `latest`, missing an image, naming an
+  image that is not `registry/repository:tag`, carrying the `api` and `frontend` values swapped,
+  claiming a `latest` that is not the highest version present, or speaking a schema this repo
+  does not; the changelog missing the released version, dating it differently, or having no
+  `Unreleased` heading to write into; the README restating a pin the manifest disagrees with, or
+  having lost the pin altogether; and the tag naming a version the manifest does not publish. CI
+  runs the selftest before the check, so a detector that has quietly stopped detecting fails
+  loudly rather than passing this repo for the wrong reason (MAS-441).
 
 ### Changed
 
@@ -57,9 +77,19 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
   (MAS-171). Dependabot updates are grouped, and the GitHub Actions majors were taken (MAS-126).
 - A scheduled check fails when the public self-hosted docs pin an older module than the registry
   publishes (MAS-199).
+- `MANIFEST.json` must now declare a `schema_version` this repo speaks and a non-empty `module`.
+  The manifest is a contract other programs parse, so a change to its shape has to arrive with
+  the checker and the contract document or the build refuses it (MAS-441).
 
 ### Documentation
 
+- [docs/release-manifest.md](docs/release-manifest.md) — the manifest's shape written down for
+  whoever parses it, rather than left to be inferred from an example: where to fetch it, every
+  field with its type and meaning, which fields are stable while `schema_version` is `1`, which
+  may be added without warning, and the two things not to assume — that `releases` is complete
+  history, and that the image pair says what an install is running now rather than what the
+  version was released against (MAS-441).
+- Entries for 0.8.0 through 0.14.0, reconstructed from their tag messages (MAS-259).
 - `oidc_allowed_issuers` is the install's own issuer, not a per-customer list (MAS-164).
 
 ## [0.15.0] - 2026-09-07
@@ -74,5 +104,80 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
 
 - Third-party actions are pinned by digest, and Dependabot watches them.
 
+## [0.14.0] - 2026-09-07
+
+### Changed
+
+- The published api is HTTPS-only, and the Container Apps environment encrypts app-to-app
+  traffic (MAS-39).
+
+## [0.13.0] - 2026-09-07
+
+### Documentation
+
+- The README's pin was moved to 0.13.
+
+## [0.12.0] - 2026-09-04
+
+### Added
+
+- The api can be made reachable, narrowly, so a client outside the install — the Python SDK,
+  for one — can talk to it.
+
+## [0.11.0] - 2026-09-01
+
+### Added
+
+- Telemetry wiring to Masterly's control plane.
+
+## [0.10.0] - 2026-09-01
+
+### Added
+
+- Three network topologies served from one module: public ingress, private ingress, and
+  hub-and-spoke.
+
+## [0.9.1] - 2026-09-01
+
+### Changed
+
+- CI gates the artifact customers consume.
+
+## [0.9.0] - 2026-09-01
+
+### Added
+
+- The declared data-residency claim is checked against where the resources actually land.
+
+## [0.8.2] - 2026-09-01
+
+### Fixed
+
+- The Azure-assigned Postgres standby availability zone is ignored, so an apply no longer
+  fights the platform over it.
+
+## [0.8.1] - 2026-09-01
+
+### Documentation
+
+- Documentation only.
+
+## [0.8.0] - 2026-09-01
+
+### Added
+
+- The first public tag. The Terraform content was unchanged from the internal repository it was
+  extracted from, api readiness-probe tolerances included, and `examples/production` was added.
+
 [Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.15.0...HEAD
 [0.15.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.15.0
+[0.14.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.14.0
+[0.13.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.13.0
+[0.12.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.12.0
+[0.11.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.11.0
+[0.10.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.10.0
+[0.9.1]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.9.1
+[0.9.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.9.0
+[0.8.2]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.8.2
+[0.8.1]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.8.1
+[0.8.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.8.0
