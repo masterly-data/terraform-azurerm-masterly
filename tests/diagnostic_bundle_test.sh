@@ -15,6 +15,9 @@
 #      value is present, the file is named in manifest.json under
 #      record_data.needs_line_by_line_review, and the operator is told on stderr/stdout.
 #      Asserting absence there would be asserting something the script does not do.
+#   3. manifest.json's `.tool` names the version of the TREE THE SCRIPT RAN FROM, and never a
+#      version that tree is not. That is asserted in its own scenario, against a staged module
+#      root, because inside this repository the true answer and the wrong one look alike.
 #
 # It runs the real script against a fake `az` and a fake `curl` (tests/fixtures/
 # diagnostic-bundle/) whose answers are SEEDED with values that must never reach the bundle:
@@ -30,10 +33,10 @@
 # allow-list cannot see, and asserts the refusal gate fires: exit 3, the directory renamed
 # `-REFUSED`, the finding reported by file and line and never by content.
 #
-# `--selftest` is the part that keeps this honest. It copies the script, breaks it four ways
+# `--selftest` is the part that keeps this honest. It copies the script, breaks it five ways
 # a real regression would — keep every env value, keep secret values, disable the gate,
-# disable the statement-echo warning — and asserts that THIS harness fails against each
-# broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
+# disable the statement-echo warning, take the version from the release manifest when the tree
+# could answer — and asserts that THIS harness fails against each broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
 # that a detector that has quietly stopped detecting fails the build instead of passing it.
 # Each break is checked to have actually changed the copy, so a stale sed cannot turn the
 # selftest vacuous.
@@ -293,11 +296,120 @@ scenario_gaps() { # scenario_gaps <script> — no token, no request id: the mani
   [[ $failures -eq 0 ]]
 }
 
+# --- Provenance: the bundle may only name a version its own tree actually is -----------------
+# `.tool` is the field a support engineer reads to learn what produced a bundle, on the channel
+# ADR 0080 makes the primary one for a self-hosted install. It must name the version of the tree
+# the script ran from. The release manifest's `latest` is a DIFFERENT fact — the newest
+# published release — and the two disagree the moment anyone follows the runbook and clones
+# `main`: a bundle stamped with a tag that does not contain the script that wrote it sends
+# triage to the wrong source, which is the round trip this whole script exists to remove.
+#
+# Asserting that from inside this repository would be nearly vacuous — here the tag and the tree
+# almost agree — so the script under test is STAGED into purpose-built module roots whose two
+# possible answers are far apart: a MANIFEST.json naming a version the staged tree provably is
+# not, beside a git tag this test chose. Three roots, because there are three real situations:
+# a clone of the module, a copy with no git tree at all (extracted from the registry), and a
+# copy vendored inside somebody else's repository, whose tags are not module versions.
+PROVENANCE_TAG="v0.0.1-fixture"
+PROVENANCE_MANIFEST_VERSION="99.99.99-manifest-not-this-tree"
+PROVENANCE_OUTER_TAG="v7.7.7-outer-repo"
+
+stage_module() { # stage_module <root> <script> — a module tree whose MANIFEST disagrees with it
+  local root="$1" script="$2"
+  mkdir -p "$root/scripts"
+  cp "$script" "$root/scripts/diagnostic-bundle.sh"
+  jq -n --arg v "$PROVENANCE_MANIFEST_VERSION" \
+    '{schema_version: 1, module: "masterly-data/masterly/azurerm", latest: $v,
+      releases: {($v): {date: "2000-01-01",
+                        images: {api: "example.invalid/api:v0", frontend: "example.invalid/frontend:v0"}}}}' \
+    > "$root/MANIFEST.json"
+}
+
+git_here() { # git_here <dir> <args...> — commits without depending on the runner's git identity
+  local dir="$1"; shift
+  git -C "$dir" -c user.email=test@example.invalid -c user.name="diagnostic bundle test" "$@"
+}
+
+run_staged() { # run_staged <root> <tmp> <label> — run the staged copy, echo its manifest's .tool
+  local root="$1" tmp="$2" label="$3" manifest
+  PATH="$tmp/bin:$PATH" bash "$root/scripts/diagnostic-bundle.sh" \
+    --subscription 00000000-0000-0000-0000-000000000000 --out "$tmp/out-$label" \
+    > "$tmp/stdout-$label" 2> "$tmp/stderr-$label" || true
+  manifest=$(find "$tmp/out-$label" -name manifest.json -maxdepth 2 2>/dev/null | sort | head -n1)
+  [[ -n "$manifest" ]] || return 1
+  jq -r '.tool' "$manifest"
+}
+
+scenario_provenance() { # scenario_provenance <script>
+  local script="$1" tmp tool
+  tmp=$(mktemp -d)
+  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3.json"
+
+  # (a) The module's own git tree. The tag is the answer; the manifest is not consulted.
+  stage_module "$tmp/clone" "$script"
+  git -c init.defaultBranch=main init -q "$tmp/clone"
+  git_here "$tmp/clone" add -A
+  git_here "$tmp/clone" commit -q -m "staged module"
+  git_here "$tmp/clone" tag "$PROVENANCE_TAG"
+  if tool=$(run_staged "$tmp/clone" "$tmp" clone); then
+    if [[ "$tool" == *"$PROVENANCE_TAG"* ]]; then
+      pass "provenance names the version of the tree the script ran from ($tool)"
+    else
+      fail "manifest .tool does not name the tree's own tag $PROVENANCE_TAG: $tool"
+    fi
+    if [[ "$tool" == *"$PROVENANCE_MANIFEST_VERSION"* ]]; then
+      fail "manifest .tool names $PROVENANCE_MANIFEST_VERSION, the release manifest's version, which this tree is NOT: $tool"
+    else
+      pass "provenance does not name the release manifest's version, which the tree is not"
+    fi
+  else
+    fail "no manifest.json written by the staged clone — the provenance assertions are vacuous"
+  fi
+
+  # (b) No git tree — a module extracted from the registry. The manifest is the only evidence
+  # there is, so the field may repeat it, but it must attribute it: an unattributed version
+  # reads as a fact established about the tree, which is the defect this scenario exists for.
+  stage_module "$tmp/extracted" "$script"
+  if tool=$(run_staged "$tmp/extracted" "$tmp" extracted); then
+    if [[ "$tool" != *"$PROVENANCE_MANIFEST_VERSION"* ]]; then
+      pass "with no git tree the field claims no version of its own: $tool"
+    elif [[ "$tool" == *MANIFEST.json* ]]; then
+      pass "with no git tree the manifest's version is attributed to the manifest: $tool"
+    else
+      fail "manifest .tool states $PROVENANCE_MANIFEST_VERSION as the tree's version with no evidence for it: $tool"
+    fi
+  else
+    fail "no manifest.json written by the extracted copy"
+  fi
+
+  # (c) Vendored inside somebody else's repository. That repository's tags are its versions,
+  # not this module's, and a customer who tags their infrastructure repo with a semver would
+  # otherwise see it stamped on a Masterly bundle.
+  stage_module "$tmp/outer/vendor/masterly" "$script"
+  git -c init.defaultBranch=main init -q "$tmp/outer"
+  git_here "$tmp/outer" add -A
+  git_here "$tmp/outer" commit -q -m "vendored"
+  git_here "$tmp/outer" tag "$PROVENANCE_OUTER_TAG"
+  if tool=$(run_staged "$tmp/outer/vendor/masterly" "$tmp" vendored); then
+    if [[ "$tool" == *"$PROVENANCE_OUTER_TAG"* ]]; then
+      fail "manifest .tool reports the enclosing repository's tag $PROVENANCE_OUTER_TAG as a module version: $tool"
+    else
+      pass "a vendored copy is not stamped with the enclosing repository's tag: $tool"
+    fi
+  else
+    fail "no manifest.json written by the vendored copy"
+  fi
+
+  rm -rf "$tmp"
+  [[ $failures -eq 0 ]]
+}
+
 run_suite() { # run_suite <script> — all scenarios; non-zero if any assertion failed
   failures=0
   scenario_clean "$1" || true
   scenario_refused "$1" || true
   scenario_gaps "$1" || true
+  scenario_provenance "$1" || true
   [[ $failures -eq 0 ]]
 }
 
@@ -312,20 +424,23 @@ selftest() {
     'keep secret values (names-only projection dropped)'
     'refusal gate disabled'
     'statement-echo warning disabled (record data reaches the bundle unflagged)'
+    'provenance taken from the release manifest when the tree could answer'
   )
   local exprs=(
     's/elif (\.name as \$n | \$allow | index(\$n)) != null then/elif true then/'
     's/secrets: \[\.properties\.configuration\.secrets\[\]? | \.name\]/secrets: [.properties.configuration.secrets[]?]/'
     's/^if \[\[ -n "\$findings" \]\]; then$/if false; then/'
     's/^REVIEW_FILES=\$(printf/REVIEW_FILES=""; : $(printf/'
+    's/^git_root=\$(git -C "\$module_root" rev-parse --show-toplevel .*$/git_root=""/'
   )
   local gones=(
     'index($n)) != null then'
     'secrets[]? | .name]'
     'if [[ -n "$findings" ]]; then'
     'REVIEW_FILES=$(printf'
+    'git_root=$(git -C "$module_root" rev-parse'
   )
-  for n in 0 1 2 3; do
+  for n in 0 1 2 3 4; do
     total=$((total + 1))
     broken="$tmp/broken-$total.sh"
     sed -e "${exprs[$n]}" "$SCRIPT" > "$broken"
@@ -348,6 +463,10 @@ selftest() {
 }
 
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
+# git is required by the provenance scenario, which stages module trees to tell a tree's own
+# version apart from the release manifest's. Refused rather than skipped: a scenario that
+# quietly does not run is the failure mode --selftest exists to make impossible.
+command -v git >/dev/null 2>&1 || { echo "git is required" >&2; exit 1; }
 
 if [[ "${1:-}" == "--selftest" ]]; then
   echo "== selftest: a broken script must fail this suite"

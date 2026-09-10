@@ -450,7 +450,10 @@ and whether anyone is listening to it, the six Log Analytics queries the public
 [operations page](https://masterlydata.com/docs/self-hosted/operations/#before-you-contact-us)
 publishes, the starter server's shape, and `GET /v1/ops/metrics` when you give it a token or
 a file. `manifest.json` says what was collected and what was not, and why — a denied
-permission is a named gap, never a silently empty file. Log Analytics is queried through
+permission is a named gap, never a silently empty file. Its `tool` field describes the tree the
+script ran from (`git describe`, or the manifest's claim when there is no git tree, said as a
+claim); that is **not** the version your install is pinned to, which the bundle cannot see —
+state your pin in the message. Log Analytics is queried through
 `az rest`, which is in the core CLI, so no extension has to be installable on the machine.
 
 What it never carries, by construction:
@@ -493,9 +496,10 @@ report, not a line to forward.
 two strengths of claim apart rather than blurring them: each seeded secret, credential,
 address and key is asserted **absent**, and the record-data class is asserted **present in
 `q6` and flagged** — the value in the file, the file named in `manifest.json`, the operator
-told on the terminal, and the run still exiting 0. Its `--selftest` breaks the script four
+told on the terminal, and the run still exiting 0. Its `--selftest` breaks the script five
 ways — allow-list bypassed, secret values kept, refusal gate disabled, statement-echo warning
-disabled — to insist the harness notices. CI runs both on every change.
+disabled, version taken from the release manifest — to insist the harness notices. CI runs both
+on every change.
 
 ## If you front this install with a WAF, CDN, or gateway
 

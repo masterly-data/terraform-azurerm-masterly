@@ -500,14 +500,44 @@ REVIEW_JSON=$(printf '%s' "$REVIEW_FILES" | jq -R -s 'split("\n") | map(select(l
 # --- 6. Manifest and cover note ----------------------------------------------------------
 head2 "Manifest"
 az_version=$(az version --query '"azure-cli"' -o tsv 2>/dev/null || echo "unknown")
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-module_version="unknown"
-if [[ -f "$script_dir/../MANIFEST.json" ]]; then
-  module_version=$(jq -r '.latest // "unknown"' "$script_dir/../MANIFEST.json" 2>/dev/null || echo "unknown")
+# Resolved physically (`-P`), because the toplevel comparison below is against `git`'s answer
+# and git always reports a physical path: on a macOS temp directory the logical form differs.
+module_root=$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+# Which module version produced this bundle. It must describe THE TREE THIS SCRIPT IS IN, and
+# nothing else. MANIFEST.json's `latest` is the latest PUBLISHED release, which is a different
+# fact: this script reaches a workstation by cloning `main`, so `latest` routinely names a tag
+# that does not contain the script that wrote the bundle. A support engineer reading a version
+# that cannot contain this file is worse off than one reading nothing, so:
+#
+#   * the module's own git tree answers for itself — `describe --tags --always --dirty` gives
+#     `v0.15.0` on a tag, `v0.15.0-12-gabc1234` on a clone of `main`, a bare commit id when the
+#     clone is shallow or untagged, and a `-dirty` suffix when the tree has been edited. The
+#     string is git's, untransformed: rewriting it here would be this script inventing a
+#     version rather than reporting one;
+#   * the toplevel check keeps a copy VENDORED inside someone else's repository from being
+#     described by THAT repository's tags, which would read like a module version and not be
+#     one;
+#   * with no git tree of its own — the ordinary case for a module extracted from the registry
+#     — MANIFEST.json is the best available evidence, because the tag build enforces
+#     `latest` == the tag being cut, so an extracted release's manifest names that release.
+#     That invariant cannot be verified from inside the extracted tree, so the field reports it
+#     as the manifest's claim rather than as a fact established about the tree.
+module_provenance=""
+git_root=$(git -C "$module_root" rev-parse --show-toplevel 2>/dev/null || true)
+if [[ -n "$git_root" ]] && [[ "$(cd -P "$git_root" 2>/dev/null && pwd -P)" == "$module_root" ]]; then
+  git_describe=$(git -C "$module_root" describe --tags --always --dirty 2>/dev/null || true)
+  if [[ -n "$git_describe" ]]; then module_provenance="tree at $git_describe"; fi
 fi
+if [[ -z "$module_provenance" && -f "$module_root/MANIFEST.json" ]]; then
+  manifest_latest=$(jq -r '.latest // empty' "$module_root/MANIFEST.json" 2>/dev/null || true)
+  if [[ -n "$manifest_latest" ]]; then
+    module_provenance="version not read from a git tree; MANIFEST.json claims $manifest_latest"
+  fi
+fi
+[[ -n "$module_provenance" ]] || module_provenance="version unknown"
 jq -n \
   --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg tool "diagnostic-bundle.sh (terraform-azurerm-masterly $module_version)" \
+  --arg tool "diagnostic-bundle.sh from terraform-azurerm-masterly, $module_provenance" \
   --arg az "$az_version" \
   --arg subscription "$SUBSCRIPTION" --arg prefix "$NAME_PREFIX" \
   --arg rg_aca "$RG_ACA" --arg rg_data "$RG_DATA" --arg env "$ACA_ENV" \

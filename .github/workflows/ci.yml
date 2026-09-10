@@ -74,7 +74,10 @@ jobs:
   # echoes a failing statement and the values on its DETAIL: line — so for that class the
   # promise is that the file is FLAGGED, and that is what is asserted. Both are tests, not
   # comments: the harness runs the real script against a fake `az` whose answers are seeded
-  # with both classes of value. The selftest runs FIRST, and breaks the script four ways to
+  # with both classes of value. A third scenario stages the script into purpose-built module
+  # trees and asserts that the version in manifest.json's `.tool` is the one the tree it ran
+  # from actually is — never the newest published release, which on a clone of `main` is a tag
+  # that does not contain the script. The selftest runs FIRST, and breaks the script five ways to
   # insist the harness notices — a detector nobody has watched fail is a hypothesis, and this
   # repo's characteristic defect is a rule with nothing enforcing it.
   # No cloud, no credential: safe on a pull request from a fork. MAS-343.
