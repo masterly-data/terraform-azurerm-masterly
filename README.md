@@ -364,8 +364,11 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   CPU-credit exhaustion (burstable installs only), Redis memory nearly full, Redis key evictions
   (which under the no-eviction policy mean the policy has been changed out from under the
   install, not that the cache is small), and `ca-api` / `ca-frontend` 5xx. Severity 1–2.
-- **Availability alerts** — the install is not serving at all. Severity 0, so a notification
-  tells you which of the two states you are in without opening the portal.
+- **Availability alerts** — something has stopped rather than strained: the install is not
+  serving, or the async pipeline behind it is not running. Severity 0 on all of them, so a
+  notification tells you which of the two states you are in without opening the portal; the
+  alert's own description says what stopped, because a dead `ca-workers` leaves the install
+  answering every request perfectly while no job in it makes progress.
 
 Alerts fire and record with no notification target; to be paged, set `alert_email` (the
 module creates an action group) or point `alert_action_group_id` at an existing group
@@ -383,7 +386,8 @@ precise about how far they reach.
 |---|---|---|
 | Database reports itself down | `postgres-unavailable` | Reads the platform's own `is_db_alive`. Fastest signal here: 5-minute window. |
 | Database stopped, deleted, or its telemetry broke | `postgres-silent` | Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. ~40 minutes to page, deliberately. On a brand-new install it can fire once before the first metrics land; it clears itself when they do. |
-| An app has no running replica | `<app>-unavailable` | Only created for an app whose `min_replicas` is 1 or more. Counts replicas, not readiness — see the first "not detected" entry below. |
+| An app has no running replica | `<app>-unavailable` | One per Container App the install runs — `api`, `frontend` and, with `enable_workers`, `workers`. Only created for an app whose `min_replicas` is 1 or more. Counts replicas, not readiness — see the first "not detected" entry below. |
+| The async pipeline has no worker running | `workers-unavailable` | The same alert, and the one nothing else in the set can stand in for: `ca-workers` has no ingress, so it emits no requests and `<app>-5xx` is blind to it by construction. Without this, a dead workers app is silent — the install keeps answering, the queue keeps growing, and the first signal is somebody asking why yesterday's ingest never landed. |
 | Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. |
 
 Not detected, and no alert here should be read as covering it:
@@ -395,6 +399,13 @@ Not detected, and no alert here should be read as covering it:
   cover it either: it needs more than five requests in its window, and an install nobody can
   reach receives none. A synthetic check against the install's own URL, run from wherever you
   already monitor, is what closes this; the module ships none, for the reason in the next entry.
+- **A workers app that is running but wedged.** The same shape, one layer down and with no
+  synthetic check available: a `ca-workers` replica that is up but whose consume loop is stuck
+  still counts toward `Replicas`, so `workers-unavailable` reads 1. What the module can see is
+  that the app is *there*; whether it is *draining* lives in the install's own job tables, which
+  the module provisions and never reads. Alert on queue depth or on the age of the oldest
+  unclaimed job from the application side if you need that, and keep this alert for the case it
+  does cover — the workers app being gone.
 - **A BYO-DB install's database.** With `external_database_url` set, the module wires no
   diagnostic setting to a server it does not own, so it has no telemetry stream whose end it
   could notice. Alert on your own database from wherever it runs.

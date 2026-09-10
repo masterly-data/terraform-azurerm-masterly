@@ -28,6 +28,13 @@ adds the matching `MANIFEST.json` entry, in the same commit; see "Cutting a rele
   passes its readiness probe still counts toward `Replicas`, so it reads as available — see "What
   the alerts detect, and what they do not" in the [README](README.md) for what covers it
   (MAS-263).
+- `ca-workers` gets the same no-replica availability alert the serving apps carry, on installs
+  that run it with a replica floor. It is the failure the rest of the set structurally cannot
+  see: the workers app has no ingress, so it emits no requests, and a dead one leaves the
+  install answering normally while every ingest run, scan and materialization job behind it
+  stalls. Same severity as the other availability alerts, and its description says the pipeline
+  stopped rather than that the install is down, because those are different things to be woken
+  for. No new input (MAS-305).
 
 ### Changed
 
