@@ -22,6 +22,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-10
+
 ### Added
 
 - `app-not-ready` — an availability alert for the failure that every other alert in the set
@@ -83,6 +85,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   stalls. Same severity as the other availability alerts, and its description says the pipeline
   stopped rather than that the install is down, because those are different things to be woken
   for. No new input (MAS-305).
+- `MANIFEST.json` and the check that keeps it honest — the module now states, once and
+  machine-readably, which `api` and `frontend` images each published version was released
+  against, so the README, the public docs and a pinned install read that fact instead of
+  retyping it and drifting apart. `scripts/check_release_manifest.py` runs on every pull
+  request, so the commit that cuts a release is validated before it merges, and again on the
+  tag build, where a tag pushed without its manifest and changelog entries goes red at once.
+  Release-please stays deliberately out: the module's version is a release decision, not one
+  computed from commit messages (MAS-239).
 - `python3 scripts/check_release_manifest.py --selftest` — the release check is now itself
   checked. It stages 25 synthetic module trees and asserts both halves of what it claims: a
   well-formed release passes, and every way a release can be wrong is rejected *by name* — the
@@ -132,6 +142,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Documentation
 
+- [SECURITY.md](SECURITY.md) — a private route for reporting a flaw in the published module.
+  The module provisions a customer's whole install and is consumed at a pinned tag, so a
+  publicly-filed flaw is actionable against every install on that version before any of them can
+  be told. Private reporting was already enabled on the repository and nothing pointed at it.
+  The file names GitHub private vulnerability reporting first and the owner's address as the
+  fallback, states response windows that can be held, and says what is in scope — the module,
+  its examples and its CI — and what is not (MAS-235).
 - [docs/release-manifest.md](docs/release-manifest.md) — the manifest's shape written down for
   whoever parses it, rather than left to be inferred from an example: where to fetch it, every
   field with its type and meaning, which fields are stable while `schema_version` is `1`, which
@@ -218,7 +235,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - The first public tag. The Terraform content was unchanged from the internal repository it was
   extracted from, api readiness-probe tolerances included, and `examples/production` was added.
 
-[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.16.0
 [0.15.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.15.0
 [0.14.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.14.0
 [0.13.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.13.0

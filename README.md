@@ -11,7 +11,7 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.15"
+  version = "~> 0.16"
 }
 ```
 
@@ -50,7 +50,7 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.15"
+  version = "~> 0.16"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -68,8 +68,8 @@ module "masterly" {
   # Two floors sit below it: an api older than v0.132.2 registers no job handlers on
   # ca-workers, silently, and a frontend older than v0.138.2 leaves a fresh install unable to
   # create its first Environment. api v0.133.1 has no published image.
-  api_image           = "masterly.azurecr.io/api:v0.133.2"
-  frontend_image      = "masterly.azurecr.io/frontend:v0.138.2"
+  api_image           = "masterly.azurecr.io/api:v0.133.3"
+  frontend_image      = "masterly.azurecr.io/frontend:v0.138.3"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -686,6 +686,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.16.0` | `masterly.azurecr.io/api:v0.133.3` | `masterly.azurecr.io/frontend:v0.138.3` | 2026-09-10 |
 | `0.15.0` | `masterly.azurecr.io/api:v0.133.2` | `masterly.azurecr.io/frontend:v0.138.2` | 2026-09-07 |
 <!-- release-manifest:end -->
 
