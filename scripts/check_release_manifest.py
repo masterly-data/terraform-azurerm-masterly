@@ -12,7 +12,8 @@ A manifest nobody is forced to update is a documented good intention, so this sc
 forcing function, and CI runs it three times over:
 
   * on every pull request and push to main — the manifest, the changelog and the README must
-    agree with each other, so the release commit that bumps them is validated BEFORE it merges;
+    agree with each other, so the release commit that bumps them is validated BEFORE it merges,
+    and no script the module ships may hand-type a module version in its header (MAS-479);
   * on a tag push (`--tag vX.Y.Z`) — the tag must be the manifest's `latest` and must have a
     changelog entry, so a tag cut without them turns the release build red immediately;
   * before either, as `--selftest` — synthetic trees prove the check still rejects a missing,
@@ -55,6 +56,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = Path(os.environ.get("RELEASE_MANIFEST_PATH", REPO_ROOT / "MANIFEST.json"))
 CHANGELOG_PATH = Path(os.environ.get("RELEASE_CHANGELOG_PATH", REPO_ROOT / "CHANGELOG.md"))
 README_PATH = Path(os.environ.get("RELEASE_README_PATH", REPO_ROOT / "README.md"))
+# The tree whose shipped scripts are scanned for a hand-typed version (see check_script_banners).
+MODULE_ROOT = Path(os.environ.get("RELEASE_MODULE_ROOT", REPO_ROOT))
 
 # The schema version this script — and docs/release-manifest.md, the contract other repos read
 # the manifest against — knows how to speak. Bumping the manifest without bumping both is how a
@@ -278,6 +281,64 @@ def check_readme(manifest: dict, write: bool) -> None:
     )
 
 
+# A shipped script may not announce which module version it is. `scripts/preflight.sh` carried
+# `(module v0.7.0)` in its header for eight releases (MAS-479) — correct the day it was typed,
+# wrong at the next tag, and read by a customer at the moment they are checking whether they hold
+# the right artifact for their install. The file is copied unchanged into every release, so its
+# version is not a fact it can state about itself: it is the version of the tree it was read from.
+#
+# Only the HEADER is scanned — the run of comment lines at the top of the file, which is the part
+# a reader takes as a claim about the artifact in their hands. Deeper in a file a version can
+# legitimately appear as history ("unchanged since …") or as an example of derived output, and
+# `scripts/diagnostic-bundle.sh` does exactly that where it explains how it asks the tree for its
+# own version. A rule that forbade both would be answered with an exception list, and an
+# exception list is how a gate stops being one.
+BANNER_VERSION_PATTERNS = (
+    # "module v0.7.0", "module version 0.7.0", "the module, 0.7.0"
+    re.compile(r"(?i)\bmodule\b[^\n]{0,24}?(?<![\w.])v?\d+\.\d+\.\d+(?![\w.])"),
+    # a bare release-tag or image-tag form: "v0.7.0"
+    re.compile(r"(?<![\w.-])v\d+\.\d+\.\d+(?![\w.])"),
+)
+
+# Everything under these is either not shipped or not ours to read.
+SKIP_DIRS = {".git", ".github", ".terraform"}
+
+
+def script_banner(text: str) -> list[tuple[int, str]]:
+    """The header of a shell script: its leading run of comment and blank lines, numbered."""
+    banner: list[tuple[int, str]] = []
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            break
+        banner.append((lineno, line))
+    return banner
+
+
+def check_script_banners() -> None:
+    """No script the module ships states a module version in its header."""
+    for path in sorted(MODULE_ROOT.rglob("*.sh")):
+        if SKIP_DIRS.intersection(path.relative_to(MODULE_ROOT).parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in script_banner(text):
+            if any(pattern.search(line) for pattern in BANNER_VERSION_PATTERNS):
+                raise CheckFailed(
+                    f"{path.relative_to(MODULE_ROOT)}:{lineno} states a module version in its "
+                    f"header:\n"
+                    f"    {line.strip()}\n"
+                    f"A script ships inside the module, so the release it belongs to is the "
+                    f"release the reader obtained the tree from — not something the file can "
+                    f"state about itself. Typed by hand it is right for one tag and wrong after "
+                    f"the next: this header carried a version eight releases stale before anyone "
+                    f"noticed (MAS-479). Delete the claim, or derive it at run time from the tree "
+                    f"the way scripts/diagnostic-bundle.sh does for the bundle's manifest."
+                )
+
+
 def check_tag(manifest: dict, tag: str) -> None:
     """The tag being built is the version the manifest and changelog just published."""
     match = TAG_RE.match(tag)
@@ -370,7 +431,39 @@ Trailing prose.
 """
 
 
-def _stage(root: Path, manifest, changelog, readme) -> dict:
+# Fixture scripts for the header rule. The version they carry is the fixture manifest's, so a
+# reader can see that the rule is about WHERE a version is written and not about which one it is.
+FIXTURE_SCRIPT_WITH_VERSION_BANNER = """#!/usr/bin/env bash
+# Fixture preflight for an example install (module v{version}).
+#
+# Usage: ./scripts/fixture.sh
+
+set -euo pipefail
+echo fixture
+"""
+
+FIXTURE_SCRIPT_CLEAN_BANNER = """#!/usr/bin/env bash
+# Fixture preflight for an example install.
+#
+# Usage: ./scripts/fixture.sh
+
+set -euo pipefail
+echo fixture
+"""
+
+FIXTURE_SCRIPT_VERSION_BELOW_BANNER = """#!/usr/bin/env bash
+# Fixture preflight for an example install.
+#
+# Usage: ./scripts/fixture.sh
+
+set -euo pipefail
+# The tree answers for itself, below the header, the way diagnostic-bundle.sh does:
+#   describe --tags --always --dirty gives v{version} on a tag.
+echo fixture
+"""
+
+
+def _stage(root: Path, manifest, changelog, readme, scripts=None) -> dict:
     """Write one synthetic module tree and return the environment that points the script at it."""
     manifest_path = root / "MANIFEST.json"
     changelog_path = root / "CHANGELOG.md"
@@ -384,8 +477,15 @@ def _stage(root: Path, manifest, changelog, readme) -> dict:
         changelog_path.write_text(changelog, encoding="utf-8")
     if readme is not None:
         readme_path.write_text(readme, encoding="utf-8")
+    for name, body in (scripts or {}).items():
+        script_path = root / name
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(body, encoding="utf-8")
     env = dict(os.environ)
     env.pop("RELEASE_TAG", None)
+    # The banner scan walks the staged tree, never this repo: a scenario must be able to fail for
+    # its own reason, and a scenario that passes must not be passing on this repo's real scripts.
+    env["RELEASE_MODULE_ROOT"] = str(root)
     env["RELEASE_MANIFEST_PATH"] = str(manifest_path)
     env["RELEASE_CHANGELOG_PATH"] = str(changelog_path)
     env["RELEASE_README_PATH"] = str(readme_path)
@@ -529,6 +629,23 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
             "the README lost the generated release table",
             base, log, ok.replace(BEGIN_MARKER, ""), [], 1, "region for the generated release",
         ),
+        # The header rule (MAS-479). The third case is the one that keeps the rule from being
+        # answered with an exception list: a version BELOW the header is not the defect.
+        (
+            "a shipped script states a module version in its header",
+            base, log, ok, [], 1, "states a module version in its header",
+            {"scripts/fixture.sh": FIXTURE_SCRIPT_WITH_VERSION_BANNER.format(version=newest)},
+        ),
+        (
+            "a shipped script whose header claims no version passes",
+            base, log, ok, [], 0, base["module"],
+            {"scripts/fixture.sh": FIXTURE_SCRIPT_CLEAN_BANNER},
+        ),
+        (
+            "a version below the header, where a script derives or illustrates one, passes",
+            base, log, ok, [], 0, base["module"],
+            {"scripts/fixture.sh": FIXTURE_SCRIPT_VERSION_BELOW_BANNER.format(version=newest)},
+        ),
     ]
 
 
@@ -539,10 +656,11 @@ def selftest() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         for index, scenario in enumerate(scenarios):
-            name, manifest, changelog, readme, args, expected_exit, fragment = scenario
+            name, manifest, changelog, readme, args, expected_exit, fragment, *rest = scenario
+            scripts = rest[0] if rest else None
             root = Path(tmp) / f"case-{index:02d}"
             root.mkdir()
-            env = _stage(root, manifest, changelog, readme)
+            env = _stage(root, manifest, changelog, readme, scripts)
             result = subprocess.run(
                 [sys.executable, str(Path(__file__).resolve()), *args],
                 env=env,
@@ -574,7 +692,8 @@ def selftest() -> int:
         return 1
     print(
         f"\nrelease-manifest selftest — {total} scenarios: a well-formed release passes, and "
-        f"every way a release can be missing, malformed or mis-tagged is rejected by name."
+        f"every way a release can be missing, malformed or mis-tagged — or a shipped script's "
+        f"header can hand-type a module version — is rejected by name."
     )
     return 0
 
@@ -605,6 +724,7 @@ def main() -> int:
         manifest = load_manifest()
         check_changelog(manifest)
         check_readme(manifest, args.write)
+        check_script_banners()
         if args.tag:
             check_tag(manifest, args.tag)
     except CheckFailed as exc:
