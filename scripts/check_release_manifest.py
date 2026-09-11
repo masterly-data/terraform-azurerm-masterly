@@ -30,7 +30,7 @@ value would be the very defect it exists to catch.
 Run:
     python3 scripts/check_release_manifest.py            # check (what CI runs)
     python3 scripts/check_release_manifest.py --write    # regenerate README.md from the manifest
-    python3 scripts/check_release_manifest.py --tag v0.15.0
+    python3 scripts/check_release_manifest.py --tag vX.Y.Z
     python3 scripts/check_release_manifest.py --selftest  # the check still rejects bad releases
 
 Paths are overridable through the environment (`RELEASE_MANIFEST_PATH`, `RELEASE_CHANGELOG_PATH`,
