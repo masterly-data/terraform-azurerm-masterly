@@ -115,7 +115,7 @@ jobs:
   # rejected by name — so a check that has quietly stopped checking goes red instead of passing
   # every release for the wrong reason. MAS-441.
   release-metadata:
-    name: Manifest, changelog and README agree
+    name: Manifest, changelog, README and script headers agree
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
