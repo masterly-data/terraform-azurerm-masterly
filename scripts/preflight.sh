@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Preflight for a Masterly self-hosted install (module v0.7.0).
+# Preflight for a Masterly self-hosted install.
+#
+# No module version is stated here, on purpose: this script ships inside the module, so the
+# release it belongs to is the one you obtained this tree from. The module states its versions
+# once, in MANIFEST.json; a number retyped into this header would be right for one tag and
+# wrong after the next.
 #
 # READ-ONLY by default: it inspects a subscription and reports. Pass --register to
 # additionally register the resource providers (needs Contributor or Owner at

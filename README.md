@@ -692,7 +692,9 @@ that shape; do not scrape this table.
 CI checks `terraform fmt` + `validate` + `terraform test` (mock providers exercise the variable
 guards and both data-plane branches) on every change, and
 `scripts/check_release_manifest.py` fails any change where the manifest, the changelog and this
-README stop agreeing.
+README stop agreeing — and any change where a script this module ships hand-types a module
+version in its header, which is not something a file copied unchanged into every release can
+truthfully say about itself.
 
 A scheduled check (`.github/workflows/public-docs-module-pin.yml`) compares the version the
 public [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) tell customers

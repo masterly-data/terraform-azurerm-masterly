@@ -102,6 +102,12 @@ jobs:
   # additionally fails when the tag is not the version the manifest publishes, so a tag cut
   # without its entries goes red at once instead of surfacing a release later. MAS-239.
   #
+  # It also refuses a module version hand-typed into the header of a script the module ships.
+  # `scripts/preflight.sh` announced itself as v0.7.0 for eight releases — correct the day it was
+  # written, and read by a customer at the moment they are checking which artifact they hold. A
+  # file copied unchanged into every release cannot state its own version, so the header states
+  # none. MAS-479.
+  #
   # The selftest runs FIRST, for the reason the diagnostic-bundle job runs its own first: a
   # checker nobody has watched reject anything is a hypothesis, and this repo's characteristic
   # defect is a rule with nothing enforcing it. It stages synthetic module trees where the
@@ -125,7 +131,7 @@ jobs:
 
       # Standard library only — release metadata should not depend on anything resolving, and
       # this repo ships no Python dependencies to resolve.
-      - name: Check the release manifest, changelog and README
+      - name: Check the release manifest, changelog, README and script headers
         run: python3 scripts/check_release_manifest.py
 
       # github.ref_name is the tag itself on a tag push. Split out so the failure message says

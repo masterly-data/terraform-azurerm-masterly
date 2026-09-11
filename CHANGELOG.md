@@ -105,6 +105,16 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   The manifest is a contract other programs parse, so a change to its shape has to arrive with
   the checker and the contract document or the build refuses it (MAS-441).
 
+### Fixed
+
+- `scripts/preflight.sh` no longer announces a module version in its header. It had said
+  `module v0.7.0` since it was written — true for one release, wrong for the eight after it,
+  and read at the moment an operator is checking which artifact they hold. A script ships
+  inside the module, so the release it belongs to is the release the reader obtained the tree
+  from, and that is not something the file can state about itself. Nothing else in the script
+  changed. `scripts/check_release_manifest.py` now refuses a module version typed into the
+  header of any script this module ships, so the header cannot drift back (MAS-479).
+
 ### Documentation
 
 - [docs/release-manifest.md](docs/release-manifest.md) — the manifest's shape written down for
