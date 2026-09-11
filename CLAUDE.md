@@ -91,14 +91,14 @@ Until the module was published (2026-08-31) the demo install consumed it by loca
 module change was planned against a live install for free. That stopped. Both real consumers now
 pin a registry version, exactly as a customer does:
 
-| Consumer | Pinned at, 2026-09-11 | Where |
-|---|---|---|
-| Masterly's demo install | `0.12.0` | `masterly-demo-iac/deployments/demo-eu/main.tf:35` |
-| The production-mode rehearsal install | `0.11.0` | `masterly-test-install/main.tf:31` |
+| Consumer | Where its pin lives |
+|---|---|
+| Masterly's demo install | `masterly-demo-iac/deployments/demo-eu/main.tf:35` |
+| The production-mode rehearsal install | `masterly-test-install/main.tf:31` |
 
-Those two numbers are a snapshot, not a derived value — read the files, not this table. What is
-durable is that neither consumer tracks a branch, and neither will ever see a change
-made here until someone bumps a pin by hand.
+Read each pin from the file it lives in; this table deliberately does not name a version, for the
+reason the working style below gives. What is durable is that neither consumer tracks a branch, and
+neither will ever see a change made here until someone bumps a pin by hand.
 
 The consequence is the rule the project-wide file states as a parenthetical, restated here as the
 rule it is: **plan a live install against the module branch before tagging a module release.** It is
