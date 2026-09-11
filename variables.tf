@@ -341,6 +341,14 @@ variable "license_issuer_url" {
   description = "The licence refresh endpoint of Masterly's control plane, verbatim from the install bundle (a full URL, not an origin). Leave unset for an offline install — no outbound call is made. Requires telemetry_url, telemetry_client_id and telemetry_client_secret: refresh authenticates as that install service account, so setting it also turns hourly usage reporting on. Refresh stays off unless all are present, and the module refuses a partial set at plan."
 }
 
+# --- Outbound egress posture ---------------------------------------------------------
+
+variable "allow_private_egress" {
+  type        = bool
+  default     = false
+  description = "Allow outbound connections to targets that resolve to a PRIVATE or reserved address. The application refuses them on mode=production (an SSRF guard over the targets a customer configures in the product: notification and Teams webhooks, the SMTP relay, stream push endpoints, a local AI endpoint, pull-connector DSNs, and a BYO-DB Environment's connection string) and allows them on mode=demo. Set true when those targets legitimately sit on your own network — most often a BYO-DB Environment whose database is reached over peering or a private endpoint, which mode=production otherwise refuses. It is install-wide, not per Environment, and it does NOT apply to external_database_url or the starter server: the install's own database is operator configuration, never restricted. False (the default) sets nothing and leaves the application's mode-gated posture in force; it is not an override in the other direction. Reaches ca-api and ca-workers, the two apps that make these connections — the frontend makes none."
+}
+
 # --- Data plane seam (ADR 0065) -----------------------------------------------------
 
 variable "external_database_url" {

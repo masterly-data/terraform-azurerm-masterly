@@ -252,6 +252,15 @@ backups go to the paired region), `postgres_zone_redundant_ha` (needs a non-burs
 SKU). Flipping an install from starter to BYO-DB **plans the destruction of the starter
 server** — migrate your data first; the plan makes it visible.
 
+A BYO-DB database on a **private** address — reached over peering or a private endpoint — is
+refused on `mode=production` by the application's egress guard when an organization
+administrator supplies it as a [BYO-DB Environment's](https://masterlydata.com/docs/guides/manage-environments/)
+connection string, along with every other outbound target configured in the product. Set
+`allow_private_egress = true` to lift that install-wide; it reaches `ca-api` and `ca-workers`,
+and `false` (the default) sets nothing, leaving the application's own mode-gated posture in
+force. `external_database_url` itself is never restricted — the install's own database is
+operator configuration, not customer input.
+
 `mode=production` refuses dev-grade defaults on the **provisioned starter server** (the
 module's plan-time-guardrail philosophy — a misconfigured production install fails in
 `terraform plan`, not in a crash loop or a 2 a.m. page). It requires a non-burstable

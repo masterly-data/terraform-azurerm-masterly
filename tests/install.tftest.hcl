@@ -2140,6 +2140,93 @@ run "telemetry_without_secret_is_rejected" {
   expect_failures = [azurerm_resource_group.aca]
 }
 
+# --- The egress guard's override (MAS-432) -------------------------------------------------
+# The documented remedy for a self-hosted BYO-DB Environment whose database sits on a private
+# address. It was documented as an operator setting the module could not make: the container's
+# environment is a closed map and `ignore_changes` deliberately does not cover it, so a value
+# put on the app with `az containerapp update` was removed again by the next apply. These runs
+# assert the variable lands in the env the container apps are actually built with -- through
+# module.<app>.env_names, which is `keys(var.env)` INSIDE the submodule, so the assertion fails
+# if the map stops crossing the module boundary -- rather than off the variable declaration.
+
+run "private_egress_override_is_absent_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  # Absent, not "false". The application reads an UNSET value as "follow the mode" (demo allows,
+  # production refuses); writing false would be an override in the other direction and would
+  # change what an evaluation install does the moment it upgrades to this module version.
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_ALLOW_PRIVATE_EGRESS")
+    error_message = "allow_private_egress = false must set nothing at all, leaving the application's mode-gated posture in force."
+  }
+
+  assert {
+    condition     = !contains(module.api.env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
+    error_message = "The default must not put the egress override on ca-api."
+  }
+}
+
+# The shape the card was filed against: self-hosted, production, BYO-DB on a private address.
+run "private_egress_override_reaches_the_backend_apps" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    allow_private_egress  = true
+  }
+
+  # The value the application parses, verbatim. A bool rendered any other way is a string the
+  # settings model would reject, and the guard would stay on with the input set.
+  assert {
+    condition     = local.api_env["MASTERLY_ALLOW_PRIVATE_EGRESS"] == "true"
+    error_message = "allow_private_egress = true must set MASTERLY_ALLOW_PRIVATE_EGRESS to the string \"true\"."
+  }
+
+  # ca-api resolves a BYO-DB Environment's connection (core/tenancy) -- the seam that refuses
+  # a private database host on a production install.
+  assert {
+    condition     = contains(module.api.env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
+    error_message = "The egress override must reach ca-api's container environment."
+  }
+
+  # ca-workers runs the same image and the async pipeline behind it: stream push delivery,
+  # webhook and SMTP delivery, and pull connectors all call the same guard, so an override the
+  # api has and the workers do not would fix the create call and leave every job refusing.
+  assert {
+    condition     = contains(module.workers[0].env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
+    error_message = "The egress override must reach ca-workers too -- the pipeline makes the same guarded connections."
+  }
+
+  # And not the frontend, which is a different image that reads no such setting. Its env is
+  # built separately in main.tf; this pins that the override does not drift into it.
+  assert {
+    condition     = !contains(module.frontend.env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
+    error_message = "The egress override is a backend setting -- the frontend must not carry it."
+  }
+}
+
 # --- Licence refresh (ADR 0074): one input, off unless the credential is beside it ----------
 
 run "license_refresh_is_off_by_default" {
