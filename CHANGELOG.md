@@ -50,6 +50,21 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   file on the terminal and in `manifest.json` for line-by-line review rather than claiming it
   carries none. `--selftest` proves the test still fails when the script is broken; CI runs
   both (MAS-343).
+- `allow_private_egress` — the install-wide egress override becomes a module input, so the one
+  documented remedy for a private outbound target survives an apply. The application refuses a
+  customer-configured target that resolves to a private or reserved address on
+  `mode = "production"` (an SSRF guard over webhooks, the SMTP relay, stream push endpoints, a
+  local AI endpoint, pull-connector DSNs and a BYO-DB Environment's connection string), and
+  `MASTERLY_ALLOW_PRIVATE_EGRESS` is what lifts it. The module set no such variable and writes a
+  closed environment onto the apps, which it deliberately does not ignore drift in — so an
+  operator who set the value with `az containerapp update` had it removed again by the next
+  `terraform apply`, at a moment disconnected from anything they did. The input writes it on
+  `ca-api` and `ca-workers`, the two apps that make those connections; the frontend reads no such
+  setting. Default `false`, which sets **nothing**: an unset variable is how the application is
+  told to follow the mode (demo allows, production refuses), so an install that does not set this
+  behaves exactly as it did before. It does not affect `external_database_url` or the starter
+  server — the install's own database is operator configuration and was never restricted
+  (MAS-432).
 - `license_issuer_url` — the licence refresh endpoint reaches the apps, so an install can
   re-fetch and re-verify its licence daily instead of waiting for the next apply. Optional, and
   it requires the three telemetry inputs (MAS-98).
