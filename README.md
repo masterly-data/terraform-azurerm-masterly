@@ -726,7 +726,11 @@ one commit, on `main`, before the tag:
 4. Merge, then tag `vX.Y.Z` on that commit.
 
 CI runs the same check on the tag build with `--tag`, so a tag pushed without its manifest and
-changelog entries fails immediately rather than being noticed a release later.
+changelog entries fails immediately rather than being noticed a release later. When every check on
+the tag build passes, CI publishes the tag's GitHub Release with that version's changelog section as
+its body (`scripts/release_notes.py`). The Terraform Registry has already published the version by
+then, so neither step can stop a release — a tag whose checks fail is published without a Release
+page.
 
 ## Provider versions and the lock file
 

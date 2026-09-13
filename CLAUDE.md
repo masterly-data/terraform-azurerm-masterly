@@ -11,8 +11,9 @@ Two facts govern everything below, and neither is obvious from reading the code:
 
 1. **This repo is public.** Every comment, TODO, variable description and commit message is
    customer-readable — including this file.
-2. **The tag is the release.** There is no release workflow. Pushing a tag publishes to the public
-   registry, and a published version cannot be withdrawn.
+2. **The tag is the release.** Pushing a tag publishes to the public registry, and a published
+   version cannot be withdrawn. The GitHub Release page CI creates afterwards is release notes, not
+   a release step.
 
 ## This repo is public and Apache-2.0
 
@@ -45,8 +46,15 @@ path to it: `tests/` and `examples/` ship on purpose, and `.gitattributes` says 
 ## The tag IS the release
 
 `.github/workflows/` holds exactly two files: `ci.yml` and `public-docs-module-pin.yml`. Neither
-publishes anything, because nothing here does. The Terraform Registry watches this repo's tags
-through its own webhook, entirely outside GitHub Actions.
+publishes the module. The Terraform Registry watches this repo's tags through its own webhook,
+entirely outside GitHub Actions.
+
+The one thing CI writes is the tag's **GitHub Release page**: `ci.yml`'s `release` job runs after
+the other jobs pass on a tag build and publishes that version's `CHANGELOG.md` section as the
+Release body, extracted by `scripts/release_notes.py` (MAS-258). It fails when the section is
+missing or empty, and a re-run rewrites the existing page rather than creating a second one. It
+runs after the registry has already published, so it is not a gate either — a tag whose checks fail
+simply gets no Release page.
 
 So the sequence on a tag push is: **tag pushed → registry publishes the version → CI turns red, if
 it is going to.** `ci.yml` does run on `v*` tags and does assert that the tag is the version
@@ -125,12 +133,13 @@ terraform init -backend=false -input=false && terraform validate
 terraform test                                   # mock providers, no cloud access, seconds
 python3 scripts/check_release_manifest.py --selftest
 python3 scripts/check_release_manifest.py
+python3 scripts/release_notes.py --selftest
 bash tests/diagnostic_bundle_test.sh --selftest
 bash tests/diagnostic_bundle_test.sh
 ```
 
 CI pins Terraform 1.10.5, at the module's `required_version = ">= 1.10"` floor; a newer local CLI is
-fine for these checks. The two `--selftest` invocations run **first** in CI on purpose: a checker
+fine for these checks. The `--selftest` invocations run **first** in CI on purpose: a checker
 nobody has watched reject anything is a hypothesis, and this repo's characteristic defect is a rule
 with nothing enforcing it.
 
@@ -193,7 +202,7 @@ or self-contained subsystem has its own file, so a change to one is a diff in on
 | `modules/` | Five nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `log-analytics-workspace`, `user-assigned-identity` |
 | `tests/` | `install.tftest.hcl` (the mock-provider run blocks) and `diagnostic_bundle_test.sh` with its `fixtures/` — the harness that proves the diagnostic bundle carries no secrets |
 | `examples/production/` | The production-posture example a customer copies. It consumes the module by relative path, so it validates the working tree |
-| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the two release/docs gates). Standard library only — release metadata should not depend on anything resolving |
+| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the two release/docs gates), `release_notes.py` (a version's changelog section, as its GitHub Release body). Standard library only — release metadata should not depend on anything resolving |
 | `MANIFEST.json` | The release manifest. See below |
 | `CHANGELOG.md` | Keep a Changelog format. Write new entries under `Unreleased`; cutting a release renames that heading |
 | `README.md` | The module surface reference. The customer walkthrough lives in the public docs, not here |
