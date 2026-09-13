@@ -1,0 +1,21 @@
+# What `git archive` leaves out of the module tarball an air-gapped install receives.
+#
+# `export-ignore` affects `git archive` only. The Terraform Registry and a `git::` or
+# `github.com/...?ref=` source fetch the repository itself, so they still see every file.
+#
+# `git archive <tag>` reads this file as it was at that tag: a tag cut before this file
+# existed archives the whole tree, `.github/` included.
+#
+# Deliberately NOT ignored:
+#   examples/  - examples/production is the root configuration an operator copies.
+#   tests/     - the README cites tests/diagnostic_bundle_test.sh as the proof that the
+#                diagnostic bundle carries no secrets; the proof ships with the claim.
+#   .gitignore - its `*.tfvars` rule is meant to be copied into the install repo.
+
+# This repository's own CI and docs-pin workflows. They run nothing in an install.
+/.github        export-ignore
+
+# Guidance for coding agents working on this repository, not on an install.
+/CLAUDE.md      export-ignore
+
+/.gitattributes export-ignore

@@ -129,6 +129,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   from, and that is not something the file can state about itself. Nothing else in the script
   changed. `scripts/check_release_manifest.py` now refuses a module version typed into the
   header of any script this module ships, so the header cannot drift back (MAS-479).
+- The module archive an air-gapped install receives no longer carries this repository's own CI
+  workflows (`.github/`) or its coding-agent guidance (`CLAUDE.md`). A new `.gitattributes`
+  marks them `export-ignore`, so `git archive` leaves them out; `examples/` and `tests/` still
+  ship — the example is what an operator copies, and the test harness is the proof the README
+  cites for the diagnostic bundle's no-secrets claim. `git archive` reads the file as it was at
+  the tag being archived, so this applies from the first release that includes it; archiving
+  0.15.0 or any earlier tag still yields the whole tree. Consumers fetching from the Terraform
+  Registry or a git source are unaffected either way — they receive the repository, not an
+  archive (MAS-603).
 
 ### Documentation
 

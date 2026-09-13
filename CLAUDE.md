@@ -17,7 +17,11 @@ Two facts govern everything below, and neither is obvious from reading the code:
 ## This repo is public and Apache-2.0
 
 `LICENSE` is Apache 2.0, `NOTICE` carries the attribution, and the whole tree ships to customers
-and partners both from GitHub and inside the install bundle's module tarball.
+and partners from GitHub. The install bundle's module tarball is built with `git archive`, which
+drops what `.gitattributes` marks `export-ignore` — `.github/` and this file — so everything else
+reaches an air-gapped customer too. `git archive` reads that file as of the archived tag; tags up to
+and including v0.15.0 predate it and archive the whole tree. Decide deliberately before adding a
+path to it: `tests/` and `examples/` ship on purpose, and `.gitattributes` says why.
 
 - **Write every comment for a customer.** No internal shorthand that reads as a defect ("this is a
   mess", "hack until we fix X"), no speculation about a customer, no unexplained `TODO` that reads
