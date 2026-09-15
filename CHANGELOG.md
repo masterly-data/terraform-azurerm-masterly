@@ -119,6 +119,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - `MANIFEST.json` must now declare a `schema_version` this repo speaks and a non-empty `module`.
   The manifest is a contract other programs parse, so a change to its shape has to arrive with
   the checker and the contract document or the build refuses it (MAS-441).
+- Each version tag now gets a GitHub Release page whose body is that version's section of this
+  changelog, published by CI once the tag build's checks pass. The Terraform Registry publishes
+  the version independently, so a missing Release page means the checks failed, not that the
+  version is unpublished (MAS-258).
 
 ### Fixed
 

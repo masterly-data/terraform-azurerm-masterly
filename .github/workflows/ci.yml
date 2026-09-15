@@ -129,6 +129,11 @@ jobs:
       - name: The check still rejects a missing, malformed or mis-tagged release
         run: python3 scripts/check_release_manifest.py --selftest
 
+      # The release job below publishes what this script extracts, so it is proven on every pull
+      # request rather than first exercised on the tag build that needs it.
+      - name: The release-notes extraction still refuses a missing, empty or unreleased section
+        run: python3 scripts/release_notes.py --selftest
+
       # Standard library only — release metadata should not depend on anything resolving, and
       # this repo ships no Python dependencies to resolve.
       - name: Check the release manifest, changelog, README and script headers
@@ -139,3 +144,70 @@ jobs:
       - name: The tag is the version the manifest publishes
         if: startsWith(github.ref, 'refs/tags/')
         run: python3 scripts/check_release_manifest.py --tag "${{ github.ref_name }}"
+
+  # The GitHub Release page for a tag, with that version's CHANGELOG.md section as its body. The
+  # module version is the one customer-facing version (ADR 0062), and this page is where a reader
+  # looks for what it changed. MAS-258.
+  #
+  # What this job is NOT: a gate on the release. The Terraform Registry publishes a version from
+  # its own webhook the moment the tag is pushed, before any job here has started, and nothing in
+  # this workflow can withdraw it. `needs:` means a tag whose checks fail gets no Release page — a
+  # visible sign that the version was published without passing — and nothing more.
+  #
+  # The body comes from CHANGELOG.md as it is at the tagged commit, never from text typed here, and
+  # scripts/release_notes.py fails the job when that section is missing or empty rather than
+  # publishing a placeholder.
+  #
+  # Re-running is safe. When a Release for the tag already exists its title, body and latest flag
+  # are rewritten from the tagged changelog — which cannot have changed, since the tag has not — so
+  # a re-run converges instead of failing on "already exists" or creating a second page. The one
+  # thing it overwrites is a hand edit to that page's notes; correct the changelog instead.
+  #
+  # "Latest" is decided from the tags, not left to GitHub's default, which weighs when a release
+  # was created as well as its version: a patch tagged for an older line after a newer version
+  # exists is published, but not marked latest.
+  release:
+    name: Publish the GitHub Release from the changelog
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [validate, diagnostic-bundle, release-metadata]
+    runs-on: ubuntu-latest
+    # The only job in this repository that writes: it creates or edits the Release object. It
+    # pushes no commit and no tag.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Extract this version's changelog section
+        env:
+          TAG: ${{ github.ref_name }}
+          LINK_BASE: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/
+        run: python3 scripts/release_notes.py "$TAG" --link-base "$LINK_BASE" > "$RUNNER_TEMP/release-notes.md"
+
+      # Public repository, so listing its tags needs no credential.
+      - name: Decide whether this version is the newest release
+        id: newest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' > "$RUNNER_TEMP/tags.txt"
+          echo "latest=$(python3 scripts/release_notes.py "$TAG" --is-newest < "$RUNNER_TEMP/tags.txt")" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          LATEST: ${{ steps.newest.outputs.latest }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md" --latest="$LATEST"
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md" --latest="$LATEST"
+          fi
