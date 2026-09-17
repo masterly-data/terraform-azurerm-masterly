@@ -552,23 +552,28 @@ locals {
     var.mode == "production" ? { MASTERLY_CONTROLPLANE_STORE = "postgres" } : {},
   )
 
-  # The egress guard's install-wide override (SSRF; core/egress in the api image). The guard
+  # The egress guard's install-wide posture (SSRF; core/egress in the api image). The guard
   # refuses a customer-configured outbound target that resolves to a private or reserved
   # address on mode=production, which is what a BYO-DB Environment on a private network runs
-  # into. Written only when the input is true: false is the ABSENCE of an override, leaving the
-  # application's own mode-gated posture (demo allows, production refuses) exactly as it is, so
-  # upgrading to a version that has this input changes nothing for an install that does not set
-  # it. This is the durable form of the setting — a value put on the app out of band with
-  # `az containerapp update` is removed again by the next apply, because the module owns the
-  # container's environment and deliberately does not ignore drift in it.
-  private_egress_env = var.allow_private_egress ? {
-    MASTERLY_ALLOW_PRIVATE_EGRESS = "true"
-  } : {}
+  # into; the allowlist names the ranges it may connect into instead. Each variable is written
+  # only when its input is set: an empty list and a false flag are the ABSENCE of a setting,
+  # leaving the application's own mode-gated posture (demo allows, production refuses) exactly
+  # as it is, so upgrading to a version that has these inputs changes nothing for an install
+  # that does not set them. This is the durable form of the setting — a value put on the app
+  # out of band with `az containerapp update` is removed again by the next apply, because the
+  # module owns the container's environment and deliberately does not ignore drift in it.
+  # The two are never both written: allowed_private_egress_cidrs refuses that at plan.
+  private_egress_env = merge(
+    length(var.allowed_private_egress_cidrs) > 0 ? {
+      MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS = join(",", var.allowed_private_egress_cidrs)
+    } : {},
+    var.allow_private_egress ? { MASTERLY_ALLOW_PRIVATE_EGRESS = "true" } : {}, # deprecated
+  )
 
   api_env = merge(
     local.install_env,
     local.identity_env,
-    local.private_egress_env, # the egress guard's override, off unless allow_private_egress
+    local.private_egress_env, # the egress guard's allowlist (and deprecated override), empty unless set
     local.servicebus_env,
     local.acs_email_env,         # ACS endpoint + sender auto-wired when email is enabled (ADR 0040)
     local.keyvault_env,          # durable secret store when the Key Vault is enabled (ADR 0066)

@@ -255,11 +255,21 @@ server** — migrate your data first; the plan makes it visible.
 A BYO-DB database on a **private** address — reached over peering or a private endpoint — is
 refused on `mode=production` by the application's egress guard when an organization
 administrator supplies it as a [BYO-DB Environment's](https://masterlydata.com/docs/guides/manage-environments/)
-connection string, along with every other outbound target configured in the product. Set
-`allow_private_egress = true` to lift that install-wide; it reaches `ca-api` and `ca-workers`,
-and `false` (the default) sets nothing, leaving the application's own mode-gated posture in
-force. `external_database_url` itself is never restricted — the install's own database is
-operator configuration, not customer input.
+connection string, along with every other outbound target configured in the product. List
+the ranges those targets sit on in `allowed_private_egress_cidrs` (`["10.20.0.0/16"]`, say —
+the database's subnet, no wider) and the application admits a target inside them; every
+other private address stays refused, and loopback, link-local (`169.254.169.254`) and the
+unspecified address are refused whatever is listed — an entry covering one fails the plan. It
+reaches `ca-api` and `ca-workers`, and an empty list (the default) sets nothing, leaving the
+application's own mode-gated posture in force. `external_database_url` itself is never
+restricted — the install's own database is operator configuration, not customer input.
+
+`allow_private_egress` is **deprecated** and goes away in a later release. It arrives already
+deprecated: it never reached a published version, and the application setting it writes used
+to switch the guard off entirely, loopback and the metadata endpoint included. For one release
+`true` means the allowlist it stood in for — every RFC1918 range, CGNAT and IPv6 unique-local,
+never loopback or link-local — and the application warns at every start. Migrate by replacing
+it with the ranges your targets are actually on; setting both fails the plan.
 
 `mode=production` refuses dev-grade defaults on the **provisioned starter server** (the
 module's plan-time-guardrail philosophy — a misconfigured production install fails in
