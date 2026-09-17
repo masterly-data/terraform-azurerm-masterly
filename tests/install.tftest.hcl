@@ -2168,6 +2168,13 @@ run "private_egress_override_is_absent_by_default" {
     condition     = !contains(module.api.env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
     error_message = "The default must not put the egress override on ca-api."
   }
+
+  # The allowlist (MAS-655) is absent by default for the same reason: an empty list is "follow
+  # the mode", and writing an empty string would be a setting the application has to parse.
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS")
+    error_message = "allowed_private_egress_cidrs = [] must set nothing at all."
+  }
 }
 
 # The shape the card was filed against: self-hosted, production, BYO-DB on a private address.
@@ -2225,6 +2232,117 @@ run "private_egress_override_reaches_the_backend_apps" {
     condition     = !contains(module.frontend.env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
     error_message = "The egress override is a backend setting -- the frontend must not carry it."
   }
+}
+
+# --- The egress allowlist (MAS-655) ---------------------------------------------------------
+# The override above switched the guard off entirely. The allowlist names the private ranges
+# the application may connect into, and the deprecated flag stays for one release. These runs
+# pin the wiring (the joined list reaches the two backend apps and not the frontend), the three
+# plan-time refusals (no prefix length, a never-admitted range, both inputs at once), and that
+# the two variables are never written together.
+
+run "private_egress_allowlist_reaches_the_backend_apps" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+
+    external_database_url        = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    allowed_private_egress_cidrs = ["10.20.0.0/16", "fd00:1::/64", "10.30.3.4/32"]
+  }
+
+  # Comma-joined, in the order given, verbatim: the application splits on commas and parses
+  # each entry as a network, so any other rendering is a value it refuses at startup.
+  assert {
+    condition     = local.api_env["MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS"] == "10.20.0.0/16,fd00:1::/64,10.30.3.4/32"
+    error_message = "allowed_private_egress_cidrs must reach the application as one comma-joined string."
+  }
+
+  assert {
+    condition     = contains(module.api.env_names, "MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS")
+    error_message = "The egress allowlist must reach ca-api's container environment."
+  }
+
+  assert {
+    condition     = contains(module.workers[0].env_names, "MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS")
+    error_message = "The egress allowlist must reach ca-workers too -- the pipeline makes the same guarded connections."
+  }
+
+  assert {
+    condition     = !contains(module.frontend.env_names, "MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS")
+    error_message = "The egress allowlist is a backend setting -- the frontend must not carry it."
+  }
+
+  # The list alone: the deprecated flag is not written beside it.
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_ALLOW_PRIVATE_EGRESS")
+    error_message = "An install on the allowlist must not also carry the deprecated override."
+  }
+}
+
+# Guard: an entry without a prefix length is not a range.
+run "private_egress_allowlist_refuses_an_entry_without_a_prefix" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs        = ["203.0.113.7/32"]
+    allowed_private_egress_cidrs = ["10.20.0.0/16", "10.30.3.4"]
+  }
+
+  expect_failures = [var.allowed_private_egress_cidrs]
+}
+
+# Guard: the ranges the application never admits are refused at plan, not at startup.
+run "private_egress_allowlist_refuses_a_never_admitted_range" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs        = ["203.0.113.7/32"]
+    allowed_private_egress_cidrs = ["10.20.0.0/16", "169.254.0.0/16"]
+  }
+
+  expect_failures = [var.allowed_private_egress_cidrs]
+}
+
+# Guard: the "everything" spelling is refused for the same reason -- it cannot mean that.
+run "private_egress_allowlist_refuses_a_zero_prefix" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs        = ["203.0.113.7/32"]
+    allowed_private_egress_cidrs = ["0.0.0.0/0"]
+  }
+
+  expect_failures = [var.allowed_private_egress_cidrs]
+}
+
+# Guard: the list and the deprecated flag are one setting, not two.
+run "private_egress_allowlist_refuses_the_deprecated_flag_beside_it" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs        = ["203.0.113.7/32"]
+    allowed_private_egress_cidrs = ["10.20.0.0/16"]
+    allow_private_egress         = true
+  }
+
+  expect_failures = [var.allowed_private_egress_cidrs]
 }
 
 # --- Licence refresh (ADR 0074): one input, off unless the credential is beside it ----------

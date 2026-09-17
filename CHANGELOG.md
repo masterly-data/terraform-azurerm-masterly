@@ -24,6 +24,20 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `allowed_private_egress_cidrs` — the private ranges the application may make outbound
+  connections into, named instead of admitted wholesale. The application's egress guard refuses
+  a customer-configured outbound target on a private or reserved address on
+  `mode = "production"`, and the one remedy was `allow_private_egress`, which switched the guard
+  off entirely: a self-hosted BYO-DB install whose database sits behind a private endpoint — the
+  ordinary production arrangement — had to admit loopback and the cloud metadata endpoint
+  (`169.254.169.254`) for every webhook, SMTP relay, stream push, local AI endpoint and
+  pull-connector DSN at once. The list writes `MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS` on
+  `ca-api` and `ca-workers`, comma-joined; the application then admits a private address only
+  inside a listed range, and refuses loopback, link-local and the unspecified address whatever
+  is listed. The plan refuses an entry without a prefix length, an entry covering one of those
+  never-admitted ranges, and the list beside the deprecated flag. Empty (the default) sets
+  nothing. Reading the variable needs an `api` image that has it: the next `MANIFEST.json`
+  image pair is the first to (MAS-655).
 - `app-not-ready` — an availability alert for the failure that every other alert in the set
   structurally cannot see: a replica that starts, never passes its readiness probe, and is
   therefore never routed to, while still counting toward the platform's replica metric. Until
@@ -64,7 +78,7 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   told to follow the mode (demo allows, production refuses), so an install that does not set this
   behaves exactly as it did before. It does not affect `external_database_url` or the starter
   server — the install's own database is operator configuration and was never restricted
-  (MAS-432).
+  (MAS-432). It arrives already deprecated — see *Deprecated* below (MAS-655).
 - `license_issuer_url` — the licence refresh endpoint reaches the apps, so an install can
   re-fetch and re-verify its licence daily instead of waiting for the next apply. Optional, and
   it requires the three telemetry inputs (MAS-98).
@@ -123,6 +137,20 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   changelog, published by CI once the tag build's checks pass. The Terraform Registry publishes
   the version independently, so a missing Release page means the checks failed, not that the
   version is unpublished (MAS-258).
+
+### Deprecated
+
+- `allow_private_egress` — replaced by `allowed_private_egress_cidrs` above, and kept for one
+  release. `true` used to switch the application's egress guard off entirely; it now means the
+  allowlist it stood in for — every RFC1918 range, CGNAT (`100.64.0.0/10`) and IPv6 unique-local
+  (`fc00::/7`), never loopback or link-local — which is strictly narrower, and the application
+  logs a deprecation warning at every start while it is set. Migrate by replacing it with the
+  ranges your targets are actually on; setting both inputs fails the plan, and the application
+  refuses to start with both variables set. The narrowing reaches connection strings too: under
+  the flag a `production` install now refuses a DSN with no host or one that connects over a
+  Unix socket, which the full bypass let through, so name the database's host instead. An `api` image older than the next manifest pair
+  still reads the flag as the full bypass it was, so the narrowing lands with the image, not
+  with this module version (MAS-655).
 
 ### Fixed
 

@@ -343,10 +343,46 @@ variable "license_issuer_url" {
 
 # --- Outbound egress posture ---------------------------------------------------------
 
+variable "allowed_private_egress_cidrs" {
+  type        = list(string)
+  default     = []
+  description = "The PRIVATE address ranges the application may make outbound connections into, as CIDRs (\"10.20.0.0/16\", \"fd00:1::/64\"; a single host is \"10.20.3.4/32\"). On mode=production the application refuses a customer-configured outbound target that resolves to a private or reserved address (an SSRF guard over notification and Teams webhooks, the SMTP relay, stream push endpoints, a local AI endpoint, pull-connector DSNs, and a BYO-DB Environment's connection string) unless the address falls inside a range listed here. List the ranges those targets legitimately sit on — most often the subnet a BYO-DB Environment's database is reached on, over peering or a private endpoint, which mode=production otherwise refuses — and nothing wider: every private address outside the list stays refused. Loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16 — the cloud metadata endpoint — and fe80::/10) and the unspecified address are refused whatever is listed; an entry covering one of them is refused at plan here and at startup by the application. Install-wide, not per Environment, and it does NOT apply to external_database_url or the starter server: the install's own database is operator configuration, never restricted. Empty (the default) sets nothing and leaves the application's posture in force (demo unrestricted, production admits nothing private). Reaches ca-api and ca-workers, the two apps that make these connections — the frontend makes none. Replaces allow_private_egress."
+
+  validation {
+    condition     = alltrue([for entry in var.allowed_private_egress_cidrs : can(cidrhost(entry, 0))])
+    error_message = "Every allowed_private_egress_cidrs entry must be a CIDR range with a prefix length — \"10.20.0.0/16\", \"fd00:1::/64\", or \"10.20.3.4/32\" for a single host."
+  }
+
+  # The application refuses these ranges whatever the list says (loopback, link-local, the
+  # unspecified address), and refuses to START on an entry that claims to admit one of them, so
+  # the plan says so first. This check reads the entry's network address and prefix and catches
+  # the entries an operator actually writes; the application's startup check is the complete
+  # overlap test and remains the authority.
+  validation {
+    condition = alltrue([
+      for entry in var.allowed_private_egress_cidrs :
+      can(cidrhost(entry, 0)) ? !(
+        tonumber(split("/", entry)[1]) == 0
+        || can(regex("^(127\\.|169\\.254\\.|0\\.0\\.0\\.0$)", cidrhost(entry, 0)))
+        || can(regex("^(::1?$|fe[89ab])", cidrhost(entry, 0)))
+      ) : true
+    ])
+    error_message = "allowed_private_egress_cidrs can never admit loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16, fe80::/10) or the unspecified address, and a /0 covers all of them: the application keeps those refused whatever is listed and refuses to start on an entry that claims otherwise. List the private ranges your targets are actually on."
+  }
+
+  # One input says what the install admits. The deprecated flag beside a list would either
+  # widen the list back to every RFC1918 range or be silently inert; the application refuses
+  # to start with both set, so the plan refuses first.
+  validation {
+    condition     = !(var.allow_private_egress && length(var.allowed_private_egress_cidrs) > 0)
+    error_message = "allowed_private_egress_cidrs replaces allow_private_egress: list the ranges and remove the deprecated flag, not both. The application refuses to start with both set."
+  }
+}
+
 variable "allow_private_egress" {
   type        = bool
   default     = false
-  description = "Allow outbound connections to targets that resolve to a PRIVATE or reserved address. The application refuses them on mode=production (an SSRF guard over the targets a customer configures in the product: notification and Teams webhooks, the SMTP relay, stream push endpoints, a local AI endpoint, pull-connector DSNs, and a BYO-DB Environment's connection string) and allows them on mode=demo. Set true when those targets legitimately sit on your own network — most often a BYO-DB Environment whose database is reached over peering or a private endpoint, which mode=production otherwise refuses. It is install-wide, not per Environment, and it does NOT apply to external_database_url or the starter server: the install's own database is operator configuration, never restricted. False (the default) sets nothing and leaves the application's mode-gated posture in force; it is not an override in the other direction. Reaches ca-api and ca-workers, the two apps that make these connections — the frontend makes none."
+  description = "DEPRECATED — use allowed_private_egress_cidrs, which names the private ranges the application may connect into instead of admitting all of them. Kept for one release: true now means an allowlist of every RFC1918 range, the CGNAT range (100.64.0.0/10) and IPv6 unique-local (fc00::/7) — it no longer admits loopback or link-local, the cloud metadata endpoint included, which it used to. The application logs a deprecation warning at every start while it is set, and refuses to start when both inputs are set. False (the default) sets nothing. Reaches ca-api and ca-workers, like its replacement."
 }
 
 # --- Data plane seam (ADR 0065) -----------------------------------------------------
