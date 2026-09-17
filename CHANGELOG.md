@@ -146,7 +146,9 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   (`fc00::/7`), never loopback or link-local — which is strictly narrower, and the application
   logs a deprecation warning at every start while it is set. Migrate by replacing it with the
   ranges your targets are actually on; setting both inputs fails the plan, and the application
-  refuses to start with both variables set. An `api` image older than the next manifest pair
+  refuses to start with both variables set. The narrowing reaches connection strings too: under
+  the flag a `production` install now refuses a DSN with no host or one that connects over a
+  Unix socket, which the full bypass let through, so name the database's host instead. An `api` image older than the next manifest pair
   still reads the flag as the full bypass it was, so the narrowing lands with the image, not
   with this module version (MAS-655).
 

@@ -259,7 +259,8 @@ connection string, along with every other outbound target configured in the prod
 the ranges those targets sit on in `allowed_private_egress_cidrs` (`["10.20.0.0/16"]`, say —
 the database's subnet, no wider) and the application admits a target inside them; every
 other private address stays refused, and loopback, link-local (`169.254.169.254`) and the
-unspecified address are refused whatever is listed — an entry covering one fails the plan. It
+unspecified address are refused whatever is listed — an entry covering one fails the plan or,
+for a wide range, refuses to start. It
 reaches `ca-api` and `ca-workers`, and an empty list (the default) sets nothing, leaving the
 application's own mode-gated posture in force. `external_database_url` itself is never
 restricted — the install's own database is operator configuration, not customer input.
