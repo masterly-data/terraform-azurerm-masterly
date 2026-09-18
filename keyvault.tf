@@ -1,8 +1,10 @@
 # The install's Key Vault (ADR 0066 increment 2) — the durable secret-store binding.
 # Opt-in (default off; dev/demo run the in-process store): when enabled, this provisions a
 # per-install vault (RBAC mode, no access policies) and grants the apps identity the
-# Secrets Officer data-plane role. The api is flipped to MASTERLY_SECRET_STORE=keyvault and
-# handed the vault URI; auth is the managed identity via AZURE_CLIENT_ID — no secret.
+# Secrets Officer data-plane role, plus Crypto Officer for the erasure keys of ADR 0081 (the
+# grant below says why that one is vault-scoped). The api is flipped to
+# MASTERLY_SECRET_STORE=keyvault and handed the vault URI; auth is the managed identity via
+# AZURE_CLIENT_ID — no secret.
 # Sealed material (BYO-DB connection strings, GitOps tokens) then survives restarts.
 #
 # Hardening (production): soft-delete + purge protection so a compromised or fat-fingered
@@ -196,6 +198,42 @@ resource "azurerm_role_assignment" "kv_secrets_officer" {
 
   scope                = azurerm_key_vault.this[0].id
   role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = module.apps_identity.principal_id
+}
+
+# The apps identity also creates and uses this vault's KEYS — the Crypto Officer data-plane
+# role, again scoped to this vault only.
+#
+# What needs it: erasure of personal data (ADR 0081). On an application release that carries
+# erasure, each Environment gets two erasure keys of its own, both living in this vault:
+#
+#   - a SIGNING key, held as a vault key. The application asks the vault to sign each erasure
+#     listing and never holds the key's private half, so a listing cannot be forged by anyone
+#     who only reaches the database.
+#   - a SUPPRESSION key, held as a vault secret — already covered by the Secrets Officer grant
+#     above, and named here only so the pair is not mistaken for one grant covering both.
+#
+# Why this grant is on the vault rather than on those two keys, and why Crypto Officer rather
+# than the narrower Crypto User:
+#
+#   - Both keys are created by the running application, at fixed names derived from the
+#     Environment's id, and only if they are absent. The Environment is created long after this
+#     module applies, so at apply time there is no key for a role assignment to name — and an
+#     Azure role assignment cannot be scoped to a key that does not exist yet.
+#   - Key Vault Crypto User can read, sign and verify, but it cannot create a key. Crypto
+#     Officer is the smallest built-in role that can, so it is the tightest grant this design
+#     admits.
+#
+# What bounds it: the role reaches this install's own vault and nothing else, and that vault
+# holds no keys besides its Environments'. In mode = "production" purge protection is armed on
+# the vault above, so a deleted key stays recoverable for the soft-delete window and a purge is
+# refused by the vault whatever the role permits. Losing an erasure key is consequential all the
+# same — see "Erasure keys belong in your secret backup" in the README.
+resource "azurerm_role_assignment" "kv_crypto_officer" {
+  count = var.enable_key_vault ? 1 : 0
+
+  scope                = azurerm_key_vault.this[0].id
+  role_definition_name = "Key Vault Crypto Officer"
   principal_id         = module.apps_identity.principal_id
 }
 
