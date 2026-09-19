@@ -177,14 +177,14 @@ they bite, so confirm them before you plan.
 | `rg-masterly-aca`, `rg-masterly-data` | Customer-naming resource groups (`rg-masterly-<purpose>`) |
 | VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
-| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Service Bus send + receive, ACS Email Owner. Later install identity work (ADR 0020) |
+| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner. Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull and nothing else: `ca-frontend` is the only internet-facing app and needs no data-plane access, so it does not carry the backend's grants |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
 | Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
-| Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer grant to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
+| Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer and Crypto Officer grants to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
 | Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the keyed URL rides as a Container App secret). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
 
@@ -637,6 +637,55 @@ makes the change durable rather than a manual patch the next apply reverts.
 Entra RBAC is eventually consistent, so a **first** apply can land inside the propagation
 window of the grant in (1) and fail with `Forbidden` on the first secret. Re-run the apply.
 The module does not pad every apply with a fixed wait for a race only the first one can lose.
+
+### Erasure keys belong in your secret backup
+
+This applies to installs running an application release that carries **erasure of personal
+data** (ADR 0081) and that have executed at least one erasure. Until you run such a release the
+vault holds no erasure keys and nothing below is in force — but the backup habit is cheaper to
+start before you need it than after.
+
+An Environment that executes an erasure puts two keys of its own in this install's vault: a
+**signing key** (a vault key, used to sign the erasure listings that keep the audit trail
+verifiable after redaction) and a **suppression key** (a vault secret, used to recognise an
+erased subject's keys if they arrive again). Both are reached at fixed names derived from the
+Environment's id. That is deliberate — nothing points at them from the Environment's database,
+so restoring a database cannot silently swap them.
+
+Three consequences for whoever operates the install:
+
+1. **Back both keys up, and keep the backup for as long as the erasures exist.** They are not
+   in your Postgres backup, and a replacement is not a recovery: a fresh key is a different key,
+   and nothing already recorded — a suppression entry, a signed listing — matches it.
+   `az keyvault key backup` and `az keyvault secret backup` produce the blobs; store
+   them with the same care as the vault itself. **An Azure Key Vault backup restores only into
+   a vault in the same subscription and the same Azure geography** — a blob taken in one
+   geography cannot be restored into another, so plan the restore destination before you need
+   one.
+2. **A vault recreated without that backup refuses key-addressed writes permanently.** With the
+   suppression key gone, an Environment holding suppression entries cannot tell an erased
+   subject's key from any other, so it refuses rather than risk recreating the subject — and no
+   amount of later work recovers the key, because the values its entries were computed from are
+   the ones the erasure destroyed. The only way out is the controller explicitly lifting those
+   suppression entries, which gives up the protection they exist for. With the signing key gone,
+   listings it signed can no longer be authenticated online, though exports taken earlier still
+   carry its public key.
+3. **After an erasure, that Environment depends on the vault to work at all.** Ingest, pipeline
+   jobs, consume reads and Stream delivery each check what the vault holds — the key that
+   recognises a suppressed arrival, and the mark that says the database is not behind the
+   erasures already executed against it. With the vault unreachable or the grant missing they
+   fail closed rather than skip the check, so vault availability is an availability concern for
+   the data plane, not only for start-up.
+
+The module's part in this is one role assignment: the apps identity gets **Key Vault Crypto
+Officer** on the install vault, alongside the Secrets Officer grant above, so the application
+can create and use those keys. It is vault-scoped because the keys do not exist when Terraform
+runs — the application creates each one, only if absent, at a name derived from an Environment
+created long after the apply — and an Azure role assignment cannot name a key that does not
+exist yet. Key Vault Crypto **User** cannot create a key, so Crypto Officer is the smallest
+built-in role that fits. `keyvault.tf` carries the same reasoning beside the resource. In
+`mode = "production"` the vault's purge protection means a key deleted in error stays
+recoverable for the soft-delete window and cannot be purged at all.
 
 ## State security — your tfstate holds secrets in plaintext
 

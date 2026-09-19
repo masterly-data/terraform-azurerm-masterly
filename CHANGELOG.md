@@ -108,6 +108,33 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   having lost the pin altogether; and the tag naming a version the manifest does not publish. CI
   runs the selftest before the check, so a detector that has quietly stopped detecting fails
   loudly rather than passing this repo for the wrong reason (MAS-441).
+- **Key Vault Crypto Officer** for the apps identity on the install vault, alongside the Secrets
+  Officer grant it already held, gated on `enable_key_vault` exactly as that one is. It is what
+  lets an application release carrying **erasure of personal data** (ADR 0081) create and use an
+  Environment's two erasure keys: a signing key, held as a vault key, which the application asks
+  the vault to sign each erasure listing with so it never holds the private half, and a
+  suppression key, held as a vault secret, which the Secrets Officer grant already covered.
+  The grant is scoped to the install's own vault rather than to those two keys because the keys
+  do not exist when Terraform runs — the application creates each one, only if absent, at a name
+  derived from an Environment created long after the apply — and an Azure role assignment cannot
+  name a key that does not exist yet; Key Vault Crypto **User** cannot create a key, so Crypto
+  Officer is the smallest built-in role that fits. No new input, and **no change to what the
+  deploying identity must be**: the grant is an ordinary `azurerm_role_assignment` on a vault the
+  module already owns, so the `Role Based Access Control Administrator` that
+  `scripts/preflight.sh` already accepts remains enough (MAS-790).
+
+  **Upgrading from an earlier version:** bump the module `version` and apply. The plan adds one
+  `azurerm_role_assignment` on installs with `enable_key_vault = true` and is a no-op on installs
+  without the vault; nothing else moves, and no application restart follows. Two things worth
+  doing in the same window:
+
+  - Entra RBAC is eventually consistent, so the new grant takes a few minutes to be usable.
+    Nothing in the apply depends on it, so a `Forbidden` on a key operation immediately after the
+    apply means propagation, not a mistake.
+  - Read [Erasure keys belong in your secret backup](README.md#erasure-keys-belong-in-your-secret-backup)
+    before running an erasure, not after. Those keys are not in your Postgres backup, a
+    replacement key matches nothing already recorded, and an Environment that has run an erasure
+    depends on the vault for ingest, pipeline jobs, consume reads and Stream delivery.
 
 ### Changed
 

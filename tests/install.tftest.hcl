@@ -699,6 +699,67 @@ run "key_vault_enabled_provisions_vault_and_grant" {
   }
 }
 
+# The erasure keys (ADR 0081) live in this same vault, and the application creates them at
+# runtime — so the grant that lets it is vault-scoped and has to be Crypto Officer, the only
+# built-in Crypto role that can create a key. Pinning the role name and the principal is the
+# point: Crypto User would fail the first erasure an install runs, months after the apply that
+# looked clean, and a grant that drifted onto the frontend's identity would hand the
+# internet-facing app the signing key.
+run "key_vault_enabled_grants_the_apps_identity_crypto_officer" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_key_vault      = true
+  }
+
+  # The identity's principal id is only known after apply, so it is supplied here — the same
+  # shape the frontend grant test uses — and the assertion below is then about the grant's
+  # target rather than about what the mock provider happened to return.
+  override_module {
+    target = module.apps_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
+      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-apps"
+    }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.kv_crypto_officer) == 1 &&
+      azurerm_role_assignment.kv_crypto_officer[0].role_definition_name == "Key Vault Crypto Officer" &&
+      azurerm_role_assignment.kv_crypto_officer[0].principal_id == module.apps_identity.principal_id
+    )
+    error_message = "enable_key_vault must grant the apps identity Key Vault Crypto Officer, and no other Crypto role."
+  }
+
+  # The grant's scope is the install's own vault. It is a computed id, so a plan cannot compare
+  # it to a literal; what a plan can prove is that exactly one vault is being created for it to
+  # name, which is what makes "scoped to this vault" true rather than merely intended.
+  assert {
+    condition     = length(azurerm_key_vault.this) == 1
+    error_message = "The Crypto Officer grant is scoped to the install vault, so exactly one vault must be planned beside it."
+  }
+}
+
+# The other branch: no vault, no key grant. A role assignment left planned against a vault that
+# is not created is a plan that cannot apply.
+run "key_vault_off_plans_no_crypto_grant" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.kv_crypto_officer) == 0
+    error_message = "Without the vault there is nothing to grant Crypto Officer on."
+  }
+}
+
 # When the frontend DOES carry secrets, it resolves them itself — so it needs data-plane read
 # on the vault, and that is the one grant the split admits. It must be the NARROWEST one: the
 # frontend never writes sealed material, and it is the app an attacker reaches first. Pinning
@@ -753,10 +814,13 @@ run "the_frontend_reads_its_own_secrets_and_only_reads" {
     error_message = "A frontend carrying vault-backed secrets must get Key Vault Secrets User on its own identity — read, and nothing more."
   }
 
-  # The Officer grant stays where it was: on the backend apps, never on the public one.
+  # The Officer grants stay where they were: on the backend apps, never on the public one.
   assert {
-    condition     = azurerm_role_assignment.kv_secrets_officer[0].principal_id == module.apps_identity.principal_id
-    error_message = "Key Vault Secrets Officer must never reach the frontend's identity."
+    condition = (
+      azurerm_role_assignment.kv_secrets_officer[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.kv_crypto_officer[0].principal_id == module.apps_identity.principal_id
+    )
+    error_message = "Key Vault Secrets Officer and Crypto Officer must never reach the frontend's identity."
   }
 
   # And the references name the identity that actually holds the grant. ACA resolves a vault
