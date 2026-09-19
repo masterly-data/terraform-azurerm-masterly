@@ -92,6 +92,20 @@ locals {
   # its own. Defaulting to that makes the safe configuration the automatic one.
   allowed_regions = var.allowed_regions != null ? var.allowed_regions : [var.masterly_region]
 
+  # The ports the install's private endpoints actually answer on, and the whole of what the
+  # endpoints subnet admits: Postgres (5432), Key Vault (443), Azure Cache for Redis over TLS
+  # (6380) and Azure Managed Redis (10000, its documented default).
+  #
+  # The managed offering's port is read from the database rather than trusted to be that
+  # default. The ARM contract says the database port "defaults to an available port", which is
+  # not a guarantee — a rule naming only 10000 would cut the session registry off on an
+  # install that got anything else, and it would fail as a connection timeout at boot rather
+  # than as anything that names a firewall.
+  private_endpoint_ports = distinct(concat(
+    ["443", "5432", "6380", "10000"],
+    local.use_managed_redis ? [tostring(azurerm_managed_redis.this[0].default_database[0].port)] : [],
+  ))
+
   # Data plane seam (ADR 0065): BYO-DB when the customer supplies a DSN, otherwise the
   # provisioned starter server.
   provision_postgres = var.external_database_url == null
@@ -241,7 +255,167 @@ resource "azurerm_subnet" "private_endpoints" {
   resource_group_name               = azurerm_resource_group.aca.name
   virtual_network_name              = azurerm_virtual_network.this[0].name
   address_prefixes                  = [local.private_endpoints_subnet_prefix] # clear of the runtime subnet
-  private_endpoint_network_policies = "Disabled"
+  private_endpoint_network_policies = "Enabled"                               # so the NSG below applies to private-endpoint traffic
+}
+
+# --- Network security groups on the module's own subnets --------------------------
+# Deny-by-default at the subnet edge, underneath the Container Apps ingress allowlist.
+# An NSG's own defaults are not that: they deny the internet, but they ALLOW everything
+# the VirtualNetwork service tag covers — which is not only this VNet but every peered
+# network and every on-premises address space reachable through a gateway attached to it.
+# On a network a platform team later peers into a wider estate, that is a door opening by
+# itself. So each subnet names what it admits and denies the rest explicitly.
+#
+# Inbound only. Container Apps needs broad egress (image pull, Microsoft Container Registry,
+# Entra ID, Azure Monitor), the outbound set is long and versioned by Microsoft, and an
+# outbound deny written here would be a second, stale copy of it — the failure would be an
+# environment that provisions and then cannot start a replica. Azure's default
+# AllowInternetOutBound stays; narrowing egress is a firewall or NVA decision, and on an
+# injected spoke it is already the platform team's (docs/networking.md, "Egress").
+#
+# Created ONLY when the module owns the network. On an injected spoke (topology 3) the
+# subnets belong to the platform team, and attaching an NSG to a subnet somebody else
+# governs would silently replace rules this module cannot see. docs/networking.md states
+# the baseline those subnets are expected to carry instead.
+
+resource "azurerm_network_security_group" "aca" {
+  count = local.inject_network ? 0 : 1
+
+  name                = "nsg-${var.name_prefix}-aca"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  tags                = local.tags
+
+  # Ingress to the apps. The source follows the environment's load balancer, because an
+  # internal environment has no public endpoint at all: admitting the Internet tag there
+  # would describe a path that does not exist. VirtualNetwork is the right tag for that
+  # topology — it covers peered networks and the on-premises address spaces reachable over
+  # a VPN or ExpressRoute gateway, which is exactly who reaches topology 2.
+  #
+  # This is defence in depth, not the allowlist. `ingress_allowed_cidrs` is what narrows who
+  # may reach the apps, and Container Apps ingress enforces it. It is deliberately not reused
+  # as the source here: an empty list is a legal configuration meaning "unrestricted", and an
+  # NSG rule cannot express an empty source — it would have to become a deny, turning a
+  # documented default into an outage.
+  #
+  # Port 80 is admitted beside 443 because Azure's edge answers it with a 301 to https://
+  # (see ingress_allow_insecure on the api). Dropping it here would turn that redirect into a
+  # timeout for anyone who typed the host without a scheme.
+  security_rule {
+    name                       = "allow-app-ingress"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_address_prefix      = var.aca_internal_load_balancer ? "VirtualNetwork" : "Internet"
+    source_port_range          = "*"
+    destination_address_prefix = local.aca_subnet_prefix
+    destination_port_ranges    = ["80", "443"]
+    description                = "Reach the frontend (and the api when api_ingress_external is true); ingress_allowed_cidrs narrows it further at the Container Apps edge."
+  }
+
+  # Required by Container Apps on a Consumption-only environment: the platform's load
+  # balancer reaches the environment on the ephemeral range. Without this rule the deny below
+  # takes the apps offline — the environment provisions and then serves nothing.
+  security_rule {
+    name                       = "allow-container-apps-load-balancer"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_address_prefix      = "AzureLoadBalancer"
+    source_port_range          = "*"
+    destination_address_prefix = local.aca_subnet_prefix
+    destination_port_range     = "30000-32767"
+    description                = "Azure Container Apps platform requirement for a Consumption-only environment."
+  }
+
+  # The environment's own components talk to each other inside the infrastructure subnet:
+  # the ingress proxy to the replicas, and the replicas to their sidecars. Also a Container
+  # Apps requirement, and equally load-bearing once the deny below exists.
+  security_rule {
+    name                       = "allow-environment-internal"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_address_prefix      = local.aca_subnet_prefix
+    source_port_range          = "*"
+    destination_address_prefix = local.aca_subnet_prefix
+    destination_port_range     = "*"
+    description                = "Azure Container Apps platform requirement: traffic within the infrastructure subnet."
+  }
+
+  # The point of the whole block: nothing else reaches the runtime subnet, including the rest
+  # of the VNet and anything peered into it.
+  security_rule {
+    name                       = "deny-all-inbound"
+    priority                   = 4000
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_address_prefix      = "*"
+    source_port_range          = "*"
+    destination_address_prefix = "*"
+    destination_port_range     = "*"
+    description                = "Everything not admitted above."
+  }
+}
+
+resource "azurerm_network_security_group" "private_endpoints" {
+  count = local.inject_network ? 0 : 1
+
+  name                = "nsg-${var.name_prefix}-private-endpoints"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  tags                = local.tags
+
+  # The apps are the only caller the install's data plane has. Postgres, Key Vault and Redis
+  # have no public network presence, so this rule is the whole of who may open a connection
+  # to them — and it is now enforced rather than implied, because the subnet above has
+  # private_endpoint_network_policies = "Enabled".
+  security_rule {
+    name                       = "allow-data-plane-from-apps"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_address_prefix      = local.aca_subnet_prefix
+    source_port_range          = "*"
+    destination_address_prefix = local.private_endpoints_subnet_prefix
+    destination_port_ranges    = local.private_endpoint_ports
+    description                = "Postgres, Key Vault and the Redis session registry, from the runtime subnet only."
+  }
+
+  security_rule {
+    name                       = "deny-all-inbound"
+    priority                   = 4000
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_address_prefix      = "*"
+    source_port_range          = "*"
+    destination_address_prefix = "*"
+    destination_port_range     = "*"
+    description                = "Everything not admitted above."
+  }
+}
+
+# Associated as separate resources rather than on the subnet: azurerm_subnet carries no
+# network_security_group_id argument, so this is the association, not a second way of
+# writing one.
+resource "azurerm_subnet_network_security_group_association" "aca" {
+  count = local.inject_network ? 0 : 1
+
+  subnet_id                 = azurerm_subnet.aca[0].id
+  network_security_group_id = azurerm_network_security_group.aca[0].id
+}
+
+resource "azurerm_subnet_network_security_group_association" "private_endpoints" {
+  count = local.inject_network ? 0 : 1
+
+  subnet_id                 = azurerm_subnet.private_endpoints[0].id
+  network_security_group_id = azurerm_network_security_group.private_endpoints[0].id
 }
 
 # Private DNS so the server's public FQDN resolves to the private endpoint inside the
