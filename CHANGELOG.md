@@ -136,6 +136,31 @@ inventing one now would be exactly the retyped-value failure the manifest exists
     replacement key matches nothing already recorded, and an Environment that has run an erasure
     depends on the vault for ingest, pipeline jobs, consume reads and Stream delivery.
 
+- Network security groups on the two subnets the module creates, each ending in an explicit
+  inbound deny. Until now both were created without one, in every topology the module builds,
+  and a subnet with no NSG is not closed: it inherits Azure's default rules, which allow
+  everything the `VirtualNetwork` service tag covers — this VNet, every network peered to it,
+  and every on-premises range reachable through a gateway attached to it. `snet-aca` admits the
+  apps' ingress (TCP 80 and 443, from `Internet`, or from `VirtualNetwork` when
+  `aca_internal_load_balancer` is set, since an internal environment has no public endpoint to
+  reach) plus the two Container Apps platform rules a Consumption-only environment requires;
+  `snet-private-endpoints` admits Postgres, Key Vault and the Redis session registry from
+  `snet-aca` and nothing else. Outbound is untouched — Container Apps needs a long,
+  Microsoft-versioned egress set, and a stale copy of it written here would produce an
+  environment that provisions and then cannot start a replica; narrowing egress stays a
+  firewall or NVA decision. The rules are a second layer under `ingress_allowed_cidrs`, not a
+  replacement for it. **Nothing is created on an injected spoke** (`aca_subnet_id` /
+  `private_endpoints_subnet_id`): a subnet holds exactly one NSG, and associating one there
+  would replace what your platform team attached, from outside their own configuration —
+  [docs/networking.md](docs/networking.md) states the baseline those subnets are expected to
+  meet instead. **On a live install this also flips `snet-private-endpoints` from
+  `private_endpoint_network_policies = "Disabled"` to `"Enabled"`**, without which an NSG on a
+  private-endpoint subnet does not apply to private-endpoint traffic at all and the rules would
+  be inert. That is an **in-place** subnet update: it replaces neither subnet and does not
+  touch the Container Apps environment. Read the plan for your install before applying —
+  network policies now govern route tables on that subnet too, so a user-defined route you
+  attached to it begins to apply to private-endpoint traffic (MAS-37).
+
 ### Changed
 
 - `breakglass_secret_hash` says what the api actually accepts. The input has held a **salted

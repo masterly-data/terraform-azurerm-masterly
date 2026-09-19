@@ -2047,6 +2047,105 @@ run "default_topology_owns_its_network" {
   }
 }
 
+# The subnets the module owns are filtered deny-by-default. A subnet with no NSG inherits
+# Azure's default set, which allows the whole VirtualNetwork tag inbound — this VNet plus
+# every peered network and every on-premises range behind a gateway attached to it.
+run "nsgs_present_when_module_owns_network" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      length(azurerm_network_security_group.aca) == 1 &&
+      length(azurerm_network_security_group.private_endpoints) == 1
+    )
+    error_message = "Both subnets the module creates must get a network security group."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet_network_security_group_association.aca) == 1 &&
+      length(azurerm_subnet_network_security_group_association.private_endpoints) == 1
+    )
+    error_message = "An NSG that is never associated with its subnet filters nothing."
+  }
+
+  # The deny is the rule every other rule is an exception to; without it the NSG only adds
+  # to Azure's permissive defaults instead of replacing them.
+  assert {
+    condition = anytrue([
+      for rule in azurerm_network_security_group.aca[0].security_rule :
+      rule.access == "Deny" &&
+      rule.direction == "Inbound" &&
+      rule.protocol == "*" &&
+      rule.source_address_prefix == "*" &&
+      rule.destination_port_range == "*"
+      if rule.name == "deny-all-inbound"
+    ])
+    error_message = "The runtime subnet's NSG must deny every inbound flow it did not admit."
+  }
+
+  assert {
+    condition = anytrue([
+      for rule in azurerm_network_security_group.private_endpoints[0].security_rule :
+      rule.access == "Deny" &&
+      rule.direction == "Inbound" &&
+      rule.protocol == "*" &&
+      rule.source_address_prefix == "*" &&
+      rule.destination_port_range == "*"
+      if rule.name == "deny-all-inbound"
+    ])
+    error_message = "The endpoints subnet's NSG must deny every inbound flow it did not admit."
+  }
+
+  # Container Apps platform requirements for a Consumption-only environment. They are
+  # harmless while nothing denies, and load-bearing the moment something does: drop either
+  # one and the environment provisions and then serves nothing.
+  assert {
+    condition = length([
+      for rule in azurerm_network_security_group.aca[0].security_rule : rule.name
+      if contains(["allow-container-apps-load-balancer", "allow-environment-internal"], rule.name)
+    ]) == 2
+    error_message = "The runtime subnet's NSG must keep the Container Apps platform rules alongside the deny."
+  }
+
+  # Topology 1 is reached from the internet; the internal-load-balancer source is asserted
+  # in private_ingress_topology below.
+  assert {
+    condition = anytrue([
+      for rule in azurerm_network_security_group.aca[0].security_rule :
+      rule.source_address_prefix == "Internet" &&
+      contains(rule.destination_port_ranges, "443") &&
+      contains(rule.destination_port_ranges, "80")
+      if rule.name == "allow-app-ingress"
+    ])
+    error_message = "The default topology must admit the apps' ingress from the internet on 443 and 80."
+  }
+
+  # The apps are the only caller the data plane has, and these are the ports it answers on.
+  assert {
+    condition = anytrue([
+      for rule in azurerm_network_security_group.private_endpoints[0].security_rule :
+      rule.source_address_prefix == azurerm_subnet.aca[0].address_prefixes[0] &&
+      alltrue([
+        for port in ["5432", "10000", "6380", "443"] : contains(rule.destination_port_ranges, port)
+      ])
+      if rule.name == "allow-data-plane-from-apps"
+    ])
+    error_message = "The endpoints subnet must admit Postgres, Redis and Key Vault from the runtime subnet only."
+  }
+
+  # An NSG on a private-endpoint subnet applies to private-endpoint traffic only once
+  # network policies are enabled there. Disabled, the rules above would be inert.
+  assert {
+    condition     = azurerm_subnet.private_endpoints[0].private_endpoint_network_policies == "Enabled"
+    error_message = "private_endpoint_network_policies must be Enabled, or the endpoints subnet's NSG does not apply to the endpoints."
+  }
+}
+
 # Topology 2: internal load balancer, no public endpoint. The frontend stays `external`
 # because on an internal environment that means "reachable from the VNet", which is
 # exactly what a VPN user needs.
@@ -2061,6 +2160,18 @@ run "private_ingress_topology" {
   assert {
     condition     = module.aca_env.internal_load_balancer_enabled == true
     error_message = "aca_internal_load_balancer must reach the Container App Environment."
+  }
+
+  # There is no public endpoint on this topology, so admitting the Internet tag would
+  # describe a path that does not exist. VirtualNetwork covers the VPN and ExpressRoute
+  # address spaces this install is actually reached from.
+  assert {
+    condition = anytrue([
+      for rule in azurerm_network_security_group.aca[0].security_rule :
+      rule.source_address_prefix == "VirtualNetwork"
+      if rule.name == "allow-app-ingress"
+    ])
+    error_message = "An internal-load-balancer install must admit its ingress from VirtualNetwork, not from the internet."
   }
 }
 
@@ -2096,6 +2207,30 @@ run "injected_network_creates_no_network" {
   assert {
     condition     = local.virtual_network_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke"
     error_message = "The VNet id must be derived from the injected subnet id."
+  }
+}
+
+# ...and no network security groups either. An injected subnet belongs to the platform
+# team, and a subnet holds exactly one NSG: associating one here would replace whatever
+# they attached, silently and from outside their own configuration. The baseline those
+# subnets are expected to carry is documented instead (docs/networking.md).
+run "nsgs_absent_when_network_injected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_network_security_group.aca) == 0 &&
+      length(azurerm_network_security_group.private_endpoints) == 0 &&
+      length(azurerm_subnet_network_security_group_association.aca) == 0 &&
+      length(azurerm_subnet_network_security_group_association.private_endpoints) == 0
+    )
+    error_message = "Injecting subnets must create no network security group and no association — the platform team owns both."
   }
 }
 

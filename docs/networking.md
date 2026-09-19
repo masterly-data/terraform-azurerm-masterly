@@ -68,9 +68,10 @@ from the subnet id, so the two can never disagree.
 
 - `aca_subnet_id` — **/23 or larger**, delegated to `Microsoft.App/environments`. Azure refuses
   the environment otherwise, and the module cannot delegate a subnet it does not own.
-- `private_endpoints_subnet_id` — a **different** subnet, with private endpoint network
-  policies disabled. A delegated subnet cannot hold private endpoints, so these cannot be the
-  same subnet; the module refuses that at plan too.
+- `private_endpoints_subnet_id` — a **different** subnet. A delegated subnet cannot hold
+  private endpoints, so these cannot be the same subnet; the module refuses that at plan too.
+  Leave private endpoint network policies **enabled** on it if you want the NSG rules below to
+  apply to the endpoints — disabled, they are there and inert.
 
 **Centralised private DNS.** If your hub owns the privatelink zones, inject them and the module
 creates neither the zone nor the VNet link — linking the hub zone to this spoke is your
@@ -88,6 +89,60 @@ Each is independent: inject the ones your hub owns and let the module create the
 subnet — yours to write, since the subnet is yours. The install needs to reach your identity
 provider and the container registry it pulls images from.
 
+## Network security baseline
+
+Every subnet the module creates carries a network security group, and each one ends in an
+explicit inbound deny. That deny is the point. A subnet with **no** NSG is not closed — it
+inherits Azure's default rules, which allow everything the `VirtualNetwork` service tag
+covers: this VNet, every network peered to it, and every on-premises range reachable through
+a gateway attached to it. On a spoke somebody later peers into a wider estate, that is a door
+that opens by itself.
+
+**`snet-aca`**, the Container Apps infrastructure subnet:
+
+| Priority | Access | Source | Protocol / ports | Why |
+|---|---|---|---|---|
+| 100 | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443 | Reach the apps. 80 carries Azure's 301 to `https://`, so dropping it turns that redirect into a timeout |
+| 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement for a Consumption-only environment |
+| 120 | Allow | `snet-aca` | any | Container Apps platform requirement: traffic within the infrastructure subnet |
+| 4000 | Deny | any | any | Everything not admitted above |
+
+**`snet-private-endpoints`**:
+
+| Priority | Access | Source | Protocol / ports | Why |
+|---|---|---|---|---|
+| 100 | Allow | `snet-aca` | TCP 443, 5432, 6380, 10000 | Key Vault, Postgres, Azure Cache for Redis, Azure Managed Redis |
+| 4000 | Deny | any | any | Everything not admitted above |
+
+The module sets `private_endpoint_network_policies = "Enabled"` on that subnet, without which
+an NSG on a private-endpoint subnet does not apply to private-endpoint traffic at all. Note
+that this governs route tables there as well: a user-defined route attached to that subnet
+begins to apply to private-endpoint traffic too.
+
+Azure Managed Redis picks "an available port" rather than guaranteeing 10000, so when that
+offering is enabled the module reads the real port from the database and admits it alongside.
+
+**Outbound is untouched.** Azure's default `AllowInternetOutBound` stays. Container Apps needs
+a long, Microsoft-versioned egress set — image pull, Microsoft Container Registry, Entra ID,
+Azure Monitor — and a copy of it written into this module would go stale into an environment
+that provisions and then cannot start a replica. Narrowing egress is a firewall or NVA
+decision; see **Egress** above.
+
+**The allowlist still does the narrowing.** `ingress_allowed_cidrs` is enforced by Container
+Apps ingress, and it is deliberately not what the NSG's source says: an empty list is a legal
+configuration meaning *unrestricted*, and an NSG rule cannot express an empty source — it
+would have to become a deny, turning a documented default into an outage. The NSG is a second
+layer under the allowlist, not a replacement for it.
+
+### Topology 3: what your own subnets should carry
+
+On an injected spoke the module creates no NSG and associates none. A subnet holds exactly one,
+so attaching ours would replace whatever your platform team put there, from outside their own
+configuration. The tables above are the baseline those subnets are expected to meet, and two
+rows of them are not optional: without the `AzureLoadBalancer` and intra-subnet rules the
+Container Apps environment provisions and then serves nothing, and without `snet-aca` reaching
+your endpoints subnet on the data-plane ports the apps cannot open a database connection.
+
 ## Upgrading an existing install
 
 Making the network injectable gave three resources a `count`, which changes their address in
@@ -97,3 +152,11 @@ for an install that keeps building its own network.
 Moving a *running* install onto an existing spoke is not an in-place change: the ACA
 environment's infrastructure subnet cannot be swapped underneath it. That is a rebuild, and
 worth deciding before the first apply rather than after.
+
+The network security baseline above arrives the same way — additively. On an install that
+builds its own network the plan creates two NSGs and their two subnet associations, and
+updates `snet-private-endpoints` in place to enable network policies. Neither subnet is
+replaced and the Container Apps environment is not touched. Read the plan for your own install
+before applying: if you attached your own NSG or a user-defined route to either subnet out of
+band, the module's association replaces the first and enabling network policies starts
+applying the second to private-endpoint traffic.

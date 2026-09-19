@@ -242,7 +242,9 @@ AWS Aurora PG, Cosmos for PG). The DSN is the install-level connection
 (`postgresql+asyncpg://…`; the role needs `CREATEDB` — the api creates
 `masterly_dp_<environment>` databases at first touch). Reachability of your database
 from the install's VNet is your side: peering, a private endpoint into
-`snet-private-endpoints`, or your hub.
+`snet-private-endpoints`, or your hub. A private endpoint placed in that subnet is reached
+on the ports the subnet's network security group admits — Postgres among them; see
+[docs/networking.md](docs/networking.md#network-security-baseline).
 
 Omit `external_database_url` and the module provisions the **starter server** instead —
 private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its knobs:
