@@ -621,20 +621,30 @@ makes the change durable rather than a manual patch the next apply reverts.
    setup, state holds the apply identity's grant and every plan proposes destroying it.
 2. **A network path.** In `mode = production` the vault has no public presence, and
    `bypass = "AzureServices"` does *not* cover a CI runner — the trusted-services list is
-   Azure services, not whoever is holding the token. So state one of:
+   Azure services, not whoever is holding the token. So state one of — and the two shapes are
+   not equals, listed here in the order Masterly recommends:
 
+   - `key_vault_deployer_in_vnet = true` — the apply runs inside the install's VNet
+     (self-hosted runner, jumpbox, VPN/ExpressRoute). **This is the recommended production
+     path.** The vault's public endpoint stays off entirely, which is the posture
+     `mode = "production"` was designed around and the one a security-conscious customer will
+     accept. It costs a runner to provision, patch and pay for, per install. It is also a claim
+     about **every** future run, including the one that tears the install down: an operator who
+     sets it and then plans from a laptop gets the 403 above, on an install Terraform can no
+     longer fully manage until the path exists. Declaring this from a hosted runner is a false
+     claim — see the refresh warning above for what it costs.
    - `key_vault_deployer_ip_rules = ["203.0.113.7"]` — the egress address of the machine or
-     runner that applies. This opens the vault's public endpoint **behind its firewall**:
-     `default_action` stays `Deny`, and nothing but the listed addresses (and the private
-     endpoint) gets in. Key Vault rejects `/31` and `/32`, so write a single address bare.
-   - `key_vault_deployer_in_vnet = true` — the apply already runs inside the install's VNet
-     (self-hosted runner, jumpbox, VPN/ExpressRoute), so no exception is needed and the vault
-     keeps no public presence at all. This is a claim about **every** future run, including the
-     one that tears the install down. An operator who sets it and then plans from a laptop gets
-     the 403 above, on an install Terraform can no longer fully manage until the path exists.
+     runner that applies, owned by a NAT gateway fronting the runner or by a fixed apply host.
+     This is the documented **smaller-scale alternative**, with its weaker posture stated
+     plainly rather than buried: the vault's public endpoint stays **on**, behind its
+     firewall — `default_action` stays `Deny`, and nothing but the listed addresses (and the
+     private endpoint) gets in. Key Vault rejects `/31` and `/32`, so write a single address
+     bare.
 
    Production refuses to plan with neither set. That is deliberate: the alternative is a 403
-   partway through a ten-minute apply, with the install half-built.
+   partway through a ten-minute apply, with the install half-built. Which one you run is your
+   choice as much as Masterly's recommendation — it costs a runner either way, once as
+   infrastructure to operate and once as the posture a security review will ask about.
 
 Entra RBAC is eventually consistent, so a **first** apply can land inside the propagation
 window of the grant in (1) and fail with `Forbidden` on the first secret. Re-run the apply.
