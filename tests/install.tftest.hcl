@@ -2544,6 +2544,151 @@ run "private_egress_allowlist_refuses_the_deprecated_flag_beside_it" {
   expect_failures = [var.allowed_private_egress_cidrs]
 }
 
+# --- Trusting a private CA (MAS-446) ---------------------------------------------------------
+# The allowlist above answers WHERE the application may connect; ca_bundle_pem answers whether
+# it TRUSTS what answers there (MAS-375 made SMTP STARTTLS verify rather than accept anything).
+# These runs assert the mount reaches the container apps that actually make outbound TLS
+# connections -- through module.<app>.secret_file_mounts and module.<app>.env_names, both
+# INSIDE the submodule, so the assertion fails if the wiring is dropped in the root's merge --
+# and that a private-CA install still plans clean with the Key Vault-backed secret store on,
+# since production requires enable_key_vault.
+
+run "ca_bundle_is_absent_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "SSL_CERT_FILE")
+    error_message = "ca_bundle_pem unset must not set SSL_CERT_FILE -- outbound TLS must verify against the image's own trust store exactly as before this input existed."
+  }
+
+  assert {
+    condition     = length(module.api.secret_file_mounts) == 0
+    error_message = "The default must not put a CA bundle mount on ca-api."
+  }
+}
+
+run "ca_bundle_reaches_the_backend_apps" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    ca_bundle_pem         = "-----BEGIN CERTIFICATE-----\nMIIBfakefakefakefakefakefakefakefakefakefakeA==\n-----END CERTIFICATE-----\n"
+  }
+
+  # SSL_CERT_FILE names the path the init container actually writes to -- the two must agree,
+  # or the application would look for the bundle somewhere the mount never lands it.
+  assert {
+    condition     = local.api_env["SSL_CERT_FILE"] == "/mnt/secrets/ca-bundle/ca-bundle.pem"
+    error_message = "SSL_CERT_FILE must name the exact path the CA bundle is mounted at."
+  }
+
+  # ca-api makes the SMTP STARTTLS handshake (core/delivery), resolves pull-connector DSNs,
+  # and reaches stream push / local-LLM endpoints -- the targets the card names.
+  assert {
+    condition     = contains(module.api.env_names, "SSL_CERT_FILE")
+    error_message = "SSL_CERT_FILE must reach ca-api's container environment."
+  }
+
+  assert {
+    condition     = contains(keys(module.api.secret_file_mounts), "ca-bundle")
+    error_message = "The CA bundle mount must reach ca-api."
+  }
+
+  assert {
+    condition     = module.api.secret_file_mounts["ca-bundle"].mount_path == "/mnt/secrets/ca-bundle"
+    error_message = "The CA bundle mount's path must match what SSL_CERT_FILE's directory names."
+  }
+
+  # The write must be additive -- the image's own CA bundle first, ca_bundle_pem's content
+  # appended -- or every other outbound target that presents a publicly-trusted certificate
+  # (telemetry, licence refresh, ACS email) starts failing verification the moment this apply
+  # lands. This is also what keeps ca_bundle_pem itself small enough to fit a Key Vault
+  # secret's 25 KB limit on a production install, since it never has to carry a copy of the
+  # image's own ~230 KB bundle.
+  assert {
+    condition     = module.api.secret_file_mounts["ca-bundle"].prepend_image_ca_bundle == true
+    error_message = "The CA bundle mount must be additive (prepend_image_ca_bundle = true), or ca_bundle_pem replaces the image's trust store instead of extending it."
+  }
+
+  # ca-workers runs the same image and makes the same guarded connections (SMTP, webhook and
+  # stream-push delivery, pull connectors) -- an install trusting the CA on the api alone
+  # would still fail every job that ran in the workers process.
+  assert {
+    condition     = contains(module.workers[0].env_names, "SSL_CERT_FILE")
+    error_message = "SSL_CERT_FILE must reach ca-workers too -- the pipeline makes the same guarded connections."
+  }
+
+  assert {
+    condition     = contains(keys(module.workers[0].secret_file_mounts), "ca-bundle")
+    error_message = "The CA bundle mount must reach ca-workers too."
+  }
+
+  # And not the frontend, which makes none of these connections and reads no such setting.
+  assert {
+    condition     = !contains(module.frontend.env_names, "SSL_CERT_FILE")
+    error_message = "The CA bundle is a backend concern -- the frontend must not carry SSL_CERT_FILE."
+  }
+
+  assert {
+    condition     = length(module.frontend.secret_file_mounts) == 0
+    error_message = "The CA bundle mount is a backend concern -- the frontend must not carry it."
+  }
+
+  # Key Vault on (required by mode=production): the bundle's content must travel as a vault
+  # reference like every other install secret, not as a value the app itself has to hold.
+  assert {
+    condition     = contains(keys(local.api_vault_secret_refs), "ca-bundle-pem")
+    error_message = "With enable_key_vault, ca_bundle_pem must be stored as a Key Vault reference like the install's other secrets, not as a value-based Container App secret."
+  }
+}
+
+# Guard: an empty or whitespace-only bundle would set SSL_CERT_FILE at an empty trust store.
+run "ca_bundle_refuses_an_empty_string" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    ca_bundle_pem         = "   "
+  }
+
+  expect_failures = [var.ca_bundle_pem]
+}
+
+# Guard: something that is not a PEM bundle (no BEGIN CERTIFICATE marker) fails at plan, not
+# after an apply that silently breaks every outbound TLS connection the install makes.
+run "ca_bundle_refuses_content_without_a_certificate_marker" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    ca_bundle_pem         = "not actually a certificate"
+  }
+
+  expect_failures = [var.ca_bundle_pem]
+}
+
 # --- Licence refresh (ADR 0074): one input, off unless the credential is beside it ----------
 
 run "license_refresh_is_off_by_default" {

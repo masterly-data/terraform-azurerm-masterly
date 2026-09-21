@@ -86,6 +86,78 @@ resource "azurerm_container_app" "this" {
     min_replicas = var.min_replicas
     max_replicas = var.max_replicas
 
+    # SELF-HOSTED EXTENSION: secret-backed file mounts (MAS-446).
+    #
+    # `azurerm_container_app`'s `volume` block supports only `storage_type = "AzureFile"` and
+    # `"EmptyDir"` (checked against the provider schema, 4.61.0 through 4.81.0 — there is no
+    # `Secret` storage type here, unlike the raw Azure Container Apps API). So an app secret
+    # cannot be mounted as a file directly, the way it can be sourced into an env var below.
+    # `AzureFile` would need a whole storage account + share + environment-storage binding for
+    # one small PEM file; this module gets the same result with what it already has: an
+    # EMPTY EmptyDir volume, shared between the container below and a short-lived INIT
+    # CONTAINER that writes the file from the named secret before the real container starts.
+    # ACA runs every init container to completion, in order, before starting the app
+    # container in the same revision — so the file exists at the mount path from the app
+    # container's first instruction, on every replica start (a cold start writes it fresh;
+    # nothing here is a one-time seed). It reuses this app's own image (already pulled, under
+    # the same registry credentials as the app container) rather than adding a dependency on a
+    # generic utility image — every image this module deploys ships a POSIX shell.
+    dynamic "volume" {
+      for_each = var.secret_file_mounts
+      content {
+        name         = "${volume.key}-vol"
+        storage_type = "EmptyDir"
+      }
+    }
+
+    dynamic "init_container" {
+      for_each = var.secret_file_mounts
+      content {
+        name  = "${init_container.key}-init"
+        image = var.image
+
+        # umask 077: the file is created owner-read/write only. This is safe -- readable by the
+        # app container that mounts the same volume -- only because that container runs the
+        # SAME image (var.image, above): same USER, same UID, so "owner-only" still means the
+        # process that needs to read it. A future caller of this block that swapped the init
+        # container for a generic utility image (busybox, say, typically running as root) would
+        # produce a file the app container's non-root process cannot read, silently, the first
+        # time this file mount is actually needed -- worth remembering if that image ever stops
+        # being var.image.
+        #
+        # printf, not echo -- echo's handling of a leading "-" or backslash sequences in the
+        # content is shell-dependent, printf's is not, and %s never reinterprets the value.
+        #
+        # prepend_image_ca_bundle (MAS-446): true makes the write ADDITIVE -- the image's own
+        # CA trust store goes into the file first, then the secret's content is appended, so the
+        # result trusts both the publicly-trusted roots the image already ships and whatever the
+        # secret adds, rather than the secret's content replacing the image's trust store
+        # outright. This is what keeps ca_bundle_pem (see variables.tf, root) from being a
+        # foot-gun: without it, setting ca_bundle_pem to an internal CA would make every OTHER
+        # outbound TLS call the install makes -- telemetry, licence refresh, ACS email --
+        # start failing certificate verification the moment the apply landed, because
+        # SSL_CERT_FILE would name a file that no longer had those roots in it at all.
+        command = [
+          "/bin/sh", "-c",
+          init_container.value.prepend_image_ca_bundle ? (
+            "umask 077 && cat /etc/ssl/certs/ca-certificates.crt > \"${init_container.value.mount_path}/${init_container.value.file_name}\" && printf '%s\n' \"$MASTERLY_FILE_CONTENT\" >> \"${init_container.value.mount_path}/${init_container.value.file_name}\""
+            ) : (
+            "umask 077 && printf '%s\n' \"$MASTERLY_FILE_CONTENT\" > \"${init_container.value.mount_path}/${init_container.value.file_name}\""
+          )
+        ]
+
+        env {
+          name        = "MASTERLY_FILE_CONTENT"
+          secret_name = init_container.value.secret_name
+        }
+
+        volume_mounts {
+          name = "${init_container.key}-vol"
+          path = init_container.value.mount_path
+        }
+      }
+    }
+
     container {
       name    = var.name
       image   = var.image
@@ -107,6 +179,16 @@ resource "azurerm_container_app" "this" {
         content {
           name        = env.key
           secret_name = env.value
+        }
+      }
+
+      # SELF-HOSTED EXTENSION: secret-backed file mounts (MAS-446) — the same EmptyDir volume
+      # the init container above just wrote the file into.
+      dynamic "volume_mounts" {
+        for_each = var.secret_file_mounts
+        content {
+          name = "${volume_mounts.key}-vol"
+          path = volume_mounts.value.mount_path
         }
       }
 
@@ -153,6 +235,11 @@ resource "azurerm_container_app" "this" {
     precondition {
       condition     = alltrue([for s in keys(var.env_secret_refs) : contains(local.secret_names, var.env_secret_refs[s])])
       error_message = "Every env_secret_refs value must name a key of var.secrets or var.secret_refs."
+    }
+
+    precondition {
+      condition     = alltrue([for m in values(var.secret_file_mounts) : contains(local.secret_names, m.secret_name)])
+      error_message = "Every secret_file_mounts[*].secret_name must name a key of var.secrets or var.secret_refs."
     }
 
     # One namespace: ACA rejects two secrets with the same name, and a caller that moved a

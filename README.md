@@ -274,6 +274,47 @@ to switch the guard off entirely, loopback and the metadata endpoint included. F
 never loopback or link-local — and the application warns at every start. Migrate by replacing
 it with the ranges your targets are actually on; setting both fails the plan.
 
+### Trusting a private CA
+
+The allowlist above says **where** the application may connect. It says nothing about whether
+it **trusts** what answers there — a TLS handshake, STARTTLS included, verifies the peer's
+certificate, and a relay, pull-connector DSN, stream push endpoint or local AI endpoint on your
+own network commonly presents one from an internal CA rather than a public one. Set
+`ca_bundle_pem` to your CA certificate(s) — just your own internal CA(s), PEM-encoded and
+concatenated if there is more than one — and the module mounts a bundle into `ca-api` and
+`ca-workers` and points `SSL_CERT_FILE` at it — OpenSSL's default-verify-paths mechanism, which
+every outbound TLS connection those two apps make reads, not only the one target that needed it.
+That includes `httpx` (pull connectors, stream push, telemetry, licence refresh, the AI router):
+it reads `SSL_CERT_FILE` itself when set, the same as the standard-library `ssl` module SMTP
+delivery uses, so one file covers both.
+
+**The mounted file is your bundle *added to* the image's own trust store, not a replacement for
+it.** The module writes the image's public roots
+(`/etc/ssl/certs/ca-certificates.crt`, the Debian base image's bundle) into the file first and
+your `ca_bundle_pem` content after — you do not concatenate anything yourself. Because of that,
+`ca_bundle_pem` should carry only what it says: your own internal CA(s), typically a kilobyte or
+two, never a copy of the image's bundle. Keeping it that small also matters mechanically —
+`enable_key_vault` is required in `mode=production`, and Azure's documented maximum Key Vault
+secret value is 25 KB, well under which your CA(s) sit but the ~230 KB image bundle alone would
+not.
+
+Null (the default) sets nothing: outbound TLS verifies against the image's own trust store
+exactly as it did before this input existed. The module refuses an empty or all-whitespace
+value at plan (an empty trust store, not a smaller one) and a value that does not contain a
+`-----BEGIN CERTIFICATE-----` marker (almost certainly the wrong file mounted at the wrong
+path, caught before the apply rather than after).
+
+There is no `azurerm_container_app` volume type backed by a Container App secret — only
+`AzureFile` and `EmptyDir` — so the module cannot simply declare the bundle as a file the way it
+declares `MASTERLY_DATABASE_URL` as an environment variable. What it does instead: an `EmptyDir`
+volume, mounted on both `ca-api`/`ca-workers` and on a short-lived **init container** (the app's
+own image, so nothing new is pulled) that writes the image's own CA bundle followed by your
+`ca_bundle_pem` content into it, from the Container App secret, before the real container
+starts, on every replica start. With `enable_key_vault` the secret is a versionless Key Vault
+reference like the install's other secrets, so rotating the certificate in the vault reaches it
+the same way — ACA re-resolves within 30 minutes and restarts active revisions, which reruns the
+init container too.
+
 `mode=production` refuses dev-grade defaults on the **provisioned starter server** (the
 module's plan-time-guardrail philosophy — a misconfigured production install fails in
 `terraform plan`, not in a crash loop or a 2 a.m. page). It requires a non-burstable

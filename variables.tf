@@ -385,6 +385,34 @@ variable "allow_private_egress" {
   description = "DEPRECATED — use allowed_private_egress_cidrs, which names the private ranges the application may connect into instead of admitting all of them. Kept for one release: true now means an allowlist of every RFC1918 range, the CGNAT range (100.64.0.0/10) and IPv6 unique-local (fc00::/7) — it no longer admits loopback or link-local, the cloud metadata endpoint included, which it used to. The application logs a deprecation warning at every start while it is set, and refuses to start when both inputs are set. False (the default) sets nothing. Reaches ca-api and ca-workers, like its replacement."
 }
 
+# --- Trusting a private CA (MAS-446) --------------------------------------------------
+#
+# The allowlist above tells the application WHICH private addresses it may reach. It says
+# nothing about whether it TRUSTS what answers there — a TLS handshake, STARTTLS included,
+# still verifies the peer's certificate against the process's trust store, and a relay
+# behind allowed_private_egress_cidrs presenting a certificate from an internal CA fails
+# that unless the CA is trusted too (MAS-375 made the api's SMTP STARTTLS verify rather than
+# accept anything, which is what surfaces this for a relay on a private CA).
+
+variable "ca_bundle_pem" {
+  type        = string
+  default     = null
+  description = "One or more of YOUR OWN internal CA certificates, PEM-encoded and concatenated — not a copy of any public trust store — trusted install-wide for outbound TLS: the SMTP relay's STARTTLS handshake, pull-connector DSNs, stream push endpoints and a local AI endpoint alike (the same targets allowed_private_egress_cidrs names; this is the trust half, not the reachability half). Mounted into ca-api and ca-workers as a file and pointed to with SSL_CERT_FILE (OpenSSL's default-verify-paths mechanism, read by every outbound TLS connection those apps make, httpx included — not only the target that needed it). Public material — not customer credentials. The mounted file is this content ADDED to the image's own CA bundle, not a replacement for it: the module writes the image's public roots first and this content after, so a target presenting a publicly-trusted certificate (Masterly's control plane, Azure Communication Services) keeps verifying exactly as it did before you set this. Keep this input to just your own CA(s) — production requires enable_key_vault, which stores it as a Key Vault secret capped at Azure's documented 25 KB, far below your CA(s) but well below the image's own ~230 KB bundle too, which is why that bundle is never something you supply here. Null (the default) sets nothing — outbound TLS verifies against the image's own trust store exactly as before this input existed. See the README, \"Trusting a private CA\"."
+
+  # Ternary, not `== null ||`: Terraform's `||` evaluates both sides regardless of the first,
+  # so trimspace(null)/strcontains(null, ...) would error on the unset (and by far most common)
+  # case. The conditional expression below evaluates only the branch it selects.
+  validation {
+    condition     = var.ca_bundle_pem == null ? true : length(trimspace(var.ca_bundle_pem)) > 0
+    error_message = "ca_bundle_pem must not be an empty (or all-whitespace) string — that would set SSL_CERT_FILE to an empty trust store and fail every outbound TLS connection the install makes, not only the one you meant to fix. Leave it unset (null) instead."
+  }
+
+  validation {
+    condition     = var.ca_bundle_pem == null ? true : strcontains(var.ca_bundle_pem, "-----BEGIN CERTIFICATE-----")
+    error_message = "ca_bundle_pem does not look like a PEM certificate bundle (no \"-----BEGIN CERTIFICATE-----\" marker). Concatenate one or more PEM certificates — a private key or some other file mounted here would silently break outbound TLS at apply time, not at plan time."
+  }
+}
+
 # --- Data plane seam (ADR 0065) -----------------------------------------------------
 
 variable "external_database_url" {

@@ -24,6 +24,26 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `ca_bundle_pem` — an install-wide CA bundle, mounted into `ca-api` and `ca-workers` and
+  pointed to with `SSL_CERT_FILE`, so a relay, DSN or endpoint on an internal CA can be trusted
+  by name instead of not at all. Before this input there was no supported way to do it on a
+  stock install: `SSL_CERT_FILE` named a path, but the module had no mechanism to put a file at
+  that path, and `azurerm_container_app`'s `volume` block turns out to support only
+  `AzureFile`/`EmptyDir` — there is no Secret-backed volume type in this provider, unlike the
+  raw Azure Container Apps API. The mount is an EmptyDir volume plus a short-lived init
+  container (the app's own image) that writes the image's own CA bundle followed by
+  `ca_bundle_pem`'s content into a single file from a Container App secret before the real
+  container starts — a Key Vault reference when `enable_key_vault`, a value otherwise — which is
+  why it reaches `ca-api` and `ca-workers` durably: Terraform owns the container template like
+  it owns everything else in it, so nothing here needed carving out of `ignore_changes`. The
+  write is additive, not a replacement: `ca_bundle_pem` carries only your own internal CA(s),
+  typically a kilobyte or two, and the module concatenates it after the image's public roots
+  rather than asking you to — every other outbound call (telemetry, licence refresh, ACS email)
+  keeps verifying exactly as before. That keeps the input well under Azure's 25 KB Key Vault
+  secret limit, which `mode=production`'s required `enable_key_vault` would otherwise make the
+  image's own ~230 KB bundle collide with. Null (the default) sets nothing. The application
+  change that made this necessary made SMTP STARTTLS verify the relay's certificate rather than
+  accept anything — a fail-closed change with no remedy on self-hosted until now (MAS-446).
 - `allowed_private_egress_cidrs` — the private ranges the application may make outbound
   connections into, named instead of admitted wholesale. The application's egress guard refuses
   a customer-configured outbound target on a private or reserved address on
