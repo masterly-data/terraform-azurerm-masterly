@@ -58,11 +58,14 @@ module "workers" {
   max_replicas = var.workers_max_replicas
 
   # The full api env contract: build_services in the workers process reads the same
-  # settings (identity, license, bus, secret store, redis) as the api.
-  env             = local.api_env
-  secrets         = local.api_value_secrets
-  secret_refs     = local.api_vault_secret_refs
-  env_secret_refs = local.api_env_secret_refs
+  # settings (identity, license, bus, secret store, redis) as the api. That includes the
+  # CA bundle mount (MAS-446): SMTP/webhook/stream-push delivery and pull connectors run
+  # here, so ca-workers needs the same trusted CA the api does, at the same path.
+  env                = local.api_env
+  secrets            = local.api_value_secrets
+  secret_refs        = local.api_vault_secret_refs
+  env_secret_refs    = local.api_env_secret_refs
+  secret_file_mounts = local.ca_bundle_secret_file_mounts
 
   tags = local.tags
 

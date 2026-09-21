@@ -274,6 +274,41 @@ to switch the guard off entirely, loopback and the metadata endpoint included. F
 never loopback or link-local — and the application warns at every start. Migrate by replacing
 it with the ranges your targets are actually on; setting both fails the plan.
 
+### Trusting a private CA
+
+The allowlist above says **where** the application may connect. It says nothing about whether
+it **trusts** what answers there — a TLS handshake, STARTTLS included, verifies the peer's
+certificate, and a relay, pull-connector DSN, stream push endpoint or local AI endpoint on your
+own network commonly presents one from an internal CA rather than a public one. Set
+`ca_bundle_pem` to your CA certificate(s), PEM-encoded and concatenated if there is more than
+one, and the module mounts the bundle into `ca-api` and `ca-workers` and points `SSL_CERT_FILE`
+at it — OpenSSL's default-verify-paths mechanism, which every outbound TLS connection those two
+apps make reads, not only the one target that needed it.
+
+**`SSL_CERT_FILE` replaces the process's default trust store — it does not add to it.** If any
+other outbound target also presents a publicly-trusted certificate (Masterly's own control
+plane, if you use telemetry or licence refresh; Azure Communication Services, if you use
+`enable_email`), concatenate the image's own CA bundle onto yours before setting this, or every
+one of those calls starts failing certificate verification the moment the apply lands — the
+same install-wide blast radius the SSRF allowlist above has, for the same reason (one process,
+one trust store). The image's bundle is the Debian base image's `/etc/ssl/certs/ca-certificates.crt`.
+
+Null (the default) sets nothing: outbound TLS verifies against the image's own trust store
+exactly as it did before this input existed. The module refuses an empty or all-whitespace
+value at plan (an empty trust store, not a smaller one) and a value that does not contain a
+`-----BEGIN CERTIFICATE-----` marker (almost certainly the wrong file mounted at the wrong
+path, caught before the apply rather than after).
+
+There is no `azurerm_container_app` volume type backed by a Container App secret — only
+`AzureFile` and `EmptyDir` — so the module cannot simply declare the bundle as a file the way it
+declares `MASTERLY_DATABASE_URL` as an environment variable. What it does instead: an `EmptyDir`
+volume, mounted on both `ca-api`/`ca-workers` and on a short-lived **init container** (the app's
+own image, so nothing new is pulled) that writes the bundle from the Container App secret before
+the real container starts, on every replica start. With `enable_key_vault` the secret is a
+versionless Key Vault reference like the install's other secrets, so rotating the certificate in
+the vault reaches it the same way — ACA re-resolves within 30 minutes and restarts active
+revisions, which reruns the init container too.
+
 `mode=production` refuses dev-grade defaults on the **provisioned starter server** (the
 module's plan-time-guardrail philosophy — a misconfigured production install fails in
 `terraform plan`, not in a crash loop or a 2 a.m. page). It requires a non-burstable

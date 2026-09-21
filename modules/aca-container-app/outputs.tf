@@ -95,3 +95,16 @@ output "secret_ref_identity_ids" {
   value       = distinct(sort([for r in values(var.secret_refs) : r.identity_id]))
   description = "Distinct user-assigned identity resource IDs used to resolve this app's Key Vault references."
 }
+
+# Same reason as env_names and the secret-posture outputs above: `volume`, `init_container`
+# and `volume_mounts` are dynamic blocks on the container app resource, not readable off it in
+# a test, so without this a test cannot tell "this app has a CA bundle mounted at
+# /mnt/secrets/ca-bundle" from "this app has no such mount" -- it can only see
+# var.secret_file_mounts echoed back, which is the point: proving the map actually crossed the
+# module boundary rather than being dropped in the caller's merge. Metadata only (mount path,
+# file name, which SECRET NAME backs it) -- never the file's content, which
+# var.secrets/var.secret_refs already keep out of a plan-readable output.
+output "secret_file_mounts" {
+  value       = var.secret_file_mounts
+  description = "The secret-backed file mounts declared on this app (mount path, file name, and the secret name providing the content), by mount name. Empty when none are declared."
+}

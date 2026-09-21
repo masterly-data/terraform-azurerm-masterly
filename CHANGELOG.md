@@ -24,6 +24,23 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `ca_bundle_pem` — an install-wide CA bundle, mounted into `ca-api` and `ca-workers` and
+  pointed to with `SSL_CERT_FILE`, so a relay, DSN or endpoint on an internal CA can be trusted
+  by name instead of not at all. Before this input there was no supported way to do it on a
+  stock install: `SSL_CERT_FILE` named a path, but the module had no mechanism to put a file at
+  that path, and `azurerm_container_app`'s `volume` block turns out to support only
+  `AzureFile`/`EmptyDir` — there is no Secret-backed volume type in this provider, unlike the
+  raw Azure Container Apps API. The mount is an EmptyDir volume plus a short-lived init
+  container (the app's own image) that writes the bundle from a Container App secret before the
+  real container starts — a Key Vault reference when `enable_key_vault`, a value otherwise —
+  which is why it reaches `ca-api` and `ca-workers` durably: Terraform owns the container
+  template like it owns everything else in it, so nothing here needed carving out of
+  `ignore_changes`. `SSL_CERT_FILE` replaces the process's default trust store rather than
+  adding to it — concatenate the image's own CA bundle onto yours if any other outbound target
+  also presents a publicly-trusted certificate, or every other outbound call starts failing
+  verification the moment this apply lands. Null (the default) sets nothing. The application
+  change that made this necessary made SMTP STARTTLS verify the relay's certificate rather than
+  accept anything — a fail-closed change with no remedy on self-hosted until now (MAS-446).
 - `allowed_private_egress_cidrs` — the private ranges the application may make outbound
   connections into, named instead of admitted wholesale. The application's egress guard refuses
   a customer-configured outbound target on a private or reserved address on

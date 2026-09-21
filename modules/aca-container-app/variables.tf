@@ -164,6 +164,24 @@ variable "env_secret_refs" {
   description = "Environment variables sourced from app secrets: env var name => secret name (a key of var.secrets or var.secret_refs)."
 }
 
+# SELF-HOSTED EXTENSION: secret-backed file mounts (MAS-446). `azurerm_container_app` has no
+# Secret-backed volume type (checked against the provider schema; see the comment on the
+# `volume`/`init_container` blocks in main.tf for why), so a named entry here becomes an
+# EmptyDir volume, an init container that writes the named secret's value into it before the
+# app container starts, and a mount of that volume on the app container. Nothing about this
+# implies the content is confidential — it is simply the mechanism available for landing a
+# value on disk without provisioning a storage account, and a CA bundle is public material
+# carried this way for exactly that reason.
+variable "secret_file_mounts" {
+  type = map(object({
+    mount_path  = string
+    file_name   = string
+    secret_name = string
+  }))
+  default     = {}
+  description = "Named file mounts: each key identifies one EmptyDir volume + init container pair. mount_path is the absolute directory mounted on the app container (and on the init container, which writes into it); file_name is the file written inside that directory; secret_name names the app secret (a key of var.secrets or var.secret_refs) whose value becomes the file's content. A caller wanting one file declares one entry."
+}
+
 # SELF-HOSTED EXTENSION: HTTP probes.
 variable "liveness_probe_path" {
   type        = string

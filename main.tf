@@ -744,10 +744,38 @@ locals {
     var.allow_private_egress ? { MASTERLY_ALLOW_PRIVATE_EGRESS = "true" } : {}, # deprecated
   )
 
+  # Trusting a private CA (MAS-446): the allowlist above says WHERE the application may
+  # connect; this says whether it TRUSTS what answers there. A CA bundle is file-shaped, not
+  # env-shaped, so it rides the secret-backed file mount below (modules/aca-container-app
+  # secret_file_mounts — an EmptyDir volume plus an init container, since the provider has no
+  # Secret-backed volume type; see that module's main.tf) rather than a value straight in env.
+  # It gets the same durability guarantee every other part of the container's template
+  # already has here: Terraform owns it, and ignore_changes carves out only the image and
+  # workload_profile_name. The single env var lives here because both apps need to know the
+  # PATH the file landed at.
+  ca_bundle_mount_dir  = "/mnt/secrets/ca-bundle"
+  ca_bundle_file_name  = "ca-bundle.pem"
+  ca_bundle_mount_path = "${local.ca_bundle_mount_dir}/${local.ca_bundle_file_name}"
+
+  ca_bundle_env = var.ca_bundle_pem != null ? {
+    SSL_CERT_FILE = local.ca_bundle_mount_path
+  } : {}
+
+  # One mount, named after the app secret that holds the bundle's content — reused verbatim on
+  # ca-workers so the mount is identical on both apps that read SSL_CERT_FILE.
+  ca_bundle_secret_file_mounts = var.ca_bundle_pem != null ? {
+    "ca-bundle" = {
+      mount_path  = local.ca_bundle_mount_dir
+      file_name   = local.ca_bundle_file_name
+      secret_name = "ca-bundle-pem"
+    }
+  } : {}
+
   api_env = merge(
     local.install_env,
     local.identity_env,
     local.private_egress_env, # the egress guard's allowlist (and deprecated override), empty unless set
+    local.ca_bundle_env,      # SSL_CERT_FILE, pointed at the mounted bundle, empty unless set
     local.servicebus_env,
     local.acs_email_env,         # ACS endpoint + sender auto-wired when email is enabled (ADR 0040)
     local.keyvault_env,          # durable secret store when the Key Vault is enabled (ADR 0066)
@@ -779,6 +807,11 @@ locals {
     "breakglass-secret-hash"  = var.breakglass_secret_hash
     "telemetry-client-secret" = var.telemetry_client_secret
     "oidc-client-secret"      = var.oidc_client_secret
+    # Not confidential (see ca_bundle_pem's description) — it travels through the SAME
+    # Container App secret plumbing as everything else here only because that plumbing is
+    # also how a value reaches the file mount below (secret_file_mounts, MAS-446), not
+    # because it needs hiding.
+    "ca-bundle-pem" = var.ca_bundle_pem
   }
 
   # Credential-based image pull (ADR 0067): the SP secret rides on every app that pulls.
@@ -795,6 +828,7 @@ locals {
     nonsensitive(var.license_token != null) ? ["license-token"] : [],
     nonsensitive(var.breakglass_secret_hash != null) ? ["breakglass-secret-hash"] : [],
     local.telemetry_configured ? ["telemetry-client-secret"] : [],
+    var.ca_bundle_pem != null ? ["ca-bundle-pem"] : [],
   )
 
   # On oidc the frontend is the confidential BFF client: its client secret is used only
@@ -903,10 +937,11 @@ module "api" {
   min_replicas = var.api_min_replicas
   max_replicas = var.api_max_replicas
 
-  env             = local.api_env
-  secrets         = local.api_value_secrets
-  secret_refs     = local.api_vault_secret_refs
-  env_secret_refs = local.api_env_secret_refs
+  env                = local.api_env
+  secrets            = local.api_value_secrets
+  secret_refs        = local.api_vault_secret_refs
+  env_secret_refs    = local.api_env_secret_refs
+  secret_file_mounts = local.ca_bundle_secret_file_mounts
 
   liveness_probe_path  = "/healthz"
   readiness_probe_path = "/readyz"
