@@ -763,11 +763,24 @@ locals {
 
   # One mount, named after the app secret that holds the bundle's content — reused verbatim on
   # ca-workers so the mount is identical on both apps that read SSL_CERT_FILE.
+  #
+  # prepend_image_ca_bundle = true: the file this produces is ADDITIVE, not a replacement.
+  # ca_bundle_pem is meant to carry only the customer's own internal CA(s) -- typically a
+  # kilobyte or two -- not a copy of the public roots the image already trusts. Without this,
+  # SSL_CERT_FILE would point at a file containing ONLY var.ca_bundle_pem's content, and every
+  # other outbound TLS call the install makes (telemetry, licence refresh, ACS email) would
+  # start failing certificate verification the moment the apply landed, because those targets
+  # present publicly-trusted certificates the customer's bundle knows nothing about. It also
+  # keeps ca_bundle_pem itself small enough to live in a Key Vault secret (Azure's documented
+  # 25 KB maximum) on a production install, where enable_key_vault is required -- the image's
+  # own bundle is a couple hundred KB on its own and never needs to travel through Key Vault to
+  # get here, since the init container reads it straight off its own filesystem.
   ca_bundle_secret_file_mounts = var.ca_bundle_pem != null ? {
     "ca-bundle" = {
-      mount_path  = local.ca_bundle_mount_dir
-      file_name   = local.ca_bundle_file_name
-      secret_name = "ca-bundle-pem"
+      mount_path              = local.ca_bundle_mount_dir
+      file_name               = local.ca_bundle_file_name
+      secret_name             = "ca-bundle-pem"
+      prepend_image_ca_bundle = true
     }
   } : {}
 

@@ -31,14 +31,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   that path, and `azurerm_container_app`'s `volume` block turns out to support only
   `AzureFile`/`EmptyDir` — there is no Secret-backed volume type in this provider, unlike the
   raw Azure Container Apps API. The mount is an EmptyDir volume plus a short-lived init
-  container (the app's own image) that writes the bundle from a Container App secret before the
-  real container starts — a Key Vault reference when `enable_key_vault`, a value otherwise —
-  which is why it reaches `ca-api` and `ca-workers` durably: Terraform owns the container
-  template like it owns everything else in it, so nothing here needed carving out of
-  `ignore_changes`. `SSL_CERT_FILE` replaces the process's default trust store rather than
-  adding to it — concatenate the image's own CA bundle onto yours if any other outbound target
-  also presents a publicly-trusted certificate, or every other outbound call starts failing
-  verification the moment this apply lands. Null (the default) sets nothing. The application
+  container (the app's own image) that writes the image's own CA bundle followed by
+  `ca_bundle_pem`'s content into a single file from a Container App secret before the real
+  container starts — a Key Vault reference when `enable_key_vault`, a value otherwise — which is
+  why it reaches `ca-api` and `ca-workers` durably: Terraform owns the container template like
+  it owns everything else in it, so nothing here needed carving out of `ignore_changes`. The
+  write is additive, not a replacement: `ca_bundle_pem` carries only your own internal CA(s),
+  typically a kilobyte or two, and the module concatenates it after the image's public roots
+  rather than asking you to — every other outbound call (telemetry, licence refresh, ACS email)
+  keeps verifying exactly as before. That keeps the input well under Azure's 25 KB Key Vault
+  secret limit, which `mode=production`'s required `enable_key_vault` would otherwise make the
+  image's own ~230 KB bundle collide with. Null (the default) sets nothing. The application
   change that made this necessary made SMTP STARTTLS verify the relay's certificate rather than
   accept anything — a fail-closed change with no remedy on self-hosted until now (MAS-446).
 - `allowed_private_egress_cidrs` — the private ranges the application may make outbound

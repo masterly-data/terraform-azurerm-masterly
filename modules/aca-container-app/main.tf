@@ -116,12 +116,34 @@ resource "azurerm_container_app" "this" {
         name  = "${init_container.key}-init"
         image = var.image
 
-        # umask 077: the file is created owner-read/write only. printf, not echo -- echo's
-        # handling of a leading "-" or backslash sequences in the content is shell-dependent,
-        # printf's is not, and %s never reinterprets the value.
+        # umask 077: the file is created owner-read/write only. This is safe -- readable by the
+        # app container that mounts the same volume -- only because that container runs the
+        # SAME image (var.image, above): same USER, same UID, so "owner-only" still means the
+        # process that needs to read it. A future caller of this block that swapped the init
+        # container for a generic utility image (busybox, say, typically running as root) would
+        # produce a file the app container's non-root process cannot read, silently, the first
+        # time this file mount is actually needed -- worth remembering if that image ever stops
+        # being var.image.
+        #
+        # printf, not echo -- echo's handling of a leading "-" or backslash sequences in the
+        # content is shell-dependent, printf's is not, and %s never reinterprets the value.
+        #
+        # prepend_image_ca_bundle (MAS-446): true makes the write ADDITIVE -- the image's own
+        # CA trust store goes into the file first, then the secret's content is appended, so the
+        # result trusts both the publicly-trusted roots the image already ships and whatever the
+        # secret adds, rather than the secret's content replacing the image's trust store
+        # outright. This is what keeps ca_bundle_pem (see variables.tf, root) from being a
+        # foot-gun: without it, setting ca_bundle_pem to an internal CA would make every OTHER
+        # outbound TLS call the install makes -- telemetry, licence refresh, ACS email --
+        # start failing certificate verification the moment the apply landed, because
+        # SSL_CERT_FILE would name a file that no longer had those roots in it at all.
         command = [
           "/bin/sh", "-c",
-          "umask 077 && printf '%s\n' \"$MASTERLY_FILE_CONTENT\" > \"${init_container.value.mount_path}/${init_container.value.file_name}\""
+          init_container.value.prepend_image_ca_bundle ? (
+            "umask 077 && cat /etc/ssl/certs/ca-certificates.crt > \"${init_container.value.mount_path}/${init_container.value.file_name}\" && printf '%s\n' \"$MASTERLY_FILE_CONTENT\" >> \"${init_container.value.mount_path}/${init_container.value.file_name}\""
+            ) : (
+            "umask 077 && printf '%s\n' \"$MASTERLY_FILE_CONTENT\" > \"${init_container.value.mount_path}/${init_container.value.file_name}\""
+          )
         ]
 
         env {

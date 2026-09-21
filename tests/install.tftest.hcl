@@ -2621,6 +2621,17 @@ run "ca_bundle_reaches_the_backend_apps" {
     error_message = "The CA bundle mount's path must match what SSL_CERT_FILE's directory names."
   }
 
+  # The write must be additive -- the image's own CA bundle first, ca_bundle_pem's content
+  # appended -- or every other outbound target that presents a publicly-trusted certificate
+  # (telemetry, licence refresh, ACS email) starts failing verification the moment this apply
+  # lands. This is also what keeps ca_bundle_pem itself small enough to fit a Key Vault
+  # secret's 25 KB limit on a production install, since it never has to carry a copy of the
+  # image's own ~230 KB bundle.
+  assert {
+    condition     = module.api.secret_file_mounts["ca-bundle"].prepend_image_ca_bundle == true
+    error_message = "The CA bundle mount must be additive (prepend_image_ca_bundle = true), or ca_bundle_pem replaces the image's trust store instead of extending it."
+  }
+
   # ca-workers runs the same image and makes the same guarded connections (SMTP, webhook and
   # stream-push delivery, pull connectors) -- an install trusting the CA on the api alone
   # would still fail every job that ran in the workers process.
