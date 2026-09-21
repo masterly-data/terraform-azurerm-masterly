@@ -248,6 +248,9 @@ fi
 # --- 2. The apps: configuration state, revisions, replicas -------------------------------
 head2 "Container Apps"
 for app in $APPS; do
+  # The filter is a jq program: `$allow` and `$n` are jq's own, bound by --argjson and by
+  # `.name as $n`, and the single quotes are what keeps the shell from touching them.
+  # shellcheck disable=SC2016
   azj "app:$app" "$BUNDLE/apps/$app.json" '
     def env_entry:
       if .secretRef != null then {name, source: "secret", secret_name: .secretRef}
@@ -474,6 +477,9 @@ fi
 # whole diagnosis, and a tool that refuses to hand over the evidence during the incident it
 # exists to shorten would simply not be used.
 head2 "Statement echo"
+# `\$1` below is a regular expression for the literal text a Postgres server writes when it
+# logs a statement's bound parameters — not a shell parameter. Single quotes keep it literal.
+# shellcheck disable=SC2016
 REVIEW_PATTERNS=(
   'DETAIL:[[:space:]]*Key[[:space:]]*\('        # a unique/foreign-key violation and its values
   'DETAIL:[[:space:]]*Failing row contains'     # a check/not-null violation and the whole row
