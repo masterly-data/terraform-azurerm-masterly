@@ -136,7 +136,15 @@ python3 scripts/check_release_manifest.py
 python3 scripts/release_notes.py --selftest
 bash tests/diagnostic_bundle_test.sh --selftest
 bash tests/diagnostic_bundle_test.sh
+shellcheck --severity=style $(git ls-files '*.sh')
 ```
+
+The shellcheck line is the same invocation CI runs, at the same severity: **any** finding fails.
+The obvious laxer line — failing on `warning` and above — lets SC2086 through, and an unquoted
+expansion that word-splits a path is the most ordinary way a script does something other than
+what it reads. A finding is answered by fixing it, or by a `# shellcheck disable=SCxxxx`
+directive scoped to the command or the function it belongs to, with the reason on the line above
+— never by lowering the severity. MAS-428.
 
 CI pins Terraform 1.10.5, at the module's `required_version = ">= 1.10"` floor; a newer local CLI is
 fine for these checks. The `--selftest` invocations run **first** in CI on purpose: a checker

@@ -148,6 +148,11 @@ EOF
 # --- Scenarios ------------------------------------------------------------------------------
 # Each scenario runs the script under test and returns non-zero when an assertion fails.
 
+# `<assertion> && pass … || fail …` is this file's assertion idiom, and shellcheck is right
+# that A && B || C is not if-then-else in general. It is here: `pass` is a bare `printf`, so C
+# cannot run when A succeeded. Keep that true — an assertion helper that can fail would make
+# every line below report a failure it did not see.
+# shellcheck disable=SC2015
 scenario_clean() { # scenario_clean <script>
   local script="$1" tmp bundle rc
   tmp=$(mktemp -d)
@@ -246,6 +251,10 @@ scenario_clean() { # scenario_clean <script>
   [[ $rc -eq 0 ]] && pass "statement echo warns, it does not refuse (exit 0)" \
     || fail "statement echo must warn, not refuse — exit was $rc"
   local bundle_mode
+  # `ls -ld` on one known directory, for its mode string. `find -printf` is GNU-only and
+  # `stat`'s format flag differs between GNU and BSD, so this is the portable reading of it;
+  # the filename it would mishandle is never part of the answer.
+  # shellcheck disable=SC2012
   bundle_mode=$(ls -ld "$bundle" | cut -c1-10)
   [[ "$bundle_mode" == "drwx------" ]] && pass "bundle directory is owner-only ($bundle_mode)" \
     || fail "bundle directory is $bundle_mode, expected drwx------"
@@ -278,6 +287,8 @@ scenario_refused() { # scenario_refused <script>
   [[ $failures -eq 0 ]]
 }
 
+# The same assertion idiom as scenario_clean, safe for the same reason: `pass` is a `printf`.
+# shellcheck disable=SC2015
 scenario_gaps() { # scenario_gaps <script> — no token, no request id: the manifest says so.
   local script="$1" tmp bundle rc
   tmp=$(mktemp -d)
@@ -414,6 +425,10 @@ run_suite() { # run_suite <script> — all scenarios; non-zero if any assertion 
 }
 
 # --- Self-test: break the script, and insist the suite notices ----------------------------
+# The `$` in the lists below belongs to the text being matched, not to this shell: `exprs` are
+# sed programs whose `\$` matches a dollar in the script under test, and `gones` are literal
+# fragments of that script. Single quotes are what makes them literal, which is the point.
+# shellcheck disable=SC2016
 selftest() {
   local tmp broken n rc total=0
   tmp=$(mktemp -d)

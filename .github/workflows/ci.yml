@@ -66,6 +66,43 @@ jobs:
       - name: Test the module (mock providers — guards, residency, conditional branches)
         run: terraform test
 
+  # The module ships three shell scripts — the operator's diagnostic bundle, the pre-apply
+  # preflight, and the bundle's own test harness — and until this job existed nothing read them
+  # but a person. The defect that argues for it was caught exactly that way: a `[[ … ]] &&
+  # assignment` as the last command of a function, which under `set -e` ends the script when the
+  # test is false. Nothing in the suite below would have failed; the script would simply have
+  # stopped early and written a partial bundle, on the channel a self-hosted install reaches
+  # support through, during the incident it exists to shorten. MAS-428.
+  #
+  # It fails on ANY shellcheck finding, which is shellcheck's default severity. The obvious
+  # laxer threshold — failing only on `warning` and `error` — would let SC2086 through, and an
+  # unquoted expansion that word-splits a path is the most ordinary way a script does something
+  # other than what it reads. So the two defensible lines are "info and above" and "everything",
+  # and this tree is already clean at "everything" apart from six deliberate idioms, each
+  # suppressed where it occurs with its reason beside it. `git ls-files '*.sh' | xargs grep -n
+  # 'shellcheck disable'` is the complete list, and it is meant to stay short: a finding is
+  # answered by fixing it or by a directive that says why, never by moving this line.
+  #
+  # shellcheck is already on the GitHub-hosted runner image, so this job installs nothing and
+  # reaches no network — the property that lets every other job here run on a fork's pull
+  # request. Its version is printed, because a finding is easiest to reproduce against the
+  # version that reported it.
+  #
+  # The files come from `git ls-files` rather than from a pair of directory globs: the day shell
+  # lands somewhere nobody listed, a glob lints nothing there and passes.
+  shell-lint:
+    name: The module's shell passes shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Lint every shell script in the tree
+        run: |
+          shellcheck --version
+          git ls-files -z '*.sh' | xargs -0 shellcheck --severity=style
+
   # The diagnostic bundle (scripts/diagnostic-bundle.sh) is the primary support channel for a
   # self-hosted install, and it makes two promises of different strengths. It carries no
   # secret values, credentials, addresses or key material — asserted as absence, canary by
@@ -169,7 +206,7 @@ jobs:
   release:
     name: Publish the GitHub Release from the changelog
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [validate, diagnostic-bundle, release-metadata]
+    needs: [validate, shell-lint, diagnostic-bundle, release-metadata]
     runs-on: ubuntu-latest
     # The only job in this repository that writes: it creates or edits the Release object. It
     # pushes no commit and no tag.
