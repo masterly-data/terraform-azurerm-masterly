@@ -814,6 +814,7 @@ locals {
   secret_values = {
     "database-url"            = local.database_url
     "session-secret"          = random_password.session_secret.result
+    "session-secret-previous" = var.session_secret_previous
     "registry-password"       = var.registry_password
     "redis-url"               = local.redis_url # embeds the access key (ADR 0066)
     "license-token"           = var.license_token
@@ -836,6 +837,8 @@ locals {
   # the secret — the same narrow unmarking, for the same reason, as redis_url_wired.
   api_secret_names = concat(
     ["database-url", "session-secret"],
+    # Only while a rotation is in flight; unset is the steady state (see the variable).
+    nonsensitive(var.session_secret_previous != null) ? ["session-secret-previous"] : [],
     local.registry_secret_names,
     local.redis_secret_names,
     nonsensitive(var.license_token != null) ? ["license-token"] : [],
@@ -859,6 +862,11 @@ locals {
       MASTERLY_DATABASE_URL   = "database-url"
       MASTERLY_SESSION_SECRET = "session-secret"
     },
+    # nonsensitive() on the PRESENCE test alone, as above: whether a rotation is in flight is
+    # not the secret, and it is what decides whether the api is told to accept a second key.
+    nonsensitive(var.session_secret_previous != null) ? {
+      MASTERLY_SESSION_SECRET_PREVIOUS = "session-secret-previous"
+    } : {},
     local.redis_secret_refs,
     var.license_token != null ? { MASTERLY_LICENSE_TOKEN = "license-token" } : {},
     var.breakglass_secret_hash != null ? { MASTERLY_BREAKGLASS_SECRET_HASH = "breakglass-secret-hash" } : {},

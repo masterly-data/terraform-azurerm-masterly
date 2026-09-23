@@ -24,6 +24,21 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `session_secret_previous` — the outgoing session secret, kept acceptable for verifying
+  existing sessions while a rotation completes. Replacing `random_password.session_secret` on
+  its own signs out every signed-in user the moment the new revision takes traffic, which makes
+  the operation you perform when a secret may have leaked an outage you have to schedule — and
+  a rotation you schedule is one you postpone. The input writes
+  `MASTERLY_SESSION_SECRET_PREVIOUS` on `ca-api` as a Container App secret (a Key Vault
+  reference with `enable_key_vault`), and the application accepts the listed values for
+  **verification only**, never for signing, so the rotation is two ordinary applies with no
+  session loss: name the old value while replacing the generated one, then clear it once no
+  session signed with the old value can still be within its lifetime. The plan refuses a value
+  shorter than 32 characters — a listed key verifies sessions as well as the one that signs
+  them, so it is held to the same minimum. Null (the default) sets nothing, and an install that
+  never rotates is unchanged. "Rotating the session secret" in the README has the procedure and
+  how long to leave the window open. Reading the variable needs an `api` image that has it: the
+  next `MANIFEST.json` image pair is the first to (MAS-431).
 - `ca_bundle_pem` — an install-wide CA bundle, mounted into `ca-api` and `ca-workers` and
   pointed to with `SSL_CERT_FILE`, so a relay, DSN or endpoint on an internal CA can be trusted
   by name instead of not at all. Before this input there was no supported way to do it on a

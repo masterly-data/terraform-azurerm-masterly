@@ -272,6 +272,28 @@ variable "breakglass_secret_hash" {
   description = "The break-glass secret in the stored form the api verifies (ADR 0024): a salted Argon2id value, never the secret itself. A bare sha256 digest is no longer accepted — the api refuses one at startup, so ca-api and ca-workers crash-loop until it is replaced. Mint the value inside the api image this install runs, with `python -m masterly_app.core.breakglass_credential`: that image is where the accepted parameters live, so a value minted there is one it verifies. https://masterlydata.com/docs/self-hosted/install/#access-and-identity"
 }
 
+# --- Rotating the session secret ------------------------------------------------------
+# The module generates the session signing secret (`random_password.session_secret`) and the
+# api signs every session token with it. Replacing it on its own signs out everyone who is
+# signed in, at the moment the new revision takes traffic — which turns the operation you
+# perform when a secret may have leaked into an outage you schedule, and a rotation you
+# schedule is a rotation you postpone.
+#
+# The api accepts retired secrets for VERIFICATION only, so a rotation is two ordinary
+# applies with no session loss. "Rotating the session secret" in the README has the order.
+
+variable "session_secret_previous" {
+  type        = string
+  default     = null
+  sensitive   = true
+  description = "The outgoing session secret, kept acceptable for verifying EXISTING sessions while a rotation completes — never for signing new ones. Set it to the value the install is signing with today, in the same apply that replaces `random_password.session_secret`, and no signed-in user is signed out; clear it in a second apply once no session signed with that value can still be within its lifetime, after which it is refused like any other stale token. Leave it unset in the steady state. Several comma-separated values are accepted, for a second rotation inside the first one's window. A value here still verifies sessions, so it is held to the same minimum as the secret it replaced."
+
+  validation {
+    condition     = var.session_secret_previous == null ? true : length(var.session_secret_previous) >= 32
+    error_message = "session_secret_previous must be the real outgoing secret: at least 32 characters, the same key-material minimum the api enforces for the secret it signs with (RFC 7518 §3.2 for HS256). A key too weak to sign with is too weak to keep accepting."
+  }
+}
+
 # --- License (ADR 0013/0018) --------------------------------------------------------
 # The install's entitlement: a platform-minted ES256 JWT plus the issuer's PUBLIC JWK.
 # Both arrive in the customer's install bundle. Unset = the app's fixture license
