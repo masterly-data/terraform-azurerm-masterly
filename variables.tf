@@ -307,24 +307,29 @@ variable "session_secret_previous" {
 # Self-hosted is fixed-price, so this is NOT billing input — it is fleet visibility: which
 # installs exist, on what versions, and whether their licence is near expiry. The install is
 # fully functional without it, and a customer who declines telemetry simply leaves it unset.
+#
+# telemetry_url is the switch. telemetry_client_id / telemetry_client_secret are the install
+# credential — the install service account from the bundle — and despite the name they are not
+# telemetry-only: licence refresh (license_issuer_url, below) authenticates with the same pair.
+# Each feature needs the credential; neither feature needs the other's URL.
 
 variable "telemetry_url" {
   type        = string
   default     = null
-  description = "Base URL of the Masterly control plane that receives usage reports (from the install bundle). Leave unset to report nothing — the reporter is inert unless both this and telemetry_client_id are set."
+  description = "Base URL of the Masterly control plane that receives usage reports (from the install bundle). This is the switch for fleet telemetry: leave it unset to report nothing, whatever else is set. Requires the install credential (telemetry_client_id and telemetry_client_secret); the module refuses the URL without it at plan."
 }
 
 variable "telemetry_client_id" {
   type        = string
   default     = null
-  description = "Service-account client id the install reports as (from the install bundle). Required with telemetry_url; reporting stays off unless both are present."
+  description = "The install credential's client id: the install service account from the install bundle. Despite the name it is not telemetry-only — it authenticates licence refresh (license_issuer_url) and fleet telemetry (telemetry_url), whichever of the two you turn on. Set it with telemetry_client_secret, and only beside at least one of those features; the module refuses a credential with neither at plan."
 }
 
 variable "telemetry_client_secret" {
   type        = string
   default     = null
   sensitive   = true
-  description = "That service account's secret (from the install bundle). Travels as a Container App secret, never plain environment."
+  description = "The install credential's secret, from the install bundle: the other half of telemetry_client_id, and required whenever it is set. Travels as a Container App secret, never plain environment."
 }
 
 variable "license_token" {
@@ -343,14 +348,13 @@ variable "license_public_jwk" {
 # --- Licence refresh (ADR 0074) ---------------------------------------------------------
 # With this set, the application refreshes its licence from Masterly's control plane once a
 # day and re-verifies what comes back against license_public_jwk before adopting it. The
-# install authenticates as the same service account it reports telemetry as (the bundle's
-# install credential), and that account reaches the control plane through the telemetry
-# inputs — so refresh is on only when this AND telemetry_url + telemetry_client_id +
-# telemetry_client_secret are all set. The module refuses the half-configuration at plan.
+# install authenticates with the install credential (telemetry_client_id /
+# telemetry_client_secret — the bundle's install service account), so refresh is on only when
+# this AND that pair are set. The module refuses the half-configuration at plan.
 #
-# Because the credential and the URL are shared, an install configured for refresh today is
-# also an install that reports usage hourly. The two are separable in principle (ADR 0074
-# §2) and are not yet separated in the module; separating them is a known follow-up.
+# telemetry_url is not part of it. Refresh and fleet telemetry share the credential and
+# nothing else (ADR 0074): an install can refresh its licence and report nothing, report and
+# never refresh, do both, or do neither.
 #
 # Unset = the offline posture: no outbound call, and the licence is governed by its own
 # expiry and grace alone. Air-gapped installs leave it unset and lose nothing. Where it is
@@ -360,7 +364,7 @@ variable "license_public_jwk" {
 variable "license_issuer_url" {
   type        = string
   default     = null
-  description = "The licence refresh endpoint of Masterly's control plane, verbatim from the install bundle (a full URL, not an origin). Leave unset for an offline install — no outbound call is made. Requires telemetry_url, telemetry_client_id and telemetry_client_secret: refresh authenticates as that install service account, so setting it also turns hourly usage reporting on. Refresh stays off unless all are present, and the module refuses a partial set at plan."
+  description = "The licence refresh endpoint of Masterly's control plane, verbatim from the install bundle (a full URL, not an origin). Leave unset for an offline install — no outbound call is made. Requires the install credential, telemetry_client_id and telemetry_client_secret: refresh authenticates as that install service account, and the module refuses the URL without it at plan. Does not require telemetry_url, and does not turn usage reporting on."
 }
 
 # --- Outbound egress posture ---------------------------------------------------------

@@ -105,19 +105,22 @@ module "masterly" {
   license_token      = var.license_token # from your secret store
   license_public_jwk = file("license-issuer.jwk.json")
 
-  # Fleet telemetry (optional, from the same bundle): usage ledger + an install snapshot
-  # (version, health, counts) to Masterly's control plane. Leave all three unset to report
-  # nothing; set them together — a partial set is refused at plan. Never billing input.
-  # telemetry_url           = "<control-plane URL from your install bundle>"
+  # The install credential (from the same bundle): the install service account. Despite
+  # the telemetry_ prefix it serves both optional features below, which each need it and
+  # neither of which needs the other. Set it only with at least one of them — a credential
+  # with neither feature, or half of it, is refused at plan.
   # telemetry_client_id     = var.telemetry_client_id
   # telemetry_client_secret = var.telemetry_client_secret # from your secret store
 
-  # Licence refresh (optional, same credential): the install re-fetches its licence from
-  # Masterly daily and re-verifies it before adopting it. Leave unset on an offline
-  # install — no outbound call is made. Requires all THREE telemetry inputs above
-  # (telemetry_url included — refresh authenticates as that same install service account),
-  # so an install that refreshes its licence also reports usage hourly.
+  # Licence refresh (optional): the install re-fetches its licence from Masterly daily and
+  # re-verifies it before adopting it. Needs the install credential above; does not need
+  # telemetry_url and reports nothing. Leave unset on an offline install — no outbound call.
   # license_issuer_url      = "<licence refresh URL from your install bundle>"
+
+  # Fleet telemetry (optional): usage ledger + an install snapshot (version, health,
+  # counts) to Masterly's control plane, hourly. Needs the install credential above; leave
+  # this unset to report nothing. Never billing input.
+  # telemetry_url           = "<control-plane URL from your install bundle>"
 
   # BYO-DB (ADR 0065): your own Postgres. Omit to provision the starter server instead.
   external_database_url = var.masterly_database_url # from your secret store
