@@ -12,6 +12,10 @@ on:
   push:
     branches: [main]
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  # cut-release.yml starts the tag build this way when it created the tag with its own
+  # GITHUB_TOKEN, because GitHub starts no workflow for a tag that token creates. Dispatched on a
+  # tag, github.ref is that tag, so the build is the one a pushed tag gets. MAS-274.
+  workflow_dispatch:
 
 # A re-push supersedes the run before it, so cancel the superseded PR run rather than pay
 # for a result nobody will read. Guarded to pull_request: a push to main — a deploy on some
@@ -171,6 +175,11 @@ jobs:
       - name: The release-notes extraction still refuses a missing, empty or unreleased section
         run: python3 scripts/release_notes.py --selftest
 
+      # cut-release.yml runs this gate before it creates a tag, the one step in this repository
+      # that cannot be undone — so it is proven on every pull request, not first on a release.
+      - name: The release gate still refuses an unverified commit or an existing tag
+        run: python3 scripts/release_gate.py --selftest
+
       # Standard library only — release metadata should not depend on anything resolving, and
       # this repo ships no Python dependencies to resolve.
       - name: Check the release manifest, changelog, README and script headers
@@ -189,7 +198,8 @@ jobs:
   # What this job is NOT: a gate on the release. The Terraform Registry publishes a version from
   # its own webhook the moment the tag is pushed, before any job here has started, and nothing in
   # this workflow can withdraw it. `needs:` means a tag whose checks fail gets no Release page — a
-  # visible sign that the version was published without passing — and nothing more.
+  # visible sign that the version was published without passing — and nothing more. The checks
+  # that can refuse a release run before the tag exists, in cut-release.yml (MAS-274).
   #
   # The body comes from CHANGELOG.md as it is at the tagged commit, never from text typed here, and
   # scripts/release_notes.py fails the job when that section is missing or empty rather than

@@ -895,14 +895,28 @@ one commit, on `main`, before the tag:
    `Unreleased`.
 3. Run `python3 scripts/check_release_manifest.py --write` to bring this README into line, and
    `python3 scripts/check_release_manifest.py` to check the result.
-4. Merge, then tag `vX.Y.Z` on that commit.
+4. Merge, wait for `main`'s CI run on that commit to pass, then run the **cut-release** workflow
+   (Actions → cut-release → Run workflow, from `main`) with the version and the release commit's
+   full SHA. Do not create the tag by hand.
 
-CI runs the same check on the tag build with `--tag`, so a tag pushed without its manifest and
-changelog entries fails immediately rather than being noticed a release later. When every check on
-the tag build passes, CI publishes the tag's GitHub Release with that version's changelog section as
-its body (`scripts/release_notes.py`). The Terraform Registry has already published the version by
-then, so neither step can stop a release — a tag whose checks fail is published without a Release
-page.
+A tag on this repository is the release: the Terraform Registry publishes the version from its own
+webhook the moment the tag appears, and a published version cannot be withdrawn, only superseded.
+So the checks that can refuse a release have to run before the tag exists. `cut-release`
+(`.github/workflows/cut-release.yml`) creates the tag only after `scripts/release_gate.py` finds
+that the most recent CI run from the commit's push to `main` concluded success and that the tag
+does not exist yet, that the commit is on `main`, and that the commit's own manifest, changelog
+and README publish exactly this version.
+
+CI still runs the same manifest check on the tag build with `--tag`. When every check on the tag
+build passes, CI publishes the tag's GitHub Release with that version's changelog section as its
+body (`scripts/release_notes.py`). The registry has already published the version by then, so the
+tag build reports; it does not refuse.
+
+**What is not enforced yet.** GitHub still accepts a `v*` tag pushed by hand, and such a tag
+publishes without passing through `cut-release`. Closing that takes a tag ruleset that only the
+workflow's release identity may bypass, which is a repository setting rather than anything in
+this tree; [docs/releasing.md](docs/releasing.md) records the exact settings and whether they are
+in place. Until they are, `cut-release` is the documented path, not the only possible one.
 
 ## Provider versions and the lock file
 
