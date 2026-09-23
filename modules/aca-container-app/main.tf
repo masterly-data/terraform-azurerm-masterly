@@ -192,13 +192,19 @@ resource "azurerm_container_app" "this" {
         }
       }
 
-      # SELF-HOSTED EXTENSION: HTTP probes.
+      # SELF-HOSTED EXTENSION: HTTP probes. Tolerances are inputs on both; null keeps Azure's
+      # defaults (1s timeout, 3 failures). The liveness block has no success threshold.
       dynamic "liveness_probe" {
         for_each = var.liveness_probe_path != null ? [1] : []
         content {
           path      = var.liveness_probe_path
           port      = var.ingress_target_port
           transport = "HTTP"
+
+          initial_delay           = var.liveness_probe_initial_delay
+          interval_seconds        = var.liveness_probe_interval_seconds
+          timeout                 = var.liveness_probe_timeout
+          failure_count_threshold = var.liveness_probe_failure_count_threshold
         }
       }
 

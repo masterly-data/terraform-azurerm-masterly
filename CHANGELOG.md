@@ -241,6 +241,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Fixed
 
+- `ca-api`'s liveness probe declares its tolerances instead of running on Azure's defaults for
+  a declared probe (a 1 s timeout and 3 failures). A failing liveness probe restarts the
+  container, so at those defaults one slow `/healthz` answer, or a start that took longer than
+  about 30 seconds, restarted a healthy replica, and a systemic slowdown became a restart loop.
+  The api's liveness probe now allows 5 + 24 x 20 = 485 seconds of continuous failure (10 s
+  timeout), the same budget as its readiness probe. Applying this updates `ca-api` in place and
+  rolls it to a new revision once. `ca-frontend` and `ca-workers` are unchanged. The
+  `aca-container-app` submodule gains `liveness_probe_initial_delay`,
+  `liveness_probe_interval_seconds`, `liveness_probe_timeout` and
+  `liveness_probe_failure_count_threshold`; each defaults to null, which keeps Azure's default
+  (MAS-205).
 - `scripts/preflight.sh` no longer announces a module version in its header. It had said
   `module v0.7.0` since it was written — true for one release, wrong for the eight after it,
   and read at the moment an operator is checking which artifact they hold. A script ships

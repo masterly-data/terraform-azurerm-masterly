@@ -39,6 +39,20 @@ output "readiness_probe" {
   description = "The readiness gate as configured, or null when the app has none. A null tolerance means Azure's default applies."
 }
 
+# Liveness posture as configured, for the same reason: a liveness probe restarts the container
+# when it fails, so its tolerances decide whether a slow moment becomes a restart, and a test
+# has to be able to pin them.
+output "liveness_probe" {
+  value = var.liveness_probe_path == null ? null : {
+    path                    = var.liveness_probe_path
+    initial_delay           = var.liveness_probe_initial_delay
+    interval_seconds        = var.liveness_probe_interval_seconds
+    timeout                 = var.liveness_probe_timeout
+    failure_count_threshold = var.liveness_probe_failure_count_threshold
+  }
+  description = "The liveness probe as configured, or null when the app has none. A null tolerance means Azure's default applies."
+}
+
 output "ingress_external" {
   # Whether this app answers beyond the Container App Environment. A root that reasons about
   # who can reach an app — or a test that pins it — cannot read it off the resource, because

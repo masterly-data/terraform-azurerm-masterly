@@ -996,6 +996,15 @@ module "api" {
   readiness_probe_failure_count_threshold = 48
   readiness_probe_success_count_threshold = 1
 
+  # Liveness asks only "is the process alive", and a failure restarts it, so its budget is
+  # generous: a slow moment must never restart a healthy process. The api does not listen until
+  # its startup (including control-plane migrations) completes, so this budget also covers a
+  # slow start. 5 + 24 x 20 = 485s, the same as readiness, so neither probe is the tighter one.
+  liveness_probe_initial_delay           = 5
+  liveness_probe_interval_seconds        = 20
+  liveness_probe_timeout                 = 10
+  liveness_probe_failure_count_threshold = 24
+
   tags = local.tags
 
   # The api connects at boot (readyz): the private endpoints + DNS must exist first, and the
