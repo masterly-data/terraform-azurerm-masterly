@@ -186,10 +186,14 @@ jobs:
         run: python3 scripts/check_release_manifest.py
 
       # github.ref_name is the tag itself on a tag push. Split out so the failure message says
-      # which of the two questions was being asked.
+      # which of the two questions was being asked. The tag reaches the shell through `env:`,
+      # as data, rather than spliced into the command line: a `${{ }}` expression is substituted
+      # before the shell parses the line, so a ref containing shell syntax would run as code.
       - name: The tag is the version the manifest publishes
         if: startsWith(github.ref, 'refs/tags/')
-        run: python3 scripts/check_release_manifest.py --tag "${{ github.ref_name }}"
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 scripts/check_release_manifest.py --tag "$TAG"
 
   # The GitHub Release page for a tag, with that version's CHANGELOG.md section as its body. The
   # module version is the one customer-facing version (ADR 0062), and this page is where a reader
