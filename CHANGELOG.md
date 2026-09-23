@@ -198,6 +198,12 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- The Service Bus namespace (`enable_service_bus = true`) now sets `minimum_tls_version = "1.2"`
+  explicitly. Previously the setting was inherited from a service default that depends on the API
+  version the namespace was created with, and namespaces created before `2022-01-01-preview`
+  default to 1.0. On an existing namespace this is expected to be an in-place update. It changes nothing when
+  Azure already holds 1.2, and otherwise it refuses clients older than TLS 1.2 from the next
+  apply. Installs without Service Bus are unaffected (MAS-41).
 - `breakglass_secret_hash` says what the api actually accepts. The input has held a **salted
   Argon2id** value since the api change that made it one; this repo still described a sha256
   digest, and `examples/production` still told an operator to produce one with `shasum -a 256`.
@@ -279,6 +285,12 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   version was released against (MAS-441).
 - Entries for 0.8.0 through 0.14.0, reconstructed from their tag messages (MAS-259).
 - `oidc_allowed_issuers` is the install's own issuer, not a per-customer list (MAS-164).
+- "Accepted exceptions" under the README's Networking section. It covers the three settings a
+  security scanner will flag and why each is deliberate: Service Bus on its public endpoint with
+  Microsoft Entra ID-only auth, key and password authentication to Redis and the starter Postgres,
+  and geo-redundant backup off for residency. Each item names the Azure Policy built-in
+  definitions that evaluate it, by display name and definition ID, and says whether they are in
+  Defender for Cloud's default Microsoft cloud security benchmark initiatives (MAS-41).
 
 ## [0.15.0] - 2026-09-07
 

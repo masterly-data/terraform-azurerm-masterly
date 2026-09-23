@@ -640,7 +640,19 @@ resource "azurerm_servicebus_namespace" "this" {
   location            = var.location
   sku                 = var.servicebus_sku
   local_auth_enabled  = false # managed identity only — no SAS connection strings (ADR 0029)
-  tags                = local.tags
+
+  # Set explicitly rather than inherited. The service default depends on the API version a
+  # namespace was created with (1.0 before 2022-01-01-preview), so an explicit value is the
+  # only way the floor is the same on every install and cannot move without a diff.
+  minimum_tls_version = "1.2"
+
+  # Public network access stays at its default (enabled) on purpose. Private endpoints are
+  # Premium-only on Service Bus, and IP rules would need a stable source address, which a
+  # Consumption-only Container Apps environment does not have. The namespace accepts
+  # Microsoft Entra ID tokens only (local auth is off above). See "Accepted exceptions" in
+  # the README.
+
+  tags = local.tags
 }
 
 resource "azurerm_servicebus_queue" "jobs" {
