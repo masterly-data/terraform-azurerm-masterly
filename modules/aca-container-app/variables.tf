@@ -246,6 +246,38 @@ variable "readiness_probe_success_count_threshold" {
   description = "Consecutive successful readiness probes before the replica takes traffic (1-10). 1 keeps a healthy cold wake from paying extra probe intervals."
 }
 
+# Liveness tolerances. Null leaves Azure's default, so every caller that sets none plans
+# unchanged. A DECLARED liveness probe defaults to a 1s timeout, a 10s interval and 3
+# failures, and a failing liveness probe always restarts the container — so at the defaults a
+# process that is merely slow, or still starting, for about 30 seconds is killed and started
+# again. A caller that declares a liveness probe should size these deliberately.
+#
+# There is no success threshold here: the provider does not expose one on the liveness block,
+# and one success is all a liveness probe ever needs.
+variable "liveness_probe_initial_delay" {
+  type        = number
+  default     = null
+  description = "Seconds after container start before the first liveness probe (0-60)."
+}
+
+variable "liveness_probe_interval_seconds" {
+  type        = number
+  default     = null
+  description = "Seconds between liveness probes (1-240)."
+}
+
+variable "liveness_probe_timeout" {
+  type        = number
+  default     = null
+  description = "Seconds before a liveness probe attempt counts as failed (1-240). Keep it at or below liveness_probe_interval_seconds."
+}
+
+variable "liveness_probe_failure_count_threshold" {
+  type        = number
+  default     = null
+  description = "Consecutive failed liveness probes before the container is restarted (1-30). initial_delay + threshold x interval is how long a process may go unanswered, including while it is still starting, before it is restarted."
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}

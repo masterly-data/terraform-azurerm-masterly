@@ -1623,6 +1623,71 @@ run "frontend_readiness_gates_on_the_api" {
   }
 }
 
+# The api's liveness probe declares its tolerances. A declared liveness probe with none set runs
+# on Azure's defaults (1s timeout, 3 failures), and a failing liveness probe always restarts the
+# container — so one slow /healthz answer, or a start that takes longer than about 30 seconds,
+# becomes a restart, and a systemic one becomes a restart loop. The api does not listen until
+# its startup completes, so the liveness budget is also its startup budget.
+run "api_liveness_declares_its_tolerances" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = module.api.liveness_probe.path == "/healthz"
+    error_message = "The api must probe liveness on /healthz."
+  }
+
+  # The declared values, pinned, so an edit cannot silently drop the api back to the defaults.
+  assert {
+    condition = (
+      module.api.liveness_probe.initial_delay == 5 &&
+      module.api.liveness_probe.interval_seconds == 20 &&
+      module.api.liveness_probe.timeout == 10 &&
+      module.api.liveness_probe.failure_count_threshold == 24
+    )
+    error_message = "The api's liveness tolerances must be declared (initial_delay 5, interval 20s, timeout 10s, 24 failures). If you change them deliberately, change this assertion with them."
+  }
+
+  # The budget a process that is alive but slow, or still starting, has before it is restarted.
+  # It must not be tighter than readiness: readiness already takes an unhealthy replica out of
+  # rotation and restarts it, so a tighter liveness budget adds nothing but a second, earlier
+  # way to restart a replica that is only starting.
+  assert {
+    condition = (
+      module.api.liveness_probe.initial_delay +
+      module.api.liveness_probe.failure_count_threshold *
+      module.api.liveness_probe.interval_seconds
+      ) >= (
+      module.api.readiness_probe.initial_delay +
+      module.api.readiness_probe.failure_count_threshold *
+      module.api.readiness_probe.interval_seconds
+    )
+    error_message = "The api's liveness budget must be at least its readiness budget, or liveness restarts a replica that readiness is still waiting on."
+  }
+
+  # A timeout above the interval would let attempts overlap and never resolve.
+  assert {
+    condition     = module.api.liveness_probe.timeout <= module.api.liveness_probe.interval_seconds
+    error_message = "The api's liveness timeout must stay at or below its interval."
+  }
+
+  # Every other caller keeps Azure's defaults: the new inputs are null unless set, and only the
+  # api sets them.
+  assert {
+    condition = (
+      module.frontend.liveness_probe.path == "/api/healthz" &&
+      module.frontend.liveness_probe.initial_delay == null &&
+      module.frontend.liveness_probe.interval_seconds == null &&
+      module.frontend.liveness_probe.timeout == null &&
+      module.frontend.liveness_probe.failure_count_threshold == null
+    )
+    error_message = "The frontend's liveness probe must be unchanged by the api's tolerances."
+  }
+}
+
 # --- Azure Managed Redis (ADR 0071) ------------------------------------------------------
 #
 # Microsoft blocked creation of Basic/Standard/Premium Azure Cache for Redis for NEW customers
