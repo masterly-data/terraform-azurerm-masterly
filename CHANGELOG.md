@@ -224,6 +224,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   changelog, published by CI once the tag build's checks pass. The Terraform Registry publishes
   the version independently, so a missing Release page means the checks failed, not that the
   version is unpublished (MAS-258).
+- Releases are cut by the `cut-release` workflow, which creates the version tag only after
+  checking that the release commit is on `main`, that its CI run there passed, that the tag does
+  not exist yet, and that the commit's `MANIFEST.json`, changelog and README publish that version.
+  The registry publishes from the tag, so these are the checks that can refuse a release rather
+  than report on one after it is public. A tag pushed by hand is not yet refused;
+  [docs/releasing.md](docs/releasing.md) records the repository settings that close that and
+  whether they are in place (MAS-274).
 
 ### Deprecated
 
