@@ -229,10 +229,16 @@ one and apply.
 - **`dev`** — evaluation only. The module **refuses** `dev` with an open ingress:
   set `ingress_allowed_cidrs` (an IP allowlist) or switch to `oidc`.
 
-Without a custom domain the frontend FQDN is only known after the first apply, so the
-OIDC bootstrap is: apply with `identity_binding=dev` + your IP allowlist, read
-`frontend_url`, register `https://<frontend host>/api/auth/callback` at your IdP, then
-flip to `oidc` and re-apply.
+Without a custom domain the frontend FQDN is an output of the first apply, so a production
+install is two applies, **both with `identity_binding = "oidc"`** and the production posture:
+apply 1 carries a placeholder `oidc_redirect_uri` (the value is read only during sign-in, never
+at boot or by the readiness probe, so the install comes up healthy with it), then read
+`frontend_url`, register `https://<frontend host>/api/auth/callback` at your IdP, set
+`oidc_redirect_uri` to it and apply again. [`examples/production/`](examples/production/) does
+exactly this. Do not bring a production install up with `identity_binding = "dev"` and switch to
+`oidc` afterwards: that second apply would change identity and everything else production
+requires — Key Vault with purge protection, which cannot be turned off, the control-plane store,
+Redis — at once, on a running install.
 
 ## Data plane (ADR 0065)
 

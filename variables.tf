@@ -250,7 +250,7 @@ variable "oidc_authority" {
 variable "oidc_redirect_uri" {
   type        = string
   default     = null
-  description = "The BFF callback the IdP redirects to: https://<frontend host>/api/auth/callback. Without a custom domain the frontend FQDN is only known after the first apply — bootstrap with identity_binding=dev (allowlisted), read frontend_url, then flip to oidc."
+  description = "The BFF callback the IdP redirects to: https://<frontend host>/api/auth/callback. Without a custom domain the frontend FQDN is an output of the first apply, so a production install is two applies, both with identity_binding=oidc: apply 1 carries a placeholder (e.g. https://redirect-not-yet-known.invalid/api/auth/callback — read only during sign-in, never at boot), then read frontend_url, register https://<frontend host>/api/auth/callback at your IdP, set it here and apply again. Do not bring production up on the dev identity binding and switch afterwards: that second apply changes identity and the production posture at once, on a running install. See examples/production."
 }
 
 variable "oidc_scopes" {
