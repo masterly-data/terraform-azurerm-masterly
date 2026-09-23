@@ -740,6 +740,63 @@ built-in role that fits. `keyvault.tf` carries the same reasoning beside the res
 `mode = "production"` the vault's purge protection means a key deleted in error stays
 recoverable for the soft-delete window and cannot be purged at all.
 
+## Rotating the session secret
+
+The module generates the session signing secret (`random_password.session_secret`) and the
+`api` signs every session token with it. Replacing it is a two-step operation, and doing it in
+one step is an outage: the moment the new value takes traffic, every token signed with the old
+one stops verifying and every signed-in user is signed out at once — with no warning to them
+and nothing they can do but sign in again.
+
+That matters most in the case you rotate for. A secret is replaced when it may have leaked,
+and an operator weighing "sign everybody out now" against "wait for a maintenance window" will
+sometimes wait, which is the worst of the three outcomes. So the `api` accepts **retired**
+secrets for verification while they are configured, never for signing, and
+`session_secret_previous` is how you say which:
+
+1. **Read the value the install is signing with now.** With `enable_key_vault = true` it is the
+   vault secret `install-session-secret`:
+
+   ```bash
+   az keyvault secret show --vault-name <your vault> \
+     --name install-session-secret --query value -o tsv
+   ```
+
+   Without the vault it is in your state file, which is the other reason to treat that file as
+   a secret store (below). Capture it **before** step 2 — replacing the resource is what makes
+   the old value unrecoverable.
+
+2. **Apply once, replacing the secret and naming the old one.** Put the value from step 1 in
+   `session_secret_previous` (a `.tfvars` you do not commit, or `-var`), and replace the
+   generated secret in the same apply:
+
+   ```bash
+   terraform apply -replace=random_password.session_secret
+   ```
+
+   New sessions are signed with the new value; existing ones keep working. Nobody is signed
+   out. `ca-api` restarts, as it does for any secret change.
+
+3. **Apply again once the window has elapsed, with `session_secret_previous` unset.** After
+   that apply a token signed with the retired value is refused like any other stale token.
+
+**How long to leave the window open:** until no session signed with the old value can still be
+inside its lifetime — the install's session TTL, or the longest `max_session_hours` any
+Organization in it has configured, whichever is greater. Longer is not safer. A retired key is
+one you decided not to trust, and while it is listed the install still believes tokens signed
+with it, so the window is exactly the cost of not signing everyone out. Each boot with one
+configured logs `session.secret.rotation_window_open`, so an install that is still mid-rotation
+says so.
+
+The input takes a comma-separated list, for the case a second rotation starts before the first
+window has closed. Every value in it is held to the same minimum as the secret it replaced —
+32 characters at plan time here, 32 bytes of key material at startup in the `api` — because a
+listed key verifies sessions exactly as well as the one that signs them.
+
+> Reading the variable needs an `api` image that has it. Check the `MANIFEST.json` entry for
+> the module version you are pinned to: with an image that predates it, the variable travels to
+> the app and nothing reads it, so step 2 signs everyone out after all.
+
 ## State security — your tfstate holds secrets in plaintext
 
 Terraform writes **plaintext secrets into your state file**, and moving the app secrets into
@@ -769,7 +826,9 @@ Treat the state backend as a secrets store:
   audit access. Consider a private endpoint / firewall on the storage account.
 - **Rotate** on exposure: the Postgres/session/Redis material is module-generated, so a
   `terraform apply` after tainting the relevant `random_*`/cache regenerates it; the OIDC and
-  license secrets rotate at their source. With `enable_key_vault`, a rotation applied straight
+  license secrets rotate at their source. The session secret has a second step, or the
+  rotation signs out every signed-in user — see
+  [Rotating the session secret](#rotating-the-session-secret). With `enable_key_vault`, a rotation applied straight
   to the vault reaches the running apps on its own (versionless references, ~30 minutes) — but
   the next `terraform apply` writes the value it holds in state back over it, so rotate at the
   input, not only in the vault.

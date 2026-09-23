@@ -2259,6 +2259,76 @@ run "same_subnet_twice_is_rejected" {
   expect_failures = [azurerm_resource_group.aca]
 }
 
+# --- Rotating the session secret ------------------------------------------------------
+# Replacing the signing secret on its own signs out every signed-in user. The api accepts a
+# retired secret for verification while it is configured, so the rotation is two applies —
+# but only if the module can actually express the outgoing value.
+
+run "no_session_secret_rotation_window_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  # The steady state is one key. Absent, not empty: an empty value would be a second key the
+  # api is told to accept, and the empty string is not a key anyone should sign with.
+  assert {
+    condition     = !contains(keys(local.api_env_secret_refs), "MASTERLY_SESSION_SECRET_PREVIOUS")
+    error_message = "With no rotation in flight the api must not be told to accept a second session secret."
+  }
+
+  assert {
+    condition     = !contains(module.api.value_secret_names, "session-secret-previous")
+    error_message = "The retired-secret slot must not exist on the app when no rotation is in flight."
+  }
+}
+
+run "session_secret_rotation_window_reaches_the_api" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    session_secret_previous = "the-outgoing-session-secret-0123456789ab"
+  }
+
+  # It travels as a Container App secret, exactly like the secret it replaces — never plain
+  # environment, where any reader of the app's configuration would have the key.
+  assert {
+    condition     = local.api_env_secret_refs["MASTERLY_SESSION_SECRET_PREVIOUS"] == "session-secret-previous"
+    error_message = "The outgoing session secret must reach the api as a secret reference."
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_SESSION_SECRET_PREVIOUS")
+    error_message = "The outgoing session secret must never appear in the plain environment map."
+  }
+
+  assert {
+    condition     = contains(module.api.value_secret_names, "session-secret-previous")
+    error_message = "The outgoing session secret must be carried by the app it is verified in."
+  }
+
+  # The frontend signs and verifies nothing. A key it never needs is a key it must not hold.
+  assert {
+    condition     = !contains(module.frontend.value_secret_names, "session-secret-previous")
+    error_message = "No session secret, current or retired, may reach the frontend."
+  }
+}
+
+# A rotation window is only as strong as the weakest key in it: a listed secret still
+# verifies sessions, so it is held to the minimum the api enforces for the one it signs with.
+run "a_weak_retired_session_secret_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    session_secret_previous = "short"
+  }
+
+  expect_failures = [var.session_secret_previous]
+}
+
 # --- Telemetry to the control plane (ADR 0034/0056) --------------------------------------
 # Built at both ends and never wired: the application's reporter gates on url AND client_id,
 # and the module set neither, so no self-hosted install has ever reported.
