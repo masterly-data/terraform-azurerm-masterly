@@ -116,7 +116,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   (MAS-432). It arrives already deprecated — see *Deprecated* below (MAS-655).
 - `license_issuer_url` — the licence refresh endpoint reaches the apps, so an install can
   re-fetch and re-verify its licence daily instead of waiting for the next apply. Optional, and
-  it requires the three telemetry inputs (MAS-98).
+  it requires the install credential, `telemetry_client_id` / `telemetry_client_secret` — not
+  `telemetry_url`, so turning refresh on does not turn usage reporting on (MAS-98, MAS-208).
 - Availability alerts, alongside the saturation alerts that were the whole catalogue until now.
   An install that has stopped serving now raises a severity-0 alert — the database reporting
   itself unavailable, an app left with no running replica, or the database's telemetry stopping
@@ -198,6 +199,22 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- Licence refresh and fleet telemetry are separate features, and the plan-time guards now say
+  so. `telemetry_client_id` / `telemetry_client_secret` are the **install credential** — the
+  install service account from your bundle — and both features authenticate with it, but
+  neither needs the other's URL: `license_issuer_url` with the credential and no
+  `telemetry_url` plans cleanly, and the apps then refresh their licence daily and report
+  nothing, because the application reports only when `MASTERLY_TELEMETRY_URL` is set, and the
+  module writes that variable only when `telemetry_url` is. Previously the refresh URL was
+  refused without `telemetry_url`, so an install could not refresh its licence without also
+  reporting usage hourly. The guards are stated per feature: `license_issuer_url` without the
+  whole credential is refused, and so is `telemetry_url` without it. Two configurations that
+  used to plan are now refused, because each looked configured and did nothing: half of the
+  credential on its own (in particular `telemetry_client_secret` without
+  `telemetry_client_id`), and the whole credential with neither feature set. An install that
+  sets all three telemetry inputs, or none of them, plans exactly as before. The inputs keep
+  their names. Licence refresh itself needs an `api` image that has it: the next
+  `MANIFEST.json` image pair is the first to (MAS-208).
 - `breakglass_secret_hash` says what the api actually accepts. The input has held a **salted
   Argon2id** value since the api change that made it one; this repo still described a sha256
   digest, and `examples/production` still told an operator to produce one with `shasum -a 256`.
