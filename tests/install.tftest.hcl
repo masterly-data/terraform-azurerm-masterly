@@ -1172,8 +1172,7 @@ run "service_bus_enabled_provisions_broker_and_grants" {
     error_message = "The namespace must refuse SAS auth — the apps authenticate as their managed identity."
   }
 
-  # TLS floor pinned, not inherited: the service default depends on the API version a
-  # namespace was created with, so only an explicit value holds on every install.
+  # TLS floor stated by the module, not left to the provider's default.
   assert {
     condition     = azurerm_servicebus_namespace.this[0].minimum_tls_version == "1.2"
     error_message = "The namespace must refuse clients below TLS 1.2."

@@ -390,68 +390,93 @@ measure a real problem, open an issue with the numbers rather than reaching for 
 out-of-band change to peer-traffic encryption is invisible to `terraform plan` (above),
 which makes it exactly the kind of setting that stops being true without anyone noticing.
 
-### Accepted exceptions
+### Where this module departs from Azure's recommended baseline
 
-Three settings in this module will not satisfy a security scanner, and each is a choice
-rather than an oversight. Each item names the Azure Policy built-in definitions that
-evaluate it, by display name and definition ID. Microsoft Defender for Cloud builds its
-policy-based recommendations from these definitions. Whether one appears on your
-subscription depends on which standards you have assigned. Each item says whether its
-definitions are part of either Microsoft cloud security benchmark initiative, which are
-Defender for Cloud's default standards: `1f3afdf9-d0c9-4c3d-847f-89da613e70a8` and
-`e3ec7e09-768c-4b64-882c-fcada3772047` (v2). If your portal shows a slightly different
-title, search for the definition ID.
+In three places this module does not yet follow Azure's recommended configuration for the
+resources it creates. Each is listed below with what it is, why it holds today, and what you
+can do now to follow Azure's recommendation. Making Azure's recommendation the module's
+default in each place is tracked work, and this section changes as each one is closed.
 
-**Service Bus accepts connections on its public endpoint** (`enable_service_bus = true`
-only). The namespace accepts Microsoft Entra ID tokens and nothing else: `local_auth_enabled
-= false` turns off shared access signatures, so there is no connection string to leak. The
-apps authenticate as their managed identity, which holds only the Data Sender and Data
-Receiver roles. The namespace also refuses clients below TLS 1.2 (`minimum_tls_version`).
-The endpoint itself stays public for two reasons:
+Azure Policy and Microsoft Defender for Cloud can report these. Each item names the Azure
+Policy built-in definitions that evaluate it, by display name and definition ID; if your
+portal shows a slightly different title, search for the ID. Defender for Cloud's default
+standard is the Microsoft cloud security benchmark v1
+(`1f3afdf9-d0c9-4c3d-847f-89da613e70a8`), and none of the definitions below is part of it.
+The Microsoft cloud security benchmark v2 (`e3ec7e09-768c-4b64-882c-fcada3772047`) is an
+opt-in preview; each item says whether its definitions are in it. Whether a finding appears
+on your subscription therefore depends on the standards and policies you have assigned.
 
-- Private endpoints are a Premium-tier feature, and the module's default SKU is Standard.
-  The module does not create a private endpoint on Premium either.
-- IP firewall rules exist on Standard, but they need a stable source address. This module's
-  Container Apps environment is Consumption-only, and in that kind of environment outbound
-  IPs may change over time and cannot be routed through a NAT gateway.
+#### Service Bus keeps public network access enabled
+
+This applies only with `enable_service_bus = true`. The namespace leaves public network access
+at Azure's default, enabled, and the module creates no private endpoint for it. Azure
+recommends the Premium tier with a private endpoint and public network access disabled. The
+namespace's minimum TLS version is set to 1.2 explicitly (`minimum_tls_version`).
+
+Why it holds today:
+
+- Private endpoints are a Premium-tier feature. The module's default `servicebus_sku` is
+  Standard, and the module does not create a private endpoint on Premium either.
+- IP firewall rules are available on Standard, but they leave public network access enabled,
+  so they do not meet the recommendation. They would also need a stable source address, which
+  this module's Consumption-only Container Apps environment does not have.
+
+To follow Azure's recommendation now, leave `enable_service_bus` at its default, `false`. The
+apps then run their job queue in the install's Postgres database (the polling bus binding),
+no broker is provisioned, and `mode = "production"` accepts that configuration.
+`examples/production` sets `enable_service_bus = true`; remove that line to follow this.
 
 Definitions that flag this:
 
 - *Service Bus Namespaces should disable public network access*
-  (`cbd11fd3-3002-4907-b6c8-579f0e700e13`). It is in the benchmark v2 initiative and
-  applies to every SKU.
+  (`cbd11fd3-3002-4907-b6c8-579f0e700e13`). It is in the benchmark v2 initiative and applies
+  to every SKU.
 - *Azure Service Bus namespaces should use private link*
   (`1c06e275-d63d-4540-b761-71f364c2111d`). It is in the benchmark v2 initiative, but it
   evaluates Premium namespaces only, so the Standard default does not trigger it.
 
-**Redis and the starter Postgres authenticate with a key or password, not a Microsoft Entra
-token.** The Redis URL the module hands the apps carries the cache's access key, on both
-`redis_offering` paths. The managed path sets `access_keys_authentication_enabled = true`
-because Azure Managed Redis disables keys by default and exports no key without it. The
-starter server's DSN carries the password of its `masterly_admin` login. The server has
-Microsoft Entra authentication off and no Entra administrator. No released `api` image
-connects to Redis or Postgres with an Entra token. Offering one for Redis is follow-on work
-named in ADR 0071. Both credentials travel as Container App secrets, and as Key Vault
-references with `enable_key_vault = true`. That changes who can read the credential, not
-how it authenticates. Neither resource has a public network path: each is reachable only
-through its private endpoint. With `external_database_url` (BYO-DB), the module provisions
-no Postgres server, and your database's authentication is your own.
+#### Redis and the starter Postgres authenticate with a key or password
+
+The Redis URL the module hands the apps carries the cache's access key, on both
+`redis_offering` paths. The managed path sets `access_keys_authentication_enabled = true`,
+because Azure Managed Redis disables access keys by default. The starter Postgres server's
+connection string carries the password of its `masterly_admin` login, and the server has
+Microsoft Entra authentication off. Azure recommends Microsoft Entra ID authentication for
+both, with access keys and passwords disabled.
+
+Why it holds today: no released `api` image connects to Redis or Postgres with a Microsoft
+Entra token, so turning key or password authentication off would leave the apps unable to
+connect.
+
+There is no setting in this module today that follows Azure's recommendation here. With
+`external_database_url` (BYO-DB) the module provisions no Postgres server, and how your
+database authenticates is yours to configure.
 
 Definitions that flag this:
 
 - *Azure Cache for Redis should not use access keys for authentication*
-  (`3827af20-8f80-4b15-8300-6db0873ec901`). It evaluates the `redis_offering = "cache"`
-  path only. It is in neither benchmark initiative.
+  (`3827af20-8f80-4b15-8300-6db0873ec901`). It evaluates the `redis_offering = "cache"` path
+  only, and it is in neither benchmark initiative.
 - *A Microsoft Entra administrator should be provisioned for PostgreSQL flexible servers*
   (`ce39a96d-bf09-4b60-8c32-e85d52abea0f`). It is in neither benchmark initiative.
 - No built-in definition evaluates access-key authentication on Azure Managed Redis
   (`redis_offering = "managed"`).
 
-**Geo-redundant backup is off on the starter Postgres server.**
-`postgres_geo_redundant_backup` defaults to `false`, because geo-redundant backup copies
-backups to the paired Azure region. Whether that region is inside your install's
-data-residency boundary is yours to decide. Turn it on once you have checked. The module
-does not decide it for you, and `mode = "production"` does not require it.
+#### Geo-redundant backup is off on the starter Postgres server
+
+`postgres_geo_redundant_backup` defaults to `false`, and `mode = "production"` does not
+require it. Azure recommends geo-redundant backup as a reliability measure.
+
+Why it holds today: geo-redundant backup copies the server's backups to the region Azure
+pairs with the server's region. Whether that region is inside your install's data-residency
+boundary is a decision the module cannot make for you, and a region with no pair cannot use
+geo-redundant backup at all.
+
+To follow Azure's recommendation now, check that the paired region is inside your residency
+boundary, then set `postgres_geo_redundant_backup = true` **before the apply that creates the
+server**. Azure accepts this setting only when a server is created. On an existing install,
+changing it makes Terraform plan to replace the starter server, which destroys the server and
+the data on it; do not apply that plan.
 
 Definitions that flag this:
 

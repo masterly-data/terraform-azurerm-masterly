@@ -649,16 +649,17 @@ resource "azurerm_servicebus_namespace" "this" {
   sku                 = var.servicebus_sku
   local_auth_enabled  = false # managed identity only — no SAS connection strings (ADR 0029)
 
-  # Set explicitly rather than inherited. The service default depends on the API version a
-  # namespace was created with (1.0 before 2022-01-01-preview), so an explicit value is the
-  # only way the floor is the same on every install and cannot move without a diff.
+  # Stated rather than left to the provider's default. Every azurerm version this module
+  # supports already defaults to 1.2, so this changes nothing on an install today; it keeps
+  # the floor a property of the module, visible in review, instead of a provider default.
   minimum_tls_version = "1.2"
 
-  # Public network access stays at its default (enabled) on purpose. Private endpoints are
-  # Premium-only on Service Bus, and IP rules would need a stable source address, which a
-  # Consumption-only Container Apps environment does not have. The namespace accepts
-  # Microsoft Entra ID tokens only (local auth is off above). See "Accepted exceptions" in
-  # the README.
+  # Public network access stays at Azure's default, enabled. Private endpoints are a Premium
+  # feature on Service Bus and the module creates none, and IP rules would leave public
+  # access enabled and need a stable source address, which a Consumption-only Container Apps
+  # environment does not have. This departs from Azure's recommended baseline; the README
+  # section "Where this module departs from Azure's recommended baseline" says what it is
+  # and how to follow the recommendation instead (leave enable_service_bus off).
 
   tags = local.tags
 }
