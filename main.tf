@@ -648,7 +648,20 @@ resource "azurerm_servicebus_namespace" "this" {
   location            = var.location
   sku                 = var.servicebus_sku
   local_auth_enabled  = false # managed identity only — no SAS connection strings (ADR 0029)
-  tags                = local.tags
+
+  # Stated rather than left to the provider's default. Every azurerm version this module
+  # supports already defaults to 1.2, so this changes nothing on an install today; it keeps
+  # the floor a property of the module, visible in review, instead of a provider default.
+  minimum_tls_version = "1.2"
+
+  # Public network access stays at Azure's default, enabled. Private endpoints are a Premium
+  # feature on Service Bus and the module creates none, and IP rules would leave public
+  # access enabled and need a stable source address, which a Consumption-only Container Apps
+  # environment does not have. This departs from Azure's recommended baseline; the README
+  # section "Where this module departs from Azure's recommended baseline" says what it is
+  # and how to follow the recommendation instead (leave enable_service_bus off).
+
+  tags = local.tags
 }
 
 resource "azurerm_servicebus_queue" "jobs" {

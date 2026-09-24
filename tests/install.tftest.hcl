@@ -1172,6 +1172,12 @@ run "service_bus_enabled_provisions_broker_and_grants" {
     error_message = "The namespace must refuse SAS auth — the apps authenticate as their managed identity."
   }
 
+  # TLS floor stated by the module, not left to the provider's default.
+  assert {
+    condition     = azurerm_servicebus_namespace.this[0].minimum_tls_version == "1.2"
+    error_message = "The namespace must refuse clients below TLS 1.2."
+  }
+
   # At-least-once with idempotent handlers: redeliver on failure, dead-letter past the cap,
   # never drop. The consume loop abandons a truncated drain, which relies on redelivery.
   assert {
