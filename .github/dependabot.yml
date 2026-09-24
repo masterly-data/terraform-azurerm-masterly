@@ -18,9 +18,19 @@ updates:
     open-pull-requests-limit: 10
     # The module customers consume at a semver tag: a provider major is a release
     # decision needing a live plan before a tag, not a weekly proposal (MAS-126).
+    #
+    # The update-types rule alone did not hold: on 2026-09-21 Dependabot opened #46,
+    # widening versions.tf from ~> 4.61 to ~> 5.6. This repo commits no lock file, so
+    # Dependabot has no resolved version to classify a change as "major" against, and a
+    # rule keyed on the classification never matched. The versions rule names the range
+    # itself and does not depend on that classification. Lift both together when azurerm 5
+    # is decided (MAS-129): the constraint lives in versions.tf and in each
+    # modules/*/versions.tf, and a bump that moves only one of them cannot resolve.
     ignore:
       - dependency-name: "hashicorp/azurerm"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "hashicorp/azurerm"
+        versions: [">= 5.0.0"]
     groups:
       terraform-minor-patch:
         patterns: ["*"]
