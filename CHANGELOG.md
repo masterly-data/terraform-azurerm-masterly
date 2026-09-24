@@ -303,6 +303,11 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   version was released against (MAS-441).
 - Entries for 0.8.0 through 0.14.0, reconstructed from their tag messages (MAS-259).
 - `oidc_allowed_issuers` is the install's own issuer, not a per-customer list (MAS-164).
+- `oidc_redirect_uri` and the README's identity section describe the same first apply as
+  `examples/production/`: production posture with `identity_binding = "oidc"` and a placeholder
+  redirect URI, then the real one on the second apply. Both used to say to bring the install up
+  with `identity_binding = "dev"` and switch to `oidc` afterwards, which makes the second apply
+  change identity and the production posture at once, on a running install (MAS-294).
 
 ## [0.15.0] - 2026-09-07
 
