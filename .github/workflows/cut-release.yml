@@ -1,0 +1,212 @@
+# Cut a module release: verify the release commit, and only then create its tag. MAS-274.
+#
+# A tag on this repository IS the release. The Terraform Registry publishes a version from its own
+# webhook the moment a `v*` tag appears, entirely outside GitHub Actions, and a published version
+# cannot be withdrawn — only superseded. So every check that runs on the tag build (ci.yml) runs
+# too late to refuse anything. This workflow moves the checks to before the tag exists, which is
+# the only place they can say no:
+#
+#   verify  the commit is named by its full SHA and is on main; the most recent `ci` run from its
+#           push to main concluded success (which covers every ci.yml job, including `validate`,
+#           the check main's branch ruleset requires); the tag does not exist yet; and the commit's
+#           own manifest, changelog and README publish exactly this version.
+#   tag     creates the annotated tag on that commit through the API. Nothing is pushed from a
+#           checkout, so no credential is ever written into a working copy.
+#
+# What this workflow does NOT do by itself: stop a `v*` tag being pushed by hand. A tag pushed
+# from a laptop still publishes, and ci.yml's tag build still only reports on it afterwards. Making
+# this workflow the only way a tag can be created needs a tag ruleset on `v*` that only this
+# workflow's identity may bypass, and that is a repository setting applied by a maintainer, not
+# something a workflow file can grant itself. Until it is in place this is the documented path,
+# not an enforced one. README.md, "Cutting a release", says which is true today.
+#
+# The identity that creates the tag:
+#
+#   * A GitHub App, when `vars.RELEASE_APP_CLIENT_ID` and `secrets.RELEASE_APP_PRIVATE_KEY` are set.
+#     This is the identity a tag ruleset can name as its only bypass — GitHub does not accept the
+#     built-in GitHub Actions app as a ruleset bypass actor on an organization's repository. A tag
+#     an App creates also starts ci.yml's tag build on its own, which publishes the GitHub Release
+#     page from the changelog.
+#   * Otherwise the workflow's own GITHUB_TOKEN, with a warning. The gate above still runs in full.
+#     GitHub starts no workflow for a tag its GITHUB_TOKEN creates, so this path then dispatches
+#     ci.yml on the new tag explicitly — without that, the version would publish with no tag build
+#     and no Release page. Once the tag ruleset is applied this path is refused by GitHub, which is
+#     the intended failure: configure the App.
+#
+# Dispatch it from main only — the gate that runs is the one on the branch it is dispatched from,
+# and main is where a change to it has been reviewed. The `tag` job's `release` Environment is
+# where a maintainer restricts that to main mechanically and, if wanted, adds a required reviewer.
+#
+# Every input reaches a shell through `env:`, never spliced into a `run:` script.
+
+name: cut-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, X.Y.Z — MANIFEST.json and CHANGELOG.md at the commit must already publish it"
+        required: true
+        type: string
+      commit:
+        description: "Full 40-character SHA of the release commit on main"
+        required: true
+        type: string
+      summary:
+        description: "Optional one-line summary for the tag message (vX.Y.Z — summary)"
+        required: false
+        type: string
+        default: ""
+
+# Least privilege: nothing at workflow level; each job asks for what it uses.
+permissions: {}
+
+# One release at a time, and never a cancelled one: a second dispatch waits, and then finds the
+# first one's tag already exists.
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: The commit may be released
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout, and the commit's history
+      actions: read # the ci.yml runs for the commit
+    outputs:
+      tag: ${{ steps.gate.outputs.tag }}
+    steps:
+      - name: Dispatched from main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::dispatch this workflow from main, not $GITHUB_REF — the release gate that runs is the one on the branch it is dispatched from"
+            exit 1
+          fi
+
+      # persist-credentials: false — nothing in this job talks to the remote with a credential.
+      # fetch-depth: 0 so the release commit and main's history are both in the clone for the
+      # ancestry check below. See masterly-framework docs/conventions/github-repo-settings.md,
+      # "Checkout credentials".
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: The gate still refuses what it should
+        run: python3 scripts/release_gate.py --selftest
+
+      # The gate: version and commit well-formed, the tag new, and CI green on the commit's push to
+      # main. `gh api -f` URL-encodes the commit into the query, so a malformed input reaches the
+      # gate — which refuses it — rather than the URL.
+      - name: CI passed on the commit's push to main, and the tag does not exist yet
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          gh api -X GET "repos/$REPO/actions/workflows/ci.yml/runs" \
+            -f head_sha="$COMMIT" -f event=push -f branch=main -f per_page=100 \
+            > "$RUNNER_TEMP/runs.json"
+          # Public repository, so listing its tags needs no credential.
+          git ls-remote --tags --refs origin | sed 's#.*refs/tags/##' > "$RUNNER_TEMP/tags.txt"
+          tag="$(python3 scripts/release_gate.py --version "$VERSION" --commit "$COMMIT" \
+            --runs "$RUNNER_TEMP/runs.json" --tags "$RUNNER_TEMP/tags.txt")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The gate has already refused anything that is not a full SHA, so the commit is safe to
+      # hand to git from here on.
+      - name: The commit is on main
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
+            echo "::error::$COMMIT is not a commit in this repository"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$COMMIT" "$GITHUB_SHA"; then
+            echo "::error::$COMMIT is not on main (main is at $GITHUB_SHA) — only a commit that merged is released"
+            exit 1
+          fi
+
+      # The same checks ci.yml runs on the tag build, run here against the release commit's own
+      # tree and its own copies of the scripts — so the tag build that follows asks nothing this
+      # step did not already answer.
+      - name: The commit's manifest, changelog and README publish this version
+        env:
+          COMMIT: ${{ inputs.commit }}
+          TAG: ${{ steps.gate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/release" "$COMMIT"
+          cd "$RUNNER_TEMP/release"
+          python3 scripts/check_release_manifest.py
+          python3 scripts/check_release_manifest.py --tag "$TAG"
+          python3 scripts/release_notes.py "$TAG" > /dev/null
+
+  tag:
+    name: Create the tag
+    needs: verify
+    runs-on: ubuntu-latest
+    # A maintainer restricts this Environment to main and may add a required reviewer; until then
+    # GitHub creates it on first use with no protection rules. It is also where the App's private
+    # key belongs, so a workflow edited on another branch cannot reach it.
+    environment: release
+    permissions:
+      contents: write # create the tag, on the GITHUB_TOKEN path only
+      actions: write # dispatch ci.yml on the new tag, on the GITHUB_TOKEN path only
+    steps:
+      - name: Mint the release App's token
+        id: app
+        if: ${{ vars.RELEASE_APP_CLIENT_ID != '' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # This repository only, and only what creating a tag needs.
+          permission-contents: write
+
+      - name: Create the annotated tag on the release commit
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          VIA_APP: ${{ steps.app.outputs.token != '' }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          COMMIT: ${{ inputs.commit }}
+          SUMMARY: ${{ inputs.summary }}
+        run: |
+          set -euo pipefail
+          if [ "$VIA_APP" != "true" ]; then
+            echo "::warning::no release App is configured (vars.RELEASE_APP_CLIENT_ID), so the tag is created with this workflow's GITHUB_TOKEN. The checks above still gated it, but a v* tag ruleset cannot name this identity as its bypass — see README.md, 'Cutting a release'."
+          fi
+          message="$TAG"
+          if [ -n "$SUMMARY" ]; then message="$TAG — $SUMMARY"; fi
+          object="$(gh api "repos/$REPO/git/tags" -f tag="$TAG" -f message="$message" \
+            -f object="$COMMIT" -f type=commit --jq .sha)"
+          gh api "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$object" > /dev/null
+          {
+            echo "### $TAG created on \`$COMMIT\`"
+            echo
+            echo "The Terraform Registry publishes it from its own webhook. Confirm it appears at"
+            echo "https://registry.terraform.io/modules/masterly-data/masterly/azurerm/${TAG#v}"
+            echo "and that ci.yml's tag build publishes its GitHub Release page."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A tag created with GITHUB_TOKEN starts no workflow, so the tag build — the post-publish
+      # check and the GitHub Release page — is started explicitly. A tag an App created has
+      # already started it, and dispatching again would only run it twice.
+      - name: Start the tag build (GITHUB_TOKEN path only)
+        if: ${{ steps.app.outputs.token == '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: gh workflow run ci.yml --ref "$TAG"

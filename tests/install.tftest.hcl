@@ -2403,7 +2403,8 @@ run "a_weak_retired_session_secret_is_rejected" {
 
 # --- Telemetry to the control plane (ADR 0034/0056) --------------------------------------
 # Built at both ends and never wired: the application's reporter gates on url AND client_id,
-# and the module set neither, so no self-hosted install has ever reported.
+# and the module set neither, so no self-hosted install has ever reported. telemetry_url is
+# the switch; the client id and secret are the install credential licence refresh shares.
 
 # Off by default, and off means genuinely absent — not an empty string the app might read.
 run "telemetry_is_off_unless_configured" {
@@ -2421,6 +2422,11 @@ run "telemetry_is_off_unless_configured" {
   assert {
     condition     = local.telemetry_configured == false
     error_message = "telemetry_configured must be false when neither input is set."
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_TELEMETRY_CLIENT_ID") && !contains(keys(local.api_env_secret_refs), "MASTERLY_TELEMETRY_CLIENT_SECRET")
+    error_message = "With no install credential set, neither half of it may reach the apps."
   }
 }
 
@@ -2886,19 +2892,82 @@ run "license_refresh_without_the_credential_is_rejected" {
   expect_failures = [azurerm_resource_group.aca]
 }
 
-# The requirement the docs state must be the requirement the module enforces. The credential
-# alone does not reach the control plane — telemetry_url is how it gets there — so a set that
-# omits it is refused, and refused by the LICENCE precondition (it is evaluated first, so the
-# one message Terraform prints names refresh rather than a telemetry pairing the customer
-# never asked for). Without this run, following the README produced a plan failure about a
-# feature the customer had not enabled.
-run "license_refresh_without_telemetry_url_is_rejected" {
+# MAS-208: licence refresh and fleet telemetry are separate features that share one input, the
+# install credential. Refresh with the credential and WITHOUT telemetry_url must plan cleanly,
+# carry the credential and the refresh URL to the apps, and carry no telemetry URL — so the
+# application refreshes daily and reports nothing (it gates reporting on the URL AND the id).
+run "license_refresh_without_telemetry_url_plans_and_reports_nothing" {
   command = plan
 
   variables {
     ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    license_token           = "eyJ.fake.jwt"
+    license_public_jwk      = "{\"kty\":\"EC\"}"
     license_issuer_url      = "https://cp.masterlydata.com/v1/licenses/refresh"
     telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+  }
+
+  assert {
+    condition     = local.license_refresh_configured && !local.telemetry_configured
+    error_message = "The licence URL plus the install credential must configure refresh and leave telemetry off."
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_LICENSE_ISSUER_URL"] == "https://cp.masterlydata.com/v1/licenses/refresh"
+    error_message = "license_issuer_url must reach the apps without telemetry_url beside it."
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_TELEMETRY_CLIENT_ID"] == "sa_01TEST"
+    error_message = "The install credential's client id must reach the apps when only refresh uses it."
+  }
+
+  assert {
+    condition     = local.api_env_secret_refs["MASTERLY_TELEMETRY_CLIENT_SECRET"] == "telemetry-client-secret" && contains(local.api_secret_names, "telemetry-client-secret")
+    error_message = "The install credential's secret must reach the apps as a secret reference when only refresh uses it."
+  }
+
+  # THE assertion this run is about: no reporting URL, so nothing is reported.
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_TELEMETRY_URL")
+    error_message = "Refresh alone must not set MASTERLY_TELEMETRY_URL — that would switch hourly fleet reporting on."
+  }
+}
+
+# Guard: refresh with half the credential never authenticates. Both the licence guard and the
+# credential-pair guard refuse it; neither names telemetry_url.
+run "license_refresh_without_the_credential_secret_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    license_issuer_url    = "https://cp.masterlydata.com/v1/licenses/refresh"
+    telemetry_client_id   = "sa_01TEST"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: the credential with neither feature that uses it looks configured and does nothing.
+run "install_credential_without_a_feature_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: the secret without its client id is half a credential, whatever else is set.
+run "install_credential_secret_without_client_id_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
     telemetry_client_secret = "s3cret"
   }
 

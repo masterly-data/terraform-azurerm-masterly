@@ -148,22 +148,30 @@ resource "azurerm_resource_group" "aca" {
       error_message = "api_ingress_external = true with an empty ingress_allowed_cidrs would publish /v1 to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. The api holds no session of its own — it trusts a bearer token — so it is the surface least able to survive being open. Name the CIDRs that may reach it."
     }
 
-    # Ahead of the two telemetry preconditions on purpose: Terraform reports the FIRST
-    # failing precondition only, and a customer who set license_issuer_url must be told
-    # about licence refresh rather than about a telemetry pairing they never asked for.
+    # Licence refresh and fleet telemetry are separate features that share one input: the
+    # install credential (telemetry_client_id / telemetry_client_secret, named for the report
+    # that first used it). So the guards are stated per FEATURE — each feature refuses to be
+    # switched on without the credential it authenticates with — and neither feature's input
+    # is required by the other. Stated that way, a customer who set only license_issuer_url is
+    # told about licence refresh and never about a report they did not ask for.
     precondition {
-      condition     = var.license_issuer_url == null || (var.telemetry_url != null && var.telemetry_client_id != null && var.telemetry_client_secret != null)
-      error_message = "license_issuer_url requires telemetry_url, telemetry_client_id and telemetry_client_secret: the licence refresh authenticates as the install service account, and that account reaches the control plane through the telemetry inputs — the application keeps refresh OFF without all of them, so a partial set produces an install that looks configured and never refreshes. Set all four (they come together in your install bundle), or none. Note what that means today: an install that refreshes its licence also reports usage hourly; the two share one credential and one control-plane URL."
+      condition     = var.license_issuer_url == null || (var.telemetry_client_id != null && var.telemetry_client_secret != null)
+      error_message = "license_issuer_url requires the install credential, telemetry_client_id and telemetry_client_secret (both from your install bundle): licence refresh authenticates as the install service account, and the application keeps refresh OFF without it, so the URL alone produces an install that looks configured and never refreshes. telemetry_url is NOT required — refresh does not turn on usage reporting."
     }
 
     precondition {
-      condition     = (var.telemetry_url == null) == (var.telemetry_client_id == null)
-      error_message = "telemetry_url and telemetry_client_id go together: the application gates reporting on BOTH, so setting one alone produces an install that looks configured and reports nothing. Set both, or neither."
+      condition     = var.telemetry_url == null || (var.telemetry_client_id != null && var.telemetry_client_secret != null)
+      error_message = "telemetry_url requires the install credential, telemetry_client_id and telemetry_client_secret (both from your install bundle): the report authenticates as the install service account, and the application gates reporting on the URL AND the client id, so the URL alone produces an install that looks configured and reports nothing. Set the credential beside it, or leave telemetry_url unset."
     }
 
     precondition {
-      condition     = !(var.telemetry_url != null && var.telemetry_client_id != null) || var.telemetry_client_secret != null
-      error_message = "telemetry_client_secret is required once telemetry_url and telemetry_client_id are set: the report authenticates with that service account, and without the secret every hourly report fails against the control plane rather than failing here."
+      condition     = (var.telemetry_client_id == null) == (var.telemetry_client_secret == null)
+      error_message = "telemetry_client_id and telemetry_client_secret go together: they are one install credential, and half of it authenticates nothing. Set both, or neither."
+    }
+
+    precondition {
+      condition     = var.telemetry_client_id == null || var.license_issuer_url != null || var.telemetry_url != null
+      error_message = "telemetry_client_id and telemetry_client_secret are set, but neither feature that uses them is: the install credential authenticates licence refresh (license_issuer_url) and fleet telemetry (telemetry_url), and on its own it does nothing. Set the input for the feature you want, or leave the credential unset."
     }
 
     precondition {
@@ -802,12 +810,13 @@ locals {
     local.private_egress_env, # the egress guard's allowlist (and deprecated override), empty unless set
     local.ca_bundle_env,      # SSL_CERT_FILE, pointed at the mounted bundle, empty unless set
     local.servicebus_env,
-    local.acs_email_env,         # ACS endpoint + sender auto-wired when email is enabled (ADR 0040)
-    local.keyvault_env,          # durable secret store when the Key Vault is enabled (ADR 0066)
-    local.redis_env,             # redis session registry when Redis is enabled (ADR 0066)
-    local.workers_inprocess_env, # the api hands the loop to ca-workers when enabled (ADR 0066)
-    local.telemetry_env,         # usage reporting to the control plane, off unless configured
-    local.license_refresh_env,   # daily licence refresh from the control plane (ADR 0074), off unless configured
+    local.acs_email_env,          # ACS endpoint + sender auto-wired when email is enabled (ADR 0040)
+    local.keyvault_env,           # durable secret store when the Key Vault is enabled (ADR 0066)
+    local.redis_env,              # redis session registry when Redis is enabled (ADR 0066)
+    local.workers_inprocess_env,  # the api hands the loop to ca-workers when enabled (ADR 0066)
+    local.install_credential_env, # the install credential, shared by refresh and telemetry
+    local.telemetry_env,          # usage reporting to the control plane, off unless configured
+    local.license_refresh_env,    # daily licence refresh from the control plane (ADR 0074), off unless configured
     # The license verification key (ADR 0013) is public material — plain env.
     var.license_public_jwk != null ? { MASTERLY_LICENSE_PUBLIC_JWK = var.license_public_jwk } : {},
   )
@@ -855,7 +864,7 @@ locals {
     local.redis_secret_names,
     nonsensitive(var.license_token != null) ? ["license-token"] : [],
     nonsensitive(var.breakglass_secret_hash != null) ? ["breakglass-secret-hash"] : [],
-    local.telemetry_configured ? ["telemetry-client-secret"] : [],
+    local.install_credential_configured ? ["telemetry-client-secret"] : [],
     var.ca_bundle_pem != null ? ["ca-bundle-pem"] : [],
   )
 
@@ -882,24 +891,32 @@ locals {
     local.redis_secret_refs,
     var.license_token != null ? { MASTERLY_LICENSE_TOKEN = "license-token" } : {},
     var.breakglass_secret_hash != null ? { MASTERLY_BREAKGLASS_SECRET_HASH = "breakglass-secret-hash" } : {},
-    local.telemetry_configured ? { MASTERLY_TELEMETRY_CLIENT_SECRET = "telemetry-client-secret" } : {},
+    local.install_credential_configured ? { MASTERLY_TELEMETRY_CLIENT_SECRET = "telemetry-client-secret" } : {},
   )
 
-  # The application gates reporting on url AND client_id together, so the module treats the
-  # pair as the switch and refuses a half-configuration at plan rather than shipping an
-  # install that silently reports nothing.
-  telemetry_configured = var.telemetry_url != null && var.telemetry_client_id != null
+  # The install credential (telemetry_client_id / _secret) is the install service account
+  # that authenticates BOTH licence refresh and fleet telemetry, so it reaches the apps
+  # whenever it is set — the preconditions refuse it set without a feature that uses it.
+  install_credential_configured = var.telemetry_client_id != null
 
-  telemetry_env = local.telemetry_configured ? {
-    MASTERLY_TELEMETRY_URL       = var.telemetry_url
+  install_credential_env = local.install_credential_configured ? {
     MASTERLY_TELEMETRY_CLIENT_ID = var.telemetry_client_id
   } : {}
 
-  # Licence refresh (ADR 0074): the URL is the only new input — the credential is the
-  # install service account above (telemetry_client_id / _secret, scope license:refresh),
-  # which the precondition requires alongside it. The application additionally requires a
-  # verifiable licence (license_token + license_public_jwk) before it switches refresh on.
-  license_refresh_configured = var.license_issuer_url != null && var.telemetry_client_id != null
+  # Fleet telemetry: the application gates reporting (the usage ledger and the install
+  # snapshot) on the URL AND the client id, so the URL is the switch. Without it the
+  # credential can be present for licence refresh and nothing is reported.
+  telemetry_configured = var.telemetry_url != null && local.install_credential_configured
+
+  telemetry_env = local.telemetry_configured ? {
+    MASTERLY_TELEMETRY_URL = var.telemetry_url
+  } : {}
+
+  # Licence refresh (ADR 0074): the URL is the only refresh-specific input — the credential is
+  # the install service account above, which the precondition requires alongside it. The
+  # application additionally requires a verifiable licence (license_token + license_public_jwk)
+  # before it switches refresh on. telemetry_url plays no part in it.
+  license_refresh_configured = var.license_issuer_url != null && local.install_credential_configured
 
   license_refresh_env = local.license_refresh_configured ? {
     MASTERLY_LICENSE_ISSUER_URL = var.license_issuer_url

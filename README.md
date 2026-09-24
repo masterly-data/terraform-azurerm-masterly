@@ -105,19 +105,22 @@ module "masterly" {
   license_token      = var.license_token # from your secret store
   license_public_jwk = file("license-issuer.jwk.json")
 
-  # Fleet telemetry (optional, from the same bundle): usage ledger + an install snapshot
-  # (version, health, counts) to Masterly's control plane. Leave all three unset to report
-  # nothing; set them together — a partial set is refused at plan. Never billing input.
-  # telemetry_url           = "<control-plane URL from your install bundle>"
+  # The install credential (from the same bundle): the install service account. Despite
+  # the telemetry_ prefix it serves both optional features below, which each need it and
+  # neither of which needs the other. Set it only with at least one of them — a credential
+  # with neither feature, or half of it, is refused at plan.
   # telemetry_client_id     = var.telemetry_client_id
   # telemetry_client_secret = var.telemetry_client_secret # from your secret store
 
-  # Licence refresh (optional, same credential): the install re-fetches its licence from
-  # Masterly daily and re-verifies it before adopting it. Leave unset on an offline
-  # install — no outbound call is made. Requires all THREE telemetry inputs above
-  # (telemetry_url included — refresh authenticates as that same install service account),
-  # so an install that refreshes its licence also reports usage hourly.
+  # Licence refresh (optional): the install re-fetches its licence from Masterly daily and
+  # re-verifies it before adopting it. Needs the install credential above; does not need
+  # telemetry_url and reports nothing. Leave unset on an offline install — no outbound call.
   # license_issuer_url      = "<licence refresh URL from your install bundle>"
+
+  # Fleet telemetry (optional): usage ledger + an install snapshot (version, health,
+  # counts) to Masterly's control plane, hourly. Needs the install credential above; leave
+  # this unset to report nothing. Never billing input.
+  # telemetry_url           = "<control-plane URL from your install bundle>"
 
   # BYO-DB (ADR 0065): your own Postgres. Omit to provision the starter server instead.
   external_database_url = var.masterly_database_url # from your secret store
@@ -229,10 +232,16 @@ one and apply.
 - **`dev`** — evaluation only. The module **refuses** `dev` with an open ingress:
   set `ingress_allowed_cidrs` (an IP allowlist) or switch to `oidc`.
 
-Without a custom domain the frontend FQDN is only known after the first apply, so the
-OIDC bootstrap is: apply with `identity_binding=dev` + your IP allowlist, read
-`frontend_url`, register `https://<frontend host>/api/auth/callback` at your IdP, then
-flip to `oidc` and re-apply.
+Without a custom domain the frontend FQDN is an output of the first apply, so a production
+install is two applies, **both with `identity_binding = "oidc"`** and the production posture:
+apply 1 carries a placeholder `oidc_redirect_uri` (the value is read only during sign-in, never
+at boot or by the readiness probe, so the install comes up healthy with it), then read
+`frontend_url`, register `https://<frontend host>/api/auth/callback` at your IdP, set
+`oidc_redirect_uri` to it and apply again. [`examples/production/`](examples/production/) does
+exactly this. Do not bring a production install up with `identity_binding = "dev"` and switch to
+`oidc` afterwards: that second apply would change identity and everything else production
+requires — Key Vault with purge protection, which cannot be turned off, the control-plane store,
+Redis — at once, on a running install.
 
 ## Data plane (ADR 0065)
 
@@ -963,14 +972,28 @@ one commit, on `main`, before the tag:
    `Unreleased`.
 3. Run `python3 scripts/check_release_manifest.py --write` to bring this README into line, and
    `python3 scripts/check_release_manifest.py` to check the result.
-4. Merge, then tag `vX.Y.Z` on that commit.
+4. Merge, wait for `main`'s CI run on that commit to pass, then run the **cut-release** workflow
+   (Actions → cut-release → Run workflow, from `main`) with the version and the release commit's
+   full SHA. Do not create the tag by hand.
 
-CI runs the same check on the tag build with `--tag`, so a tag pushed without its manifest and
-changelog entries fails immediately rather than being noticed a release later. When every check on
-the tag build passes, CI publishes the tag's GitHub Release with that version's changelog section as
-its body (`scripts/release_notes.py`). The Terraform Registry has already published the version by
-then, so neither step can stop a release — a tag whose checks fail is published without a Release
-page.
+A tag on this repository is the release: the Terraform Registry publishes the version from its own
+webhook the moment the tag appears, and a published version cannot be withdrawn, only superseded.
+So the checks that can refuse a release have to run before the tag exists. `cut-release`
+(`.github/workflows/cut-release.yml`) creates the tag only after `scripts/release_gate.py` finds
+that the most recent CI run from the commit's push to `main` concluded success and that the tag
+does not exist yet, that the commit is on `main`, and that the commit's own manifest, changelog
+and README publish exactly this version.
+
+CI still runs the same manifest check on the tag build with `--tag`. When every check on the tag
+build passes, CI publishes the tag's GitHub Release with that version's changelog section as its
+body (`scripts/release_notes.py`). The registry has already published the version by then, so the
+tag build reports; it does not refuse.
+
+**What is not enforced yet.** GitHub still accepts a `v*` tag pushed by hand, and such a tag
+publishes without passing through `cut-release`. Closing that takes a tag ruleset that only the
+workflow's release identity may bypass, which is a repository setting rather than anything in
+this tree; [docs/releasing.md](docs/releasing.md) records the exact settings and whether they are
+in place. Until they are, `cut-release` is the documented path, not the only possible one.
 
 ## Provider versions and the lock file
 

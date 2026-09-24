@@ -45,9 +45,9 @@ path to it: `tests/` and `examples/` ship on purpose, and `.gitattributes` says 
 
 ## The tag IS the release
 
-`.github/workflows/` holds exactly two files: `ci.yml` and `public-docs-module-pin.yml`. Neither
-publishes the module. The Terraform Registry watches this repo's tags through its own webhook,
-entirely outside GitHub Actions.
+`.github/workflows/` holds three files: `ci.yml`, `public-docs-module-pin.yml` and
+`cut-release.yml`. None of them publishes the module. The Terraform Registry watches this repo's
+tags through its own webhook, entirely outside GitHub Actions.
 
 The one thing CI writes is the tag's **GitHub Release page**: `ci.yml`'s `release` job runs after
 the other jobs pass on a tag build and publishes that version's `CHANGELOG.md` section as the
@@ -59,13 +59,23 @@ simply gets no Release page.
 So the sequence on a tag push is: **tag pushed → registry publishes the version → CI turns red, if
 it is going to.** `ci.yml` does run on `v*` tags and does assert that the tag is the version
 `MANIFEST.json` publishes — but that is a notification, not a refusal. A published registry version
-is not retractable, only superseded. This is Linear card MAS-274, open and undecided; do not write
-anything that implies a gate exists.
+is not retractable, only superseded.
+
+The gate that can refuse is **`cut-release.yml`** (MAS-274, owner decision 2026-09-09): dispatched
+with a version and a full commit SHA, it creates the tag only after `scripts/release_gate.py`
+finds the commit's `ci` run on `main` green and the tag new, the commit is on `main`, and the
+commit's own manifest, changelog and README publish that version. It gates **its own path only**.
+A `v*` tag pushed by hand still publishes until a tag ruleset, the release App and the `release`
+Environment are applied — repository settings a maintainer applies, recorded with their current
+status in [`docs/releasing.md`](docs/releasing.md). Read that status before writing that
+anything "cannot" be tagged by hand, and never write that a hand-pushed tag is refused while it
+says "not applied".
 
 What that forbids:
 
-- **Never push a tag.** Tagging is a release decision and a human action. An agent's job ends at a
-  merged release commit; surface the `git tag` command, do not run it.
+- **Never push a tag, and never dispatch `cut-release`.** Tagging is a release decision and a
+  human action, whichever way the tag is made. An agent's job ends at a merged release commit;
+  surface the version and the commit SHA to dispatch the workflow with, do not run it.
 - **Never treat a green PR as release-readiness.** The realistic failure MAS-274 names is a tag
   pushed at the wrong commit, or before the release commit merged. Both look fine locally.
 - **Never bump `MANIFEST.json` "to be ready for the release".** The manifest, the changelog and the
@@ -134,6 +144,7 @@ terraform test                                   # mock providers, no cloud acce
 python3 scripts/check_release_manifest.py --selftest
 python3 scripts/check_release_manifest.py
 python3 scripts/release_notes.py --selftest
+python3 scripts/release_gate.py --selftest
 bash tests/diagnostic_bundle_test.sh --selftest
 bash tests/diagnostic_bundle_test.sh
 shellcheck --severity=style $(git ls-files '*.sh')
@@ -210,11 +221,11 @@ or self-contained subsystem has its own file, so a change to one is a diff in on
 | `modules/` | Five nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `log-analytics-workspace`, `user-assigned-identity` |
 | `tests/` | `install.tftest.hcl` (the mock-provider run blocks) and `diagnostic_bundle_test.sh` with its `fixtures/` — the harness that proves the diagnostic bundle carries no secrets |
 | `examples/production/` | The production-posture example a customer copies. It consumes the module by relative path, so it validates the working tree |
-| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the two release/docs gates), `release_notes.py` (a version's changelog section, as its GitHub Release body). Standard library only — release metadata should not depend on anything resolving |
+| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the two release/docs gates), `release_notes.py` (a version's changelog section, as its GitHub Release body), `release_gate.py` (the check `cut-release.yml` runs before it creates a tag). Standard library only — release metadata should not depend on anything resolving |
 | `MANIFEST.json` | The release manifest. See below |
 | `CHANGELOG.md` | Keep a Changelog format. Write new entries under `Unreleased`; cutting a release renames that heading |
 | `README.md` | The module surface reference. The customer walkthrough lives in the public docs, not here |
-| `docs/` | `networking.md` (the three topologies) and `release-manifest.md` (the manifest's published contract) |
+| `docs/` | `networking.md` (the three topologies), `release-manifest.md` (the manifest's published contract) and `releasing.md` (what gates a tag, and the repository settings that make `cut-release` the only path) |
 | `SECURITY.md` | The vulnerability-reporting policy we publish |
 
 The README's release table is **generated** from `MANIFEST.json` by
@@ -290,7 +301,7 @@ the module's public input surface in a way a customer would have to react to.
 ## Working style
 
 - **Public by default.** Write every line for a customer, because one will read it.
-- **Never push a tag.** The tag is the publish, and the publish is irreversible.
+- **Never push a tag or dispatch `cut-release`.** The tag is the publish, and the publish is irreversible.
 - **One module, here.** No second copy, anywhere, for any reason.
 - **A green CI is not a proven change.** Mock providers do not call Azure; say so in the PR when a
   change has not been planned against a real subscription.

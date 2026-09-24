@@ -116,7 +116,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   (MAS-432). It arrives already deprecated — see *Deprecated* below (MAS-655).
 - `license_issuer_url` — the licence refresh endpoint reaches the apps, so an install can
   re-fetch and re-verify its licence daily instead of waiting for the next apply. Optional, and
-  it requires the three telemetry inputs (MAS-98).
+  it requires the install credential, `telemetry_client_id` / `telemetry_client_secret` — not
+  `telemetry_url`, so turning refresh on does not turn usage reporting on (MAS-98, MAS-208).
 - Availability alerts, alongside the saturation alerts that were the whole catalogue until now.
   An install that has stopped serving now raises a severity-0 alert — the database reporting
   itself unavailable, an app left with no running replica, or the database's telemetry stopping
@@ -204,6 +205,22 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   default to 1.0. On an existing namespace this is expected to be an in-place update. It changes nothing when
   Azure already holds 1.2, and otherwise it refuses clients older than TLS 1.2 from the next
   apply. Installs without Service Bus are unaffected (MAS-41).
+- Licence refresh and fleet telemetry are separate features, and the plan-time guards now say
+  so. `telemetry_client_id` / `telemetry_client_secret` are the **install credential** — the
+  install service account from your bundle — and both features authenticate with it, but
+  neither needs the other's URL: `license_issuer_url` with the credential and no
+  `telemetry_url` plans cleanly, and the apps then refresh their licence daily and report
+  nothing, because the application reports only when `MASTERLY_TELEMETRY_URL` is set, and the
+  module writes that variable only when `telemetry_url` is. Previously the refresh URL was
+  refused without `telemetry_url`, so an install could not refresh its licence without also
+  reporting usage hourly. The guards are stated per feature: `license_issuer_url` without the
+  whole credential is refused, and so is `telemetry_url` without it. Two configurations that
+  used to plan are now refused, because each looked configured and did nothing: half of the
+  credential on its own (in particular `telemetry_client_secret` without
+  `telemetry_client_id`), and the whole credential with neither feature set. An install that
+  sets all three telemetry inputs, or none of them, plans exactly as before. The inputs keep
+  their names. Licence refresh itself needs an `api` image that has it: the next
+  `MANIFEST.json` image pair is the first to (MAS-208).
 - `breakglass_secret_hash` says what the api actually accepts. The input has held a **salted
   Argon2id** value since the api change that made it one; this repo still described a sha256
   digest, and `examples/production` still told an operator to produce one with `shasum -a 256`.
@@ -230,6 +247,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   changelog, published by CI once the tag build's checks pass. The Terraform Registry publishes
   the version independently, so a missing Release page means the checks failed, not that the
   version is unpublished (MAS-258).
+- Releases are cut by the `cut-release` workflow, which creates the version tag only after
+  checking that the release commit is on `main`, that its CI run there passed, that the tag does
+  not exist yet, and that the commit's `MANIFEST.json`, changelog and README publish that version.
+  The registry publishes from the tag, so these are the checks that can refuse a release rather
+  than report on one after it is public. A tag pushed by hand is not yet refused;
+  [docs/releasing.md](docs/releasing.md) records the repository settings that close that and
+  whether they are in place (MAS-274).
 
 ### Deprecated
 
@@ -291,6 +315,11 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   and geo-redundant backup off for residency. Each item names the Azure Policy built-in
   definitions that evaluate it, by display name and definition ID, and says whether they are in
   Defender for Cloud's default Microsoft cloud security benchmark initiatives (MAS-41).
+- `oidc_redirect_uri` and the README's identity section describe the same first apply as
+  `examples/production/`: production posture with `identity_binding = "oidc"` and a placeholder
+  redirect URI, then the real one on the second apply. Both used to say to bring the install up
+  with `identity_binding = "dev"` and switch to `oidc` afterwards, which makes the second apply
+  change identity and the production posture at once, on a running install (MAS-294).
 
 ## [0.15.0] - 2026-09-07
 
