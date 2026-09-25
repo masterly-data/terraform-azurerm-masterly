@@ -499,7 +499,7 @@ latency on the first request, in-memory sessions drop when the last api replica 
 (unless `enable_redis`), and the api's in-process worker loop only polls while a replica is
 up — async jobs stall until the next request. Refused in `mode=production`. The workers
 floor (`workers_min_replicas`) stays >= 1 by design: nothing HTTP-wakes an ingress-less
-polling loop.
+polling loop. `mode=production` refuses 0 there too.
 
 One interaction to know about: the frontend's readiness probe calls the api, so on a
 scaled-to-zero install the first wake also waits for an api replica. The probe's budget (485s

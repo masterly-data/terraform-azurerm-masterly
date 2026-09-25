@@ -1275,6 +1275,74 @@ run "production_scale_to_zero_is_rejected" {
   expect_failures = [var.api_min_replicas, var.frontend_min_replicas]
 }
 
+# Guard: mode=production refuses a workers app that may sit at zero replicas. ca-workers has
+# no ingress, so nothing wakes it, and at a zero floor its no-replica alert stands down too —
+# the pipeline would stall with nothing reporting it.
+run "production_workers_scale_to_zero_is_rejected" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 2
+
+    workers_min_replicas = 0 # scale-to-zero for the pipeline in production -> refused
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  expect_failures = [var.workers_min_replicas]
+}
+
+# The same production install with the workers floor at 1 plans clean: the guard refuses zero,
+# not the workers app.
+run "production_workers_floor_of_one_plans" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 2
+
+    workers_min_replicas = 1
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition     = output.workers_app_name == "ca-workers"
+    error_message = "A production install with workers_min_replicas = 1 must plan the workers app."
+  }
+}
+
 # Credential-based image pull (ADR 0067 option 1): direct pull from Masterly's registry
 # with the per-customer service principal.
 run "credential_registry_pull_plans" {

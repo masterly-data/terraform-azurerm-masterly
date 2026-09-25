@@ -20,7 +20,16 @@ variable "enable_workers" {
 variable "workers_min_replicas" {
   type        = number
   default     = 1
-  description = "Minimum workers replicas (keep >= 1: the loop polls; scale-to-zero would stall the pipeline on the polling binding)."
+  description = "Minimum workers replicas (keep >= 1: the loop polls; scale-to-zero would stall the pipeline on the polling binding). mode=production requires >= 1."
+
+  # No stalled pipeline in production: ca-workers has no ingress, so nothing wakes a
+  # scaled-to-zero workers app — every queued job would wait indefinitely. It is also the one
+  # floor at which the workers no-replica alert stands down (diagnostics.tf), so a production
+  # install at zero would stall with nothing reporting it.
+  validation {
+    condition     = var.mode != "production" || var.workers_min_replicas >= 1
+    error_message = "mode=production requires workers_min_replicas >= 1 — ca-workers has no ingress, so nothing wakes it from zero and every queued job would wait indefinitely."
+  }
 }
 
 variable "workers_max_replicas" {

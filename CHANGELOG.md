@@ -22,6 +22,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Changed
+
+- `mode = "production"` now refuses `workers_min_replicas = 0` at plan time, the same guard
+  `api_min_replicas` and `frontend_min_replicas` already carry. The variable's description
+  already said to keep it at 1 or more, but nothing enforced it: `ca-workers` has no ingress, so
+  nothing wakes a workers app scaled to zero, and every queued job waits indefinitely. A zero
+  floor is also the one setting at which the workers no-replica alert stands down, so such an
+  install would stall with no alert. A production install that sets `workers_min_replicas = 0`
+  no longer plans; set it to 1 or more (1 is the default). Evaluation installs are unaffected
+  (MAS-371).
+
 ## [0.16.0] - 2026-09-24
 
 ### Added
