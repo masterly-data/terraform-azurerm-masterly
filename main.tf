@@ -553,11 +553,26 @@ resource "azurerm_postgresql_flexible_server" "this" {
   resource_group_name = azurerm_resource_group.data.name
   location            = var.location
 
-  version                       = var.postgres_version
-  sku_name                      = var.postgres_sku_name
-  storage_mb                    = var.postgres_storage_mb
-  administrator_login           = "masterly_admin"
-  administrator_password        = random_password.postgres_admin[0].result
+  version    = var.postgres_version
+  sku_name   = var.postgres_sku_name
+  storage_mb = var.postgres_storage_mb
+
+  # Password or Microsoft Entra ID (entra-auth.tf). Both are changed in place on an existing
+  # server; neither replaces it.
+  #
+  # The administrator login is set only while password authentication is on, because Azure
+  # refuses one at creation when it is off. On an existing server that moves to "entra" the
+  # login is left alone rather than cleared: it is Optional + Computed, so null here is no
+  # change, and changing it from one name to another would REPLACE the server.
+  administrator_login    = local.database_entra ? null : "masterly_admin"
+  administrator_password = local.database_entra ? null : random_password.postgres_admin[0].result
+
+  authentication {
+    active_directory_auth_enabled = local.database_entra
+    password_auth_enabled         = !local.database_entra
+    tenant_id                     = local.database_entra ? data.azurerm_client_config.current.tenant_id : null
+  }
+
   zone                          = null
   public_network_access_enabled = false # reachable only via the private endpoint
 
@@ -571,9 +586,18 @@ resource "azurerm_postgresql_flexible_server" "this" {
     }
   }
 
-  tags = local.tags
+  # The authentication this server was last applied with, which is what a later plan with
+  # database_auth unset reads back (entra-auth.tf). A tag change is in place.
+  tags = merge(local.tags, { (local.auth_tag) = local.database_auth })
 
   lifecycle {
+    # A production departure is an explicit input (ADR 0066, amended 2026-09-24): an existing
+    # server still on its password is never flipped by a default, and never kept on it silently.
+    precondition {
+      condition     = !(var.mode == "production" && var.database_auth == null && local.recorded_database_auth == "password")
+      error_message = "This install's Postgres server authenticates with the masterly_admin password, and database_auth is unset. In mode = \"production\" this module now defaults to Microsoft Entra ID authentication, but it will not switch a running server on its own: every object in its databases is owned by masterly_admin, and the apps cannot use them as their Entra identity until ownership has moved. Choose explicitly. Set database_auth = \"password\" to keep the password (nothing changes; it is a documented departure from Azure's recommended baseline), or follow \"Moving an existing install to Microsoft Entra authentication\" in the module README and then set database_auth = \"entra\"."
+    }
+
     # Both of these are ASSIGNED BY AZURE at creation and absent from this configuration, so
     # without ignoring them every later plan proposes setting them to null — and Azure refuses:
     #
@@ -587,9 +611,18 @@ resource "azurerm_postgresql_flexible_server" "this" {
     # The consequence was total: the FIRST apply succeeds, and every apply after it fails. The
     # documented production bring-up is two applies, so a customer could not even finish the
     # install, let alone upgrade. Found on the first production rehearsal, 2026-09-01.
+    #
+    # `zone` and `standby_availability_zone` are ignored for that reason. administrator_password
+    # is ignored for a different one: it is not sent again once the server exists. A server that
+    # moves to database_auth = "entra" clears it above, and sending that as an update would ask
+    # Azure to set an empty password rather than to leave the login alone. The generated
+    # password never changes on its own, so nothing else is lost by ignoring it. (This is also
+    # why a server CREATED with "entra" cannot later be moved to "password" by this module: it
+    # has no password to keep. See the README.)
     ignore_changes = [
       zone,
       high_availability[0].standby_availability_zone,
+      administrator_password,
     ]
   }
 }
@@ -703,9 +736,13 @@ resource "random_password" "session_secret" {
 
 locals {
   # The install-level DSN (ADR 0003): the customer's own database on BYO-DB (ADR 0065),
-  # otherwise the provisioned starter server's admin connection.
+  # otherwise the provisioned starter server's admin connection: the masterly_admin login and
+  # its password, or — on database_auth = "entra" — the apps' identity's Entra role with no
+  # password at all, since the api presents a token instead (entra-auth.tf).
   database_url = var.external_database_url != null ? var.external_database_url : (
-    "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require"
+    local.database_entra
+    ? "postgresql+asyncpg://${local.database_entra_role}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require"
+    : "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require"
   )
 
   # Identity (ADR 0024): the binding plus, on oidc, the backend's token-verification
@@ -814,6 +851,7 @@ locals {
     local.acs_email_env,          # ACS endpoint + sender auto-wired when email is enabled (ADR 0040)
     local.keyvault_env,           # durable secret store when the Key Vault is enabled (ADR 0066)
     local.redis_env,              # redis session registry when Redis is enabled (ADR 0066)
+    local.entra_auth_env,         # Entra token authentication to Postgres / Redis, empty unless "entra"
     local.workers_inprocess_env,  # the api hands the loop to ca-workers when enabled (ADR 0066)
     local.install_credential_env, # the install credential, shared by refresh and telemetry
     local.telemetry_env,          # usage reporting to the control plane, off unless configured
@@ -838,7 +876,7 @@ locals {
     "session-secret"          = random_password.session_secret.result
     "session-secret-previous" = var.session_secret_previous
     "registry-password"       = var.registry_password
-    "redis-url"               = local.redis_url # embeds the access key (ADR 0066)
+    "redis-url"               = local.redis_url # embeds the access key on redis_auth = "key" (ADR 0066)
     "license-token"           = var.license_token
     "breakglass-secret-hash"  = var.breakglass_secret_hash
     "telemetry-client-secret" = var.telemetry_client_secret
@@ -1049,6 +1087,11 @@ module "api" {
     azurerm_role_assignment.kv_secrets_officer,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
+    # On "entra" the api authenticates as its identity at boot, so the database role and the
+    # Redis access policy must exist before a revision starts.
+    azurerm_postgresql_flexible_server_active_directory_administrator.apps,
+    azurerm_managed_redis_access_policy_assignment.apps,
+    azurerm_redis_cache_access_policy_assignment.apps,
   ]
 }
 

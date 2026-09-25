@@ -22,8 +22,30 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Added
+
+- `database_auth` (`"entra"` | `"password"`) and `redis_auth` (`"entra"` | `"key"`): how the apps
+  authenticate to the starter Postgres server and to Redis. `"entra"` is Microsoft Entra ID only,
+  Azure's recommended baseline: password authentication and access keys are off, the apps'
+  identity is the server's Microsoft Entra administrator and holds a data access policy on
+  whichever `redis_offering` is active, the connection strings carry no credential, and
+  `ca-api` / `ca-workers` get `MASTERLY_DATABASE_AUTH` / `MASTERLY_REDIS_AUTH`. It needs api images
+  `v0.133.7` or later. `"password"` and `"key"` keep today's behaviour and are documented
+  departures. BYO-DB (`external_database_url`) is unaffected and refuses `database_auth = "entra"`
+  (MAS-1085).
+
 ### Changed
 
+- `mode = "production"` now defaults a **new** install's starter Postgres server and Redis to
+  Microsoft Entra ID authentication (`"entra"`). An existing server or cache is never switched by
+  the default: when an input is unset, the module reads what the server or cache already uses (a
+  `masterly-auth` tag it now sets; untagged means password or key), and a production install
+  whose existing server or cache still uses a password or key **no longer plans until you
+  choose**. Set `database_auth = "password"` and `redis_auth = "key"` to keep the install exactly
+  as it is, or follow "Moving an existing install to Microsoft Entra authentication" in the README
+  — it includes the ownership steps the starter server needs first. Every change on that path is
+  made in place; none replaces the server or the cache. Evaluation installs keep the password and
+  the key (MAS-1085).
 - `mode = "production"` now refuses `workers_min_replicas = 0` at plan time, the same guard
   `api_min_replicas` and `frontend_min_replicas` already carry. The variable's description
   already said to keep it at 1 or more, but nothing enforced it: `ca-workers` has no ingress, so
