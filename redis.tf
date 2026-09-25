@@ -31,8 +31,10 @@
 # local.redis_dns_zone_name / local.redis_subresource) — that matters to hub-and-spoke landing
 # zones, which must pre-create the RIGHT zone.
 #
-# The connection URL carries the access key, so it travels as a Container App secret
-# (MASTERLY_REDIS_URL via secret ref), never plain env.
+# On redis_auth = "key" the connection URL carries the access key, so it travels as a Container
+# App secret (MASTERLY_REDIS_URL via secret ref), never plain env. On "entra" (entra-auth.tf) it
+# carries no credential, and travels the same way so that switching between the two changes
+# nothing about how the apps receive it.
 
 variable "enable_redis" {
   type        = bool
@@ -220,14 +222,24 @@ resource "azurerm_managed_redis" "this" {
     # rediss:// and the app verifies the hostname.
     client_protocol = "Encrypted"
 
-    # The provider defaults this to false, and primary_access_key is only exported when it is
-    # true — so without this the keyed URL below authenticates against nothing. Microsoft Entra
-    # ID is the better posture and Azure Managed Redis is built for it, but the application has
-    # no Entra-token Redis credential provider today; that is its own increment (ADR 0071).
-    access_keys_authentication_enabled = true
+    # Off on redis_auth = "entra", Azure's recommended baseline: the apps authenticate with a
+    # Microsoft Entra ID token through the access policy assignment in entra-auth.tf, which Azure
+    # Managed Redis always accepts. On "key" it is on, because the provider defaults it to false
+    # and primary_access_key is only exported when it is true — without it the keyed URL below
+    # would authenticate against nothing. Changed in place either way; the database is not
+    # recreated.
+    access_keys_authentication_enabled = !local.redis_entra
   }
 
-  tags = local.tags
+  # The authentication this cache was last applied with (entra-auth.tf). A tag change is in place.
+  tags = merge(local.tags, { (local.auth_tag) = local.redis_auth })
+
+  lifecycle {
+    precondition {
+      condition     = !(var.mode == "production" && var.redis_auth == null && local.recorded_redis_auth == "key")
+      error_message = local.redis_key_refusal
+    }
+  }
 }
 
 # --- Offering "cache": Azure Cache for Redis (Microsoft.Cache/redis) ------------------------
@@ -268,13 +280,27 @@ resource "azurerm_redis_cache" "this" {
   # redis_capacity, not to this module.
   redis_configuration {
     maxmemory_policy = "noeviction"
+
+    # Microsoft Entra ID authentication, on redis_auth = "entra" (entra-auth.tf). Azure requires
+    # it on before access keys can be turned off. Both change in place.
+    active_directory_authentication_enabled = local.redis_entra
   }
+
+  access_keys_authentication_enabled = !local.redis_entra
 
   # No public presence: reachable only via the private endpoint below (mirrors the starter
   # Postgres). Private-endpoint access is supported on every SKU offered here.
   public_network_access_enabled = false
 
-  tags = local.tags
+  # The authentication this cache was last applied with (entra-auth.tf). A tag change is in place.
+  tags = merge(local.tags, { (local.auth_tag) = local.redis_auth })
+
+  lifecycle {
+    precondition {
+      condition     = !(var.mode == "production" && var.redis_auth == null && local.recorded_redis_auth == "key")
+      error_message = local.redis_key_refusal
+    }
+  }
 }
 
 # Private DNS so the cache's public hostname resolves to the private endpoint inside the
@@ -338,16 +364,27 @@ locals {
   # the privatelink.* form, which would fail TLS hostname verification.
   # /0 is retained: redis-py only emits SELECT when the db index is truthy, so db 0 sends
   # nothing and Redis Enterprise's single-database model stays invisible to the app.
-  managed_redis_url = local.use_managed_redis ? "rediss://:${azurerm_managed_redis.this[0].default_database[0].primary_access_key}@${azurerm_managed_redis.this[0].hostname}:${azurerm_managed_redis.this[0].default_database[0].port}/0" : ""
+  #
+  # On redis_auth = "entra" the userinfo is simply absent: the api authenticates with a token for
+  # its identity and reads the Redis username from that token (entra-auth.tf).
+  managed_redis_url = local.use_managed_redis ? (local.redis_entra
+    ? "rediss://${azurerm_managed_redis.this[0].hostname}:${azurerm_managed_redis.this[0].default_database[0].port}/0"
+    : "rediss://:${azurerm_managed_redis.this[0].default_database[0].primary_access_key}@${azurerm_managed_redis.this[0].hostname}:${azurerm_managed_redis.this[0].default_database[0].port}/0"
+  ) : ""
 
   # Azure Cache for Redis: rediss:// on the fixed TLS port 6380.
-  legacy_redis_url = local.use_legacy_redis ? "rediss://:${azurerm_redis_cache.this[0].primary_access_key}@${azurerm_redis_cache.this[0].hostname}:6380/0" : ""
+  legacy_redis_url = local.use_legacy_redis ? (local.redis_entra
+    ? "rediss://${azurerm_redis_cache.this[0].hostname}:6380/0"
+    : "rediss://:${azurerm_redis_cache.this[0].primary_access_key}@${azurerm_redis_cache.this[0].hostname}:6380/0"
+  ) : ""
 
-  # The URL embeds the access key -> app secret (Key Vault-backed when the vault is on),
+  # The URL may embed the access key -> app secret (Key Vault-backed when the vault is on),
   # never plain env. Empty when Redis is disabled; the name below is what gates it.
   redis_url = local.use_managed_redis ? local.managed_redis_url : local.legacy_redis_url
 
   redis_secret_names = local.redis_enabled ? ["redis-url"] : []
+
+  redis_key_refusal = "This install's Redis authenticates with its access key, and redis_auth is unset. In mode = \"production\" this module now defaults to Microsoft Entra ID authentication, but it will not switch a running cache on its own: the apps can authenticate that way only on api images v0.133.7 or later, and the running image is set by your deployment, not by this module. Choose explicitly. Set redis_auth = \"key\" to keep the access key (nothing changes; it is a documented departure from Azure's recommended baseline), or confirm that ca-api and ca-workers run v0.133.7 or later and set redis_auth = \"entra\"."
 
   redis_secret_refs = local.redis_enabled ? {
     MASTERLY_REDIS_URL = "redis-url"

@@ -180,7 +180,7 @@ they bite, so confirm them before you plan.
 | `rg-masterly-aca`, `rg-masterly-data` | Customer-naming resource groups (`rg-masterly-<purpose>`) |
 | VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
-| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner. Later install identity work (ADR 0020) |
+| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull and nothing else: `ca-frontend` is the only internet-facing app and needs no data-plane access, so it does not carry the backend's grants |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
@@ -188,7 +188,7 @@ they bite, so confirm them before you plan.
 | Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
 | Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer and Crypto Officer grants to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
-| Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the keyed URL rides as a Container App secret). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
+| Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the URL rides as a Container App secret, keyless on `redis_auth = "entra"` — [authentication](#authentication-to-the-starter-server-and-redis)). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
 
 ## Getting the images (ADR 0067)
@@ -282,6 +282,86 @@ to switch the guard off entirely, loopback and the metadata endpoint included. F
 `true` means the allowlist it stood in for — every RFC1918 range, CGNAT and IPv6 unique-local,
 never loopback or link-local — and the application warns at every start. Migrate by replacing
 it with the ranges your targets are actually on; setting both fails the plan.
+
+### Authentication to the starter server and Redis
+
+The apps authenticate to the starter Postgres server and to Redis in one of two ways, chosen
+by `database_auth` and `redis_auth`:
+
+| | `"entra"` — Azure's recommendation | `"password"` / `"key"` — a departure |
+|---|---|---|
+| Postgres | Microsoft Entra authentication on, password authentication off. The apps' identity (`id-masterly-apps`) is the server's Microsoft Entra administrator — the role that creates a database per Environment — and the connection string names that role with no password | The `masterly_admin` login, with its password in the connection string |
+| Redis | Access keys off. The apps' identity holds a data access policy: the default policy on Azure Managed Redis, *Data Contributor* on Azure Cache for Redis. The URL carries no key | The access key, in the URL |
+| The apps | `MASTERLY_DATABASE_AUTH=entra` / `MASTERLY_REDIS_AUTH=entra` and `AZURE_CLIENT_ID`, on `ca-api` and `ca-workers`. Needs **api images `v0.133.7` or later** | Nothing added |
+
+When an input is unset, the module picks for you, and it never changes what an existing
+server or cache already uses:
+
+| | No server or cache yet | One exists |
+|---|---|---|
+| `mode = "production"` | `"entra"` | What it records. If that is a password or key, the plan stops and asks you to choose |
+| `mode = "demo"` | `"password"` / `"key"` | What it records |
+
+To know what exists, the module lists the subscription's flexible servers (and caches of the
+active `redis_offering`) at plan time and reads the `masterly-auth` tag it puts on its own. A
+server or cache created by an earlier version of this module has no such tag and is read as
+using its password or key. Setting the input skips the lookup: an explicit value always wins.
+
+Choose `database_auth` before the apply that creates the server. A server created with
+`"entra"` has no password login at all, so this module cannot move it to `"password"`
+afterwards. A server that started on `"password"` can move to `"entra"`, and back.
+
+With `external_database_url` (BYO-DB) none of this applies: the database is yours, the DSN is
+the credential, and `database_auth = "entra"` is refused at plan.
+
+### Moving an existing install to Microsoft Entra authentication
+
+An install created before this default authenticates with the `masterly_admin` password and
+the Redis access key. In `mode = "production"`, its plan stops until you choose. Every change
+below is made in place; none of them replaces the server or the cache.
+
+1. **Keep the install as it is while you prepare.** Set `database_auth = "password"` and
+   `redis_auth = "key"`, and apply. Only the `masterly-auth` tags change.
+2. **Run api images `v0.133.7` or later** on `ca-api` and `ca-workers`. This module does not
+   change a running app's image; your deployment does. An older image cannot authenticate
+   with a token, and would lose both stores at the next step.
+3. **Redis.** Set `redis_auth = "entra"` and apply. The access policy is assigned, access keys
+   are turned off, and the apps roll a new revision with a keyless URL. Sign-ins can fail for
+   the moment between the keys going off and the new revision becoming ready; sessions
+   already in Redis are kept.
+4. **Postgres ownership.** Every table, sequence and Environment database on the server is
+   owned by `masterly_admin`, and the apps' Entra identity cannot use them until ownership has
+   moved. While password authentication is still on, connect as `masterly_admin` from a host
+   that can reach the server's private endpoint — the password is in the `database-url` secret,
+   and in your Terraform state as `random_password.postgres_admin` — and run, in the `postgres`
+   database:
+
+   ```sql
+   CREATE ROLE masterly_owner NOLOGIN;
+   GRANT masterly_owner TO masterly_admin WITH INHERIT TRUE, SET TRUE;
+   GRANT masterly_owner TO azure_pg_admin WITH INHERIT TRUE, SET TRUE;
+   REASSIGN OWNED BY masterly_admin TO masterly_owner;
+   ```
+
+   Then, in each Environment database (`SELECT datname FROM pg_database WHERE datname LIKE
+   'masterly\_dp\_%';` lists them):
+
+   ```sql
+   REASSIGN OWNED BY masterly_admin TO masterly_owner;
+   ```
+
+   Ownership now sits with `masterly_owner`, a group role. Every Microsoft Entra administrator
+   of the server is a member of `azure_pg_admin`, so the apps' identity inherits ownership the
+   moment the next step makes it one; `masterly_admin` stays a member too. Run this when nobody
+   is creating an Environment, or run the `REASSIGN` again afterwards — it is safe to repeat.
+5. **Switch.** Set `database_auth = "entra"` and apply. Microsoft Entra authentication is
+   turned on and password authentication off, the apps' identity becomes the server's Entra
+   administrator, and the apps roll a new revision whose connection string names that role.
+   Check that `/readyz` answers and that you can sign in.
+
+To go back, set `database_auth = "password"` (or `redis_auth = "key"`) and apply: password
+authentication or the access key is turned back on, and `masterly_admin` still holds
+ownership through `masterly_owner`.
 
 ### Trusting a private CA
 
@@ -392,10 +472,11 @@ which makes it exactly the kind of setting that stops being true without anyone 
 
 ### Where this module departs from Azure's recommended baseline
 
-In three places this module does not yet follow Azure's recommended configuration for the
-resources it creates. Each is listed below with what it is, why it holds today, and what you
-can do now to follow Azure's recommendation. Making Azure's recommendation the module's
-default in each place is tracked work, and this section changes as each one is closed.
+In two places this module's defaults do not yet follow Azure's recommended configuration for
+the resources it creates, and in one more a production install departs from it only when you
+say so. Each is listed below with what it is, why it holds today or why you might choose it,
+and what you can do to follow Azure's recommendation. Making Azure's recommendation the
+module's default in each place is tracked work, and this section changes as each one is closed.
 
 Azure Policy and Microsoft Defender for Cloud can report these. Each item names the Azure
 Policy built-in definitions that evaluate it, by display name and definition ID; if your
@@ -435,30 +516,40 @@ Definitions that flag this:
   (`1c06e275-d63d-4540-b761-71f364c2111d`). It is in the benchmark v2 initiative, but it
   evaluates Premium namespaces only, so the Standard default does not trigger it.
 
-#### Redis and the starter Postgres authenticate with a key or password
+#### Redis and the starter Postgres authenticate with a key or password, when you choose it
 
-The Redis URL the module hands the apps carries the cache's access key, on both
-`redis_offering` paths. The managed path sets `access_keys_authentication_enabled = true`,
-because Azure Managed Redis disables access keys by default. The starter Postgres server's
-connection string carries the password of its `masterly_admin` login, and the server has
-Microsoft Entra authentication off. Azure recommends Microsoft Entra ID authentication for
-both, with access keys and passwords disabled.
+In `mode = "production"`, a new install's starter Postgres server and Redis authenticate with
+Microsoft Entra ID only, which is Azure's recommendation: password authentication and access
+keys are off, and the apps present a token for their managed identity
+([Authentication to the starter server and Redis](#authentication-to-the-starter-server-and-redis)).
+Two inputs depart from that, and only on purpose:
 
-Why it holds today: no released `api` image connects to Redis or Postgres with a Microsoft
-Entra token, so turning key or password authentication off would leave the apps unable to
-connect.
+- `database_auth = "password"` keeps the starter server's `masterly_admin` login, with its
+  password in the apps' connection string and Microsoft Entra authentication off.
+- `redis_auth = "key"` keeps the cache's access key in the apps' Redis URL, with access-key
+  authentication on.
 
-There is no setting in this module today that follows Azure's recommendation here. With
+Why you might choose them: an install that existed before this default keeps its password and
+key until you move it
+([Moving an existing install to Microsoft Entra authentication](#moving-an-existing-install-to-microsoft-entra-authentication)),
+and a production plan stops until you choose, so setting these is how you keep the install as
+it is in the meantime. Either also suits an install whose api image is older than `v0.133.7`,
+which cannot authenticate with a token. What it costs: a credential that can be copied out of
+the apps' configuration, or out of your Terraform state, and used from anywhere that can reach
+the private endpoint, until you rotate it.
+
+Evaluation installs (`mode = "demo"`) keep the password and the key by default. With
 `external_database_url` (BYO-DB) the module provisions no Postgres server, and how your
 database authenticates is yours to configure.
 
-Definitions that flag this:
+Definitions that flag the departure:
 
 - *Azure Cache for Redis should not use access keys for authentication*
   (`3827af20-8f80-4b15-8300-6db0873ec901`). It evaluates the `redis_offering = "cache"` path
   only, and it is in neither benchmark initiative.
 - *A Microsoft Entra administrator should be provisioned for PostgreSQL flexible servers*
-  (`ce39a96d-bf09-4b60-8c32-e85d52abea0f`). It is in neither benchmark initiative.
+  (`ce39a96d-bf09-4b60-8c32-e85d52abea0f`). It is in neither benchmark initiative. A server on
+  `database_auth = "entra"` passes it: the apps' identity is its Microsoft Entra administrator.
 - No built-in definition evaluates access-key authentication on Azure Managed Redis
   (`redis_offering = "managed"`).
 
