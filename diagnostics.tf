@@ -30,6 +30,89 @@ variable "alert_action_group_id" {
   description = "Resource ID of an existing Azure Monitor action group to route alerts to (e.g. a shared ops group / a PagerDuty webhook group). Takes precedence over alert_email. Null = use alert_email (if set) or no target."
 }
 
+# --- Load alert thresholds ----------------------------------------------------------
+# Starting values, not measurements. Each default is a conservative first guess at the point
+# where an install stops having headroom; the right number for your install comes from its
+# own baseline under representative load. Tune these from what you observe rather than
+# accepting an alert that pages on your normal Tuesday.
+
+variable "alert_postgres_cpu_percent" {
+  type        = number
+  default     = 80
+  description = "Load alert: fire when the provisioned Postgres server's average CPU stays above this percentage for 15 minutes. Tune from your install's baseline."
+
+  validation {
+    condition     = var.alert_postgres_cpu_percent > 0 && var.alert_postgres_cpu_percent < 100
+    error_message = "alert_postgres_cpu_percent must be between 0 and 100 (exclusive)."
+  }
+}
+
+variable "alert_postgres_connections_percent" {
+  type        = number
+  default     = 70
+  description = "Load alert: fire when the provisioned Postgres server's active connections average above this percentage of its max_connections over 15 minutes. Tune from your install's baseline."
+
+  validation {
+    condition     = var.alert_postgres_connections_percent > 0 && var.alert_postgres_connections_percent < 100
+    error_message = "alert_postgres_connections_percent must be between 0 and 100 (exclusive)."
+  }
+}
+
+variable "alert_postgres_max_connections" {
+  type        = number
+  default     = null
+  description = "The max_connections the connections alert takes its percentage of. Null (default) = Azure's documented default for postgres_sku_name. Set it when you have changed the server's max_connections parameter, or when your SKU is not one the module recognises (a plan then warns that no connections alert was created)."
+
+  validation {
+    condition     = var.alert_postgres_max_connections == null || try(var.alert_postgres_max_connections >= 1 && floor(var.alert_postgres_max_connections) == var.alert_postgres_max_connections, false)
+    error_message = "alert_postgres_max_connections must be a whole number of at least 1, or null."
+  }
+}
+
+variable "alert_postgres_iops_percent" {
+  type        = number
+  default     = 80
+  description = "Load alert: fire when the provisioned Postgres server consumes, on average over 15 minutes, more than this percentage of the IOPS its storage tier provides. Tune from your install's baseline."
+
+  validation {
+    condition     = var.alert_postgres_iops_percent > 0 && var.alert_postgres_iops_percent < 100
+    error_message = "alert_postgres_iops_percent must be between 0 and 100 (exclusive)."
+  }
+}
+
+variable "alert_servicebus_dead_letter_threshold" {
+  type        = number
+  default     = 0
+  description = "Load alert (enable_service_bus only): fire when the job queue's dead-letter sub-queue holds more than this many messages. 0 (default) = any dead-lettered message."
+
+  validation {
+    condition     = var.alert_servicebus_dead_letter_threshold >= 0
+    error_message = "alert_servicebus_dead_letter_threshold must be 0 or more."
+  }
+}
+
+variable "alert_api_p95_ms" {
+  type        = number
+  default     = 2000
+  description = "Load alert: fire when the 95th percentile of the api's own request durations over 15 minutes exceeds this many milliseconds. The default is a placeholder, not a latency promise — set it from a load test of your install."
+
+  validation {
+    condition     = var.alert_api_p95_ms > 0
+    error_message = "alert_api_p95_ms must be greater than 0."
+  }
+}
+
+variable "alert_workers_memory_percent" {
+  type        = number
+  default     = 85
+  description = "Load alert (enable_workers only): fire when a ca-workers replica's memory working set rises above this percentage of the replica's memory. Tune from your install's baseline."
+
+  validation {
+    condition     = var.alert_workers_memory_percent > 0 && var.alert_workers_memory_percent < 100
+    error_message = "alert_workers_memory_percent must be between 0 and 100 (exclusive)."
+  }
+}
+
 locals {
   # On in production unless explicitly overridden.
   diagnostics_enabled = var.enable_diagnostics != null ? var.enable_diagnostics : var.mode == "production"
@@ -72,6 +155,66 @@ locals {
     api      = "this install is DOWN, not merely under strain"
     frontend = "this install is DOWN, not merely under strain"
     workers  = "the async pipeline has STOPPED — ingest runs, scans, materialization and the fleet snapshot loop make no progress, while the install keeps answering requests as if nothing were wrong"
+  }
+
+  # --- The connections alert's denominator ---
+  #
+  # Azure Monitor publishes active_connections as a count, not as a share of the limit, and the
+  # limit is a server parameter whose default Azure derives from the SKU's memory. So the
+  # module derives it the same way, from Learn's "Limits in Azure Database for PostgreSQL
+  # flexible server" table: memory in GiB -> default max_connections. The table stops rising at
+  # 5000 from 48 GiB up.
+  #
+  # Memory is read off the SKU name, and only for the families whose rule is regular: General
+  # Purpose D-series carry 4 GiB per vCore, Memory Optimized E-series 8 GiB per vCore, and the
+  # burstable B-series is irregular, so it is listed. Any other SKU yields null, and then no
+  # connections alert is created and the check below says so on every plan, rather than an alert
+  # quietly measuring against a guessed limit. alert_postgres_max_connections overrides all of
+  # this, and is also the input to set when the server's max_connections has been changed.
+  postgres_sku_memory_gib_burstable = {
+    B1ms = 2, B2s = 4, B2ms = 8, B4ms = 16, B8ms = 32, B12ms = 48, B16ms = 64, B20ms = 80
+  }
+  postgres_sku_memory_gib = (
+    can(regex("^B_Standard_(B[0-9]+m?s)$", var.postgres_sku_name))
+    ? lookup(local.postgres_sku_memory_gib_burstable, regex("^B_Standard_(B[0-9]+m?s)$", var.postgres_sku_name)[0], null)
+    : can(regex("^GP_Standard_D([0-9]+)", var.postgres_sku_name))
+    ? 4 * tonumber(regex("^GP_Standard_D([0-9]+)", var.postgres_sku_name)[0])
+    : can(regex("^MO_Standard_E([0-9]+)", var.postgres_sku_name))
+    ? 8 * tonumber(regex("^MO_Standard_E([0-9]+)", var.postgres_sku_name)[0])
+    : null
+  )
+  postgres_default_max_connections = (
+    local.postgres_sku_memory_gib == null ? null
+    : local.postgres_sku_memory_gib >= 48 ? 5000
+    : lookup({ 2 = 50, 4 = 429, 8 = 859, 16 = 1718, 32 = 3437 }, tostring(local.postgres_sku_memory_gib), null)
+  )
+  postgres_max_connections  = coalesce(var.alert_postgres_max_connections, local.postgres_default_max_connections, -1)
+  diag_postgres_connections = local.diag_postgres && local.postgres_max_connections > 0
+
+  # --- The workers memory alert's threshold ---
+  #
+  # A share of the replica's own memory, read from the app's configured size (always stated in
+  # Gi — the submodule refuses anything else), so a change to the workers' size moves the
+  # threshold with it instead of leaving a byte count behind.
+  workers_memory_bytes = var.enable_workers ? tonumber(trimsuffix(module.workers[0].memory, "Gi")) * 1073741824 : null
+  diag_workers_memory  = local.diagnostics_enabled && var.enable_workers
+
+  # The api access-log line the latency rule parses. Every request the api completes writes
+  # "<METHOD> <route template> -> <status> in <milliseconds>ms" — in production as the
+  # `message` field of a JSON line, in demo as plain text — so one pattern reads both.
+  api_access_line_pattern = "[A-Z]+ ([^ ]+) -> [0-9]{3} in ([0-9.]+)ms"
+
+  # Below this many requests in the latency rule's 15-minute window, a 95th percentile is two
+  # or three requests and says nothing about load, so the rule does not evaluate it.
+  api_latency_min_requests = 50
+}
+
+# Said on every plan, not buried in a README: a provisioned server whose SKU the module cannot
+# size gets no connections alert until the operator states the limit.
+check "postgres_connections_alert_has_a_limit" {
+  assert {
+    condition     = !local.diag_postgres || local.postgres_max_connections > 0
+    error_message = "No Postgres connections alert was created: the module does not know the default max_connections of postgres_sku_name \"${var.postgres_sku_name}\". Set alert_postgres_max_connections to the server's max_connections to create it."
   }
 }
 
@@ -361,6 +504,293 @@ resource "azurerm_monitor_metric_alert" "app_5xx" {
   tags = local.tags
 }
 
+# --- Load alerts (headroom running out, before it becomes an outage) ---------------
+#
+# The alerts above notice a full disk, a full cache and a failing app. None of them notices an
+# install working harder than it can sustain, so without these the first sign of load is the
+# outage it causes. Each one below answers "how much headroom is left" for one resource, at a
+# threshold that is a module input: the defaults are starting values, and the right ones come
+# from the install's own baseline under representative load.
+#
+# Severity 2, the bottom of this module's saturation band: each is a warning with time to act,
+# not an incident. The one exception, dead-lettered job messages, is severity 1 and says why.
+#
+# None of these needs a diagnostic setting on the Container Apps. The metric alerts read Azure
+# Monitor platform metrics, which every Container App, Postgres server and Service Bus
+# namespace publishes without one; the latency rule reads ContainerAppConsoleLogs_CL, which the
+# Container Apps environment sends to the install's workspace itself (modules/aca-env-consumption
+# sets logs_destination unconditionally).
+#
+# Each metric name is taken from Learn's supported-metrics reference for its resource type.
+# Azure validates the metric against the resource when the alert is created
+# (skip_metric_validation stays at its default, false), so a wrong name fails the apply loudly
+# rather than creating an alert that never fires.
+
+# Postgres CPU. Average over fifteen minutes: a query burst that pegs the CPU for a minute is
+# normal work, a quarter-hour above the line means the SKU no longer has headroom for the
+# install's load. On a burstable SKU this measures the share of the burstable vCPU and sits
+# beside the CPU-credits alert, which is the one that says the server is about to be throttled.
+resource "azurerm_monitor_metric_alert" "postgres_cpu" {
+  count = local.diag_postgres ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-postgres-cpu"
+  resource_group_name = azurerm_resource_group.data.name
+  scopes              = [azurerm_postgresql_flexible_server.this[0].id]
+  description         = "Postgres CPU has averaged above ${var.alert_postgres_cpu_percent}% for 15 minutes — the server is running out of headroom. Find what is driving it (ingest, matching, consumption) and size postgres_sku_name up if it is sustained."
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "cpu_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.alert_postgres_cpu_percent
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# Postgres connections, as a share of max_connections. The server refuses the connection past
+# the limit, and every Masterly Environment holds its own pool, so the count grows with
+# Environments and replicas as well as with load. The threshold is a count computed from the
+# percentage and the limit (see postgres_max_connections in the locals), because Azure publishes
+# active_connections as a count and no percentage of it.
+resource "azurerm_monitor_metric_alert" "postgres_connections" {
+  count = local.diag_postgres_connections ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-postgres-connections"
+  resource_group_name = azurerm_resource_group.data.name
+  scopes              = [azurerm_postgresql_flexible_server.this[0].id]
+  description         = "Postgres active connections have averaged above ${var.alert_postgres_connections_percent}% of max_connections (${local.postgres_max_connections}) for 15 minutes — new connections will be refused once the limit is reached. Check replica counts and Environment count, then size the server up or raise max_connections."
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "active_connections"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = floor(local.postgres_max_connections * var.alert_postgres_connections_percent / 100)
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# Postgres IOPS, as a share of what the storage tier provides. Azure publishes this share
+# directly (disk_iops_consumed_percentage), so the alert does not need to know the tier's
+# limit — which matters, because that limit moves with postgres_storage_mb and with any
+# performance tier set on the server outside Terraform. At 100% the disk queues and every
+# query slows at once.
+resource "azurerm_monitor_metric_alert" "postgres_iops" {
+  count = local.diag_postgres ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-postgres-iops"
+  resource_group_name = azurerm_resource_group.data.name
+  scopes              = [azurerm_postgresql_flexible_server.this[0].id]
+  description         = "Postgres has consumed more than ${var.alert_postgres_iops_percent}% of its storage IOPS on average for 15 minutes — the disk is near its limit and queries will queue behind it. Raise the storage size or performance tier."
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "disk_iops_consumed_percentage"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.alert_postgres_iops_percent
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# Dead-lettered job messages. On the servicebus binding each message tells a worker that an
+# Environment has queued work. A message that fails delivery max_delivery_count times (10,
+# main.tf) is moved to the queue's dead-letter sub-queue instead of being dropped, and it is no
+# longer delivered. The jobs themselves stay in the Environment's own database, but the signal
+# that should have woken a worker for them is gone, so repeated dead-lettering is how work can
+# wait with nothing reporting it. Severity 1 for that reason: this is not headroom running out,
+# it is work that may already be stuck.
+#
+# DeadletteredMessages is a gauge — the number of messages sitting in the dead-letter
+# sub-queue — so the alert stays active until the dead-lettered messages are dealt with, and it
+# clears when they are. That is deliberate: the action it asks for is to look at them. Maximum,
+# so a single message is seen whenever it arrives inside the window. Scoped to the job queue by
+# its EntityName dimension, so a queue added to the namespace later is not swept in.
+resource "azurerm_monitor_metric_alert" "servicebus_dead_letters" {
+  count = local.diag_service_bus ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-servicebus-dead-letters"
+  resource_group_name = azurerm_resource_group.aca.name
+  scopes              = [azurerm_servicebus_namespace.this[0].id]
+  description         = "The ${azurerm_servicebus_queue.jobs[0].name} queue holds more than ${var.alert_servicebus_dead_letter_threshold} dead-lettered message(s) — workers repeatedly failed to process a job notification and gave up on it. Read the dead-letter reason, check the workers' logs, and resubmit or remove the messages."
+  severity            = 1
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.ServiceBus/namespaces"
+    metric_name      = "DeadletteredMessages"
+    aggregation      = "Maximum"
+    operator         = "GreaterThan"
+    threshold        = var.alert_servicebus_dead_letter_threshold
+
+    dimension {
+      name     = "EntityName"
+      operator = "Include"
+      values   = [azurerm_servicebus_queue.jobs[0].name]
+    }
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# ca-workers memory. A job handler's working set grows with the size of what it processes, and
+# a replica that reaches its memory limit is killed mid-job; the job is retried, meets the same
+# data, and is killed again. Maximum rather than Average, because the question is whether any
+# replica came near its limit, and an average across replicas or across the window hides the
+# one that did. The threshold is a share of the replica's configured memory, in bytes, because
+# WorkingSetBytes is published in bytes.
+resource "azurerm_monitor_metric_alert" "workers_memory" {
+  count = local.diag_workers_memory ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-workers-memory"
+  resource_group_name = azurerm_resource_group.aca.name
+  scopes              = [module.workers[0].id]
+  description         = "A ca-workers replica's memory working set has risen above ${var.alert_workers_memory_percent}% of its ${module.workers[0].memory} — close to the point where the replica is killed mid-job. Find the job kind that drives it; give the workers more memory or split the work."
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.App/containerapps"
+    metric_name      = "WorkingSetBytes"
+    aggregation      = "Maximum"
+    operator         = "GreaterThan"
+    threshold        = floor(local.workers_memory_bytes * var.alert_workers_memory_percent / 100)
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# api latency, as the 95th percentile of the api's own request durations. Azure Monitor has no
+# percentile for Container Apps requests — its response-time metric is an average, and an
+# average hides exactly the slow tail this alert is for — so the rule reads the api's access
+# log instead. Every request the api completes writes one line,
+# "<METHOD> <route template> -> <status> in <milliseconds>ms", and the rule parses the route and
+# the duration out of it. That line is written by every released api image this module version
+# documents, which is what makes it safe to depend on.
+#
+# What it measures: time inside the api process, from the first byte of the request to the last
+# byte of the response. It does not include the network, the ingress, or time a request waited
+# for a replica, so a client sees at least this much.
+#
+# What it leaves out, on purpose: routes that stream a response for as long as the client reads
+# it — the bulk exports (every `:export` route), the assistant's streaming chat, and the MCP
+# channel. Their duration is the size of the answer, not the speed of the api, and a handful of
+# them would own the percentile on a quiet install.
+#
+# It needs a minimum of traffic to say anything. Below api_latency_min_requests requests in the
+# window a 95th percentile is two or three requests, so the rule stays quiet; this is an alert
+# on load, and an install without load has none to report.
+#
+# The empty `datatable` anchor is the one app_not_ready carries, for the same reason:
+# ContainerAppConsoleLogs_CL does not exist until the first console line lands, and a fuzzy
+# union whose only operand is missing still fails.
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
+  count = local.diagnostics_enabled ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-api-latency"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  scopes              = [module.logs.id]
+
+  description = "The api's 95th-percentile request duration has exceeded ${var.alert_api_p95_ms} ms over 15 minutes — requests are slowing under load. Check the Postgres load alerts first, then which routes are slow in ContainerAppConsoleLogs_CL."
+  severity    = 2
+
+  evaluation_frequency = "PT5M"
+  window_duration      = "PT15M"
+
+  auto_mitigation_enabled = true
+
+  criteria {
+    query = <<-KQL
+      union isfuzzy=true
+        (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),
+        (
+          ContainerAppConsoleLogs_CL
+          | where ContainerAppName_s == "${module.api.name}"
+          | where Log_s contains " -> "
+        )
+      | extend Route = extract(@"${local.api_access_line_pattern}", 1, Log_s), DurationMs = todouble(extract(@"${local.api_access_line_pattern}", 2, Log_s))
+      | where isnotempty(Route) and isnotnull(DurationMs)
+      | where Route !contains ":export" and Route !endswith "/ai/chat" and Route !startswith "/mcp"
+      | summarize Requests = count(), P95Ms = percentile(DurationMs, 95)
+      | where Requests >= ${local.api_latency_min_requests} and P95Ms > ${var.alert_api_p95_ms}
+    KQL
+
+    # One row when the percentile is over the line and there was enough traffic to compute it,
+    # none otherwise. The provider checks none of these three against the query; they are
+    # pinned in tests/install.tftest.hcl.
+    time_aggregation_method = "Count"
+    operator                = "GreaterThan"
+    threshold               = 0
+
+    failing_periods {
+      number_of_evaluation_periods             = 1
+      minimum_failing_periods_to_trigger_alert = 1
+    }
+  }
+
+  dynamic "action" {
+    for_each = length(local.alert_action_group_ids) > 0 ? [1] : []
+    content {
+      action_groups = local.alert_action_group_ids
+    }
+  }
+
+  skip_query_validation = false
+
+  tags = local.tags
+}
+
 # --- Availability alerts (the install is not serving, as distinct from strained) -----
 
 # Every alert above is a SATURATION signal, and each one needs the resource running and
@@ -482,7 +912,11 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 #    application data, which it does not do and should not start doing. The Service Bus
 #    alternative (ActiveMessages climbing) is a saturation threshold in absence's clothing: it
 #    needs a per-install baseline, and it is exactly the kind of alert MAS-263 set out to stop
-#    adding.
+#    adding. Staleness as a LOAD signal is a different question from absence and is not
+#    answered here either: the released api image writes no log line carrying the age of the
+#    oldest queued job, so there is nothing in the workspace for a rule to read. The api does
+#    report it on request (`GET /v1/ops/metrics`, `jobs.oldest_queued_age_seconds`), and the
+#    README says how to use that until the application writes the line.
 #
 # So the shipped signal is the same one the serving apps carry, and it detects the same class
 # of failure: the app is not there. The floor gate is workers_min_replicas >= 1, which is its

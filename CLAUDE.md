@@ -213,7 +213,7 @@ or self-contained subsystem has its own file, so a change to one is a diff in on
 | Path | What is in it |
 |---|---|
 | `main.tf` | The core: two resource groups, the VNet and its two subnets, the ACA environment and the Log Analytics workspace, the `api` and `frontend` Container Apps, both user-assigned identities, the starter Postgres flexible server with its private DNS zone and endpoint, and the optional Service Bus namespace + queue |
-| `diagnostics.tf` | The observability surface: one action group, five diagnostic settings, seven metric alerts and two log-search alert rules |
+| `diagnostics.tf` | The observability surface: one action group, five diagnostic settings, twelve metric alerts and three log-search alert rules |
 | `keyvault.tf` | The opt-in durable secret store (ADR 0066) — vault, private endpoint and DNS, RBAC grants, and the install's own secrets as Key Vault references |
 | `redis.tf` | The opt-in session registry (ADR 0071) — both offerings (`managed` / `cache`), each private-endpoint only |
 | `workers.tf`, `email.tf` | The two smallest opt-ins: the `ca-workers` app, and customer-owned ACS email |

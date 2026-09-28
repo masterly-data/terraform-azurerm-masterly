@@ -22,6 +22,25 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Added
+
+- Load alerts, created with the rest of the alert set when diagnostics are on (the default in
+  `mode = "production"`), so an install running out of headroom is noticed before it becomes an
+  outage: Postgres CPU, active connections and IOPS consumed on the provisioned server;
+  dead-lettered messages on the `masterly-jobs` Service Bus queue; the api's 95th-percentile
+  request duration, read from its own access log; and `ca-workers` memory working set. Each
+  threshold is an input with a starting default — `alert_postgres_cpu_percent` (80),
+  `alert_postgres_connections_percent` (70), `alert_postgres_iops_percent` (80),
+  `alert_servicebus_dead_letter_threshold` (0), `alert_api_p95_ms` (2000),
+  `alert_workers_memory_percent` (85) — to be tuned from the install's own baseline. The
+  connections alert takes Azure's default `max_connections` for `postgres_sku_name`, or
+  `alert_postgres_max_connections` when set; for a SKU the module cannot size it creates no
+  connections alert and every plan warns. The README's "Load alerts" section says what each
+  alert means and what to do. There is no alert yet on the age of the oldest queued job: the
+  application does not write it to its log. `GET /v1/ops/metrics` reports it (MAS-1291).
+- The `aca-container-app` submodule now refuses a `memory` that is not stated in Gi, and
+  outputs the configured value (MAS-1291).
+
 ### Changed
 
 - `mode = "production"` now refuses `workers_min_replicas = 0` at plan time, the same guard
