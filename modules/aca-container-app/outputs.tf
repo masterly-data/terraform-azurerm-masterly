@@ -11,6 +11,14 @@ output "name" {
 # Informational only. Do NOT wire app-to-app traffic to this: Azure has been observed to
 # report an internal app's fqdn in the external form, and terraform reads it back as drift
 # ("changed outside of Terraform"). Address another app in the same environment by `name`.
+# Memory per replica as configured, for the same reason the probe outputs exist: the root
+# module's memory alert takes its threshold as a share of this, and a configured value is
+# known at plan time, so a test can pin the arithmetic.
+output "memory" {
+  value       = var.memory
+  description = "Memory per replica as configured (e.g. \"1Gi\")."
+}
+
 output "fqdn" {
   value       = try(azurerm_container_app.this.ingress[0].fqdn, null)
   description = "Ingress FQDN as Azure currently reports it. Null when ingress is disabled. Not stable enough to address the app with — use `name` for in-environment calls."

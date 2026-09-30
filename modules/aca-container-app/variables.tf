@@ -54,7 +54,15 @@ variable "cpu" {
 variable "memory" {
   type        = string
   default     = "1Gi"
-  description = "Memory per replica (e.g. \"1Gi\")."
+  description = "Memory per replica, in Gi (e.g. \"1Gi\", \"0.5Gi\")."
+
+  # Container Apps states replica memory in Gi, and the root module derives the workers
+  # memory alert's byte threshold from this string. A value in any other unit would make that
+  # threshold wrong, so it is refused here rather than mis-read there.
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?Gi$", var.memory))
+    error_message = "memory must be a number of Gi, e.g. \"1Gi\" or \"0.5Gi\"."
+  }
 }
 
 variable "min_replicas" {
