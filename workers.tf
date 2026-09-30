@@ -88,6 +88,9 @@ module "workers" {
     azurerm_role_assignment.kv_secrets_officer,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
+    azurerm_postgresql_flexible_server_active_directory_administrator.apps,
+    azurerm_managed_redis_access_policy_assignment.apps,
+    azurerm_redis_cache_access_policy_assignment.apps,
   ]
 }
 
