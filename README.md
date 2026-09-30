@@ -623,6 +623,10 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   CPU-credit exhaustion (burstable installs only), Redis memory nearly full, Redis key evictions
   (which under the no-eviction policy mean the policy has been changed out from under the
   install, not that the cache is small), and `ca-api` / `ca-frontend` 5xx. Severity 1–2.
+- **Load alerts** — the install is running out of headroom, before that becomes an outage:
+  Postgres CPU, connections and IOPS, `ca-api` latency, `ca-workers` memory, and dead-lettered
+  job messages on Service Bus. Severity 2 (1 for dead letters). Every threshold is an input;
+  see "Load alerts" below.
 - **Availability alerts** — something has stopped rather than strained: the install is not
   serving, the app that should serve it is running but never becomes ready, or the async
   pipeline behind it is not running. Severity 0 on all of them, so a notification tells you
@@ -633,6 +637,44 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
 Alerts fire and record with no notification target; to be paged, set `alert_email` (the
 module creates an action group) or point `alert_action_group_id` at an existing group
 (a shared ops group, a PagerDuty webhook group).
+
+### Load alerts
+
+Each alert below watches one resource's headroom. The thresholds are module inputs, and the
+defaults are **starting values, not measurements**: the right number for your install is the one
+its own baseline under representative load supports. Run the install under your real workload,
+look at where each signal sits, and set the input a comfortable margin above it. An alert that
+pages on a normal working day is one you will learn to ignore.
+
+| Alert | Fires when | Input (default) | What it means | What to do |
+|---|---|---|---|---|
+| `postgres-cpu` | Postgres `cpu_percent` averages above the threshold for 15 minutes | `alert_postgres_cpu_percent` (80) | The database server has little CPU left for the install's load. Queries slow first, then time out. | Find what is driving it — a large ingest, identity resolution over a big model, heavy consumption — in the api and workers logs. If it is sustained rather than one run, size `postgres_sku_name` up. |
+| `postgres-connections` | Postgres `active_connections` averages above the threshold's share of `max_connections` for 15 minutes | `alert_postgres_connections_percent` (70), `alert_postgres_max_connections` (null) | The server is nearing its connection limit, past which it refuses new connections and requests fail. Each Masterly Environment keeps its own pool, so the count grows with Environments and replicas as well as with load. | Check how many api and workers replicas are running and how many Environments the install hosts. Size the server up (a larger SKU has a higher default limit) or raise its `max_connections` parameter. |
+| `postgres-iops` | Postgres `disk_iops_consumed_percentage` averages above the threshold for 15 minutes | `alert_postgres_iops_percent` (80) | The disk is near the IOPS its storage tier provides. At the limit, I/O queues and every query slows at once. | Raise `postgres_storage_mb` (IOPS grow with the storage size) or the server's storage performance tier. |
+| `servicebus-dead-letters` | The `masterly-jobs` queue's dead-letter sub-queue holds more messages than the threshold (`enable_service_bus` only) | `alert_servicebus_dead_letter_threshold` (0) | A worker failed to process a job notification ten times and Service Bus set it aside. The jobs themselves are still in the Environment's database, but the message that should have woken a worker for them is gone, so work can wait with nothing else reporting it. | Read the dead-letter reason on the messages and the `ca-workers` logs around that time. Resubmit the messages once the cause is fixed, or remove them. The alert stays active while dead-lettered messages remain, and clears when they are gone. |
+| `api-latency` | The 95th percentile of the api's own request durations exceeds the threshold over 15 minutes, with at least 50 requests in that window | `alert_api_p95_ms` (2000) | Requests are slowing under load. The duration is measured inside the api, so clients see at least this much. Bulk exports, the assistant's streaming chat and the MCP channel are left out, because their duration is the size of the answer. | Look at the Postgres load alerts first — a slow database is the usual cause. Then find the slow routes in the workspace: `ContainerAppConsoleLogs_CL` for `ca-api` carries one `<METHOD> <route> -> <status> in <ms>ms` line per request. The default is a placeholder: set it from a load test of your install. |
+| `workers-memory` | A `ca-workers` replica's memory working set rises above the threshold's share of its memory, at any point in 15 minutes (`enable_workers` only) | `alert_workers_memory_percent` (85) | A worker is close to its memory limit. A replica that reaches it is stopped mid-job, and the job is retried against the same data. | Find the job kind running at the time in the `ca-workers` logs. Split the work (smaller ingest batches) or give the workers more memory. |
+
+The connections alert needs the server's `max_connections`, which Azure publishes only as a
+server parameter. By default the module takes it from Azure's documented default for
+`postgres_sku_name`, derived from the SKU's memory. For a SKU it does not recognise — the
+confidential-compute `DC`/`EC` families today — it creates no connections alert and **every
+plan warns** that it did not, rather than measuring against a guess. Set
+`alert_postgres_max_connections` to the server's value then, and also whenever you have changed
+the parameter on the server.
+
+None of these needs anything beyond `enable_diagnostics`: the metric alerts read the platform
+metrics every Postgres server, Container App and Service Bus namespace publishes, and the latency
+rule reads the console log the Container Apps environment already sends to the install's
+workspace.
+
+**Not covered: the age of the oldest queued job.** It is the most direct load signal for the
+async pipeline — how long work waits before a worker starts it — and the module does not alert
+on it yet, because the application image does not write that age to its log, so there is
+nothing in the workspace for a rule to read. The api reports it on request:
+`GET /v1/ops/metrics` returns `jobs.oldest_queued_age_seconds` (and `jobs.queued_total`) for a
+caller with the `ops:read` permission. Poll it from the monitoring you already run and alert on
+the age you need jobs to start within.
 
 ### What the alerts detect, and what they do not
 
@@ -650,6 +692,7 @@ precise about how far they reach.
 | An app is running but never becomes ready | `app-not-ready` | One rule for both serving apps, split by app name. `ca-api` and `ca-frontend` each log one line per **failing** readiness probe (and nothing on a passing one); the rule fires when an app has failed readiness in at least 30 of the last 60 minutes, so ~30–40 minutes to page. That is the case `<app>-unavailable` structurally cannot see — an unready replica is never routed to, but it still counts as a replica. A cold start legitimately fails readiness for minutes at a time, which is why the bar is half an hour rather than a single failure. Needs no input beyond diagnostics being on. |
 | The async pipeline has no worker running | `workers-unavailable` | The same alert, and the one nothing else in the set can stand in for: `ca-workers` has no ingress, so it emits no requests and `<app>-5xx` is blind to it by construction. Without this, a dead workers app is silent — the install keeps answering, the queue keeps growing, and the first signal is somebody asking why yesterday's ingest never landed. |
 | Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. |
+| Headroom running out: database CPU, connections, IOPS; api latency; worker memory; dead-lettered job messages | the load alerts | Need the resource up and publishing; the latency rule also needs traffic (at least 50 requests in 15 minutes). |
 
 Not detected, and no alert here should be read as covering it:
 
@@ -668,8 +711,9 @@ Not detected, and no alert here should be read as covering it:
   counts toward `Replicas`, so `workers-unavailable` reads 1. What the module can see is
   that the app is *there*; whether it is *draining* lives in the install's own job tables, which
   the module provisions and never reads. Alert on queue depth or on the age of the oldest
-  unclaimed job from the application side if you need that, and keep this alert for the case it
-  does cover — the workers app being gone.
+  unclaimed job from the application side if you need that — `GET /v1/ops/metrics` reports both
+  (see "Load alerts" above) — and keep this alert for the case it does cover, the workers app
+  being gone.
 - **A BYO-DB install's database.** With `external_database_url` set, the module wires no
   diagnostic setting to a server it does not own, so it has no telemetry stream whose end it
   could notice. Alert on your own database from wherever it runs.

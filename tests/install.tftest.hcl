@@ -325,6 +325,220 @@ run "production_mode_full_wiring_plans" {
   }
 }
 
+run "production_mode_load_alerts_on_byo_db" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  # BYO-DB: the module wires no telemetry for a server it does not provision, so it claims no
+  # Postgres load coverage either — and the unknown-SKU warning is not raised, because there is
+  # no server to size.
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.postgres_cpu) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_connections) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_iops) == 0
+    )
+    error_message = "A BYO-DB install must carry no Postgres load alerts."
+  }
+
+  # The api latency rule (MAS-1291). Severity 2, the bottom of the saturation band: a warning
+  # with time to act, never mistaken for the availability band's 0.
+  assert {
+    condition = (
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency) == 1 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].severity == 2 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].evaluation_frequency == "PT5M" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].window_duration == "PT15M"
+    )
+    error_message = "Production must carry the api latency rule at severity 2, evaluated every 5 minutes over 15."
+  }
+
+  # One row means "over the line": Count > 0. LessThan would fire on every healthy evaluation
+  # and still plan, which is why the triple is pinned (MAS-307).
+  assert {
+    condition = (
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].time_aggregation_method == "Count" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].operator == "GreaterThan" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].threshold == 0 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].failing_periods[0].number_of_evaluation_periods == 1 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].failing_periods[0].minimum_failing_periods_to_trigger_alert == 1
+    )
+    error_message = "The api latency rule must fire when its query returns at least one row, on one failing evaluation."
+  }
+
+  # The query's load-bearing tokens. The access-line pattern is the contract with the api
+  # image: `<METHOD> <route> -> <status> in <ms>ms`, written by every released api image. Reword
+  # it and the rule matches nothing, forever, silently. The streaming exclusions keep exports,
+  # the assistant's chat and MCP from owning the percentile; the minimum-traffic floor keeps a
+  # quiet install from paging on two slow requests; the default threshold is 2000 ms.
+  assert {
+    condition = (
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "ContainerAppConsoleLogs_CL") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "ContainerAppName_s == \"ca-api\"") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "@\"[A-Z]+ ([^ ]+) -> [0-9]{3} in ([0-9.]+)ms\"") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "percentile(DurationMs, 95)") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "Route !contains \":export\"") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "Route !endswith \"/ai/chat\"") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "Route !startswith \"/mcp\"") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "Requests >= 50 and P95Ms > 2000") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "union isfuzzy=true") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]")
+    )
+    error_message = "The api latency query must parse the api's access line, exclude streaming routes, take the 95th percentile against the threshold above a traffic floor, and keep the union's empty-datatable anchor."
+  }
+
+  # Worker memory (MAS-1291): 85% of the replica's configured 1Gi, in bytes, read as the
+  # Maximum across replicas so the one replica near its limit is not averaged away.
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.workers_memory) == 1 &&
+      azurerm_monitor_metric_alert.workers_memory[0].severity == 2 &&
+      azurerm_monitor_metric_alert.workers_memory[0].window_size == "PT15M" &&
+      azurerm_monitor_metric_alert.workers_memory[0].criteria[0].metric_namespace == "Microsoft.App/containerapps" &&
+      azurerm_monitor_metric_alert.workers_memory[0].criteria[0].metric_name == "WorkingSetBytes" &&
+      azurerm_monitor_metric_alert.workers_memory[0].criteria[0].aggregation == "Maximum" &&
+      azurerm_monitor_metric_alert.workers_memory[0].criteria[0].operator == "GreaterThan" &&
+      module.workers[0].memory == "1Gi" &&
+      azurerm_monitor_metric_alert.workers_memory[0].criteria[0].threshold == 912680550 &&
+      length(azurerm_monitor_metric_alert.workers_memory[0].criteria[0].dimension) == 0
+    )
+    error_message = "The workers memory alert must read WorkingSetBytes (Maximum) above 85% of the replica's 1Gi."
+  }
+
+  # No broker here, so no dead-letter alert.
+  assert {
+    condition     = length(azurerm_monitor_metric_alert.servicebus_dead_letters) == 0
+    error_message = "Without enable_service_bus there is no dead-letter queue to alert on."
+  }
+}
+
+# The load thresholds are inputs, and moving one moves the alert (MAS-1291).
+run "load_alert_thresholds_are_tunable" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs              = ["203.0.113.7/32"]
+    enable_diagnostics                 = true
+    enable_workers                     = true
+    postgres_sku_name                  = "GP_Standard_D4ds_v5"
+    alert_postgres_cpu_percent         = 90
+    alert_postgres_connections_percent = 50
+    alert_postgres_max_connections     = 1000
+    alert_postgres_iops_percent        = 70
+    alert_api_p95_ms                   = 750
+    alert_workers_memory_percent       = 50
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.postgres_cpu[0].criteria[0].threshold == 90 &&
+      azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].threshold == 500 &&
+      azurerm_monitor_metric_alert.postgres_iops[0].criteria[0].threshold == 70 &&
+      azurerm_monitor_metric_alert.workers_memory[0].criteria[0].threshold == 536870912 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "P95Ms > 750")
+    )
+    error_message = "Each load threshold must follow its input; an explicit alert_postgres_max_connections must override the SKU-derived limit."
+  }
+}
+
+# A SKU the module cannot size: no connections alert, and a plan-time warning that says how to
+# get one — never an alert measured against a guessed limit. The other load alerts are
+# unaffected.
+run "unknown_postgres_sku_gets_no_connections_alert_and_a_warning" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = true
+    postgres_sku_name     = "GP_Standard_DC2ads_v5"
+  }
+
+  expect_failures = [check.postgres_connections_alert_has_a_limit]
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.postgres_connections) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_cpu) == 1 &&
+      length(azurerm_monitor_metric_alert.postgres_iops) == 1
+    )
+    error_message = "An unrecognised SKU (GP_Standard_DC2ads_v5, a confidential-compute SKU the module does not size) must drop only the connections alert."
+  }
+}
+
+# The burstable default is sized from the listed table: B1ms is 2 GiB, 50 connections.
+run "burstable_default_sizes_the_connections_alert" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = true
+  }
+
+  assert {
+    condition     = azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].threshold == 35
+    error_message = "B_Standard_B1ms (max_connections 50) must alert above 35 active connections at the 70% default."
+  }
+}
+
+# Memory Optimized E-series: 8 GiB per vCore. E4ds_v5 is 32 GiB, 3437 connections.
+run "memory_optimized_sku_sizes_the_connections_alert" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = true
+    postgres_sku_name     = "MO_Standard_E4ds_v5"
+  }
+
+  assert {
+    condition     = azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].threshold == 2405
+    error_message = "MO_Standard_E4ds_v5 (max_connections 3437) must alert above 2405 active connections at the 70% default."
+  }
+}
+
+# Guards on the threshold inputs: a percentage is a percentage, a limit is a whole count.
+run "load_alert_percent_out_of_range_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs                  = ["203.0.113.7/32"]
+    alert_postgres_cpu_percent             = 100
+    alert_postgres_max_connections         = 0
+    alert_workers_memory_percent           = 0
+    alert_api_p95_ms                       = 0
+    alert_servicebus_dead_letter_threshold = -1
+  }
+
+  expect_failures = [
+    var.alert_postgres_cpu_percent,
+    var.alert_postgres_max_connections,
+    var.alert_workers_memory_percent,
+    var.alert_api_p95_ms,
+    var.alert_servicebus_dead_letter_threshold,
+  ]
+}
+
 # mode=production on the PROVISIONED starter server: the data-plane defaults must be
 # production-grade (non-burstable SKU + zone-redundant HA + >=14d retention). This exercises
 # the starter-server path (no external_database_url), unlike the BYO-DB wiring test above.
@@ -376,6 +590,48 @@ run "production_starter_postgres_grade_plans" {
       length(azurerm_monitor_action_group.alerts) == 1
     )
     error_message = "Production starter server must wire Postgres diagnostics + storage alert (no CPU-credit alert on GP) and an action group when alert_email is set."
+  }
+
+  # The Postgres load alerts (MAS-1291). CPU and IOPS are Azure's own percentages; connections
+  # is a count derived from the SKU's default max_connections: GP_Standard_D2ds_v5 is 8 GiB,
+  # 859 connections, so the 70% default fires above 601. Every one of these plans with a wrong
+  # aggregation or operator, so each is pinned.
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.postgres_cpu[0].severity == 2 &&
+      azurerm_monitor_metric_alert.postgres_cpu[0].window_size == "PT15M" &&
+      azurerm_monitor_metric_alert.postgres_cpu[0].criteria[0].metric_namespace == "Microsoft.DBforPostgreSQL/flexibleServers" &&
+      azurerm_monitor_metric_alert.postgres_cpu[0].criteria[0].metric_name == "cpu_percent" &&
+      azurerm_monitor_metric_alert.postgres_cpu[0].criteria[0].aggregation == "Average" &&
+      azurerm_monitor_metric_alert.postgres_cpu[0].criteria[0].operator == "GreaterThan" &&
+      azurerm_monitor_metric_alert.postgres_cpu[0].criteria[0].threshold == 80
+    )
+    error_message = "The Postgres CPU alert must read cpu_percent (Average) above 80 over 15 minutes."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.postgres_connections[0].severity == 2 &&
+      azurerm_monitor_metric_alert.postgres_connections[0].window_size == "PT15M" &&
+      azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].metric_name == "active_connections" &&
+      azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].aggregation == "Average" &&
+      azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].operator == "GreaterThan" &&
+      azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].threshold == 601 &&
+      strcontains(azurerm_monitor_metric_alert.postgres_connections[0].description, "(859)")
+    )
+    error_message = "The Postgres connections alert must read active_connections (Average) above 70% of the D2ds_v5 default of 859."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.postgres_iops[0].severity == 2 &&
+      azurerm_monitor_metric_alert.postgres_iops[0].window_size == "PT15M" &&
+      azurerm_monitor_metric_alert.postgres_iops[0].criteria[0].metric_name == "disk_iops_consumed_percentage" &&
+      azurerm_monitor_metric_alert.postgres_iops[0].criteria[0].aggregation == "Average" &&
+      azurerm_monitor_metric_alert.postgres_iops[0].criteria[0].operator == "GreaterThan" &&
+      azurerm_monitor_metric_alert.postgres_iops[0].criteria[0].threshold == 80
+    )
+    error_message = "The Postgres IOPS alert must read disk_iops_consumed_percentage (Average) above 80 over 15 minutes."
   }
 
   # The provisioned server gets both database availability alerts (MAS-263): the fast one that
@@ -702,7 +958,11 @@ run "key_vault_enabled_provisions_vault_and_grant" {
       length(azurerm_monitor_metric_alert.app_unavailable) == 0 &&
       length(azurerm_monitor_metric_alert.postgres_unavailable) == 0 &&
       length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0 &&
-      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 0
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_cpu) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_connections) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_iops) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency) == 0
     )
     error_message = "Diagnostics must be off by default outside production."
   }
@@ -1195,6 +1455,37 @@ run "service_bus_enabled_provisions_broker_and_grants" {
       azurerm_servicebus_queue.jobs[0].dead_lettering_on_message_expiration
     )
     error_message = "The jobs queue must redeliver and dead-letter rather than drop work."
+  }
+}
+
+# Dead-lettered job messages (MAS-1291): any message in the job queue's dead-letter sub-queue,
+# read as the Maximum so one arriving inside the window is seen, and scoped to that queue by
+# name so a later queue in the namespace is not swept in. Severity 1: work may already be stuck.
+run "service_bus_dead_letters_are_alerted" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_service_bus    = true
+    enable_workers        = true
+    enable_diagnostics    = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.servicebus_dead_letters) == 1 &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].severity == 1 &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].window_size == "PT15M" &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].criteria[0].metric_namespace == "Microsoft.ServiceBus/namespaces" &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].criteria[0].metric_name == "DeadletteredMessages" &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].criteria[0].aggregation == "Maximum" &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].criteria[0].operator == "GreaterThan" &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].criteria[0].threshold == 0 &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].criteria[0].dimension[0].name == "EntityName" &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].criteria[0].dimension[0].operator == "Include" &&
+      azurerm_monitor_metric_alert.servicebus_dead_letters[0].criteria[0].dimension[0].values == tolist(["masterly-jobs"])
+    )
+    error_message = "The dead-letter alert must read DeadletteredMessages (Maximum) above 0 on the masterly-jobs queue."
   }
 }
 
