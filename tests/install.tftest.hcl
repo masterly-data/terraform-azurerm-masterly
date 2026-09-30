@@ -4070,12 +4070,13 @@ run "demo_existing_servers_keep_what_they_have" {
   }
 }
 
-# An existing production server moved on purpose: once the ownership steps have run, setting
-# database_auth = "entra" switches it, and the module does not look up what exists. Whether that
-# switch is in place is the provider's answer and not something a mock can show: the
-# `authentication` block is updated in place, and the administrator login is left unset rather
-# than renamed (a rename replaces the server). Only a plan against a live install proves it.
-run "production_explicit_entra_skips_the_lookup" {
+# An explicit "entra" wins over the default without a Redis lookup. The server is still read,
+# for one fact only: whether it holds the generated admin password it must keep being sent (the
+# transition runs at the end of this file). On a new install it finds nothing. Whether a switch
+# of an existing server is in place is the provider's answer and not something a mock can show:
+# the `authentication` block is updated in place, and the administrator login is left unset
+# rather than renamed (a rename replaces the server). Only a plan against a live install proves it.
+run "production_explicit_entra_reads_only_the_server" {
   command = plan
 
   variables {
@@ -4106,12 +4107,22 @@ run "production_explicit_entra_skips_the_lookup" {
 
   assert {
     condition = (
-      length(data.azurerm_resources.existing_postgres) == 0 &&
+      length(data.azurerm_resources.existing_postgres) == 1 &&
       length(data.azurerm_resources.existing_redis) == 0 &&
       length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 1 &&
       length(azurerm_managed_redis_access_policy_assignment.apps) == 1
     )
-    error_message = "An explicit \"entra\" must skip the lookup and grant the apps' identity on both stores."
+    error_message = "An explicit \"entra\" must read only the server, and grant the apps' identity on both stores."
+  }
+
+  # A new server on "entra" is sent no password: Azure refuses one at creation when password
+  # authentication is off.
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.this[0].administrator_password == null &&
+      azurerm_postgresql_flexible_server.this[0].tags["masterly-admin-password"] == "none"
+    )
+    error_message = "A server created on \"entra\" must be sent no administrator password, and record that it holds none."
   }
 }
 
@@ -4153,4 +4164,192 @@ run "redis_auth_rejects_the_database_spelling" {
   }
 
   expect_failures = [var.redis_auth]
+}
+
+# --- The generated admin password across transitions ------------------------------------------
+#
+# A server holds exactly the administrator_password this configuration last sent, and the
+# provider sends any change to it — a change to null included — as a new password. The
+# override_data blocks below stand in for the tags a real server carries by then.
+
+# A server created on "entra" records "none", and on every later plan, with the input set or
+# unset, it is sent no password: it never had the generated one, and Azure refuses a password
+# where password authentication was off from the start. (Its creation is asserted in
+# production_explicit_entra_reads_only_the_server.)
+run "a_server_created_on_entra_is_never_sent_a_password" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  override_data {
+    target = data.azurerm_resources.existing_postgres
+    values = {
+      resources = [{
+        id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+        name                = "psql-masterly-abc123"
+        resource_group_name = "rg-masterly-data"
+        type                = "Microsoft.DBforPostgreSQL/flexibleServers"
+        location            = "swedencentral"
+        tags                = { "install-id" = "test", "masterly-auth" = "entra", "masterly-admin-password" = "none" }
+      }]
+    }
+  }
+
+  assert {
+    condition = (
+      output.database_auth == "entra" &&
+      azurerm_postgresql_flexible_server.this[0].administrator_password == null &&
+      azurerm_postgresql_flexible_server.this[0].tags["masterly-admin-password"] == "none"
+    )
+    error_message = "A server created on \"entra\" must stay on \"entra\" and never be sent a password."
+  }
+}
+
+# The runs from here to the end of the file APPLY against the mock providers and share one state,
+# in order, so each later run plans against the server the earlier ones left: the only way to see
+# what an existing server is sent. Keep them last — every run after them would start from that
+# state. They target the server (and so what it depends on, the password among them): the rest
+# of the install is not what they are about, and mock values would not pass the provider's own
+# checks of the IDs one resource hands another.
+
+# A new install on "password" (the evaluation default). The server gets a well-formed ID, which
+# the teardown's destroy plan hands the private endpoint.
+run "password_install_created" {
+  command = apply
+
+  plan_options {
+    target = [azurerm_postgresql_flexible_server.this]
+  }
+
+  override_resource {
+    target = azurerm_postgresql_flexible_server.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+    }
+  }
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.this[0].administrator_password == random_password.postgres_admin[0].result &&
+      azurerm_postgresql_flexible_server.this[0].tags["masterly-admin-password"] == "generated"
+    )
+    error_message = "A server created on \"password\" must be sent the generated password and record that it holds it."
+  }
+}
+
+# Rotation: replacing random_password.postgres_admin must change the server's password in the
+# same apply that rolls the connection URL onto it. If the server kept its old password, the apps
+# would restart on a URL whose password Azure never received.
+run "password_rotation_reaches_the_server" {
+  command = apply
+
+  plan_options {
+    target  = [azurerm_postgresql_flexible_server.this]
+    replace = [random_password.postgres_admin[0]]
+  }
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  override_data {
+    target = data.azurerm_resources.existing_postgres
+    values = {
+      resources = [{
+        id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+        name                = "psql-masterly-abc123"
+        resource_group_name = "rg-masterly-data"
+        type                = "Microsoft.DBforPostgreSQL/flexibleServers"
+        location            = "swedencentral"
+        tags                = { "install-id" = "test", "masterly-auth" = "password", "masterly-admin-password" = "generated" }
+      }]
+    }
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].administrator_password == random_password.postgres_admin[0].result
+    error_message = "A replaced random_password.postgres_admin must reach the server in the same apply as the connection URL."
+  }
+}
+
+# The same server moved to "entra" on purpose. The lookup finds it untagged — the case of a server
+# created by an earlier version of this module — and the server keeps being sent the password it
+# holds, so the move plans no password change: null would reach Azure as an empty password.
+run "moving_to_entra_keeps_the_held_password" {
+  command = apply
+
+  plan_options {
+    target = [azurerm_postgresql_flexible_server.this]
+  }
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    database_auth         = "entra"
+  }
+
+  override_data {
+    target = data.azurerm_resources.existing_postgres
+    values = {
+      resources = [{
+        id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+        name                = "psql-masterly-abc123"
+        resource_group_name = "rg-masterly-data"
+        type                = "Microsoft.DBforPostgreSQL/flexibleServers"
+        location            = "swedencentral"
+        tags                = { "install-id" = "test" }
+      }]
+    }
+  }
+
+  assert {
+    condition = (
+      output.database_auth == "entra" &&
+      azurerm_postgresql_flexible_server.this[0].authentication[0].password_auth_enabled == false &&
+      azurerm_postgresql_flexible_server.this[0].administrator_password == random_password.postgres_admin[0].result &&
+      azurerm_postgresql_flexible_server.this[0].tags["masterly-admin-password"] == "generated"
+    )
+    error_message = "A server moved from \"password\" to \"entra\" must keep being sent the password it holds, and record that it holds it."
+  }
+}
+
+# And on the plan after, with the input unset: the tags now say "entra" and "generated", and the
+# server is still sent the same password — no change on any later plan either.
+run "a_moved_server_keeps_its_password_on_later_plans" {
+  command = plan
+
+  plan_options {
+    target = [azurerm_postgresql_flexible_server.this]
+  }
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  override_data {
+    target = data.azurerm_resources.existing_postgres
+    values = {
+      resources = [{
+        id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+        name                = "psql-masterly-abc123"
+        resource_group_name = "rg-masterly-data"
+        type                = "Microsoft.DBforPostgreSQL/flexibleServers"
+        location            = "swedencentral"
+        tags                = { "install-id" = "test", "masterly-auth" = "entra", "masterly-admin-password" = "generated" }
+      }]
+    }
+  }
+
+  assert {
+    condition = (
+      output.database_auth == "entra" &&
+      azurerm_postgresql_flexible_server.this[0].administrator_password == random_password.postgres_admin[0].result
+    )
+    error_message = "A moved server must stay on \"entra\" and keep being sent the password it holds."
+  }
 }

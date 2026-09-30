@@ -564,8 +564,14 @@ resource "azurerm_postgresql_flexible_server" "this" {
   # refuses one at creation when it is off. On an existing server that moves to "entra" the
   # login is left alone rather than cleared: it is Optional + Computed, so null here is no
   # change, and changing it from one name to another would REPLACE the server.
+  #
+  # The password follows the server rather than the choice (entra-auth.tf, "The generated admin
+  # password"): a server that holds the generated password keeps being sent it, on "entra" too,
+  # because the provider would send a change to null as an empty password. So replacing
+  # random_password.postgres_admin changes the server's password and the connection URL in the
+  # same apply. Only a server created on "entra" is sent none.
   administrator_login    = local.database_entra ? null : "masterly_admin"
-  administrator_password = local.database_entra ? null : random_password.postgres_admin[0].result
+  administrator_password = local.postgres_admin_password_held ? random_password.postgres_admin[0].result : null
 
   authentication {
     active_directory_auth_enabled = local.database_entra
@@ -587,8 +593,12 @@ resource "azurerm_postgresql_flexible_server" "this" {
   }
 
   # The authentication this server was last applied with, which is what a later plan with
-  # database_auth unset reads back (entra-auth.tf). A tag change is in place.
-  tags = merge(local.tags, { (local.auth_tag) = local.database_auth })
+  # database_auth unset reads back, and whether it holds the generated admin password
+  # (entra-auth.tf). A tag change is in place.
+  tags = merge(local.tags, {
+    (local.auth_tag)           = local.database_auth
+    (local.admin_password_tag) = local.postgres_admin_password_held ? "generated" : "none"
+  })
 
   lifecycle {
     # A production departure is an explicit input (ADR 0066, amended 2026-09-24): an existing
@@ -612,17 +622,11 @@ resource "azurerm_postgresql_flexible_server" "this" {
     # documented production bring-up is two applies, so a customer could not even finish the
     # install, let alone upgrade. Found on the first production rehearsal, 2026-09-01.
     #
-    # `zone` and `standby_availability_zone` are ignored for that reason. administrator_password
-    # is ignored for a different one: it is not sent again once the server exists. A server that
-    # moves to database_auth = "entra" clears it above, and sending that as an update would ask
-    # Azure to set an empty password rather than to leave the login alone. The generated
-    # password never changes on its own, so nothing else is lost by ignoring it. (This is also
-    # why a server CREATED with "entra" cannot later be moved to "password" by this module: it
-    # has no password to keep. See the README.)
+    # administrator_password is deliberately NOT ignored: a replaced random_password has to reach
+    # the server, or the apps would roll onto a connection URL whose password Azure never got.
     ignore_changes = [
       zone,
       high_availability[0].standby_availability_zone,
-      administrator_password,
     ]
   }
 }

@@ -305,11 +305,32 @@ server or cache already uses:
 To know what exists, the module lists the subscription's flexible servers (and caches of the
 active `redis_offering`) at plan time and reads the `masterly-auth` tag it puts on its own. A
 server or cache created by an earlier version of this module has no such tag and is read as
-using its password or key. Setting the input skips the lookup: an explicit value always wins.
+using its password or key. An explicit value always wins, and setting it skips the lookup —
+except `database_auth = "entra"`, which still reads the server's `masterly-admin-password` tag
+(below). The listing is a read at subscription scope, which the Contributor or Owner role at
+subscription scope that [Preflight](#preflight) checks for already includes.
 
 Choose `database_auth` before the apply that creates the server. A server created with
-`"entra"` has no password login at all, so this module cannot move it to `"password"`
-afterwards. A server that started on `"password"` can move to `"entra"`, and back.
+`"entra"` has no password login at all, so moving it to `"password"` afterwards is not a
+supported change. A server that started on `"password"` can move to `"entra"`, and back.
+
+**The generated admin password.** A server that started on `"password"` keeps the generated
+`masterly_admin` password when it moves to `"entra"`: the module goes on applying the same
+value, unused while password authentication is off, and that is what lets the server move back.
+A server created on `"entra"` never has one. The server records which in its
+`masterly-admin-password` tag (`"generated"` or `"none"`).
+
+To rotate the password on a server using `"password"` — after a state exposure, say — replace
+it and apply:
+
+```bash
+terraform apply -replace='module.masterly.random_password.postgres_admin[0]'
+```
+
+(with your own module name in place of `masterly`). One apply changes the password on the
+server and in the `database-url` secret, and the apps roll a new revision onto it; connections
+the old revision opens in between are refused until it does. On a server that moved to
+`"entra"` the same command replaces a password nothing signs in with.
 
 With `external_database_url` (BYO-DB) none of this applies: the database is yours, the DSN is
 the credential, and `database_auth = "entra"` is refused at plan.
@@ -357,6 +378,7 @@ below is made in place; none of them replaces the server or the cache.
 5. **Switch.** Set `database_auth = "entra"` and apply. Microsoft Entra authentication is
    turned on and password authentication off, the apps' identity becomes the server's Entra
    administrator, and the apps roll a new revision whose connection string names that role.
+   The plan shows no change to the administrator password: the server keeps it, unused.
    Check that `/readyz` answers and that you can sign in.
 
 To go back, set `database_auth = "password"` (or `redis_auth = "key"`) and apply: password

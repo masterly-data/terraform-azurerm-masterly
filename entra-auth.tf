@@ -40,7 +40,27 @@
 #                           -> the plan stops and asks for an explicit database_auth / redis_auth,
 #                              because a production departure is always a stated input.
 #
-# Setting the input skips the lookup entirely: an explicit value always wins.
+# Setting the input skips the lookup, and an explicit value always wins. The one exception is
+# database_auth = "entra", which still reads the server: see "The generated admin password"
+# below.
+#
+# --- The generated admin password -------------------------------------------------------------
+#
+# A server that exists holds exactly the administrator_password this configuration last sent,
+# and the module must keep sending that value: the provider sends any change, a change to null
+# included, as a new password. So the value sent follows the server, not only the choice:
+#
+#   - a server on "password" is sent the generated password, and a replaced
+#     random_password.postgres_admin reaches the server and the connection URL together.
+#   - a server that started on "password" and moved to "entra" keeps being sent the same
+#     password, so the move plans no password change. Password authentication is off, so
+#     nothing can sign in with it; it is what lets the server move back.
+#   - a server created on "entra" is sent none, ever: Azure refuses a password at creation when
+#     password authentication is off, and it never had one to keep.
+#
+# The last two cases look the same in the masterly-auth tag, so the server carries a second tag,
+# masterly-admin-password: "generated" or "none". An untagged server was created by an earlier
+# version of this module, on its password.
 
 variable "database_auth" {
   type        = string
@@ -71,7 +91,7 @@ variable "redis_auth" {
   }
 }
 
-# --- What already exists (read only when the input is unset) ---------------------------------
+# --- What already exists (read when an input is unset, and on database_auth = "entra") ------
 #
 # A listing by resource type, narrowed below to this install's data resource group and name.
 # It is read at plan time on a new install too — every argument is known — and it finds nothing
@@ -79,7 +99,8 @@ variable "redis_auth" {
 # this module already has.
 
 data "azurerm_resources" "existing_postgres" {
-  count = local.provision_postgres && var.database_auth == null ? 1 : 0
+  # Unset: to choose a default. "entra": to know whether the server holds the generated password.
+  count = local.provision_postgres && var.database_auth != "password" ? 1 : 0
 
   type = "Microsoft.DBforPostgreSQL/flexibleServers"
 }
@@ -91,8 +112,10 @@ data "azurerm_resources" "existing_redis" {
 }
 
 locals {
-  # The tag each server or cache carries, recording the authentication it was last applied with.
-  auth_tag = "masterly-auth"
+  # The tag each server or cache carries, recording the authentication it was last applied with,
+  # and the server's record of whether it holds the generated admin password.
+  auth_tag           = "masterly-auth"
+  admin_password_tag = "masterly-admin-password"
 
   existing_postgres = [
     for r in flatten(data.azurerm_resources.existing_postgres[*].resources) : r
@@ -107,6 +130,9 @@ locals {
   # lookup ran). Untagged means it was created before this module recorded it: password / key.
   recorded_database_auth = length(local.existing_postgres) > 0 ? try(local.existing_postgres[0].tags[local.auth_tag], "password") : null
   recorded_redis_auth    = length(local.existing_redis) > 0 ? try(local.existing_redis[0].tags[local.auth_tag], "key") : null
+  recorded_admin_password = (
+    length(local.existing_postgres) > 0 ? try(local.existing_postgres[0].tags[local.admin_password_tag], "generated") : null
+  )
 
   # The effective choice: the input when set, otherwise what exists, otherwise the mode's default
   # — the mode-conditional shape of keyvault.tf's purge_protection_enabled.
@@ -121,6 +147,11 @@ locals {
   # to a Redis that is not enabled.
   database_entra = local.provision_postgres && local.database_auth == "entra"
   redis_entra    = local.redis_enabled && local.redis_auth == "entra"
+
+  # Whether the server is sent the generated admin password (see "The generated admin password"
+  # above): always on "password"; on "entra" only for a server that already holds it. On "entra"
+  # the lookup has always run, so a server that exists is always found here.
+  postgres_admin_password_held = !local.database_entra || local.recorded_admin_password == "generated"
 
   # The Postgres role the apps' identity becomes: an Entra administrator's role is named by
   # its principal_name, and the connection URL's user must be exactly that name.

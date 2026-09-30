@@ -62,6 +62,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   — it includes the ownership steps the starter server needs first. Every change on that path is
   made in place; none replaces the server or the cache. Evaluation installs keep the password and
   the key (MAS-1085).
+- The starter Postgres server now carries a second tag, `masterly-admin-password` (`"generated"`
+  or `"none"`), recording whether it holds the module's generated `masterly_admin` password. A
+  server that moves to `"entra"` keeps that password, unused, so the move plans no password change
+  and the server can move back; a server created on `"entra"` is never sent one. Replacing
+  `random_password.postgres_admin` still changes the password on the server and in the apps'
+  connection string in the same apply; the README's "The generated admin password" says how.
+  `database_auth = "entra"` therefore still reads the subscription's server listing, as an unset
+  input does (MAS-1085).
 - `mode = "production"` now refuses `workers_min_replicas = 0` at plan time, the same guard
   `api_min_replicas` and `frontend_min_replicas` already carry. The variable's description
   already said to keep it at 1 or more, but nothing enforced it: `ca-workers` has no ingress, so
