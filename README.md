@@ -265,9 +265,10 @@ on the ports the subnet's network security group admits — Postgres among them;
 Omit `external_database_url` and the module provisions the **starter server** instead —
 private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its knobs:
 `postgres_sku_name`, `postgres_storage_mb`, `postgres_version`,
-`postgres_backup_retention_days`, `postgres_geo_redundant_backup` (mind data residency —
-backups go to the paired region), `postgres_zone_redundant_ha` (needs a non-burstable
-SKU). Flipping an install from starter to BYO-DB **plans the destruction of the starter
+`postgres_backup_retention_days`, `postgres_geo_redundant_backup` (on by default in
+production where the module knows the region supports it; mind data residency — backups go to
+the paired region; see [the departures section](#geo-redundant-backup-is-on-only-in-the-regions-the-module-lists)),
+`postgres_zone_redundant_ha` (needs a non-burstable SKU). Flipping an install from starter to BYO-DB **plans the destruction of the starter
 server** — migrate your data first; the plan makes it visible.
 
 A BYO-DB database on a **private** address — reached over peering or a private endpoint — is
@@ -469,21 +470,39 @@ Definitions that flag this:
 - No built-in definition evaluates access-key authentication on Azure Managed Redis
   (`redis_offering = "managed"`).
 
-#### Geo-redundant backup is off on the starter Postgres server
+#### Geo-redundant backup is on only in the regions the module lists
 
-`postgres_geo_redundant_backup` defaults to `false`, and `mode = "production"` does not
-require it. Azure recommends geo-redundant backup as a reliability measure.
+Geo-redundant backup copies the starter Postgres server's backups to the region Azure pairs
+with the server's region, so the server can be restored there if its own region is lost. Azure
+recommends it as a reliability measure. Leave `postgres_geo_redundant_backup` unset and the
+module decides:
 
-Why it holds today: geo-redundant backup copies the server's backups to the region Azure
-pairs with the server's region. Whether that region is inside your install's data-residency
-boundary is a decision the module cannot make for you, and a region with no pair cannot use
-geo-redundant backup at all.
+| Install | Region | Geo-redundant backup |
+|---|---|---|
+| `mode = "production"` | Sweden Central | On. Its pair, Sweden South, is in Sweden, inside the `eu` geo. |
+| `mode = "production"` | Poland Central, Spain Central | Off. Azure does not offer geo-redundant backup for Postgres flexible server in these regions, so turning it on would fail the apply. |
+| `mode = "production"` | Any other region | Off. The module has not yet recorded whether Azure supports it there. |
+| `mode = "demo"` | Any | Off. |
 
-To follow Azure's recommendation now, check that the paired region is inside your residency
-boundary, then set `postgres_geo_redundant_backup = true` **before the apply that creates the
-server**. Azure accepts this setting only when a server is created. On an existing install,
-changing it makes Terraform plan to replace the starter server, which destroys the server and
-the data on it; do not apply that plan.
+Set `postgres_geo_redundant_backup = true` or `false` to decide yourself; your value always
+wins. Before setting `true`, check two things against Microsoft's
+[regions table](https://learn.microsoft.com/azure/postgresql/overview#azure-regions): that the
+region supports geo-redundant backup, and that the paired region is inside your install's
+data-residency boundary. The backups are copies of your data, so a pair outside that boundary
+is a residency breach, not a backup.
+
+The setting takes effect only when the server is created. Azure accepts it only at creation,
+and changing it would replace the server, destroying the server and every Environment database
+on it. So the module ignores later changes to it: a module upgrade that changes the default, or
+a changed input, leaves an existing server as it was created. An install created before this
+default keeps the setting it was created with: off, unless you had set it. To turn it on for an existing server, restore the
+server to a new one with geo-redundant backup enabled and move the install's data plane to it.
+
+A geo-restore creates a new server in the paired region. Sweden South is an access-restricted
+region: a subscription can create resources there only after Microsoft grants it access. If
+your install is in Sweden Central, request access to Sweden South for the install's
+subscription before you need a restore, through an Azure support request; the backups are
+copied there either way, but a restore into Sweden South waits on that access.
 
 Definitions that flag this:
 

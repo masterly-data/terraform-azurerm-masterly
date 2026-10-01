@@ -494,8 +494,8 @@ variable "postgres_backup_retention_days" {
 
 variable "postgres_geo_redundant_backup" {
   type        = bool
-  default     = false
-  description = "Geo-redundant backups for the provisioned Postgres server. CAUTION: replicates backups to the paired Azure region — verify that region satisfies the install's data-residency boundary before enabling."
+  default     = null
+  description = "Geo-redundant backups for the provisioned Postgres server, which copy its backups to the Azure region paired with var.location. Unset (null), mode=production turns it on in regions where the module knows Azure supports it (Sweden Central today) and leaves it off elsewhere; evaluation installs leave it off. Set true or false to decide yourself. Before setting true, check that the paired region is inside the install's data-residency boundary. Azure accepts this setting only when the server is created, so the module applies it at creation only: changing it later does not change, or replace, an existing server. See the README, \"Where this module departs from Azure's recommended baseline\"."
 }
 
 variable "postgres_zone_redundant_ha" {
