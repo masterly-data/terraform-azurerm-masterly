@@ -707,9 +707,15 @@ The script does not delete those lines — the statement that failed is often th
 diagnosis — and it does not refuse the bundle over them either, because a tool that refuses to
 hand over the evidence during an incident does not get used. It **names the files**: on the
 terminal at the end of the run, and in `manifest.json` under
-`record_data.needs_line_by_line_review`, which lists the files in *that* bundle where
-statement text was actually found. Read those files line by line, delete any line you are not
-willing to send, and say in your message that you did.
+`record_data.needs_line_by_line_review`, which lists the files in *that* bundle that must be
+read line by line — every one of the two above that the run collected, whether or not the
+script found statement text in it. The script's scan for statement shapes (`STATEMENT:`,
+`DETAIL: Key (…)`, `PARAMETERS:`) is a heuristic for what Postgres writes at its defaults; an
+attribute value has no shape of its own, so the scan finding nothing is not the file being
+clear, and a read-first instruction gated on the scan would go quiet exactly when it is least
+able to tell (MAS-423). Where the scan did find statement text, the file is also listed under
+`record_data.statement_text_found_in` and the terminal says so. Read the named files line by
+line, delete any line you are not willing to send, and say in your message that you did.
 
 Before it finishes it scans everything it wrote for anything shaped like a secret — a URL
 with credentials, a JWT, a private key, a `password=` — and **refuses** a bundle that trips
@@ -721,10 +727,12 @@ report, not a line to forward.
 two strengths of claim apart rather than blurring them: each seeded secret, credential,
 address and key is asserted **absent**, and the record-data class is asserted **present in
 `q6` and flagged** — the value in the file, the file named in `manifest.json`, the operator
-told on the terminal, and the run still exiting 0. Its `--selftest` breaks the script five
-ways — allow-list bypassed, secret values kept, refusal gate disabled, statement-echo warning
-disabled, version taken from the release manifest — to insist the harness notices. CI runs both
-on every change.
+told on the terminal, and the run still exiting 0 — and a `q6` carrying a Postgres error with
+no statement marker at all is asserted to be named just the same. Its `--selftest` breaks the
+script seven ways — allow-list bypassed, secret values kept, refusal gate disabled,
+statement-echo warning disabled, its pattern scan alone disabled, the review list seeded from
+the scan alone, version taken from the release manifest — to insist the harness notices. CI
+runs both on every change.
 
 ## If you front this install with a WAF, CDN, or gateway
 
