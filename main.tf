@@ -8,12 +8,18 @@
 # Environment at first touch either way, ADR 0003). Identity is dev (evaluation,
 # allowlist-required) or the customer's OIDC IdP (ADR 0024); the license JWT (ADR 0013)
 # arrives as an input. Secrets are born here or arrive as sensitive inputs and live as
-# Container App secrets; nothing per-install is baked into images.
+# Container App secrets, or as Key Vault references with enable_key_vault; nothing
+# per-install is baked into images.
 #
-# Deliberately deferred (-> later): Key Vault-backed secrets, Redis (until then the api
-# is pinned to one replica — the session registry is in-memory), the dedicated workers
-# service, custom domains, the per-install Entra identity of ADR 0020 (the install does
-# not call Masterly's control plane yet).
+# Opt-in subsystems, off by default: Key Vault (keyvault.tf), Redis (redis.tf), the
+# dedicated workers app (workers.tf), customer-owned email (email.tf) and the Service Bus
+# transport (below). mode=production requires the first three. The observability surface
+# (diagnostics.tf) is on by default in mode=production and off otherwise.
+#
+# Deliberately deferred: custom domains, and the per-install Entra identity of ADR 0020.
+# The calls the install can make to Masterly's control plane (licence refresh, usage
+# reporting) are opt-in and authenticate with the install credential from the bundle, not
+# with that identity. The README's "Deliberately deferred" section is the list of record.
 
 locals {
   rg_aca_name  = "rg-${var.name_prefix}-aca"

@@ -82,6 +82,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   Changing `postgres_geo_redundant_backup` on an existing install no longer plans
   anything for the server; to change the setting, restore the server to a new one (MAS-1087).
 
+### Fixed
+
+- The header comment at the top of `main.tf` described the module as it was several releases
+  ago. It listed Key Vault-backed secrets, Redis and the dedicated workers app as deliberately
+  deferred, although all three ship as opt-in subsystems and `mode = "production"` requires
+  them, and it said the install does not call Masterly's control plane, although licence refresh
+  and usage reporting are both available as opt-ins. The header now names those subsystems and
+  lists only what is still deferred: custom domains and the per-install Entra identity of
+  ADR 0020, matching the README's "Deliberately deferred" section. Comments only; nothing an
+  install plans or applies changed (MAS-225).
+
 ## [0.16.0] - 2026-09-24
 
 ### Added
