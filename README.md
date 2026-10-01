@@ -348,7 +348,9 @@ Landing-zone accommodations:
   allocation sets `aca_subnet_prefix` + `private_endpoints_subnet_prefix` explicitly.
 - Hub-and-spoke shops that centralize private DNS pass
   `postgres_private_dns_zone_id` — the module then creates no zone and no VNet link
-  (linking the central zone to this VNet is the platform team's side).
+  (linking the central zone to this VNet is the platform team's side). The same holds for
+  `key_vault_private_dns_zone_id`, `redis_private_dns_zone_id` and
+  `servicebus_private_dns_zone_id`.
 
 > Upgrading from v0.1: `infrastructure_subnet_id` is create-time-only, so the apply
 > REPLACES the Container App Environment and the apps — their FQDNs change. The Postgres
@@ -406,31 +408,48 @@ The Microsoft cloud security benchmark v2 (`e3ec7e09-768c-4b64-882c-fcada3772047
 opt-in preview; each item says whether its definitions are in it. Whether a finding appears
 on your subscription therefore depends on the standards and policies you have assigned.
 
-#### Service Bus keeps public network access enabled
+#### Service Bus on Basic or Standard keeps public network access enabled
 
-This applies only with `enable_service_bus = true`. The namespace leaves public network access
-at Azure's default, enabled, and the module creates no private endpoint for it. Azure
-recommends the Premium tier with a private endpoint and public network access disabled. The
-namespace's minimum TLS version is set to 1.2 explicitly (`minimum_tls_version`).
+This applies only with `enable_service_bus = true`. Azure recommends the Premium tier with a
+private endpoint and public network access disabled. The namespace's minimum TLS version is set
+to 1.2 explicitly (`minimum_tls_version`) on every tier.
 
-Why it holds today:
+In `mode = "production"` with `servicebus_sku = "Premium"`, the module follows that
+recommendation: public network access is disabled, and the apps reach the namespace over a
+private endpoint in the install's private-endpoints subnet, with a
+`privatelink.servicebus.windows.net` private DNS zone linked to the install's VNet (or the zone
+you pass in `servicebus_private_dns_zone_id`). Outside production a Premium namespace keeps
+public access, for ease of evaluation.
 
-- Private endpoints are a Premium-tier feature. The module's default `servicebus_sku` is
-  Standard, and the module does not create a private endpoint on Premium either.
+On Basic or Standard the namespace keeps public network access enabled, and the module's
+default `servicebus_sku` is Standard. Why that departure exists:
+
+- Private endpoints are a Premium-tier feature, so Basic and Standard cannot be made private.
 - IP firewall rules are available on Standard, but they leave public network access enabled,
   so they do not meet the recommendation. They would also need a stable source address, which
   this module's Consumption-only Container Apps environment does not have.
+- Premium is priced per messaging unit. The module provisions one, which costs about **$677
+  per month** in Sweden Central at list price (USD 0.9275 per messaging-unit hour), against a
+  Standard base charge of about $10 per month. Check the price for your region and agreement.
 
-To follow Azure's recommendation now, leave `enable_service_bus` at its default, `false`. The
-apps then run their job queue in the install's Postgres database (the polling bus binding),
-no broker is provisioned, and `mode = "production"` accepts that configuration.
-`examples/production` sets `enable_service_bus = true`; remove that line to follow this.
+To follow Azure's recommendation, either:
+
+- leave `enable_service_bus` at its default, `false`. The apps then run their job queue in the
+  install's Postgres database (the polling bus binding), no broker is provisioned, and
+  `mode = "production"` accepts that configuration. `examples/production` sets
+  `enable_service_bus = true`; remove that line to follow this. Or
+- set `servicebus_sku = "Premium"` in production. **On an install that already runs a Basic or
+  Standard namespace, this replaces it.** Azure does not convert a namespace between Premium
+  and the other tiers in place, so the plan destroys the namespace, its `masterly-jobs` queue
+  and the apps' two role assignments, and creates them again. Job
+  notifications still in the queue are lost with it; the jobs themselves are in the
+  Environment's database. Read the plan before you apply it.
 
 Definitions that flag this:
 
 - *Service Bus Namespaces should disable public network access*
   (`cbd11fd3-3002-4907-b6c8-579f0e700e13`). It is in the benchmark v2 initiative and applies
-  to every SKU.
+  to every SKU. A production Premium namespace passes it.
 - *Azure Service Bus namespaces should use private link*
   (`1c06e275-d63d-4540-b761-71f364c2111d`). It is in the benchmark v2 initiative, but it
   evaluates Premium namespaces only, so the Standard default does not trigger it.

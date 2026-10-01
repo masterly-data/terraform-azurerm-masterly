@@ -40,6 +40,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   application does not write it to its log. `GET /v1/ops/metrics` reports it (MAS-1291).
 - The `aca-container-app` submodule now refuses a `memory` that is not stated in Gi, and
   outputs the configured value (MAS-1291).
+- A Service Bus namespace on Premium in `mode = "production"` now runs private: public network
+  access is disabled, and the apps reach it over a private endpoint in the private-endpoints
+  subnet, with a `privatelink.servicebus.windows.net` private DNS zone linked to the install's
+  VNet. That subnet's network security group admits AMQP over TLS (TCP 5671) from the runtime
+  subnet when, and only when, such a namespace exists. A new input,
+  `servicebus_private_dns_zone_id`, takes a centrally managed zone instead, as the Postgres,
+  Key Vault and Redis zone inputs do, and refuses a zone of any other name. Basic and Standard
+  namespaces, and every namespace outside production, keep public network access as before
+  (MAS-1086).
 
 ### Changed
 
@@ -51,6 +60,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   install would stall with no alert. A production install that sets `workers_min_replicas = 0`
   no longer plans; set it to 1 or more (1 is the default). Evaluation installs are unaffected
   (MAS-371).
+
+### Fixed
+
+- `servicebus_sku = "Premium"` now provisions one messaging unit and one partition. Before, the
+  module requested a Premium namespace with neither, which the provider refuses at apply, so
+  Premium could not be used at all. Basic and Standard namespaces plan no change from this
+  (MAS-1086).
 
 ## [0.16.0] - 2026-09-24
 

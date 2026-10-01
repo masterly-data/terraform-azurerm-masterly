@@ -659,10 +659,21 @@ variable "enable_service_bus" {
 variable "servicebus_sku" {
   type        = string
   default     = "Standard"
-  description = "Service Bus namespace SKU (Basic has no topics/sessions; Standard is the small-install default)."
+  description = "Service Bus namespace SKU: Basic, Standard or Premium. In mode = \"production\", Premium runs the namespace private, with public network access disabled and a private endpoint in the install's network, which is Azure's recommended baseline; Basic and Standard cannot host a private endpoint and keep a public endpoint, a departure the README describes. Premium is provisioned at one messaging unit, billed at about $677 per month in Sweden Central (Standard's base charge is about $10 per month). Changing an existing namespace to or from Premium replaces it: Azure does not convert a namespace between Premium and the other tiers in place."
 
   validation {
     condition     = contains(["Basic", "Standard", "Premium"], var.servicebus_sku)
     error_message = "servicebus_sku must be Basic, Standard, or Premium."
+  }
+}
+
+variable "servicebus_private_dns_zone_id" {
+  type        = string
+  default     = null
+  description = "Resource ID of an existing privatelink.servicebus.windows.net private DNS zone (hub-and-spoke landing zones that centralize private DNS and deny zone creation in spokes). When set, the module creates no zone and no VNet link — linking this VNet to the central zone (or DINE policy) is the platform team's side. Null (default) creates a per-install zone + link when the namespace runs private (Premium in production)."
+
+  validation {
+    condition     = var.servicebus_private_dns_zone_id == null || can(regex("(?i)/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.servicebus\\.windows\\.net$", var.servicebus_private_dns_zone_id))
+    error_message = "servicebus_private_dns_zone_id must be the resource ID of a private DNS zone named privatelink.servicebus.windows.net. A zone of any other name does not resolve the namespace's hostname to its private endpoint, and the apps would fail to reach the bus."
   }
 }

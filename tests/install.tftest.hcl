@@ -1495,6 +1495,225 @@ run "service_bus_default_off" {
     )
     error_message = "The default must provision no broker — the polling binding runs air-gapped."
   }
+
+  # Disabled, Service Bus leaves nothing behind on the network side either: no endpoint, no
+  # zone, and no AMQP port opened on the endpoints subnet.
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.servicebus) == 0 &&
+      length(azurerm_private_dns_zone.servicebus) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.servicebus) == 0 &&
+      !anytrue([
+        for rule in azurerm_network_security_group.private_endpoints[0].security_rule :
+        contains(rule.destination_port_ranges, "5671")
+        if rule.name == "allow-data-plane-from-apps"
+      ])
+    )
+    error_message = "With Service Bus off there is no Service Bus endpoint, zone, or AMQP port."
+  }
+}
+
+# Service Bus in production on Premium: Azure's recommended baseline (ADR 0066, amendment of
+# 2026-09-24; Azure Policy cbd11fd3-3002-4907-b6c8-579f0e700e13). Public network access is
+# Disabled — IP rules would not pass the policy — and the apps reach the namespace over a
+# private endpoint with its private DNS zone, the same shape as Postgres, Key Vault and Redis.
+run "production_premium_service_bus_is_private" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus    = true
+    servicebus_sku        = "Premium"
+  }
+
+  assert {
+    condition = (
+      azurerm_servicebus_namespace.this[0].sku == "Premium" &&
+      azurerm_servicebus_namespace.this[0].public_network_access_enabled == false
+    )
+    error_message = "A production Premium namespace must have public network access disabled."
+  }
+
+  # Premium is refused by the service with no messaging unit, so the module states one.
+  assert {
+    condition = (
+      azurerm_servicebus_namespace.this[0].capacity == 1 &&
+      azurerm_servicebus_namespace.this[0].premium_messaging_partitions == 1
+    )
+    error_message = "A Premium namespace needs one messaging unit and one partition; 0 is refused at apply."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.servicebus) == 1 &&
+      azurerm_private_endpoint.servicebus[0].private_service_connection[0].subresource_names == tolist(["namespace"]) &&
+      azurerm_private_endpoint.servicebus[0].resource_group_name == azurerm_resource_group.data.name &&
+      length(azurerm_private_dns_zone.servicebus) == 1 &&
+      azurerm_private_dns_zone.servicebus[0].name == "privatelink.servicebus.windows.net" &&
+      length(azurerm_private_dns_zone_virtual_network_link.servicebus) == 1
+    )
+    error_message = "A private namespace needs a private endpoint on the namespace subresource, in the data resource group, with a privatelink.servicebus.windows.net zone linked to the VNet."
+  }
+
+  # The endpoint lives in the module's endpoints subnet, and that subnet's NSG admits AMQP over
+  # TLS from the runtime subnet: without 5671 the apps' Service Bus client cannot connect.
+  assert {
+    condition = anytrue([
+      for rule in azurerm_network_security_group.private_endpoints[0].security_rule :
+      rule.source_address_prefix == azurerm_subnet.aca[0].address_prefixes[0] &&
+      contains(rule.destination_port_ranges, "5671") &&
+      contains(rule.destination_port_ranges, "443")
+      if rule.name == "allow-data-plane-from-apps"
+    ])
+    error_message = "The endpoints subnet must admit AMQP over TLS (5671) from the runtime subnet when the namespace is private."
+  }
+}
+
+# A landing zone that centralizes private DNS supplies the zone: the module creates none and
+# no VNet link, and the endpoint registers in the injected zone.
+run "production_premium_service_bus_uses_injected_dns_zone" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    external_database_url          = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus             = true
+    servicebus_sku                 = "Premium"
+    servicebus_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_dns_zone.servicebus) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.servicebus) == 0 &&
+      length(azurerm_private_endpoint.servicebus) == 1 &&
+      azurerm_private_endpoint.servicebus[0].private_dns_zone_group[0].private_dns_zone_ids == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"])
+    )
+    error_message = "An injected Service Bus zone must be used as given, with no zone or link created."
+  }
+}
+
+# Guard: an injected zone of any other name would leave the namespace's hostname resolving to
+# its public address, which a private namespace refuses — a broken bus that plans clean.
+run "service_bus_dns_zone_of_the_wrong_name_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    enable_service_bus             = true
+    servicebus_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+  }
+
+  expect_failures = [var.servicebus_private_dns_zone_id]
+}
+
+# The opt-down: Standard in production keeps a public endpoint, because Standard cannot host
+# a private endpoint. It plans no endpoint, no zone, no AMQP port, and leaves an existing
+# Standard namespace's capacity and partitions where the provider records them (0), so it
+# plans no change to that namespace.
+run "production_standard_service_bus_keeps_public_endpoint" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus    = true
+    servicebus_sku        = "Standard"
+  }
+
+  assert {
+    condition = (
+      azurerm_servicebus_namespace.this[0].sku == "Standard" &&
+      azurerm_servicebus_namespace.this[0].public_network_access_enabled == true &&
+      azurerm_servicebus_namespace.this[0].capacity == 0 &&
+      azurerm_servicebus_namespace.this[0].premium_messaging_partitions == 0
+    )
+    error_message = "A Standard namespace keeps public access and takes no messaging units."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.servicebus) == 0 &&
+      length(azurerm_private_dns_zone.servicebus) == 0 &&
+      !anytrue([
+        for rule in azurerm_network_security_group.private_endpoints[0].security_rule :
+        contains(rule.destination_port_ranges, "5671")
+        if rule.name == "allow-data-plane-from-apps"
+      ])
+    )
+    error_message = "A Standard namespace gets no private endpoint, no zone and no AMQP port."
+  }
+}
+
+# Outside production nothing changes: a Premium namespace keeps public access, as Key Vault
+# does outside production, for ease of evaluation. It still gets its messaging unit.
+run "non_production_premium_service_bus_stays_public" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_service_bus    = true
+    servicebus_sku        = "Premium"
+  }
+
+  assert {
+    condition = (
+      azurerm_servicebus_namespace.this[0].public_network_access_enabled == true &&
+      azurerm_servicebus_namespace.this[0].capacity == 1 &&
+      length(azurerm_private_endpoint.servicebus) == 0 &&
+      length(azurerm_private_dns_zone.servicebus) == 0
+    )
+    error_message = "Outside production a Premium namespace keeps public access and gets no private endpoint."
+  }
 }
 
 # Guard: scaling the api past one replica without Redis is unrepresentable.
