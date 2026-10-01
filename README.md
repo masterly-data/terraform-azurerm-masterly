@@ -146,12 +146,19 @@ module "masterly" {
 }
 ```
 
-Outputs include `frontend_url`, the apps resource group, the Container App names (the
-values the app repos' release workflows use to roll images — `DEMO_RG`, `DEMO_APP_API`,
-`DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
+Outputs include `frontend_url`, `api_url` (the API's base URL for the Python SDK and other
+clients outside the environment — null unless `api_ingress_external = true`), the apps resource
+group, the Container App names (the values the app repos' release workflows use to roll
+images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
 `apps_identity_client_id` / `frontend_identity_principal_id` for out-of-band role grants.
 The install runs on **two** app identities (see below), so an out-of-band `AcrPull` grant
 has to reach both principals.
+
+`api_internal_fqdn` keeps its name so existing configurations still plan, but the name is older
+than `api_ingress_external`: it holds the API's internal hostname only while the API is
+unpublished, and its published hostname once it is. Read `api_url` for a client's base URL. Like
+every ingress hostname, both are for a person or a client to use, not for wiring one app to
+another — apps in the same environment address the API by its Container App name.
 
 ## Preflight
 
