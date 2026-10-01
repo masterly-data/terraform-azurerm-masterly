@@ -1017,6 +1017,13 @@ If you are reading the manifest from a program rather than from this page,
 field with its type, which of them are stable and which may be added without warning. Parse
 that shape; do not scrape this table.
 
+[`RUNTIME_ENV.json`](RUNTIME_ENV.json) is the manifest's sibling for the other thing a release
+fixes: every environment variable the module sets on `ca-api`, `ca-workers` and `ca-frontend`,
+by name and per app. It is generated from the `.tf` files by
+`python3 scripts/check_runtime_env.py --write`, checked on every change by the same script, and
+documented for programs in [docs/runtime-env.md](docs/runtime-env.md). The application
+repositories check their own code and runbooks against it.
+
 CI checks `terraform fmt` + `validate` + `terraform test` (mock providers exercise the variable
 guards and both data-plane branches) on every change, and
 `scripts/check_release_manifest.py` fails any change where the manifest, the changelog and this
