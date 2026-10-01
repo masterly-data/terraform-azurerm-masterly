@@ -41,7 +41,22 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - The `aca-container-app` submodule now refuses a `memory` that is not stated in Gi, and
   outputs the configured value (MAS-1291).
 
+- An `api_url` output: the API's base URL for the Python SDK and your own pipelines,
+  `https://` followed by the API's ingress hostname, in the same shape as `frontend_url`. It is
+  null unless `api_ingress_external = true`, because an unpublished API has no address a client
+  outside the Container App Environment can reach. Until now the only output carrying the API's
+  hostname was `api_internal_fqdn`, so finding the base URL meant reading the Container App's
+  ingress in the Azure portal (MAS-242).
+
 ### Changed
+
+- `api_internal_fqdn`'s description now says what the output holds. It said the hostname was
+  internal and reachable only inside the environment, which is true only while
+  `api_ingress_external` is false; with the API published, Azure reports the published hostname
+  there. The output keeps its name and its value, so nothing that reads it changes; read
+  `api_url` for a client's base URL. The description also carries the caveat the app module
+  already documented: the hostname is for a person or a client, not for wiring one app to another
+  (MAS-242).
 
 - `mode = "production"` now refuses `workers_min_replicas = 0` at plan time, the same guard
   `api_min_replicas` and `frontend_min_replicas` already carry. The variable's description

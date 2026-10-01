@@ -3466,6 +3466,63 @@ run "external_api_refuses_insecure" {
   }
 }
 
+# api_url is the output a client's base URL is read from. Unpublished, it is null rather than the
+# internal hostname: that address answers only inside the environment, and a base URL that cannot
+# connect is worse than none. api_internal_fqdn stays, under its original name, for existing
+# configurations.
+run "api_url_is_null_while_the_api_is_internal" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = output.api_url == null
+    error_message = "api_url must be null while api_ingress_external is false: an internal api has no address a client outside the environment can use."
+  }
+}
+
+# Published, api_url mirrors frontend_url: the hostname Azure reports, behind https://. The
+# hostname is computed, so at plan it is unknown and an assertion on it asserts nothing;
+# `override_module` pins the api app's outputs to known values so the URL's shape is checkable.
+# (apply is not an option — the mock provider hands out ids that the azurerm provider then
+# rejects as unparseable.) A published api refuses plain HTTP (external_api_refuses_insecure),
+# so an http:// base URL would be a broken one.
+run "api_url_is_an_https_url_once_the_api_is_published" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_ingress_external  = true
+  }
+
+  override_module {
+    target = module.api
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+      name                      = "ca-api"
+      fqdn                      = "ca-api.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
+    }
+  }
+
+  assert {
+    condition     = output.api_url == "https://ca-api.example.swedencentral.azurecontainerapps.io"
+    error_message = "api_url must be https:// followed by the api's ingress hostname once api_ingress_external is true."
+  }
+
+  # The pre-existing output keeps its name and its value — the bare hostname — so a
+  # configuration that already reads it plans exactly as before.
+  assert {
+    condition     = output.api_internal_fqdn == "ca-api.example.swedencentral.azurecontainerapps.io"
+    error_message = "api_internal_fqdn must still carry the api's ingress hostname, unchanged."
+  }
+}
+
 # The other half of the same finding. Flipping the api to HTTPS-only would push the plaintext
 # problem onto the in-environment hop if this were not on, because the BFF keeps calling
 # http://ca-api by app name — the one address that cannot drift and cannot be verified over
