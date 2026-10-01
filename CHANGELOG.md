@@ -67,6 +67,21 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   no longer plans; set it to 1 or more (1 is the default). Evaluation installs are unaffected
   (MAS-371).
 
+- `postgres_geo_redundant_backup` now defaults to `null`, and unset it means: on for
+  `mode = "production"` in a region where the module knows Azure supports geo-redundant backup
+  for Postgres flexible server (Sweden Central today), off in every other region and on every
+  evaluation install. It used to default to `false` everywhere. Set it to `true` or `false` to
+  decide yourself; your value always wins. Poland Central and Spain Central do not support it;
+  other regions stay off until the module records them, and the README's departures section
+  says how to turn it on there and what to check first (MAS-1087).
+- The starter Postgres server now ignores later changes to `geo_redundant_backup_enabled`
+  (`lifecycle.ignore_changes`). Azure accepts the setting only at creation, so changing it used
+  to plan a replacement of the server, which destroys every Environment database on it. The
+  value now takes effect only when the server is created: upgrading to this version does not
+  change, or replace, an existing server, which keeps the setting it was created with.
+  Changing `postgres_geo_redundant_backup` on an existing install no longer plans
+  anything for the server; to change the setting, restore the server to a new one (MAS-1087).
+
 ## [0.16.0] - 2026-09-24
 
 ### Added

@@ -88,6 +88,36 @@ locals {
   location_key = lower(replace(var.location, " ", ""))
   install_geo  = var.location_geo != null ? var.location_geo : lookup(local.location_geo_map, local.location_key, null)
 
+  # --- Geo-redundant backup on the starter Postgres server ------------------------------
+  # Whether Azure Database for PostgreSQL flexible server offers geo-redundant backup in a
+  # region, from Microsoft's regions table:
+  # https://learn.microsoft.com/azure/postgresql/overview#azure-regions
+  #
+  # Only regions whose answer has been checked against that table are listed. A region that
+  # is absent is treated as unsupported, so the production default leaves geo-redundant
+  # backup off there rather than turning on a setting Azure might refuse at apply; set
+  # postgres_geo_redundant_backup = true to turn it on yourself. Checked 2026-09-25:
+  #   - swedencentral: supported. Its pair, Sweden South, is in Sweden, inside the "eu" geo.
+  #     Premium SSD v2 storage does not offer geo-redundant backup in Sweden Central; this
+  #     module provisions Premium SSD, which does.
+  #   - polandcentral, spaincentral: not supported; the table lists no geo-redundant backup
+  #     for either region.
+  # Adding a region here changes the production default only for servers created after the
+  # change; an existing server keeps what it was created with (see the server's lifecycle).
+  postgres_geo_backup_supported = {
+    swedencentral = true
+    polandcentral = false
+    spaincentral  = false
+  }
+
+  # The customer's explicit choice wins. Unset, production turns geo-redundant backup on
+  # wherever the region supports it, and evaluation installs leave it off.
+  postgres_geo_redundant_backup = (
+    var.postgres_geo_redundant_backup != null
+    ? var.postgres_geo_redundant_backup
+    : var.mode == "production" && lookup(local.postgres_geo_backup_supported, local.location_key, false)
+  )
+
   # One install is one data plane in one location, so the only geo whose data it can hold is
   # its own. Defaulting to that makes the safe configuration the automatic one.
   allowed_regions = var.allowed_regions != null ? var.allowed_regions : [var.masterly_region]
@@ -562,7 +592,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   public_network_access_enabled = false # reachable only via the private endpoint
 
   backup_retention_days        = var.postgres_backup_retention_days
-  geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
+  geo_redundant_backup_enabled = local.postgres_geo_redundant_backup
 
   dynamic "high_availability" {
     for_each = var.postgres_zone_redundant_ha ? [1] : []
@@ -587,9 +617,18 @@ resource "azurerm_postgresql_flexible_server" "this" {
     # The consequence was total: the FIRST apply succeeds, and every apply after it fails. The
     # documented production bring-up is two applies, so a customer could not even finish the
     # install, let alone upgrade. Found on the first production rehearsal, 2026-09-01.
+    #
+    # geo_redundant_backup_enabled is ignored for a different reason: Azure accepts it only when
+    # the server is created, so the provider replaces the server to change it, and replacing it
+    # destroys the server and every Environment database on it. The production default depends
+    # on the region and the mode, so a module upgrade or a changed input could otherwise plan
+    # that replacement on an existing install. Ignoring it means the value is used once, at
+    # creation, and an existing server keeps what it was created with. To change it on an
+    # existing server, restore the server to a new one with the setting you want.
     ignore_changes = [
       zone,
       high_availability[0].standby_availability_zone,
+      geo_redundant_backup_enabled,
     ]
   }
 }
