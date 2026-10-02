@@ -24,6 +24,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `RUNTIME_ENV.json`, the machine-readable statement of every environment variable the module sets
+  on `ca-api`, `ca-workers` and `ca-frontend`, by name and per app, split into plain env and
+  Container App secret references. Generated from the `.tf` files by
+  `scripts/check_release_manifest.py`'s sibling, `scripts/check_runtime_env.py --write`, and checked
+  on every pull request: a committed copy that is not what the files produce fails CI, and so does an
+  entry in the diagnostic bundle's `ENV_VALUE_ALLOWLIST` naming a variable the module sets on no
+  app. The shape a program can rely on is [docs/runtime-env.md](docs/runtime-env.md). It exists so
+  the application repositories can check their own code and runbooks against what the module
+  actually sets, instead of keeping three hand-maintained copies of one list (MAS-545).
 - Load alerts, created with the rest of the alert set when diagnostics are on (the default in
   `mode = "production"`), so an install running out of headroom is noticed before it becomes an
   outage: Postgres CPU, active connections and IOPS consumed on the provisioned server;
