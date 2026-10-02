@@ -24,6 +24,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `RUNTIME_ENV.json`, the machine-readable statement of every environment variable the module sets
+  on `ca-api`, `ca-workers` and `ca-frontend`, by name and per app, split into plain env and
+  Container App secret references. Generated from the `.tf` files by
+  `scripts/check_release_manifest.py`'s sibling, `scripts/check_runtime_env.py --write`, and checked
+  on every pull request: a committed copy that is not what the files produce fails CI, and so does an
+  entry in the diagnostic bundle's `ENV_VALUE_ALLOWLIST` naming a variable the module sets on no
+  app. The shape a program can rely on is [docs/runtime-env.md](docs/runtime-env.md). It exists so
+  the application repositories can check their own code and runbooks against what the module
+  actually sets, instead of keeping three hand-maintained copies of one list (MAS-545).
 - Load alerts, created with the rest of the alert set when diagnostics are on (the default in
   `mode = "production"`), so an install running out of headroom is noticed before it becomes an
   outage: Postgres CPU, active connections and IOPS consumed on the provisioned server;
@@ -50,7 +59,22 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   namespaces, and every namespace outside production, keep public network access as before
   (MAS-1086).
 
+- An `api_url` output: the API's base URL for the Python SDK and your own pipelines,
+  `https://` followed by the API's ingress hostname, in the same shape as `frontend_url`. It is
+  null unless `api_ingress_external = true`, because an unpublished API has no address a client
+  outside the Container App Environment can reach. Until now the only output carrying the API's
+  hostname was `api_internal_fqdn`, so finding the base URL meant reading the Container App's
+  ingress in the Azure portal (MAS-242).
+
 ### Changed
+
+- `api_internal_fqdn`'s description now says what the output holds. It said the hostname was
+  internal and reachable only inside the environment, which is true only while
+  `api_ingress_external` is false; with the API published, Azure reports the published hostname
+  there. The output keeps its name and its value, so nothing that reads it changes; read
+  `api_url` for a client's base URL. The description also carries the caveat the app module
+  already documented: the hostname is for a person or a client, not for wiring one app to another
+  (MAS-242).
 
 - `mode = "production"` now refuses `workers_min_replicas = 0` at plan time, the same guard
   `api_min_replicas` and `frontend_min_replicas` already carry. The variable's description
@@ -61,8 +85,31 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   no longer plans; set it to 1 or more (1 is the default). Evaluation installs are unaffected
   (MAS-371).
 
+- `postgres_geo_redundant_backup` now defaults to `null`, and unset it means: on for
+  `mode = "production"` in a region where the module knows Azure supports geo-redundant backup
+  for Postgres flexible server (Sweden Central today), off in every other region and on every
+  evaluation install. It used to default to `false` everywhere. Set it to `true` or `false` to
+  decide yourself; your value always wins. Poland Central and Spain Central do not support it;
+  other regions stay off until the module records them, and the README's departures section
+  says how to turn it on there and what to check first (MAS-1087).
+- The starter Postgres server now ignores later changes to `geo_redundant_backup_enabled`
+  (`lifecycle.ignore_changes`). Azure accepts the setting only at creation, so changing it used
+  to plan a replacement of the server, which destroys every Environment database on it. The
+  value now takes effect only when the server is created: upgrading to this version does not
+  change, or replace, an existing server, which keeps the setting it was created with.
+  Changing `postgres_geo_redundant_backup` on an existing install no longer plans
+  anything for the server; to change the setting, restore the server to a new one (MAS-1087).
+
 ### Fixed
 
+- The header comment at the top of `main.tf` described the module as it was several releases
+  ago. It listed Key Vault-backed secrets, Redis and the dedicated workers app as deliberately
+  deferred, although all three ship as opt-in subsystems and `mode = "production"` requires
+  them, and it said the install does not call Masterly's control plane, although licence refresh
+  and usage reporting are both available as opt-ins. The header now names those subsystems and
+  lists only what is still deferred: custom domains and the per-install Entra identity of
+  ADR 0020, matching the README's "Deliberately deferred" section. Comments only; nothing an
+  install plans or applies changed (MAS-225).
 - `servicebus_sku = "Premium"` now provisions one messaging unit and one partition. Before, the
   module requested a Premium namespace with neither, which the provider refuses at apply, so
   Premium could not be used at all. Basic and Standard namespaces plan no change from this

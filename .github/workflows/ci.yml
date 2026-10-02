@@ -195,6 +195,38 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: python3 scripts/check_release_manifest.py --tag "$TAG"
 
+  # The env a container receives is assembled from locals spread over five .tf files and merged
+  # into each app's `env` and `env_secret_refs`, and RUNTIME_ENV.json is the one place that whole
+  # set is written down by name, per app (docs/runtime-env.md). The application repositories
+  # check their code and runbooks against it. This job is what keeps the manifest honest: it is
+  # regenerated from the .tf files and compared byte for byte, so a variable added to a local
+  # the api consumes fails here until `scripts/check_runtime_env.py --write` is run and the
+  # result committed. The same pass proves every name in the diagnostic bundle's
+  # ENV_VALUE_ALLOWLIST is one the module sets — the bundle redacts every value not on that
+  # list, so a misspelt entry is a value quietly missing from every bundle. MAS-545.
+  #
+  # The selftest runs FIRST, for the reason the other checkers' do: it stages synthetic module
+  # trees — a name the module starts setting, a hand-edited manifest, a dangling `local.`
+  # reference, an allowlist entry nothing sets — and fails unless each is still rejected by name.
+  # Standard library only, no network: safe on a pull request from a fork.
+  runtime-env:
+    name: The runtime-environment manifest states what the module sets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: The check still rejects a stale or hand-edited manifest
+        run: python3 scripts/check_runtime_env.py --selftest
+
+      - name: RUNTIME_ENV.json is what the .tf files produce, and the bundle allowlist names only what is set
+        run: python3 scripts/check_runtime_env.py
+
   # The GitHub Release page for a tag, with that version's CHANGELOG.md section as its body. The
   # module version is the one customer-facing version (ADR 0062), and this page is where a reader
   # looks for what it changed. MAS-258.

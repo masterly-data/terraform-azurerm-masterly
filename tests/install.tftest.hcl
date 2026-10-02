@@ -3685,6 +3685,63 @@ run "external_api_refuses_insecure" {
   }
 }
 
+# api_url is the output a client's base URL is read from. Unpublished, it is null rather than the
+# internal hostname: that address answers only inside the environment, and a base URL that cannot
+# connect is worse than none. api_internal_fqdn stays, under its original name, for existing
+# configurations.
+run "api_url_is_null_while_the_api_is_internal" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = output.api_url == null
+    error_message = "api_url must be null while api_ingress_external is false: an internal api has no address a client outside the environment can use."
+  }
+}
+
+# Published, api_url mirrors frontend_url: the hostname Azure reports, behind https://. The
+# hostname is computed, so at plan it is unknown and an assertion on it asserts nothing;
+# `override_module` pins the api app's outputs to known values so the URL's shape is checkable.
+# (apply is not an option — the mock provider hands out ids that the azurerm provider then
+# rejects as unparseable.) A published api refuses plain HTTP (external_api_refuses_insecure),
+# so an http:// base URL would be a broken one.
+run "api_url_is_an_https_url_once_the_api_is_published" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_ingress_external  = true
+  }
+
+  override_module {
+    target = module.api
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+      name                      = "ca-api"
+      fqdn                      = "ca-api.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
+    }
+  }
+
+  assert {
+    condition     = output.api_url == "https://ca-api.example.swedencentral.azurecontainerapps.io"
+    error_message = "api_url must be https:// followed by the api's ingress hostname once api_ingress_external is true."
+  }
+
+  # The pre-existing output keeps its name and its value — the bare hostname — so a
+  # configuration that already reads it plans exactly as before.
+  assert {
+    condition     = output.api_internal_fqdn == "ca-api.example.swedencentral.azurecontainerapps.io"
+    error_message = "api_internal_fqdn must still carry the api's ingress hostname, unchanged."
+  }
+}
+
 # The other half of the same finding. Flipping the api to HTTPS-only would push the plaintext
 # problem onto the in-environment hop if this were not on, because the BFF keeps calling
 # http://ca-api by app name — the one address that cannot drift and cannot be verified over
@@ -3807,5 +3864,332 @@ run "workers_at_zero_floor_gets_no_replica_alert" {
       !contains(keys(azurerm_monitor_metric_alert.app_unavailable), "workers")
     )
     error_message = "A workers app allowed to sit at zero replicas must not carry a no-replica alert; the serving apps still must."
+  }
+}
+
+# --- Geo-redundant backup on the starter Postgres server (MAS-1087) ----------------------
+# Unset, postgres_geo_redundant_backup resolves to: on for mode=production in a region the
+# module knows supports it, off everywhere else. An explicit true or false always wins. Each
+# run below sets the full production wiring because every one of those inputs is required
+# by mode=production on the starter server.
+
+run "production_geo_backup_on_in_a_supported_region" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == true
+    error_message = "mode=production in Sweden Central must create the starter server with geo-redundant backup on."
+  }
+}
+
+# The display form of the location resolves through the same key as the lookup.
+run "production_geo_backup_on_with_the_display_form_location" {
+  command = plan
+
+  variables {
+    location                       = "Sweden Central"
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == true
+    error_message = "\"Sweden Central\" and \"swedencentral\" must resolve to the same geo-redundant backup default."
+  }
+}
+
+# Poland Central has no geo-redundant backup for Postgres flexible server. Turning it on there
+# would fail the apply, so the production default leaves it off.
+run "production_geo_backup_off_in_an_unsupported_region" {
+  command = plan
+
+  variables {
+    location                       = "polandcentral"
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "mode=production in Poland Central must leave geo-redundant backup off: the region does not support it."
+  }
+}
+
+# A region the module has not checked against Microsoft's table is treated as unsupported, so
+# the default can never turn on a setting Azure might refuse. The customer turns it on.
+run "production_geo_backup_off_in_an_unlisted_region" {
+  command = plan
+
+  variables {
+    location                       = "westeurope"
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "A region absent from the module's geo-redundant backup lookup must default to off."
+  }
+}
+
+# The customer's explicit false wins over the production default in a supported region.
+run "production_geo_backup_explicit_false_wins" {
+  command = plan
+
+  variables {
+    postgres_geo_redundant_backup  = false
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "postgres_geo_redundant_backup = false must override the production default."
+  }
+}
+
+# Evaluation installs leave it off by default, in a supported region too.
+run "evaluation_geo_backup_off_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "mode=demo must leave geo-redundant backup off unless the customer sets it."
+  }
+}
+
+# ...and the customer's explicit true wins there.
+run "evaluation_geo_backup_explicit_true_wins" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs         = ["203.0.113.7/32"]
+    postgres_geo_redundant_backup = true
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == true
+    error_message = "postgres_geo_redundant_backup = true must turn geo-redundant backup on in any mode."
+  }
+}
+
+# An existing server is never replaced to change geo-redundant backup. Azure accepts the
+# setting only at creation, so the provider replaces the server to change it, and that
+# destroys every Environment database on it. The first run creates a server the way an
+# earlier module version would have — production, Sweden Central, geo-redundant backup off —
+# and the second plans the same install with the input unset, where the new default resolves
+# to on. ignore_changes must keep the planned value at what the server was created with.
+#
+# What this proves, and what it does not: under mock providers there is no real provider
+# diff, so Terraform cannot report "must be replaced" here. What it can show is that the
+# planned value of geo_redundant_backup_enabled stays false while the module's default for a
+# new server is true; with no change to that attribute there is nothing for the provider to
+# replace the server over. Only a plan against a real install shows the action itself.
+#
+# KEEP THESE TWO RUNS LAST IN THIS FILE. Every run in a file shares one state, and the first
+# of them applies to it (mock state; nothing reaches Azure). Every other run is a plan against
+# empty state, and a run added after these would plan against this install instead.
+run "existing_server_created_without_geo_backup" {
+  command = apply
+
+  # Only the server and what it depends on. Mock providers return random strings as resource
+  # IDs, and the resources that parse the server's ID (its diagnostic setting and alerts)
+  # refuse one at apply. The server is the resource under test.
+  plan_options {
+    target = [azurerm_postgresql_flexible_server.this]
+  }
+
+  # Real-shaped IDs for what this run creates, so the teardown at the end of the file, which
+  # evaluates the whole configuration against this state, can parse them.
+  override_resource {
+    target = azurerm_resource_group.data
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data"
+    }
+  }
+
+  override_resource {
+    target = azurerm_postgresql_flexible_server.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-test"
+    }
+  }
+
+  variables {
+    postgres_geo_redundant_backup  = false
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "Setup: the existing server must be created with geo-redundant backup off."
+  }
+}
+
+run "existing_server_keeps_its_geo_backup_setting" {
+  command = plan
+
+  plan_options {
+    target = [azurerm_postgresql_flexible_server.this]
+  }
+
+  variables {
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  # The new default for this install is on...
+  assert {
+    condition     = local.postgres_geo_redundant_backup == true
+    error_message = "Precondition of this test: the unset input must resolve to on for production in Sweden Central."
+  }
+
+  # ...and the existing server's planned value is still what it was created with.
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "A changed geo-redundant backup default must not change an existing server's setting — changing it replaces the server and destroys its data."
   }
 }
