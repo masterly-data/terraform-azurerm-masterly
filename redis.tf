@@ -292,11 +292,10 @@ resource "azurerm_private_dns_zone" "redis" {
 resource "azurerm_private_dns_zone_virtual_network_link" "redis" {
   count = local.create_redis_dns ? 1 : 0
 
-  name                  = "pdzl-${var.name_prefix}-redis"
-  resource_group_name   = azurerm_resource_group.aca.name
-  private_dns_zone_name = azurerm_private_dns_zone.redis[0].name
-  virtual_network_id    = local.virtual_network_id
-  tags                  = local.tags
+  name                = "pdzl-${var.name_prefix}-redis"
+  private_dns_zone_id = azurerm_private_dns_zone.redis[0].id
+  virtual_network_id  = local.virtual_network_id
+  tags                = local.tags
 }
 
 # The cache's only network presence: a private endpoint in the install's VNet. The private

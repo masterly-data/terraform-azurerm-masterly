@@ -59,6 +59,35 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- **Breaking: the module now requires azurerm `~> 5.8`** (was `~> 4.61`), and its nested modules
+  `~> 5.0` (they said `~> 4.0`, which by itself kept azurerm 5 out of any configuration using
+  this module). A provider major changes how every install plans and applies, so the version
+  that carries this is a breaking module release. Before moving an existing install to it:
+  1. **Raise your root configuration's azurerm constraint** to `~> 5.8` (or wider within 5.x)
+     and run `terraform init -upgrade`. Commit the `.terraform.lock.hcl` it writes; see
+     "Provider versions and the lock file" in the README for the multi-platform lock command.
+  2. **Register resource providers yourself.** azurerm 5 no longer registers any on the
+     subscription by default (`resource_provider_registrations` defaults to `none`). Run
+     `scripts/preflight.sh`, with `--register` if it reports a provider as unregistered. Setting
+     `resource_provider_registrations = "legacy"` in your provider block restores the v4
+     behaviour instead.
+  3. **Remove `skip_provider_registration`** from your provider block if it is there; azurerm 5
+     removed it. An `enhanced_validation` block now goes inside `features`. If you set the
+     `ARM_PROVIDER_ENHANCED_VALIDATION` environment variable, it is gone: use that block, or
+     `ARM_PROVIDER_ENHANCED_VALIDATION_LOCATIONS` and
+     `ARM_PROVIDER_ENHANCED_VALIDATION_RESOURCE_PROVIDERS`. Location validation is now off by
+     default, so a mistyped `location` fails at apply rather than at plan.
+  4. **Plan with refresh on** (the default) and read the plan before applying. The private DNS
+     zone links for Postgres, Key Vault and Redis now name their zone with `private_dns_zone_id`,
+     because azurerm 5 removed `private_dns_zone_name` and `resource_group_name` from that
+     resource. Their Azure resource IDs do not change and a refreshing plan shows no change to
+     them; a plan run with `-refresh=false` cannot see that and shows them as replaced. A plan
+     that replaces any of them, or anything else, is not the expected upgrade: stop there.
+
+  Nothing else the module sets was removed or changed in meaning by azurerm 5; the arguments it
+  uses were checked against the provider's 5.0 upgrade guide. Configuration of your own in the
+  same root that uses azurerm resources needs the same check against that guide (MAS-129).
+
 - `api_internal_fqdn`'s description now says what the output holds. It said the hostname was
   internal and reachable only inside the environment, which is true only while
   `api_ingress_external` is false; with the API published, Azure reports the published hostname

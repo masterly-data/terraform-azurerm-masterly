@@ -9,11 +9,16 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 4.61, < 5.0"
+      version = "~> 5.8"
     }
   }
 }
 
+# azurerm 5 registers no resource providers on the subscription unless told to. Run
+# scripts/preflight.sh against the subscription first (with --register if it reports any as
+# unregistered) rather than turning the provider's v4 behaviour back on with
+# `resource_provider_registrations = "legacy"`, which registers a set of about sixty, most of
+# which this module does not use.
 provider "azurerm" {
   subscription_id = var.subscription_id
   features {}
