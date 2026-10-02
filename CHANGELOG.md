@@ -49,6 +49,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   application does not write it to its log. `GET /v1/ops/metrics` reports it (MAS-1291).
 - The `aca-container-app` submodule now refuses a `memory` that is not stated in Gi, and
   outputs the configured value (MAS-1291).
+- A Service Bus namespace on Premium in `mode = "production"` now runs private: public network
+  access is disabled, and the apps reach it over a private endpoint in the private-endpoints
+  subnet, with a `privatelink.servicebus.windows.net` private DNS zone linked to the install's
+  VNet. That subnet's network security group admits AMQP over TLS (TCP 5671) from the runtime
+  subnet when, and only when, such a namespace exists. A new input,
+  `servicebus_private_dns_zone_id`, takes a centrally managed zone instead, as the Postgres,
+  Key Vault and Redis zone inputs do, and refuses a zone of any other name. Basic and Standard
+  namespaces, and every namespace outside production, keep public network access as before
+  (MAS-1086).
 
 - An `api_url` output: the API's base URL for the Python SDK and your own pipelines,
   `https://` followed by the API's ingress hostname, in the same shape as `frontend_url`. It is
@@ -89,6 +98,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   no longer plans; set it to 1 or more (1 is the default). Evaluation installs are unaffected
   (MAS-371).
 
+- **Upgrade action for production installs that use Service Bus.** `servicebus_sku` no longer
+  defaults to `"Standard"`, and in `mode = "production"` with `enable_service_bus = true` the
+  plan is refused until you set it. Set `"Premium"`, the recommendation, for a private
+  namespace (about $677 per month per messaging unit in Sweden Central), or `"Standard"`, the
+  documented opt-down, which keeps a public endpoint. **To keep an existing Standard namespace
+  unchanged, set `servicebus_sku = "Standard"`**: moving a namespace to or from Premium replaces
+  it, together with its `masterly-jobs` queue and the apps' two role assignments, and job
+  notifications still in the queue are lost with it. The module has no default here because it
+  cannot tell a new install from an existing one. Outside production, and wherever Service Bus
+  is disabled, an unset `servicebus_sku` still means Standard and nothing changes; an explicit
+  value always wins (MAS-1086).
 - `postgres_geo_redundant_backup` now defaults to `null`, and unset it means: on for
   `mode = "production"` in a region where the module knows Azure supports geo-redundant backup
   for Postgres flexible server (Sweden Central today), off in every other region and on every
@@ -114,6 +134,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   lists only what is still deferred: custom domains and the per-install Entra identity of
   ADR 0020, matching the README's "Deliberately deferred" section. Comments only; nothing an
   install plans or applies changed (MAS-225).
+- `servicebus_sku = "Premium"` now provisions one messaging unit and one partition. Before, the
+  module requested a Premium namespace with neither, which the provider refuses at apply, so
+  Premium could not be used at all. Basic and Standard namespaces plan no change from this
+  (MAS-1086).
 
 ## [0.16.0] - 2026-09-24
 
