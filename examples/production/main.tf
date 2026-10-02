@@ -107,6 +107,15 @@ module "masterly" {
   # production requires workers: the pipeline runs here, not in the api.
   enable_workers     = true
   enable_service_bus = true
+  # No default in production, on purpose: the module asks rather than guesses, because moving
+  # an existing namespace to or from Premium replaces it (with its queue and role
+  # assignments). "Premium" is Azure's recommended baseline: the namespace runs private, with
+  # public network access disabled and a private endpoint in the install's network, at one
+  # messaging unit, about $677 per month in Sweden Central. "Standard" (about $10 per month)
+  # is the opt-down and keeps a public endpoint; set it instead to keep an existing Standard
+  # namespace unchanged. Or remove enable_service_bus altogether: the apps then run their job
+  # queue in Postgres and no broker is billed.
+  servicebus_sku = "Premium"
 
   # --- Data plane -----------------------------------------------------------------
   # Bring your own Postgres, or leave external_database_url null for the starter server.

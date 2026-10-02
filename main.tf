@@ -157,7 +157,12 @@ locals {
   # the namespace runs private exactly when it is Premium in production: public network
   # access Disabled, reached over a private endpoint in the endpoints subnet. Outside
   # production it keeps public access, as Key Vault does, for ease of evaluation.
-  servicebus_premium     = var.enable_service_bus && var.servicebus_sku == "Premium"
+  #
+  # servicebus_sku has no default: production refuses it unset when Service Bus is enabled
+  # (the variable's validation), and everywhere else unset means Standard, which is what the
+  # variable defaulted to before, so those installs plan no change.
+  servicebus_sku         = coalesce(var.servicebus_sku, "Standard")
+  servicebus_premium     = var.enable_service_bus && local.servicebus_sku == "Premium"
   servicebus_private     = local.servicebus_premium && var.mode == "production"
   create_servicebus_dns  = local.servicebus_private && var.servicebus_private_dns_zone_id == null
   servicebus_dns_zone_id = local.servicebus_private ? (var.servicebus_private_dns_zone_id != null ? var.servicebus_private_dns_zone_id : azurerm_private_dns_zone.servicebus[0].id) : null
@@ -703,7 +708,7 @@ resource "azurerm_servicebus_namespace" "this" {
   name                = "sb-${var.name_prefix}-${random_string.install.result}"
   resource_group_name = azurerm_resource_group.aca.name
   location            = var.location
-  sku                 = var.servicebus_sku
+  sku                 = local.servicebus_sku
   local_auth_enabled  = false # managed identity only — no SAS connection strings (ADR 0029)
 
   # Premium is sized in messaging units and the service refuses a Premium namespace with

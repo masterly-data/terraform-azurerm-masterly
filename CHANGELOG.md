@@ -85,6 +85,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   no longer plans; set it to 1 or more (1 is the default). Evaluation installs are unaffected
   (MAS-371).
 
+- **Upgrade action for production installs that use Service Bus.** `servicebus_sku` no longer
+  defaults to `"Standard"`, and in `mode = "production"` with `enable_service_bus = true` the
+  plan is refused until you set it. Set `"Premium"`, the recommendation, for a private
+  namespace (about $677 per month per messaging unit in Sweden Central), or `"Standard"`, the
+  documented opt-down, which keeps a public endpoint. **To keep an existing Standard namespace
+  unchanged, set `servicebus_sku = "Standard"`**: moving a namespace to or from Premium replaces
+  it, together with its `masterly-jobs` queue and the apps' two role assignments, and job
+  notifications still in the queue are lost with it. The module has no default here because it
+  cannot tell a new install from an existing one. Outside production, and wherever Service Bus
+  is disabled, an unset `servicebus_sku` still means Standard and nothing changes; an explicit
+  value always wins (MAS-1086).
 - `postgres_geo_redundant_backup` now defaults to `null`, and unset it means: on for
   `mode = "production"` in a region where the module knows Azure supports geo-redundant backup
   for Postgres flexible server (Sweden Central today), off in every other region and on every

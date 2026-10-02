@@ -1426,6 +1426,14 @@ run "service_bus_enabled_provisions_broker_and_grants" {
     error_message = "enable_service_bus must provision the namespace, the queue, and both data-plane grants."
   }
 
+  # Outside production servicebus_sku has no value of its own and means Standard, which is
+  # what the variable defaulted to before it lost its default, so such an install plans no
+  # change to its namespace.
+  assert {
+    condition     = azurerm_servicebus_namespace.this[0].sku == "Standard"
+    error_message = "Outside production an unset servicebus_sku must still plan a Standard namespace."
+  }
+
   # SAS off (ADR 0029): managed identity only, so there is no connection string to leak.
   assert {
     condition     = azurerm_servicebus_namespace.this[0].local_auth_enabled == false
@@ -1638,6 +1646,88 @@ run "service_bus_dns_zone_of_the_wrong_name_is_rejected" {
   }
 
   expect_failures = [var.servicebus_private_dns_zone_id]
+}
+
+# Production asks for the SKU rather than defaulting it (owner decision on MAS-1086). A
+# Premium default would replace every existing Standard namespace whose install never set the
+# SKU (azurerm forces replacement on any move to or from Premium), and a Standard default
+# would leave a new install off Azure's baseline without anyone choosing that. So production
+# with Service Bus enabled and no SKU is refused at plan, as redis_offering is.
+run "production_service_bus_without_sku_is_rejected" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus    = true
+  }
+
+  expect_failures = [var.servicebus_sku]
+}
+
+# The refusal is about the namespace, not the input: production with Service Bus off needs no
+# SKU and plans no namespace.
+run "production_without_service_bus_needs_no_sku" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_servicebus_namespace.this) == 0 &&
+      length(azurerm_private_endpoint.servicebus) == 0
+    )
+    error_message = "Production with Service Bus disabled must plan without servicebus_sku and create no namespace."
+  }
+}
+
+# An empty string is what an unset TF_VAR_ or a rendered template produces. It must not pass
+# as "unset" and then be read as Standard.
+run "service_bus_empty_sku_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_service_bus    = true
+    servicebus_sku        = ""
+  }
+
+  expect_failures = [var.servicebus_sku]
 }
 
 # The opt-down: Standard in production keeps a public endpoint, because Standard cannot host
