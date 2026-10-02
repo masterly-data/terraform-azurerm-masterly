@@ -17,7 +17,8 @@ resource "azurerm_container_app_environment" "this" {
   # SELF-HOSTED EXTENSION. The input name follows the provider's, and the provider's name
   # undersells what it writes: azurerm sets BOTH `peerAuthentication.mtls.enabled` and
   # `peerTrafficConfiguration.encryption.enabled` from this one bool (verified in
-  # azurerm v4.81.0 `container_app_environment_resource.go`, create and update). The second
+  # azurerm v4.81.0 and again in v5.8.0, `container_app_environment_resource.go`, create and
+  # update). The second
   # is the one Azure calls peer-to-peer encryption and the one to check an install against:
   #
   #   az containerapp env show -n <env> -g <rg> \

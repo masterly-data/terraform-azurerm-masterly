@@ -251,11 +251,10 @@ resource "azurerm_private_dns_zone" "key_vault" {
 resource "azurerm_private_dns_zone_virtual_network_link" "key_vault" {
   count = local.create_key_vault_dns ? 1 : 0
 
-  name                  = "pdzl-${var.name_prefix}-kv"
-  resource_group_name   = azurerm_resource_group.aca.name
-  private_dns_zone_name = azurerm_private_dns_zone.key_vault[0].name
-  virtual_network_id    = local.virtual_network_id
-  tags                  = local.tags
+  name                = "pdzl-${var.name_prefix}-kv"
+  private_dns_zone_id = azurerm_private_dns_zone.key_vault[0].id
+  virtual_network_id  = local.virtual_network_id
+  tags                = local.tags
 }
 
 resource "azurerm_private_endpoint" "key_vault" {
