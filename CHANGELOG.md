@@ -59,6 +59,19 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- The diagnostic bundle names every collected file that can carry statement text for the
+  line-by-line read, not only the files where its scan found some. `manifest.json` →
+  `record_data.needs_line_by_line_review` was filled only from a scan for the shapes Postgres
+  writes at its defaults (`STATEMENT:`, `DETAIL: Key (…)`, `PARAMETERS:`), so a Postgres error
+  with no such line — a deadlock, connection-slot exhaustion, a server logging its errors
+  another way — left the list empty, printed `ok  no statement text found`, and printed no READ
+  FIRST block, while `README.txt` told you to start with the files named in that list. The list
+  now always carries `logs/q6-postgres-logs.json` and `logs/q4-request-trace.json` when the run
+  collected them; a new `record_data.statement_text_found_in` is the subset where the scan did
+  match, and the terminal escalates those to "statement text found here". The `ok  no
+  statement text found` line still prints, as a statement about the scan. The harness asserts
+  the no-marker case and the selftest breaks the seeding and the scan separately (MAS-423).
+
 - `api_internal_fqdn`'s description now says what the output holds. It said the hostname was
   internal and reachable only inside the environment, which is true only while
   `api_ingress_external` is false; with the API published, Azure reports the published hostname

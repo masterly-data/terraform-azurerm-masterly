@@ -15,6 +15,12 @@
 #      value is present, the file is named in manifest.json under
 #      record_data.needs_line_by_line_review, and the operator is told on stderr/stdout.
 #      Asserting absence there would be asserting something the script does not do.
+#      And the naming does not depend on the script's pattern scan having matched (MAS-423):
+#      a collected q6 or q4 is named whether or not a STATEMENT: or DETAIL: Key line was
+#      found, because the scan is a heuristic and an attribute value has no shape of its
+#      own. A fourth scenario runs a q6 fixture carrying a Postgres error with no such
+#      marker and asserts the file is still named, the `ok  no statement text found` line
+#      still prints (it is a true statement about the scan), and the READ FIRST block prints.
 #   3. manifest.json's `.tool` names the version of the TREE THE SCRIPT RAN FROM, and never a
 #      version that tree is not. That is asserted in its own scenario, against a staged module
 #      root, because inside this repository the true answer and the wrong one look alike.
@@ -33,10 +39,11 @@
 # allow-list cannot see, and asserts the refusal gate fires: exit 3, the directory renamed
 # `-REFUSED`, the finding reported by file and line and never by content.
 #
-# `--selftest` is the part that keeps this honest. It copies the script, breaks it five ways
+# `--selftest` is the part that keeps this honest. It copies the script, breaks it seven ways
 # a real regression would — keep every env value, keep secret values, disable the gate,
-# disable the statement-echo warning, take the version from the release manifest when the tree
-# could answer — and asserts that THIS harness fails against each broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
+# disable the statement-echo warning, disable only its pattern scan, name only the files the
+# scan matched, take the version from the release manifest when the tree could answer — and
+# asserts that THIS harness fails against each broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
 # that a detector that has quietly stopped detecting fails the build instead of passing it.
 # Each break is checked to have actually changed the copy, so a stale sed cannot turn the
 # selftest vacuous.
@@ -90,14 +97,15 @@ fail() { printf '  FAIL    %s\n' "$*"; failures=$((failures + 1)); }
 # Answers the commands the script issues, from fixtures, by command — it evaluates no JMESPath,
 # so what it returns for a `--query` is what that query would have projected. The jq
 # projections under test run inside the real script, on these full documents.
-make_fakes() { # make_fakes <bindir> <fixtures> <q3 fixture name>
-  local bindir="$1" fixtures="$2" q3="$3"
+make_fakes() { # make_fakes <bindir> <fixtures> <q3 fixture name> [<q6 fixture name>]
+  local bindir="$1" fixtures="$2" q3="$3" q6="${4:-rest-q6.json}"
   mkdir -p "$bindir"
   cat > "$bindir/az" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 F="$fixtures"
 Q3="$q3"
+Q6="$q6"
 args="\$*"
 case "\$1 \${2:-} \${3:-}" in
   "account show "*)                         echo "Enabled" ;;
@@ -120,7 +128,7 @@ case "\$1 \${2:-} \${3:-}" in
       *"summarize events"*)           cat "\$F/\$Q3" ;;
       *request_id*)                    cat "\$F/rest-q4.json" ;;
       *ContainerAppSystemLogs_CL*)     cat "\$F/rest-q5.json" ;;
-      *PostgreSQLLogs*)                cat "\$F/rest-q6.json" ;;
+      *PostgreSQLLogs*)                cat "\$F/\$Q6" ;;
       *) echo "fake az: unknown query" >&2; exit 1 ;;
     esac ;;
   *) echo "fake az: unhandled command: \$args" >&2; exit 1 ;;
@@ -238,6 +246,23 @@ scenario_clean() { # scenario_clean <script>
     "$bundle/manifest.json" >/dev/null \
     && pass "manifest flags logs/q6-postgres-logs.json for line-by-line review" \
     || fail "manifest does not flag logs/q6-postgres-logs.json: $(jq -c '.record_data.needs_line_by_line_review' "$bundle/manifest.json" 2>/dev/null)"
+  jq -e '.record_data.statement_text_found_in | index("logs/q6-postgres-logs.json")' \
+    "$bundle/manifest.json" >/dev/null \
+    && pass "manifest records that statement text was actually found in q6" \
+    || fail "manifest's statement_text_found_in does not name q6: $(jq -c '.record_data.statement_text_found_in' "$bundle/manifest.json" 2>/dev/null)"
+  grep -qF "logs/q6-postgres-logs.json   (statement text found here)" "$tmp/stdout" \
+    && pass "the READ FIRST block escalates q6 to 'statement text found here'" \
+    || fail "the READ FIRST block does not escalate q6 where the scan matched"
+  # q4 was collected (--request-id) and its fixture carries no statement text. It is named
+  # anyway: the list is "must be read", not "where the scan matched" (MAS-423).
+  jq -e '.record_data.needs_line_by_line_review | index("logs/q4-request-trace.json")' \
+    "$bundle/manifest.json" >/dev/null \
+    && pass "a collected q4 is named for review although nothing in it matched" \
+    || fail "q4 was collected but is not in needs_line_by_line_review: $(jq -c '.record_data.needs_line_by_line_review' "$bundle/manifest.json" 2>/dev/null)"
+  jq -e '.record_data.statement_text_found_in | index("logs/q4-request-trace.json") | not' \
+    "$bundle/manifest.json" >/dev/null \
+    && pass "q4 is not claimed to carry statement text the scan did not find" \
+    || fail "statement_text_found_in names q4, where the fixture carries no statement text"
   jq -e '.record_data.not_guaranteed_in | index("logs/q6-postgres-logs.json")' \
     "$bundle/manifest.json" >/dev/null \
     && pass "manifest names q6 as the exception to the record-data claim" \
@@ -303,6 +328,63 @@ scenario_gaps() { # scenario_gaps <script> — no token, no request id: the mani
     || fail "manifest gaps: $(jq -c '[.items[] | select(.collected == false) | .item]' "$bundle/manifest.json")"
   [[ ! -e "$bundle/ops-metrics.json" && ! -e "$bundle/logs/q4-request-trace.json" ]] \
     && pass "no placeholder files for the gaps" || fail "placeholder file written for a gap"
+  # Only a COLLECTED file is named for review: q4 was not, so the list is q6 alone. Naming a
+  # file that is not there would send the operator looking for it.
+  jq -e '.record_data.needs_line_by_line_review == ["logs/q6-postgres-logs.json"]' \
+    "$bundle/manifest.json" >/dev/null \
+    && pass "needs_line_by_line_review names the collected q6 and not the uncollected q4" \
+    || fail "needs_line_by_line_review is not exactly [q6]: $(jq -c '.record_data.needs_line_by_line_review' "$bundle/manifest.json")"
+  rm -rf "$tmp"
+  [[ $failures -eq 0 ]]
+}
+
+# --- The heuristic's silence is not clearance (MAS-423) ------------------------------------
+# A real Postgres error need not carry a STATEMENT: line, a DETAIL: Key (…) line or a
+# PARAMETERS: line — a deadlock, a connection-slot exhaustion, a server whose
+# log_min_error_statement is raised. The scan then matches nothing, and before MAS-423 that
+# meant: `ok  no statement text found`, no READ FIRST block, and an empty
+# needs_line_by_line_review — while README.txt told the operator to start with the files
+# named there. An `ok` printed where an instruction belongs reads as clearance. This scenario
+# runs such a fixture and asserts that q6 is named regardless, that the READ FIRST block
+# prints, and that the `ok` line still prints, because it is a true statement about the scan.
+# The same assertion idiom as scenario_clean, safe for the same reason: `pass` is a `printf`.
+# shellcheck disable=SC2015
+scenario_no_marker() { # scenario_no_marker <script>
+  local script="$1" tmp bundle rc
+  tmp=$(mktemp -d)
+  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3.json" "rest-q6-no-marker.json"
+  rc=0
+  PATH="$tmp/bin:$PATH" bash "$script" --subscription 00000000-0000-0000-0000-000000000000 \
+    --out "$tmp/out" > "$tmp/stdout" 2> "$tmp/stderr" || rc=$?
+  [[ $rc -eq 0 ]] && pass "a q6 with no statement marker still exits 0" || fail "exit $rc on the no-marker q6"
+  bundle=$(find "$tmp/out" -maxdepth 1 -mindepth 1 -type d | head -n1)
+  [[ -n "$bundle" ]] || { fail "no bundle directory written for the no-marker run"; rm -rf "$tmp"; return 1; }
+  # The fixture is what it claims: a Postgres error reached q6, and none of the shapes the
+  # scan looks for is in it. Otherwise everything below is vacuous.
+  grep -qF "deadlock detected" "$bundle/logs/q6-postgres-logs.json" \
+    && pass "the no-marker fixture's Postgres error reached q6" \
+    || fail "the no-marker fixture no longer seeds a Postgres error into q6"
+  if grep -qiE 'STATEMENT:|DETAIL:[[:space:]]*(Key[[:space:]]*\(|Failing row)|PARAMETERS:' "$bundle/logs/q6-postgres-logs.json"; then
+    fail "the no-marker fixture carries a statement marker — this scenario no longer tests the heuristic's silence"
+  else
+    pass "the no-marker fixture carries no STATEMENT:, DETAIL: Key or PARAMETERS: line"
+  fi
+  jq -e '.record_data.needs_line_by_line_review | index("logs/q6-postgres-logs.json")' \
+    "$bundle/manifest.json" >/dev/null \
+    && pass "q6 is named for line-by-line review although no pattern matched" \
+    || fail "q6 not named when no pattern matched: $(jq -c '.record_data.needs_line_by_line_review' "$bundle/manifest.json" 2>/dev/null)"
+  jq -e '.record_data.statement_text_found_in == []' "$bundle/manifest.json" >/dev/null \
+    && pass "statement_text_found_in is empty — the scan's own result is reported as it was" \
+    || fail "statement_text_found_in claims a match the fixture does not carry: $(jq -c '.record_data.statement_text_found_in' "$bundle/manifest.json" 2>/dev/null)"
+  grep -qF "no statement text found" "$tmp/stdout" \
+    && pass "the 'ok  no statement text found' line still prints — it is true of the scan" \
+    || fail "the scan's own 'no statement text found' line is gone"
+  grep -qF "READ FIRST" "$tmp/stdout" \
+    && pass "the READ FIRST block prints although the scan matched nothing" \
+    || fail "no READ FIRST block on the no-marker run — the heuristic's silence reads as clearance again"
+  grep -qF "(statement text found here)" "$tmp/stdout" \
+    && fail "the READ FIRST block escalates a file where nothing matched" \
+    || pass "the READ FIRST block does not escalate q6 where nothing matched"
   rm -rf "$tmp"
   [[ $failures -eq 0 ]]
 }
@@ -420,6 +502,7 @@ run_suite() { # run_suite <script> — all scenarios; non-zero if any assertion 
   scenario_clean "$1" || true
   scenario_refused "$1" || true
   scenario_gaps "$1" || true
+  scenario_no_marker "$1" || true
   scenario_provenance "$1" || true
   [[ $failures -eq 0 ]]
 }
@@ -439,6 +522,8 @@ selftest() {
     'keep secret values (names-only projection dropped)'
     'refusal gate disabled'
     'statement-echo warning disabled (record data reaches the bundle unflagged)'
+    'pattern scan disabled (a found statement is no longer escalated)'
+    'review list seeded from the scan alone (a collected q6 with no marker goes unnamed)'
     'provenance taken from the release manifest when the tree could answer'
   )
   local exprs=(
@@ -446,6 +531,8 @@ selftest() {
     's/secrets: \[\.properties\.configuration\.secrets\[\]? | \.name\]/secrets: [.properties.configuration.secrets[]?]/'
     's/^if \[\[ -n "\$findings" \]\]; then$/if false; then/'
     's/^REVIEW_FILES=\$(printf/REVIEW_FILES=""; : $(printf/'
+    's/^MATCHED_FILES=\$(printf/MATCHED_FILES=""; : $(printf/'
+    's/^  \[\[ -s "\$BUNDLE\/\$f" \]\] && REVIEW_FILES=/  false \&\& REVIEW_FILES=/'
     's/^git_root=\$(git -C "\$module_root" rev-parse --show-toplevel .*$/git_root=""/'
   )
   local gones=(
@@ -453,9 +540,11 @@ selftest() {
     'secrets[]? | .name]'
     'if [[ -n "$findings" ]]; then'
     'REVIEW_FILES=$(printf'
+    'MATCHED_FILES=$(printf'
+    '[[ -s "$BUNDLE/$f" ]] && REVIEW_FILES='
     'git_root=$(git -C "$module_root" rev-parse'
   )
-  for n in 0 1 2 3 4; do
+  for n in 0 1 2 3 4 5 6; do
     total=$((total + 1))
     broken="$tmp/broken-$total.sh"
     sed -e "${exprs[$n]}" "$SCRIPT" > "$broken"

@@ -118,7 +118,9 @@ jobs:
   # with both classes of value. A third scenario stages the script into purpose-built module
   # trees and asserts that the version in manifest.json's `.tool` is the one the tree it ran
   # from actually is — never the newest published release, which on a clone of `main` is a tag
-  # that does not contain the script. The selftest runs FIRST, and breaks the script five ways to
+  # that does not contain the script. A fourth runs a q6 carrying a Postgres error with no
+  # statement marker and asserts the file is named anyway (MAS-423): the naming is "must be
+  # read", not "where the scan matched". The selftest runs FIRST, and breaks the script seven ways to
   # insist the harness notices — a detector nobody has watched fail is a hypothesis, and this
   # repo's characteristic defect is a rule with nothing enforcing it.
   # No cloud, no credential: safe on a pull request from a fork. MAS-343.
