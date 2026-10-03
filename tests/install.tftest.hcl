@@ -3097,6 +3097,47 @@ run "telemetry_is_off_unless_configured" {
   }
 }
 
+# The erasure backup horizon (ADR 0081 §6): an erasure's completion record states how long
+# the deleted record can survive in backups. The module knows that only for the starter
+# server it provisions, so it states it there and nowhere else. 21 is not the default, so
+# a value hard-wired to 7 cannot pass.
+run "erasure_backup_horizon_follows_starter_server_retention" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    postgres_backup_retention_days = 21
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_ERASURE_BACKUP_RETENTION_DAYS"] == "21"
+    error_message = "On the starter server the api must be told the backup retention it was provisioned with."
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].backup_retention_days == 21
+    error_message = "The horizon stated to the api must be the retention the server is provisioned with."
+  }
+}
+
+# On BYO-DB the module does not know the customer's backup policy, so it states nothing and
+# the api falls back to "the operator's backup policy governs". A number here would be a
+# claim about backups the module does not own.
+run "erasure_backup_horizon_absent_on_byo_db" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    external_database_url          = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    postgres_backup_retention_days = 21
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS")
+    error_message = "With external_database_url set the backup horizon must not be set at all."
+  }
+}
+
 run "telemetry_wires_url_id_and_secret" {
   command = plan
 

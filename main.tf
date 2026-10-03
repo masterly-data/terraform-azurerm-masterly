@@ -940,6 +940,13 @@ locals {
     local.license_refresh_env,    # daily licence refresh from the control plane (ADR 0074), off unless configured
     # The license verification key (ADR 0013) is public material — plain env.
     var.license_public_jwk != null ? { MASTERLY_LICENSE_PUBLIC_JWK = var.license_public_jwk } : {},
+    # The backup horizon an erasure's completion record states (ADR 0081): how long a
+    # deleted record can still exist in the starter server's backups. Set only when this
+    # module provisions the database, because only then does it know the retention. On
+    # BYO-DB it stays unset and the record says your own backup policy governs.
+    local.provision_postgres ? {
+      MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = tostring(var.postgres_backup_retention_days)
+    } : {},
   )
 
   # --- The install's secret material -----------------------------------------------

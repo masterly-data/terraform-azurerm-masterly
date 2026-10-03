@@ -59,6 +59,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   namespaces, and every namespace outside production, keep public network access as before
   (MAS-1086).
 
+- The api is told the backup horizon an erasure's completion record states. When the module
+  provisions the starter Postgres server, `ca-api` (and `ca-workers`, which shares its
+  environment) now carries `MASTERLY_ERASURE_BACKUP_RETENTION_DAYS`, set to
+  `postgres_backup_retention_days`, so the record can say how long an erased record may still
+  exist in that server's backups. On BYO-DB (`external_database_url` set) the variable is not set
+  at all: the module does not own your backups, and the record says your own backup policy
+  governs. The diagnostic bundle copies its value, as a non-secret setting (MAS-790).
+
 - An `api_url` output: the API's base URL for the Python SDK and your own pipelines,
   `https://` followed by the API's ingress hostname, in the same shape as `frontend_url`. It is
   null unless `api_ingress_external = true`, because an unpublished API has no address a client
