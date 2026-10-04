@@ -1116,6 +1116,11 @@ one commit, on `main`, before the tag:
 4. Merge, wait for `main`'s CI run on that commit to pass, then run the **cut-release** workflow
    (Actions → cut-release → Run workflow, from `main`) with the version and the release commit's
    full SHA. Do not create the tag by hand.
+5. After the registry publishes the version, the public
+   [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) adopt it — and the
+   install page's upgrade notes ("Coming from module N.x") are rewritten for the new release as
+   part of that, because the docs' own check refuses the adoption until they are. Until the docs
+   name the new version, the scheduled check above goes red.
 
 A tag on this repository is the release: the Terraform Registry publishes the version from its own
 webhook the moment the tag appears, and a published version cannot be withdrawn, only superseded.
