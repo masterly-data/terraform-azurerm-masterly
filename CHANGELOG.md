@@ -22,6 +22,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-05
+
 ### Added
 
 - `RUNTIME_ENV.json`, the machine-readable statement of every environment variable the module sets
@@ -553,7 +555,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - The first public tag. The Terraform content was unchanged from the internal repository it was
   extracted from, api readiness-probe tolerances included, and `examples/production` was added.
 
-[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.17.0
 [0.16.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.16.0
 [0.15.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.15.0
 [0.14.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.14.0
