@@ -491,14 +491,20 @@ resource "azurerm_private_dns_zone" "postgres" {
   tags                = local.tags
 }
 
+# azurerm 5 identifies the zone by `private_dns_zone_id` alone; the `resource_group_name` and
+# `private_dns_zone_name` pair this link (and the Key Vault, Redis and Service Bus links) used
+# before was removed. The link's Azure resource ID is unchanged — the link has always lived in
+# the zone's own resource group — and the provider fills `private_dns_zone_id` in from that ID
+# when it refreshes state, so a refreshing plan shows no change here. A plan run with
+# -refresh=false against state written by azurerm 4 cannot do that, and shows these links as
+# replaced.
 resource "azurerm_private_dns_zone_virtual_network_link" "postgres" {
   count = local.create_postgres_dns ? 1 : 0
 
-  name                  = "pdzl-${var.name_prefix}-postgres"
-  resource_group_name   = azurerm_resource_group.aca.name
-  private_dns_zone_name = azurerm_private_dns_zone.postgres[0].name
-  virtual_network_id    = local.virtual_network_id
-  tags                  = local.tags
+  name                = "pdzl-${var.name_prefix}-postgres"
+  private_dns_zone_id = azurerm_private_dns_zone.postgres[0].id
+  virtual_network_id  = local.virtual_network_id
+  tags                = local.tags
 }
 
 # The conditional refactor (ADR 0065) is a state no-op for existing installs.
@@ -821,11 +827,10 @@ resource "azurerm_private_dns_zone" "servicebus" {
 resource "azurerm_private_dns_zone_virtual_network_link" "servicebus" {
   count = local.create_servicebus_dns ? 1 : 0
 
-  name                  = "pdzl-${var.name_prefix}-servicebus"
-  resource_group_name   = azurerm_resource_group.aca.name
-  private_dns_zone_name = azurerm_private_dns_zone.servicebus[0].name
-  virtual_network_id    = local.virtual_network_id
-  tags                  = local.tags
+  name                = "pdzl-${var.name_prefix}-servicebus"
+  private_dns_zone_id = azurerm_private_dns_zone.servicebus[0].id
+  virtual_network_id  = local.virtual_network_id
+  tags                = local.tags
 }
 
 resource "azurerm_private_endpoint" "servicebus" {

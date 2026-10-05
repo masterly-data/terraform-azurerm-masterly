@@ -4,19 +4,30 @@ terraform {
   required_providers {
     azurerm = {
       source = "hashicorp/azurerm"
-      # Floor raised from ~> 4.0 for the Azure Managed Redis path (ADR 0071). This is
-      # load-bearing rather than housekeeping: .terraform.lock.hcl is gitignored, so a
-      # customer's `terraform init` is governed by THIS constraint alone, and ~> 4.0 admits
-      # 4.0.0-4.49.x where azurerm_managed_redis does not exist at all. Two gates are verified
-      # in CHANGELOG-v4.md: azurerm_managed_redis is new in 4.50.0, and public_network_access
-      # on it arrives in 4.53.0 — without which "no public network presence" is inexpressible.
-      # 4.53.0 is therefore the true floor. The constraint sits at 4.61 for headroom, not for a
-      # third gate: an earlier draft of this comment claimed 4.61 made sku_name updatable and
-      # default_database required at create, and the changelog does not say that. Only 4.80.0
-      # was ever inspected directly. Left conservative rather than lowered to 4.53 on an
-      # untested version. Not 5.x: outside the module's tested surface, and azurerm 5 defaults
-      # resource_provider_registrations to none.
-      version = "~> 4.61"
+      # azurerm 5. A provider major changes every install's apply, so moving to it is a
+      # breaking module change; CHANGELOG.md says what a calling configuration has to do.
+      #
+      # This constraint is load-bearing rather than housekeeping: .terraform.lock.hcl is
+      # gitignored, because Terraform reads a lock file in the ROOT configuration only, so a
+      # customer's `terraform init` is governed by this constraint alone.
+      #
+      # Why 5.8 and not 5.0. Every argument the module uses was checked against the provider's
+      # 5.0 upgrade guide, and `terraform validate` and `terraform test` pass on 5.0.0 as well
+      # as 5.8.0. But neither command configures the provider or calls Azure, so a version that
+      # has only been through them is untested in the sense that matters. The floor is the
+      # version a refreshing plan against a live install resolved before this shipped (5.8.0,
+      # replacing nothing) — not the lowest one that validates. Raise it with such a plan,
+      # never lower it without one.
+      #
+      # What v5 changes for the configuration that calls this module, as opposed to the module:
+      # the provider no longer registers resource providers on the subscription by default
+      # (`resource_provider_registrations` defaults to "none"). scripts/preflight.sh checks,
+      # and with --register registers, exactly the set this module needs.
+      #
+      # The v4-era gates this floor replaces still hold inside it: azurerm_managed_redis is new
+      # in 4.50.0, its public_network_access in 4.53.0, and the container app readiness probe
+      # accepts the failure_count_threshold of 48 the module sets only from 4.66.0.
+      version = "~> 5.8"
     }
     random = {
       source  = "hashicorp/random"

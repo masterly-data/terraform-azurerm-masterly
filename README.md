@@ -1277,8 +1277,20 @@ terraform providers lock \
 ```
 
 This repo ships no lock file of its own, for the same reason: it is a module, not a root
-configuration. It constrains azurerm to `~> 4.61` and leaves the exact version to you. That
+configuration. It constrains azurerm to `~> 5.8` and leaves the exact version to you. That
 floor is load-bearing rather than housekeeping: with no lock file here, the constraint is the
-only thing governing your `terraform init`, and `azurerm_managed_redis` does not exist below
-4.50.0 nor its `public_network_access` below 4.53.0 — so a root configuration resolving an
-earlier provider cannot express the production Redis path at all.
+only thing governing your `terraform init`. `versions.tf` records why it sits where it does.
+
+azurerm 5 changes one thing in **your** root configuration rather than in the module: the
+provider no longer registers resource providers on the subscription by default
+(`resource_provider_registrations` now defaults to `none`). Run `scripts/preflight.sh` against
+the subscription before the first apply, with `--register` if it reports a provider as
+unregistered; it checks exactly the set this module needs. Setting
+`resource_provider_registrations = "legacy"` in your provider block restores the v4 behaviour,
+which registers a set of about sixty providers, most of which this module does not use.
+
+Moving an existing install from azurerm 4 to 5 is a provider major and a breaking module
+change; the steps are in [CHANGELOG.md](CHANGELOG.md). Plan with refresh on (the default) for
+that first plan: the private DNS zone links (Postgres, Key Vault, Redis and a private Service
+Bus namespace, whichever your install has) change how they name their zone, and only a
+refreshing plan sees that their Azure resource IDs did not move.
