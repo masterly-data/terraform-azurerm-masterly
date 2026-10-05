@@ -53,10 +53,15 @@ Terraform is the thing writing them.
 
 ## Reading the plan
 
-The first apply creates roughly 40 resources. Two worth checking before you approve:
+The first apply creates roughly 40 resources. Three worth checking before you approve:
 
 - **Postgres** — `GP_Standard_D2ds_v5` with zone-redundant HA is two servers' worth of
   compute. Confirm your vCore quota covers it; a fresh subscription commonly starts at 0.
 - **`redis_offering`** — this example sets `"managed"`. If you already run an Azure Cache
   for Redis and mean to keep it, set `"cache"`; applying `"managed"` over it plans a
   destroy of your running session store.
+- **Authentication** — a new production install authenticates to Postgres and Redis with
+  Microsoft Entra ID only, so `api_image_tag` must be `v0.133.7` or later. Upgrading an install
+  that already exists? Its plan stops until you set `database_auth` and `redis_auth`; see
+  "Moving an existing install to Microsoft Entra authentication" in the
+  [module README](../../README.md#moving-an-existing-install-to-microsoft-entra-authentication).
