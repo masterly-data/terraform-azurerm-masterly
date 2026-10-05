@@ -1167,12 +1167,20 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
 # retention — it returned an empty result, not an error. The anchor is here so the idiom in this
 # file is the one that is true in general, because these queries get copied.
 #
-# Two consecutive failing 30-minute evaluations before it pages — roughly 40 minutes of true
-# silence. Deliberately slower than the metric alerts: Learn is explicit that log data is more
-# latent than metric data and that absence detection in logs misfires on ingestion delay, so the
-# window is sized to swallow a delay spike rather than to be first with the news. The metric
-# alerts above are the fast path; this is the one that still works when the fast path has
-# nothing left to read.
+# One failing evaluation over a 45-minute window before it pages — 45 minutes of true silence,
+# reported within one 10-minute evaluation after that. Deliberately slower than the metric
+# alerts: Learn is explicit that log data is more latent than metric data and that absence
+# detection in logs misfires on ingestion delay, so the window is sized to swallow a delay spike
+# rather than to be first with the news. The metric alerts above are the fast path; this is the
+# one that still works when the fast path has nothing left to read.
+#
+# Why the silence lives in the window and not in `failing_periods`. Azure accepts more than one
+# evaluation period only for a query that projects `TimeGenerated`, and this one cannot: it
+# summarizes the whole window to a single count, because an empty result is the firing state.
+# A rule asking for two periods is refused on create (400), so the sustained-ness is carried by
+# the window alone. 45 minutes is the value in Azure's allowed set closest to the ~40 minutes
+# that two consecutive 30-minute evaluations used to mean, and it errs on the side of not paging
+# on an ingestion delay. tests/install.tftest.hcl pins both period counts at 1.
 #
 # It is also billed differently from its neighbours — a log search alert rule is charged per rule
 # by evaluation frequency, where a metric alert is charged per monitored time series.
@@ -1197,11 +1205,11 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "postgres_silent" {
   location            = var.location
   scopes              = [module.logs.id]
 
-  description = "The install's database has sent no metrics for 30 minutes — it is stopped, deleted, or its telemetry has broken. This install is DOWN, not merely under strain."
+  description = "The install's database has sent no metrics for 45 minutes — it is stopped, deleted, or its telemetry has broken. This install is DOWN, not merely under strain."
   severity    = 0
 
   evaluation_frequency = "PT10M"
-  window_duration      = "PT30M"
+  window_duration      = "PT45M"
 
   # Resolve itself when the metrics come back: an operator who is paged for silence wants the
   # all-clear to arrive the same way, and this alert has a condition that can genuinely clear.
@@ -1220,9 +1228,10 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "postgres_silent" {
     operator                = "LessThan"
     threshold               = 1
 
+    # One period, because the query projects no `TimeGenerated` — see the comment above.
     failing_periods {
-      number_of_evaluation_periods             = 2
-      minimum_failing_periods_to_trigger_alert = 2
+      number_of_evaluation_periods             = 1
+      minimum_failing_periods_to_trigger_alert = 1
     }
   }
 
