@@ -1178,5 +1178,6 @@ which registers a set of about sixty providers, most of which this module does n
 
 Moving an existing install from azurerm 4 to 5 is a provider major and a breaking module
 change; the steps are in [CHANGELOG.md](CHANGELOG.md). Plan with refresh on (the default) for
-that first plan: the three private DNS zone links change how they name their zone, and only a
+that first plan: the private DNS zone links (Postgres, Key Vault, Redis and a private Service
+Bus namespace, whichever your install has) change how they name their zone, and only a
 refreshing plan sees that their Azure resource IDs did not move.

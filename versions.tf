@@ -14,10 +14,10 @@ terraform {
       # Why 5.8 and not 5.0. Every argument the module uses was checked against the provider's
       # 5.0 upgrade guide, and `terraform validate` and `terraform test` pass on 5.0.0 as well
       # as 5.8.0. But neither command configures the provider or calls Azure, so a version that
-      # has only been through them is untested in the sense that matters. The floor is meant
-      # to be the version that the plan against a live install, required before this ships,
-      # actually resolves — not the lowest one that validates. Raise it with that plan, never
-      # lower it without one.
+      # has only been through them is untested in the sense that matters. The floor is the
+      # version a refreshing plan against a live install resolved before this shipped (5.8.0,
+      # replacing nothing) — not the lowest one that validates. Raise it with such a plan,
+      # never lower it without one.
       #
       # What v5 changes for the configuration that calls this module, as opposed to the module:
       # the provider no longer registers resource providers on the subscription by default

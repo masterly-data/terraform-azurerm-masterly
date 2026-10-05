@@ -285,11 +285,12 @@ against `main`.
 file in the **root configuration's** working directory only, and a lock inside a module is ignored.
 
 That makes `versions.tf`'s constraint load-bearing rather than housekeeping — with no lock here, the
-constraint is the only thing governing a customer's `terraform init`. The floor is `~> 4.61`, and
-`versions.tf` carries the full reasoning: `azurerm_managed_redis` does not exist below 4.50.0 and
-its `public_network_access` below 4.53.0, so an earlier provider cannot express the production Redis
-path at all. Do not lower it, do not widen it to `~> 4.0`, and do not move to 5.x — that is outside
-the module's tested surface and changes the resource-provider registration default.
+constraint is the only thing governing a customer's `terraform init`. The floor is `~> 5.8` (and
+`~> 5.0` in each `modules/*/versions.tf`, which must move with it: a nested constraint that excludes
+a major keeps it out of every configuration using the module), and `versions.tf` carries the full
+reasoning: 5.8.0 is the version a refreshing plan against a live install resolved, replacing
+nothing. Do not lower it without such a plan, and do not move to 6.x without one — a provider major
+changes every install's apply and is a breaking module release.
 
 ## Where decisions live
 

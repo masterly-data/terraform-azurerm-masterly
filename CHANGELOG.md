@@ -43,11 +43,12 @@ inventing one now would be exactly the retyped-value failure the manifest exists
      `ARM_PROVIDER_ENHANCED_VALIDATION_RESOURCE_PROVIDERS`. Location validation is now off by
      default, so a mistyped `location` fails at apply rather than at plan.
   4. **Plan with refresh on** (the default) and read the plan before applying. The private DNS
-     zone links for Postgres, Key Vault and Redis now name their zone with `private_dns_zone_id`,
-     because azurerm 5 removed `private_dns_zone_name` and `resource_group_name` from that
-     resource. Their Azure resource IDs do not change and a refreshing plan shows no change to
-     them; a plan run with `-refresh=false` cannot see that and shows them as replaced. A plan
-     that replaces any of them, or anything else, is not the expected upgrade: stop there.
+     zone links for Postgres, Key Vault, Redis and a private Service Bus namespace now name their
+     zone with `private_dns_zone_id`, because azurerm 5 removed `private_dns_zone_name` and
+     `resource_group_name` from that resource. Their Azure resource IDs do not change and a
+     refreshing plan shows no change to them; a plan run with `-refresh=false` cannot see that
+     and shows them as replaced. A plan that replaces any of them, or anything else, is not the
+     expected upgrade: stop there.
 
   Nothing else the module sets was removed or changed in meaning by azurerm 5; the arguments it
   uses were checked against the provider's 5.0 upgrade guide. Configuration of your own in the

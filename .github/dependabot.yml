@@ -23,14 +23,15 @@ updates:
     # widening versions.tf from ~> 4.61 to ~> 5.6. This repo commits no lock file, so
     # Dependabot has no resolved version to classify a change as "major" against, and a
     # rule keyed on the classification never matched. The versions rule names the range
-    # itself and does not depend on that classification. Lift both together when azurerm 5
-    # is decided (MAS-129): the constraint lives in versions.tf and in each
-    # modules/*/versions.tf, and a bump that moves only one of them cannot resolve.
+    # itself and does not depend on that classification. The module moved to azurerm 5 by
+    # hand, with a live plan (MAS-129), so the range now holds 6.x back and 5.x minors come
+    # through. Move both together at the next major: the constraint lives in versions.tf and
+    # in each modules/*/versions.tf, and a bump that moves only one of them cannot resolve.
     ignore:
       - dependency-name: "hashicorp/azurerm"
         update-types: ["version-update:semver-major"]
       - dependency-name: "hashicorp/azurerm"
-        versions: [">= 5.0.0"]
+        versions: [">= 6.0.0"]
     groups:
       terraform-minor-patch:
         patterns: ["*"]
