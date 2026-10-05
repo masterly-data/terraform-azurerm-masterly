@@ -91,6 +91,8 @@ module "workers" {
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,
     azurerm_managed_redis_access_policy_assignment.apps,
     azurerm_redis_cache_access_policy_assignment.apps,
+    azurerm_private_endpoint.servicebus,
+    azurerm_private_dns_zone_virtual_network_link.servicebus,
   ]
 }
 

@@ -1435,6 +1435,14 @@ run "service_bus_enabled_provisions_broker_and_grants" {
     error_message = "enable_service_bus must provision the namespace, the queue, and both data-plane grants."
   }
 
+  # Outside production servicebus_sku has no value of its own and means Standard, which is
+  # what the variable defaulted to before it lost its default, so such an install plans no
+  # change to its namespace.
+  assert {
+    condition     = azurerm_servicebus_namespace.this[0].sku == "Standard"
+    error_message = "Outside production an unset servicebus_sku must still plan a Standard namespace."
+  }
+
   # SAS off (ADR 0029): managed identity only, so there is no connection string to leak.
   assert {
     condition     = azurerm_servicebus_namespace.this[0].local_auth_enabled == false
@@ -1503,6 +1511,307 @@ run "service_bus_default_off" {
       length(azurerm_role_assignment.sb_sender) == 0
     )
     error_message = "The default must provision no broker — the polling binding runs air-gapped."
+  }
+
+  # Disabled, Service Bus leaves nothing behind on the network side either: no endpoint, no
+  # zone, and no AMQP port opened on the endpoints subnet.
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.servicebus) == 0 &&
+      length(azurerm_private_dns_zone.servicebus) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.servicebus) == 0 &&
+      !anytrue([
+        for rule in azurerm_network_security_group.private_endpoints[0].security_rule :
+        contains(rule.destination_port_ranges, "5671")
+        if rule.name == "allow-data-plane-from-apps"
+      ])
+    )
+    error_message = "With Service Bus off there is no Service Bus endpoint, zone, or AMQP port."
+  }
+}
+
+# Service Bus in production on Premium: Azure's recommended baseline (ADR 0066, amendment of
+# 2026-09-24; Azure Policy cbd11fd3-3002-4907-b6c8-579f0e700e13). Public network access is
+# Disabled — IP rules would not pass the policy — and the apps reach the namespace over a
+# private endpoint with its private DNS zone, the same shape as Postgres, Key Vault and Redis.
+run "production_premium_service_bus_is_private" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus    = true
+    servicebus_sku        = "Premium"
+  }
+
+  assert {
+    condition = (
+      azurerm_servicebus_namespace.this[0].sku == "Premium" &&
+      azurerm_servicebus_namespace.this[0].public_network_access_enabled == false
+    )
+    error_message = "A production Premium namespace must have public network access disabled."
+  }
+
+  # Premium is refused by the service with no messaging unit, so the module states one.
+  assert {
+    condition = (
+      azurerm_servicebus_namespace.this[0].capacity == 1 &&
+      azurerm_servicebus_namespace.this[0].premium_messaging_partitions == 1
+    )
+    error_message = "A Premium namespace needs one messaging unit and one partition; 0 is refused at apply."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.servicebus) == 1 &&
+      azurerm_private_endpoint.servicebus[0].private_service_connection[0].subresource_names == tolist(["namespace"]) &&
+      azurerm_private_endpoint.servicebus[0].resource_group_name == azurerm_resource_group.data.name &&
+      length(azurerm_private_dns_zone.servicebus) == 1 &&
+      azurerm_private_dns_zone.servicebus[0].name == "privatelink.servicebus.windows.net" &&
+      length(azurerm_private_dns_zone_virtual_network_link.servicebus) == 1
+    )
+    error_message = "A private namespace needs a private endpoint on the namespace subresource, in the data resource group, with a privatelink.servicebus.windows.net zone linked to the VNet."
+  }
+
+  # The endpoint lives in the module's endpoints subnet, and that subnet's NSG admits AMQP over
+  # TLS from the runtime subnet: without 5671 the apps' Service Bus client cannot connect.
+  assert {
+    condition = anytrue([
+      for rule in azurerm_network_security_group.private_endpoints[0].security_rule :
+      rule.source_address_prefix == azurerm_subnet.aca[0].address_prefixes[0] &&
+      contains(rule.destination_port_ranges, "5671") &&
+      contains(rule.destination_port_ranges, "443")
+      if rule.name == "allow-data-plane-from-apps"
+    ])
+    error_message = "The endpoints subnet must admit AMQP over TLS (5671) from the runtime subnet when the namespace is private."
+  }
+}
+
+# A landing zone that centralizes private DNS supplies the zone: the module creates none and
+# no VNet link, and the endpoint registers in the injected zone.
+run "production_premium_service_bus_uses_injected_dns_zone" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    external_database_url          = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus             = true
+    servicebus_sku                 = "Premium"
+    servicebus_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_dns_zone.servicebus) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.servicebus) == 0 &&
+      length(azurerm_private_endpoint.servicebus) == 1 &&
+      azurerm_private_endpoint.servicebus[0].private_dns_zone_group[0].private_dns_zone_ids == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"])
+    )
+    error_message = "An injected Service Bus zone must be used as given, with no zone or link created."
+  }
+}
+
+# Guard: an injected zone of any other name would leave the namespace's hostname resolving to
+# its public address, which a private namespace refuses — a broken bus that plans clean.
+run "service_bus_dns_zone_of_the_wrong_name_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    enable_service_bus             = true
+    servicebus_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+  }
+
+  expect_failures = [var.servicebus_private_dns_zone_id]
+}
+
+# Production asks for the SKU rather than defaulting it (owner decision on MAS-1086). A
+# Premium default would replace every existing Standard namespace whose install never set the
+# SKU (azurerm forces replacement on any move to or from Premium), and a Standard default
+# would leave a new install off Azure's baseline without anyone choosing that. So production
+# with Service Bus enabled and no SKU is refused at plan, as redis_offering is.
+run "production_service_bus_without_sku_is_rejected" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus    = true
+  }
+
+  expect_failures = [var.servicebus_sku]
+}
+
+# The refusal is about the namespace, not the input: production with Service Bus off needs no
+# SKU and plans no namespace.
+run "production_without_service_bus_needs_no_sku" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_servicebus_namespace.this) == 0 &&
+      length(azurerm_private_endpoint.servicebus) == 0
+    )
+    error_message = "Production with Service Bus disabled must plan without servicebus_sku and create no namespace."
+  }
+}
+
+# An empty string is what an unset TF_VAR_ or a rendered template produces. It must not pass
+# as "unset" and then be read as Standard.
+run "service_bus_empty_sku_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_service_bus    = true
+    servicebus_sku        = ""
+  }
+
+  expect_failures = [var.servicebus_sku]
+}
+
+# The opt-down: Standard in production keeps a public endpoint, because Standard cannot host
+# a private endpoint. It plans no endpoint, no zone, no AMQP port, and leaves an existing
+# Standard namespace's capacity and partitions where the provider records them (0), so it
+# plans no change to that namespace.
+run "production_standard_service_bus_keeps_public_endpoint" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus    = true
+    servicebus_sku        = "Standard"
+  }
+
+  assert {
+    condition = (
+      azurerm_servicebus_namespace.this[0].sku == "Standard" &&
+      azurerm_servicebus_namespace.this[0].public_network_access_enabled == true &&
+      azurerm_servicebus_namespace.this[0].capacity == 0 &&
+      azurerm_servicebus_namespace.this[0].premium_messaging_partitions == 0
+    )
+    error_message = "A Standard namespace keeps public access and takes no messaging units."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.servicebus) == 0 &&
+      length(azurerm_private_dns_zone.servicebus) == 0 &&
+      !anytrue([
+        for rule in azurerm_network_security_group.private_endpoints[0].security_rule :
+        contains(rule.destination_port_ranges, "5671")
+        if rule.name == "allow-data-plane-from-apps"
+      ])
+    )
+    error_message = "A Standard namespace gets no private endpoint, no zone and no AMQP port."
+  }
+}
+
+# Outside production nothing changes: a Premium namespace keeps public access, as Key Vault
+# does outside production, for ease of evaluation. It still gets its messaging unit.
+run "non_production_premium_service_bus_stays_public" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_service_bus    = true
+    servicebus_sku        = "Premium"
+  }
+
+  assert {
+    condition = (
+      azurerm_servicebus_namespace.this[0].public_network_access_enabled == true &&
+      azurerm_servicebus_namespace.this[0].capacity == 1 &&
+      length(azurerm_private_endpoint.servicebus) == 0 &&
+      length(azurerm_private_dns_zone.servicebus) == 0
+    )
+    error_message = "Outside production a Premium namespace keeps public access and gets no private endpoint."
   }
 }
 
@@ -2797,6 +3106,47 @@ run "telemetry_is_off_unless_configured" {
   }
 }
 
+# The erasure backup horizon (ADR 0081 §6): an erasure's completion record states how long
+# the deleted record can survive in backups. The module knows that only for the starter
+# server it provisions, so it states it there and nowhere else. 21 is not the default, so
+# a value hard-wired to 7 cannot pass.
+run "erasure_backup_horizon_follows_starter_server_retention" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    postgres_backup_retention_days = 21
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_ERASURE_BACKUP_RETENTION_DAYS"] == "21"
+    error_message = "On the starter server the api must be told the backup retention it was provisioned with."
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].backup_retention_days == 21
+    error_message = "The horizon stated to the api must be the retention the server is provisioned with."
+  }
+}
+
+# On BYO-DB the module does not know the customer's backup policy, so it states nothing and
+# the api falls back to "the operator's backup policy governs". A number here would be a
+# claim about backups the module does not own.
+run "erasure_backup_horizon_absent_on_byo_db" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    external_database_url          = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    postgres_backup_retention_days = 21
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS")
+    error_message = "With external_database_url set the backup horizon must not be set at all."
+  }
+}
+
 run "telemetry_wires_url_id_and_secret" {
   command = plan
 
@@ -3475,6 +3825,63 @@ run "external_api_refuses_insecure" {
   }
 }
 
+# api_url is the output a client's base URL is read from. Unpublished, it is null rather than the
+# internal hostname: that address answers only inside the environment, and a base URL that cannot
+# connect is worse than none. api_internal_fqdn stays, under its original name, for existing
+# configurations.
+run "api_url_is_null_while_the_api_is_internal" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = output.api_url == null
+    error_message = "api_url must be null while api_ingress_external is false: an internal api has no address a client outside the environment can use."
+  }
+}
+
+# Published, api_url mirrors frontend_url: the hostname Azure reports, behind https://. The
+# hostname is computed, so at plan it is unknown and an assertion on it asserts nothing;
+# `override_module` pins the api app's outputs to known values so the URL's shape is checkable.
+# (apply is not an option — the mock provider hands out ids that the azurerm provider then
+# rejects as unparseable.) A published api refuses plain HTTP (external_api_refuses_insecure),
+# so an http:// base URL would be a broken one.
+run "api_url_is_an_https_url_once_the_api_is_published" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_ingress_external  = true
+  }
+
+  override_module {
+    target = module.api
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+      name                      = "ca-api"
+      fqdn                      = "ca-api.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
+    }
+  }
+
+  assert {
+    condition     = output.api_url == "https://ca-api.example.swedencentral.azurecontainerapps.io"
+    error_message = "api_url must be https:// followed by the api's ingress hostname once api_ingress_external is true."
+  }
+
+  # The pre-existing output keeps its name and its value — the bare hostname — so a
+  # configuration that already reads it plans exactly as before.
+  assert {
+    condition     = output.api_internal_fqdn == "ca-api.example.swedencentral.azurecontainerapps.io"
+    error_message = "api_internal_fqdn must still carry the api's ingress hostname, unchanged."
+  }
+}
+
 # The other half of the same finding. Flipping the api to HTTPS-only would push the plaintext
 # problem onto the in-environment hop if this were not on, because the BFF keeps calling
 # http://ca-api by app name — the one address that cannot drift and cannot be verified over
@@ -3597,6 +4004,333 @@ run "workers_at_zero_floor_gets_no_replica_alert" {
       !contains(keys(azurerm_monitor_metric_alert.app_unavailable), "workers")
     )
     error_message = "A workers app allowed to sit at zero replicas must not carry a no-replica alert; the serving apps still must."
+  }
+}
+
+# --- Geo-redundant backup on the starter Postgres server (MAS-1087) ----------------------
+# Unset, postgres_geo_redundant_backup resolves to: on for mode=production in a region the
+# module knows supports it, off everywhere else. An explicit true or false always wins. Each
+# run below sets the full production wiring because every one of those inputs is required
+# by mode=production on the starter server.
+
+run "production_geo_backup_on_in_a_supported_region" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == true
+    error_message = "mode=production in Sweden Central must create the starter server with geo-redundant backup on."
+  }
+}
+
+# The display form of the location resolves through the same key as the lookup.
+run "production_geo_backup_on_with_the_display_form_location" {
+  command = plan
+
+  variables {
+    location                       = "Sweden Central"
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == true
+    error_message = "\"Sweden Central\" and \"swedencentral\" must resolve to the same geo-redundant backup default."
+  }
+}
+
+# Poland Central has no geo-redundant backup for Postgres flexible server. Turning it on there
+# would fail the apply, so the production default leaves it off.
+run "production_geo_backup_off_in_an_unsupported_region" {
+  command = plan
+
+  variables {
+    location                       = "polandcentral"
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "mode=production in Poland Central must leave geo-redundant backup off: the region does not support it."
+  }
+}
+
+# A region the module has not checked against Microsoft's table is treated as unsupported, so
+# the default can never turn on a setting Azure might refuse. The customer turns it on.
+run "production_geo_backup_off_in_an_unlisted_region" {
+  command = plan
+
+  variables {
+    location                       = "westeurope"
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "A region absent from the module's geo-redundant backup lookup must default to off."
+  }
+}
+
+# The customer's explicit false wins over the production default in a supported region.
+run "production_geo_backup_explicit_false_wins" {
+  command = plan
+
+  variables {
+    postgres_geo_redundant_backup  = false
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "postgres_geo_redundant_backup = false must override the production default."
+  }
+}
+
+# Evaluation installs leave it off by default, in a supported region too.
+run "evaluation_geo_backup_off_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "mode=demo must leave geo-redundant backup off unless the customer sets it."
+  }
+}
+
+# ...and the customer's explicit true wins there.
+run "evaluation_geo_backup_explicit_true_wins" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs         = ["203.0.113.7/32"]
+    postgres_geo_redundant_backup = true
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == true
+    error_message = "postgres_geo_redundant_backup = true must turn geo-redundant backup on in any mode."
+  }
+}
+
+# An existing server is never replaced to change geo-redundant backup. Azure accepts the
+# setting only at creation, so the provider replaces the server to change it, and that
+# destroys every Environment database on it. The first run creates a server the way an
+# earlier module version would have — production, Sweden Central, geo-redundant backup off —
+# and the second plans the same install with the input unset, where the new default resolves
+# to on. ignore_changes must keep the planned value at what the server was created with.
+#
+# What this proves, and what it does not: under mock providers there is no real provider
+# diff, so Terraform cannot report "must be replaced" here. What it can show is that the
+# planned value of geo_redundant_backup_enabled stays false while the module's default for a
+# new server is true; with no change to that attribute there is nothing for the provider to
+# replace the server over. Only a plan against a real install shows the action itself.
+#
+# KEEP THESE TWO RUNS LAST IN THIS FILE. Every run in a file shares one state, and the first
+# of them applies to it (mock state; nothing reaches Azure). Every other run is a plan against
+# empty state, and a run added after these would plan against this install instead.
+run "existing_server_created_without_geo_backup" {
+  command = apply
+
+  # Only the server and what it depends on. Mock providers return random strings as resource
+  # IDs, and the resources that parse the server's ID (its diagnostic setting and alerts)
+  # refuse one at apply. The server is the resource under test.
+  plan_options {
+    target = [azurerm_postgresql_flexible_server.this]
+  }
+
+  # Real-shaped IDs for what this run creates, so the teardown at the end of the file, which
+  # evaluates the whole configuration against this state, can parse them.
+  override_resource {
+    target = azurerm_resource_group.data
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data"
+    }
+  }
+
+  override_resource {
+    target = azurerm_postgresql_flexible_server.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-test"
+    }
+  }
+
+  variables {
+    postgres_geo_redundant_backup  = false
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "Setup: the existing server must be created with geo-redundant backup off."
+  }
+}
+
+run "existing_server_keeps_its_geo_backup_setting" {
+  command = plan
+
+  plan_options {
+    target = [azurerm_postgresql_flexible_server.this]
+  }
+
+  variables {
+    mode                           = "production"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  # The new default for this install is on...
+  assert {
+    condition     = local.postgres_geo_redundant_backup == true
+    error_message = "Precondition of this test: the unset input must resolve to on for production in Sweden Central."
+  }
+
+  # ...and the existing server's planned value is still what it was created with.
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
+    error_message = "A changed geo-redundant backup default must not change an existing server's setting — changing it replaces the server and destroys its data."
   }
 }
 

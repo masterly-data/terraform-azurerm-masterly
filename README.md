@@ -11,7 +11,7 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.16"
+  version = "~> 0.17"
 }
 ```
 
@@ -50,7 +50,7 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.16"
+  version = "~> 0.17"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -68,8 +68,8 @@ module "masterly" {
   # Two floors sit below it: an api older than v0.132.2 registers no job handlers on
   # ca-workers, silently, and a frontend older than v0.138.2 leaves a fresh install unable to
   # create its first Environment. api v0.133.1 has no published image.
-  api_image           = "masterly.azurecr.io/api:v0.133.5"
-  frontend_image      = "masterly.azurecr.io/frontend:v0.139.0"
+  api_image           = "masterly.azurecr.io/api:v0.133.11"
+  frontend_image      = "masterly.azurecr.io/frontend:v0.139.5"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -146,12 +146,19 @@ module "masterly" {
 }
 ```
 
-Outputs include `frontend_url`, the apps resource group, the Container App names (the
-values the app repos' release workflows use to roll images — `DEMO_RG`, `DEMO_APP_API`,
-`DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
+Outputs include `frontend_url`, `api_url` (the API's base URL for the Python SDK and other
+clients outside the environment — null unless `api_ingress_external = true`), the apps resource
+group, the Container App names (the values the app repos' release workflows use to roll
+images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
 `apps_identity_client_id` / `frontend_identity_principal_id` for out-of-band role grants.
 The install runs on **two** app identities (see below), so an out-of-band `AcrPull` grant
 has to reach both principals.
+
+`api_internal_fqdn` keeps its name so existing configurations still plan, but the name is older
+than `api_ingress_external`: it holds the API's internal hostname only while the API is
+unpublished, and its published hostname once it is. Read `api_url` for a client's base URL. Like
+every ingress hostname, both are for a person or a client to use, not for wiring one app to
+another — apps in the same environment address the API by its Container App name.
 
 ## Preflight
 
@@ -185,7 +192,7 @@ they bite, so confirm them before you plan.
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
-| Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding |
+| Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding. In `mode = "production"`, `enable_service_bus = true` also requires **`servicebus_sku`**, which has no default there: `"Premium"` (recommended) runs the namespace private, behind a **private endpoint** with public network access disabled, at about $677 per month; `"Standard"` keeps a public endpoint. See [Where this module departs from Azure's recommended baseline](#where-this-module-departs-from-azures-recommended-baseline). |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
 | Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer and Crypto Officer grants to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
 | Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the URL rides as a Container App secret, keyless on `redis_auth = "entra"` — [authentication](#authentication-to-the-starter-server-and-redis)). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
@@ -258,9 +265,10 @@ on the ports the subnet's network security group admits — Postgres among them;
 Omit `external_database_url` and the module provisions the **starter server** instead —
 private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its knobs:
 `postgres_sku_name`, `postgres_storage_mb`, `postgres_version`,
-`postgres_backup_retention_days`, `postgres_geo_redundant_backup` (mind data residency —
-backups go to the paired region), `postgres_zone_redundant_ha` (needs a non-burstable
-SKU). Flipping an install from starter to BYO-DB **plans the destruction of the starter
+`postgres_backup_retention_days`, `postgres_geo_redundant_backup` (on by default in
+production where the module knows the region supports it; mind data residency — backups go to
+the paired region; see [the departures section](#geo-redundant-backup-is-on-only-in-the-regions-the-module-lists)),
+`postgres_zone_redundant_ha` (needs a non-burstable SKU). Flipping an install from starter to BYO-DB **plans the destruction of the starter
 server** — migrate your data first; the plan makes it visible.
 
 A BYO-DB database on a **private** address — reached over peering or a private endpoint — is
@@ -450,7 +458,9 @@ Landing-zone accommodations:
   allocation sets `aca_subnet_prefix` + `private_endpoints_subnet_prefix` explicitly.
 - Hub-and-spoke shops that centralize private DNS pass
   `postgres_private_dns_zone_id` — the module then creates no zone and no VNet link
-  (linking the central zone to this VNet is the platform team's side).
+  (linking the central zone to this VNet is the platform team's side). The same holds for
+  `key_vault_private_dns_zone_id`, `redis_private_dns_zone_id` and
+  `servicebus_private_dns_zone_id`.
 
 > Upgrading from v0.1: `infrastructure_subnet_id` is create-time-only, so the apply
 > REPLACES the Container App Environment and the apps — their FQDNs change. The Postgres
@@ -509,34 +519,62 @@ The Microsoft cloud security benchmark v2 (`e3ec7e09-768c-4b64-882c-fcada3772047
 opt-in preview; each item says whether its definitions are in it. Whether a finding appears
 on your subscription therefore depends on the standards and policies you have assigned.
 
-#### Service Bus keeps public network access enabled
+#### Service Bus on Basic or Standard keeps public network access enabled
 
-This applies only with `enable_service_bus = true`. The namespace leaves public network access
-at Azure's default, enabled, and the module creates no private endpoint for it. Azure
-recommends the Premium tier with a private endpoint and public network access disabled. The
-namespace's minimum TLS version is set to 1.2 explicitly (`minimum_tls_version`).
+This applies only with `enable_service_bus = true`. Azure recommends the Premium tier with a
+private endpoint and public network access disabled. The namespace's minimum TLS version is set
+to 1.2 explicitly (`minimum_tls_version`) on every tier.
 
-Why it holds today:
+In `mode = "production"` with Service Bus enabled, the module makes you choose the tier:
+`servicebus_sku` has no default there, and the plan is refused until you set it. That is
+deliberate. A Premium default would replace the namespace of every existing install that never
+set the tier, and a Standard default would leave a new install off Azure's recommendation
+without anyone having chosen that. The choice is:
 
-- Private endpoints are a Premium-tier feature. The module's default `servicebus_sku` is
-  Standard, and the module does not create a private endpoint on Premium either.
+- `servicebus_sku = "Premium"`, the recommendation. Public network access is disabled, and the
+  apps reach the namespace over a private endpoint in the install's private-endpoints subnet,
+  with a `privatelink.servicebus.windows.net` private DNS zone linked to the install's VNet (or
+  the zone you pass in `servicebus_private_dns_zone_id`). Premium is priced per messaging unit.
+  The module provisions one, which costs about **$677 per month** in Sweden Central at list
+  price (USD 0.9275 per messaging-unit hour). Check the price for your region and agreement.
+- `servicebus_sku = "Standard"`, the documented opt-down, at a base charge of about $10 per
+  month. The namespace keeps public network access enabled. This is also the value that keeps
+  an existing Standard namespace unchanged.
+
+Outside production an unset `servicebus_sku` means Standard, and a Premium namespace keeps
+public access, for ease of evaluation.
+
+On Basic or Standard the namespace keeps public network access enabled. Why that departure
+exists:
+
+- Private endpoints are a Premium-tier feature, so Basic and Standard cannot be made private.
 - IP firewall rules are available on Standard, but they leave public network access enabled,
   so they do not meet the recommendation. They would also need a stable source address, which
   this module's Consumption-only Container Apps environment does not have.
+- Premium costs about $677 per month against Standard's $10, which is a choice the module
+  leaves to you rather than making on your behalf.
 
-To follow Azure's recommendation now, leave `enable_service_bus` at its default, `false`. The
-apps then run their job queue in the install's Postgres database (the polling bus binding),
-no broker is provisioned, and `mode = "production"` accepts that configuration.
-`examples/production` sets `enable_service_bus = true`; remove that line to follow this.
+To follow Azure's recommendation, either:
+
+- leave `enable_service_bus` at its default, `false`. The apps then run their job queue in the
+  install's Postgres database (the polling bus binding), no broker is provisioned, and
+  `mode = "production"` accepts that configuration, with no `servicebus_sku`. Or
+- set `servicebus_sku = "Premium"` in production, as `examples/production` does. **On an
+  install that already runs a Basic or Standard namespace, this replaces it.** Azure does not
+  convert a namespace between Premium and the other tiers in place, so the plan destroys the
+  namespace, its `masterly-jobs` queue and the apps' two role assignments, and creates them
+  again. Job notifications still in the queue are lost with it; the jobs themselves are in the
+  Environment's database. Moving back from Premium replaces it the same way. Read the plan
+  before you apply it.
 
 Definitions that flag this:
 
 - *Service Bus Namespaces should disable public network access*
   (`cbd11fd3-3002-4907-b6c8-579f0e700e13`). It is in the benchmark v2 initiative and applies
-  to every SKU.
+  to every SKU. A production Premium namespace passes it.
 - *Azure Service Bus namespaces should use private link*
   (`1c06e275-d63d-4540-b761-71f364c2111d`). It is in the benchmark v2 initiative, but it
-  evaluates Premium namespaces only, so the Standard default does not trigger it.
+  evaluates Premium namespaces only, so a Standard namespace does not trigger it.
 
 #### Redis and the starter Postgres authenticate with a key or password, when you choose it
 
@@ -575,21 +613,39 @@ Definitions that flag the departure:
 - No built-in definition evaluates access-key authentication on Azure Managed Redis
   (`redis_offering = "managed"`).
 
-#### Geo-redundant backup is off on the starter Postgres server
+#### Geo-redundant backup is on only in the regions the module lists
 
-`postgres_geo_redundant_backup` defaults to `false`, and `mode = "production"` does not
-require it. Azure recommends geo-redundant backup as a reliability measure.
+Geo-redundant backup copies the starter Postgres server's backups to the region Azure pairs
+with the server's region, so the server can be restored there if its own region is lost. Azure
+recommends it as a reliability measure. Leave `postgres_geo_redundant_backup` unset and the
+module decides:
 
-Why it holds today: geo-redundant backup copies the server's backups to the region Azure
-pairs with the server's region. Whether that region is inside your install's data-residency
-boundary is a decision the module cannot make for you, and a region with no pair cannot use
-geo-redundant backup at all.
+| Install | Region | Geo-redundant backup |
+|---|---|---|
+| `mode = "production"` | Sweden Central | On. Its pair, Sweden South, is in Sweden, inside the `eu` geo. |
+| `mode = "production"` | Poland Central, Spain Central | Off. Azure does not offer geo-redundant backup for Postgres flexible server in these regions, so turning it on would fail the apply. |
+| `mode = "production"` | Any other region | Off. The module has not yet recorded whether Azure supports it there. |
+| `mode = "demo"` | Any | Off. |
 
-To follow Azure's recommendation now, check that the paired region is inside your residency
-boundary, then set `postgres_geo_redundant_backup = true` **before the apply that creates the
-server**. Azure accepts this setting only when a server is created. On an existing install,
-changing it makes Terraform plan to replace the starter server, which destroys the server and
-the data on it; do not apply that plan.
+Set `postgres_geo_redundant_backup = true` or `false` to decide yourself; your value always
+wins. Before setting `true`, check two things against Microsoft's
+[regions table](https://learn.microsoft.com/azure/postgresql/overview#azure-regions): that the
+region supports geo-redundant backup, and that the paired region is inside your install's
+data-residency boundary. The backups are copies of your data, so a pair outside that boundary
+is a residency breach, not a backup.
+
+The setting takes effect only when the server is created. Azure accepts it only at creation,
+and changing it would replace the server, destroying the server and every Environment database
+on it. So the module ignores later changes to it: a module upgrade that changes the default, or
+a changed input, leaves an existing server as it was created. An install created before this
+default keeps the setting it was created with: off, unless you had set it. To turn it on for an existing server, restore the
+server to a new one with geo-redundant backup enabled and move the install's data plane to it.
+
+A geo-restore creates a new server in the paired region. Sweden South is an access-restricted
+region: a subscription can create resources there only after Microsoft grants it access. If
+your install is in Sweden Central, request access to Sweden South for the install's
+subscription before you need a restore, through an Azure support request; the backups are
+copied there either way, but a restore into Sweden South waits on that access.
 
 Definitions that flag this:
 
@@ -813,9 +869,15 @@ The script does not delete those lines — the statement that failed is often th
 diagnosis — and it does not refuse the bundle over them either, because a tool that refuses to
 hand over the evidence during an incident does not get used. It **names the files**: on the
 terminal at the end of the run, and in `manifest.json` under
-`record_data.needs_line_by_line_review`, which lists the files in *that* bundle where
-statement text was actually found. Read those files line by line, delete any line you are not
-willing to send, and say in your message that you did.
+`record_data.needs_line_by_line_review`, which lists the files in *that* bundle that must be
+read line by line — every one of the two above that the run collected, whether or not the
+script found statement text in it. The script's scan for statement shapes (`STATEMENT:`,
+`DETAIL: Key (…)`, `PARAMETERS:`) is a heuristic for what Postgres writes at its defaults; an
+attribute value has no shape of its own, so the scan finding nothing is not the file being
+clear, and a read-first instruction gated on the scan would go quiet exactly when it is least
+able to tell (MAS-423). Where the scan did find statement text, the file is also listed under
+`record_data.statement_text_found_in` and the terminal says so. Read the named files line by
+line, delete any line you are not willing to send, and say in your message that you did.
 
 Before it finishes it scans everything it wrote for anything shaped like a secret — a URL
 with credentials, a JWT, a private key, a `password=` — and **refuses** a bundle that trips
@@ -827,10 +889,12 @@ report, not a line to forward.
 two strengths of claim apart rather than blurring them: each seeded secret, credential,
 address and key is asserted **absent**, and the record-data class is asserted **present in
 `q6` and flagged** — the value in the file, the file named in `manifest.json`, the operator
-told on the terminal, and the run still exiting 0. Its `--selftest` breaks the script five
-ways — allow-list bypassed, secret values kept, refusal gate disabled, statement-echo warning
-disabled, version taken from the release manifest — to insist the harness notices. CI runs both
-on every change.
+told on the terminal, and the run still exiting 0 — and a `q6` carrying a Postgres error with
+no statement marker at all is asserted to be named just the same. Its `--selftest` breaks the
+script seven ways — allow-list bypassed, secret values kept, refusal gate disabled,
+statement-echo warning disabled, its pattern scan alone disabled, the review list seeded from
+the scan alone, version taken from the release manifest — to insist the harness notices. CI
+runs both on every change.
 
 ## If you front this install with a WAF, CDN, or gateway
 
@@ -1117,6 +1181,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.17.0` | `masterly.azurecr.io/api:v0.133.11` | `masterly.azurecr.io/frontend:v0.139.5` | 2026-10-05 |
 | `0.16.0` | `masterly.azurecr.io/api:v0.133.5` | `masterly.azurecr.io/frontend:v0.139.0` | 2026-09-24 |
 | `0.15.0` | `masterly.azurecr.io/api:v0.133.2` | `masterly.azurecr.io/frontend:v0.138.2` | 2026-09-07 |
 <!-- release-manifest:end -->
@@ -1129,6 +1194,13 @@ If you are reading the manifest from a program rather than from this page,
 [docs/release-manifest.md](docs/release-manifest.md) is the contract: where to fetch it, every
 field with its type, which of them are stable and which may be added without warning. Parse
 that shape; do not scrape this table.
+
+[`RUNTIME_ENV.json`](RUNTIME_ENV.json) is the manifest's sibling for the other thing a release
+fixes: every environment variable the module sets on `ca-api`, `ca-workers` and `ca-frontend`,
+by name and per app. It is generated from the `.tf` files by
+`python3 scripts/check_runtime_env.py --write`, checked on every change by the same script, and
+documented for programs in [docs/runtime-env.md](docs/runtime-env.md). The application
+repositories check their own code and runbooks against it.
 
 CI checks `terraform fmt` + `validate` + `terraform test` (mock providers exercise the variable
 guards and both data-plane branches) on every change, and
@@ -1158,6 +1230,11 @@ one commit, on `main`, before the tag:
 4. Merge, wait for `main`'s CI run on that commit to pass, then run the **cut-release** workflow
    (Actions → cut-release → Run workflow, from `main`) with the version and the release commit's
    full SHA. Do not create the tag by hand.
+5. After the registry publishes the version, the public
+   [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) adopt it — and the
+   install page's upgrade notes ("Coming from module N.x") are rewritten for the new release as
+   part of that, because the docs' own check refuses the adoption until they are. Until the docs
+   name the new version, the scheduled check above goes red.
 
 A tag on this repository is the release: the Terraform Registry publishes the version from its own
 webhook the moment the tag appears, and a published version cannot be withdrawn, only superseded.

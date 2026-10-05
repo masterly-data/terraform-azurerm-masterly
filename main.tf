@@ -8,12 +8,18 @@
 # Environment at first touch either way, ADR 0003). Identity is dev (evaluation,
 # allowlist-required) or the customer's OIDC IdP (ADR 0024); the license JWT (ADR 0013)
 # arrives as an input. Secrets are born here or arrive as sensitive inputs and live as
-# Container App secrets; nothing per-install is baked into images.
+# Container App secrets, or as Key Vault references with enable_key_vault; nothing
+# per-install is baked into images.
 #
-# Deliberately deferred (-> later): Key Vault-backed secrets, Redis (until then the api
-# is pinned to one replica — the session registry is in-memory), the dedicated workers
-# service, custom domains, the per-install Entra identity of ADR 0020 (the install does
-# not call Masterly's control plane yet).
+# Opt-in subsystems, off by default: Key Vault (keyvault.tf), Redis (redis.tf), the
+# dedicated workers app (workers.tf), customer-owned email (email.tf) and the Service Bus
+# transport (below). mode=production requires the first three. The observability surface
+# (diagnostics.tf) is on by default in mode=production and off otherwise.
+#
+# Deliberately deferred: custom domains, and the per-install Entra identity of ADR 0020.
+# The calls the install can make to Masterly's control plane (licence refresh, usage
+# reporting) are opt-in and authenticate with the install credential from the bundle, not
+# with that identity. The README's "Deliberately deferred" section is the list of record.
 
 locals {
   rg_aca_name  = "rg-${var.name_prefix}-aca"
@@ -88,13 +94,45 @@ locals {
   location_key = lower(replace(var.location, " ", ""))
   install_geo  = var.location_geo != null ? var.location_geo : lookup(local.location_geo_map, local.location_key, null)
 
+  # --- Geo-redundant backup on the starter Postgres server ------------------------------
+  # Whether Azure Database for PostgreSQL flexible server offers geo-redundant backup in a
+  # region, from Microsoft's regions table:
+  # https://learn.microsoft.com/azure/postgresql/overview#azure-regions
+  #
+  # Only regions whose answer has been checked against that table are listed. A region that
+  # is absent is treated as unsupported, so the production default leaves geo-redundant
+  # backup off there rather than turning on a setting Azure might refuse at apply; set
+  # postgres_geo_redundant_backup = true to turn it on yourself. Checked 2026-09-25:
+  #   - swedencentral: supported. Its pair, Sweden South, is in Sweden, inside the "eu" geo.
+  #     Premium SSD v2 storage does not offer geo-redundant backup in Sweden Central; this
+  #     module provisions Premium SSD, which does.
+  #   - polandcentral, spaincentral: not supported; the table lists no geo-redundant backup
+  #     for either region.
+  # Adding a region here changes the production default only for servers created after the
+  # change; an existing server keeps what it was created with (see the server's lifecycle).
+  postgres_geo_backup_supported = {
+    swedencentral = true
+    polandcentral = false
+    spaincentral  = false
+  }
+
+  # The customer's explicit choice wins. Unset, production turns geo-redundant backup on
+  # wherever the region supports it, and evaluation installs leave it off.
+  postgres_geo_redundant_backup = (
+    var.postgres_geo_redundant_backup != null
+    ? var.postgres_geo_redundant_backup
+    : var.mode == "production" && lookup(local.postgres_geo_backup_supported, local.location_key, false)
+  )
+
   # One install is one data plane in one location, so the only geo whose data it can hold is
   # its own. Defaulting to that makes the safe configuration the automatic one.
   allowed_regions = var.allowed_regions != null ? var.allowed_regions : [var.masterly_region]
 
   # The ports the install's private endpoints actually answer on, and the whole of what the
   # endpoints subnet admits: Postgres (5432), Key Vault (443), Azure Cache for Redis over TLS
-  # (6380) and Azure Managed Redis (10000, its documented default).
+  # (6380) and Azure Managed Redis (10000, its documented default). A private Service Bus
+  # namespace adds AMQP over TLS (5671), the transport the apps' Service Bus client uses; its
+  # AMQP-over-WebSockets fallback is on 443, which is already admitted.
   #
   # The managed offering's port is read from the database rather than trusted to be that
   # default. The ARM contract says the database port "defaults to an available port", which is
@@ -104,6 +142,7 @@ locals {
   private_endpoint_ports = distinct(concat(
     ["443", "5432", "6380", "10000"],
     local.use_managed_redis ? [tostring(azurerm_managed_redis.this[0].default_database[0].port)] : [],
+    local.servicebus_private ? ["5671"] : [],
   ))
 
   # Data plane seam (ADR 0065): BYO-DB when the customer supplies a DSN, otherwise the
@@ -113,6 +152,20 @@ locals {
   # only create one when we provision the server and none is injected.
   create_postgres_dns  = local.provision_postgres && var.postgres_private_dns_zone_id == null
   postgres_dns_zone_id = local.provision_postgres ? (var.postgres_private_dns_zone_id != null ? var.postgres_private_dns_zone_id : azurerm_private_dns_zone.postgres[0].id) : null
+
+  # Service Bus (ADR 0029). Private endpoints are a Premium-only feature on Service Bus, so
+  # the namespace runs private exactly when it is Premium in production: public network
+  # access Disabled, reached over a private endpoint in the endpoints subnet. Outside
+  # production it keeps public access, as Key Vault does, for ease of evaluation.
+  #
+  # servicebus_sku has no default: production refuses it unset when Service Bus is enabled
+  # (the variable's validation), and everywhere else unset means Standard, which is what the
+  # variable defaulted to before, so those installs plan no change.
+  servicebus_sku         = coalesce(var.servicebus_sku, "Standard")
+  servicebus_premium     = var.enable_service_bus && local.servicebus_sku == "Premium"
+  servicebus_private     = local.servicebus_premium && var.mode == "production"
+  create_servicebus_dns  = local.servicebus_private && var.servicebus_private_dns_zone_id == null
+  servicebus_dns_zone_id = local.servicebus_private ? (var.servicebus_private_dns_zone_id != null ? var.servicebus_private_dns_zone_id : azurerm_private_dns_zone.servicebus[0].id) : null
 }
 
 # A stable per-install suffix for the globally-unique Postgres server name.
@@ -378,10 +431,10 @@ resource "azurerm_network_security_group" "private_endpoints" {
   location            = var.location
   tags                = local.tags
 
-  # The apps are the only caller the install's data plane has. Postgres, Key Vault and Redis
-  # have no public network presence, so this rule is the whole of who may open a connection
-  # to them — and it is now enforced rather than implied, because the subnet above has
-  # private_endpoint_network_policies = "Enabled".
+  # The apps are the only caller the install's data plane has. Postgres, Key Vault, Redis and
+  # a private Service Bus namespace have no public network presence, so this rule is the whole
+  # of who may open a connection to them — and it is now enforced rather than implied,
+  # because the subnet above has private_endpoint_network_policies = "Enabled".
   security_rule {
     name                       = "allow-data-plane-from-apps"
     priority                   = 100
@@ -392,7 +445,7 @@ resource "azurerm_network_security_group" "private_endpoints" {
     source_port_range          = "*"
     destination_address_prefix = local.private_endpoints_subnet_prefix
     destination_port_ranges    = local.private_endpoint_ports
-    description                = "Postgres, Key Vault and the Redis session registry, from the runtime subnet only."
+    description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the runtime subnet only."
   }
 
   security_rule {
@@ -583,7 +636,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   public_network_access_enabled = false # reachable only via the private endpoint
 
   backup_retention_days        = var.postgres_backup_retention_days
-  geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
+  geo_redundant_backup_enabled = local.postgres_geo_redundant_backup
 
   dynamic "high_availability" {
     for_each = var.postgres_zone_redundant_ha ? [1] : []
@@ -622,11 +675,20 @@ resource "azurerm_postgresql_flexible_server" "this" {
     # documented production bring-up is two applies, so a customer could not even finish the
     # install, let alone upgrade. Found on the first production rehearsal, 2026-09-01.
     #
+    # geo_redundant_backup_enabled is ignored for a different reason: Azure accepts it only when
+    # the server is created, so the provider replaces the server to change it, and replacing it
+    # destroys the server and every Environment database on it. The production default depends
+    # on the region and the mode, so a module upgrade or a changed input could otherwise plan
+    # that replacement on an existing install. Ignoring it means the value is used once, at
+    # creation, and an existing server keeps what it was created with. To change it on an
+    # existing server, restore the server to a new one with the setting you want.
+    #
     # administrator_password is deliberately NOT ignored: a replaced random_password has to reach
     # the server, or the apps would roll onto a connection URL whose password Azure never got.
     ignore_changes = [
       zone,
       high_availability[0].standby_availability_zone,
+      geo_redundant_backup_enabled,
     ]
   }
 }
@@ -683,20 +745,33 @@ resource "azurerm_servicebus_namespace" "this" {
   name                = "sb-${var.name_prefix}-${random_string.install.result}"
   resource_group_name = azurerm_resource_group.aca.name
   location            = var.location
-  sku                 = var.servicebus_sku
+  sku                 = local.servicebus_sku
   local_auth_enabled  = false # managed identity only — no SAS connection strings (ADR 0029)
+
+  # Premium is sized in messaging units and the service refuses a Premium namespace with
+  # none, so the module states one unit and one partition (an ordinary, non-partitioned
+  # namespace). Basic and Standard take neither and are given 0, the provider's own default
+  # for both arguments, so an existing Basic or Standard namespace plans no change here.
+  capacity                     = local.servicebus_premium ? 1 : 0
+  premium_messaging_partitions = local.servicebus_premium ? 1 : 0
 
   # Stated rather than left to the provider's default. Every azurerm version this module
   # supports already defaults to 1.2, so this changes nothing on an install today; it keeps
   # the floor a property of the module, visible in review, instead of a provider default.
   minimum_tls_version = "1.2"
 
-  # Public network access stays at Azure's default, enabled. Private endpoints are a Premium
-  # feature on Service Bus and the module creates none, and IP rules would leave public
-  # access enabled and need a stable source address, which a Consumption-only Container Apps
-  # environment does not have. This departs from Azure's recommended baseline; the README
-  # section "Where this module departs from Azure's recommended baseline" says what it is
-  # and how to follow the recommendation instead (leave enable_service_bus off).
+  # In production on Premium the namespace has no public network presence: public network
+  # access is Disabled and the apps reach it over the private endpoint below, which is what
+  # Azure's recommended baseline asks for (Azure Policy cbd11fd3-3002-4907-b6c8-579f0e700e13).
+  # Disabling public access does not affect Terraform: the queue and the role assignments are
+  # management-plane (ARM) operations, which a namespace's network settings do not govern.
+  #
+  # On Basic or Standard, and outside production, public network access stays enabled.
+  # Private endpoints are a Premium-only feature on Service Bus, and IP rules would leave
+  # public access enabled and need a stable source address, which a Consumption-only
+  # Container Apps environment does not have. The README section "Where this module departs
+  # from Azure's recommended baseline" says what that costs in posture.
+  public_network_access_enabled = !local.servicebus_private
 
   tags = local.tags
 }
@@ -729,6 +804,51 @@ resource "azurerm_role_assignment" "sb_receiver" {
   scope                = azurerm_servicebus_namespace.this[0].id
   role_definition_name = "Azure Service Bus Data Receiver"
   principal_id         = module.apps_identity.principal_id
+}
+
+# Private DNS + endpoint (production on Premium only): the namespace's public hostname
+# resolves to the private endpoint inside the VNet, so MASTERLY_SERVICEBUS_NAMESPACE and the
+# hostname the apps connect to are unchanged. Skipped when a central zone is injected
+# (servicebus_private_dns_zone_id).
+resource "azurerm_private_dns_zone" "servicebus" {
+  count = local.create_servicebus_dns ? 1 : 0
+
+  name                = "privatelink.servicebus.windows.net"
+  resource_group_name = azurerm_resource_group.aca.name
+  tags                = local.tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "servicebus" {
+  count = local.create_servicebus_dns ? 1 : 0
+
+  name                  = "pdzl-${var.name_prefix}-servicebus"
+  resource_group_name   = azurerm_resource_group.aca.name
+  private_dns_zone_name = azurerm_private_dns_zone.servicebus[0].name
+  virtual_network_id    = local.virtual_network_id
+  tags                  = local.tags
+}
+
+resource "azurerm_private_endpoint" "servicebus" {
+  count = local.servicebus_private ? 1 : 0
+
+  name                = "pe-${var.name_prefix}-servicebus"
+  resource_group_name = azurerm_resource_group.data.name
+  location            = var.location
+  subnet_id           = local.private_endpoints_subnet_id
+
+  private_service_connection {
+    name                           = "psc-${var.name_prefix}-servicebus"
+    private_connection_resource_id = azurerm_servicebus_namespace.this[0].id
+    subresource_names              = ["namespace"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "servicebus"
+    private_dns_zone_ids = [local.servicebus_dns_zone_id]
+  }
+
+  tags = local.tags
 }
 
 # --- Application secrets (born in the install, never in Git) ---------------------
@@ -862,6 +982,13 @@ locals {
     local.license_refresh_env,    # daily licence refresh from the control plane (ADR 0074), off unless configured
     # The license verification key (ADR 0013) is public material — plain env.
     var.license_public_jwk != null ? { MASTERLY_LICENSE_PUBLIC_JWK = var.license_public_jwk } : {},
+    # The backup horizon an erasure's completion record states (ADR 0081): how long a
+    # deleted record can still exist in the starter server's backups. Set only when this
+    # module provisions the database, because only then does it know the retention. On
+    # BYO-DB it stays unset and the record says your own backup policy governs.
+    local.provision_postgres ? {
+      MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = tostring(var.postgres_backup_retention_days)
+    } : {},
   )
 
   # --- The install's secret material -----------------------------------------------
@@ -1096,6 +1223,8 @@ module "api" {
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,
     azurerm_managed_redis_access_policy_assignment.apps,
     azurerm_redis_cache_access_policy_assignment.apps,
+    azurerm_private_endpoint.servicebus,
+    azurerm_private_dns_zone_virtual_network_link.servicebus,
   ]
 }
 

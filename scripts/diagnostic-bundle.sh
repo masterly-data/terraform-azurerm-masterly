@@ -127,7 +127,7 @@ ENV_VALUE_ALLOWLIST='[
   "MASTERLY_KEYVAULT_URL", "MASTERLY_ACS_ENDPOINT", "MASTERLY_OIDC_ALLOWED_ISSUERS",
   "MASTERLY_OIDC_AUDIENCE", "MASTERLY_OIDC_JWKS_URI", "MASTERLY_OIDC_AUTHORITY",
   "MASTERLY_OIDC_REDIRECT_URI", "MASTERLY_OIDC_SCOPES", "MASTERLY_LICENSE_ISSUER_URL",
-  "MASTERLY_TELEMETRY_URL"
+  "MASTERLY_TELEMETRY_URL", "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS"
 ]'
 
 # --- Output helpers -------------------------------------------------------------------
@@ -473,10 +473,28 @@ fi
 # has no shape to match on — so the honest answer is to NAME THE FILES and make "read it
 # before you send it" a specific instruction rather than a general one.
 #
+# Two lists, because they answer two different questions:
+#
+#   * REVIEW_FILES — the files you MUST read before sending. Every file in the manifest's
+#     not_guaranteed_in that this run collected is on it, whether or not anything below
+#     matched: the patterns are a heuristic for the shapes Postgres writes at its defaults,
+#     and a server that logs its errors another way, or an error with no STATEMENT: line,
+#     matches none of them and can still carry a value. A read-first instruction that
+#     depends on the heuristic firing would go quiet exactly when it is least able to tell.
+#   * MATCHED_FILES — the files where a pattern actually matched. These are named with the
+#     stronger wording, "statement text found here", and they are on REVIEW_FILES too.
+#
 # A warning, deliberately, and not a refusal: the statement that failed is very often the
 # whole diagnosis, and a tool that refuses to hand over the evidence during the incident it
 # exists to shorten would simply not be used.
 head2 "Statement echo"
+# The files that can carry statement text by construction. This array is also what the
+# manifest publishes as record_data.not_guaranteed_in, so the two cannot disagree.
+NOT_GUARANTEED_IN=("logs/q6-postgres-logs.json" "logs/q4-request-trace.json")
+REVIEW_FILES=""
+for f in "${NOT_GUARANTEED_IN[@]}"; do
+  [[ -s "$BUNDLE/$f" ]] && REVIEW_FILES="${REVIEW_FILES}${f}"$'\n'
+done
 # `\$1` below is a regular expression for the literal text a Postgres server writes when it
 # logs a statement's bound parameters — not a shell parameter. Single quotes keep it literal.
 # shellcheck disable=SC2016
@@ -487,21 +505,28 @@ REVIEW_PATTERNS=(
   'STATEMENT:[[:space:]]*(INSERT|UPDATE|DELETE|SELECT|MERGE)'
   'PARAMETERS:[[:space:]]*\$1'                  # bound parameter values
 )
-REVIEW_FILES=""
+MATCHED_FILES=""
 for pat in "${REVIEW_PATTERNS[@]}"; do
   hit=$(grep -rlEI --ignore-case "$pat" "$BUNDLE" 2>/dev/null || true)
-  [[ -n "$hit" ]] && REVIEW_FILES="${REVIEW_FILES}${hit}"$'\n'
+  [[ -n "$hit" ]] && MATCHED_FILES="${MATCHED_FILES}${hit}"$'\n'
 done
-REVIEW_FILES=$(printf '%s' "$REVIEW_FILES" | sed "s#^$BUNDLE/##" | sort -u | sed '/^$/d')
-if [[ -n "$REVIEW_FILES" ]]; then
-  item "REVIEW" "statement text found — read these line by line before you send the bundle:"
-  printf '%s\n' "$REVIEW_FILES" | sed 's/^/            /'
-  say "            A failing statement can carry attribute values from your own records."
-  say "            Delete any line you are not willing to send, and say that you did."
+MATCHED_FILES=$(printf '%s' "$MATCHED_FILES" | sed "s#^$BUNDLE/##" | sort -u | sed '/^$/d')
+REVIEW_FILES=$(printf '%s\n%s' "$REVIEW_FILES" "$MATCHED_FILES" | sort -u | sed '/^$/d')
+if [[ -n "$MATCHED_FILES" ]]; then
+  item "REVIEW" "statement text found here — it can carry attribute values from your own records:"
+  printf '%s\n' "$MATCHED_FILES" | sed 's/^/            /'
 else
   item "ok" "no statement text found in the log answers collected"
 fi
+if [[ -n "$REVIEW_FILES" ]]; then
+  item "READ" "read these line by line before you send the bundle — they can carry statement"
+  say "           text, and no scan can rule it out:"
+  printf '%s\n' "$REVIEW_FILES" | sed 's/^/            /'
+  say "            Delete any line you are not willing to send, and say that you did."
+fi
 REVIEW_JSON=$(printf '%s' "$REVIEW_FILES" | jq -R -s 'split("\n") | map(select(length > 0))')
+MATCHED_JSON=$(printf '%s' "$MATCHED_FILES" | jq -R -s 'split("\n") | map(select(length > 0))')
+NOT_GUARANTEED_JSON=$(printf '%s\n' "${NOT_GUARANTEED_IN[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')
 
 # --- 6. Manifest and cover note ----------------------------------------------------------
 head2 "Manifest"
@@ -550,7 +575,8 @@ jq -n \
   --arg workspace "$WORKSPACE" --arg workspace_id "$WORKSPACE_CUSTOMER_ID" \
   --arg data_plane "$DATA_PLANE" --arg postgres "$POSTGRES_NAME" \
   --arg request_id "$REQUEST_ID" --arg since "$SINCE" \
-  --argjson review "$REVIEW_JSON" \
+  --argjson review "$REVIEW_JSON" --argjson matched "$MATCHED_JSON" \
+  --argjson not_guaranteed "$NOT_GUARANTEED_JSON" \
   --argjson items "$MANIFEST_ITEMS" '{
     generated_at: $generated_at, tool: $tool, azure_cli: $az,
     install: {subscription: $subscription, name_prefix: $prefix,
@@ -564,10 +590,11 @@ jq -n \
     omits: "connection strings, secret values, credentials, and every environment variable value not on the allow-list in the script",
     record_data: {
       guaranteed_absent_in: "the log lines the applications themselves write (logs/q1, q2, q3, q5), redacted at the formatter to identifiers, counts and durations, plus every file this script builds from Azure Resource Manager or /v1/ops/metrics",
-      not_guaranteed_in: ["logs/q6-postgres-logs.json", "logs/q4-request-trace.json"],
+      not_guaranteed_in: $not_guaranteed,
       why: "q6 is the log stream of the Postgres server itself, which no Masterly formatter touches: at Postgres defaults a failing statement is logged with its text, and a constraint violation carries the conflicting values on its DETAIL: line. q4 projects an exception string, which carries the same text when the error came from the database.",
       needs_line_by_line_review: $review,
-      what_to_do: "Read the files listed in needs_line_by_line_review before sending this bundle. Delete any line you are not willing to send, and say in your message that you did."
+      statement_text_found_in: $matched,
+      what_to_do: "Read the files listed in needs_line_by_line_review before sending this bundle: every collected file from not_guaranteed_in is on that list, whether or not the script found statement text in it, because an attribute value has no shape a scan can rule out. statement_text_found_in is the subset where it did find some. Delete any line you are not willing to send, and say in your message that you did."
     },
     items: $items
   }' > "$BUNDLE/manifest.json"
@@ -610,7 +637,11 @@ Record data — what is guaranteed, and where it is not
   diagnosis.
 
   manifest.json -> record_data.needs_line_by_line_review names the files in THIS bundle
-  where statement text was actually found. Read those files line by line.
+  that must be read line by line: every one of those two that this run collected, whether
+  or not the script found statement text in it. The script's scan is a heuristic for the
+  shapes Postgres writes at its defaults; an attribute value has no shape of its own, so
+  the scan finding nothing is not the file being clear. Where it did find statement text,
+  record_data.statement_text_found_in says so.
 
 Before you send it
   Read it. It is plain JSON, and it is owner-only (mode 700) where it was written. Start
@@ -660,9 +691,16 @@ say "  Bundle:  $BUNDLE"
 [[ -n "$missing" ]] && say "  Missing: $missing (see manifest.json for why)"
 say ""
 if [[ -n "$REVIEW_FILES" ]]; then
-  say "  READ FIRST, line by line — these carry statement text, which can echo your own"
-  say "  record values. They are listed in manifest.json under record_data:"
-  printf '%s\n' "$REVIEW_FILES" | sed 's/^/    /'
+  say "  READ FIRST, line by line — these can carry statement text, which can echo your own"
+  say "  record values, and no scan can rule it out. They are listed in manifest.json under"
+  say "  record_data.needs_line_by_line_review:"
+  while IFS= read -r f; do
+    if printf '%s\n' "$MATCHED_FILES" | grep -qxF -- "$f"; then
+      say "    $f   (statement text found here)"
+    else
+      say "    $f"
+    fi
+  done <<<"$REVIEW_FILES"
   say ""
 fi
 say "  Read it before you send it, then package it:"

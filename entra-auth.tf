@@ -135,7 +135,12 @@ locals {
   )
 
   # The effective choice: the input when set, otherwise what exists, otherwise the mode's default
-  # — the mode-conditional shape of keyvault.tf's purge_protection_enabled.
+  # — the mode-conditional shape of keyvault.tf's purge_protection_enabled and of
+  # postgres_geo_redundant_backup in main.tf. Like servicebus_sku, the input itself defaults to
+  # null and an explicit value always wins. Unlike servicebus_sku, production does not refuse it
+  # unset: a Service Bus namespace cannot be read back to tell a new install from an existing
+  # one, while the server and the cache can (their masterly-auth tag), so a new install meets
+  # the baseline with no input and only an existing one on a password or key is asked to choose.
   database_auth = var.database_auth != null ? var.database_auth : coalesce(
     local.recorded_database_auth, var.mode == "production" ? "entra" : "password",
   )
