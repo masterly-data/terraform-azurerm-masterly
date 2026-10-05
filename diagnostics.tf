@@ -1231,7 +1231,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "postgres_silent" {
     # One period, because the query projects no `TimeGenerated` — see the comment above.
     failing_periods {
       number_of_evaluation_periods             = 1
-      minimum_failing_periods_to_trigger_alert = 2
+      minimum_failing_periods_to_trigger_alert = 1
     }
   }
 
