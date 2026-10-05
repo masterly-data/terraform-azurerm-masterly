@@ -662,6 +662,24 @@ run "production_starter_postgres_grade_plans" {
     error_message = "The no-telemetry alert must fire when the query returns NO rows (Count < 1) — otherwise silence stays quiet."
   }
 
+  # Azure refuses more than one evaluation period for a query that does not project
+  # `TimeGenerated`, and this one cannot: it reduces the window to a single count so that an
+  # empty result is the firing state. A rule with two periods plans and validates clean here and
+  # is refused with a 400 on create, which is how 0.16.0 and 0.17.0 shipped it. The silence the
+  # rule waits for is carried by the window instead, so the window is pinned beside the periods.
+  assert {
+    condition = (
+      azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent[0].criteria[0].failing_periods[0].number_of_evaluation_periods == 1 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent[0].criteria[0].failing_periods[0].minimum_failing_periods_to_trigger_alert == 1
+    )
+    error_message = "The no-telemetry alert must use exactly one evaluation period: Azure refuses more than one (400) for a query that does not project TimeGenerated."
+  }
+
+  assert {
+    condition     = azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent[0].window_duration == "PT45M"
+    error_message = "The no-telemetry alert's 45-minute window is what carries its silence threshold now that it has one evaluation period; change the description and the comment in diagnostics.tf with it."
+  }
+
   # Not asserted here, and worth naming rather than leaving as a silent gap: that the rule's
   # scope is the install's own workspace and its query names the install's own server. Both are
   # built from resource ids, which are unknown until apply, so under mock providers the

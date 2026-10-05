@@ -22,6 +22,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Fixed
+
+- The `postgres-silent` alert rule is accepted by Azure. Azure refused it on create (`400`: the
+  number of evaluation periods must be 1 for a query that does not project `TimeGenerated`), so
+  `enable_diagnostics = true` with a provisioned Postgres server could not apply on 0.16.0 and
+  0.17.0. The rule now uses one evaluation period over a 45-minute window, and pages after 45
+  minutes of silence where it previously intended about 40 (MAS-1531).
+
 ## [0.17.0] - 2026-10-05
 
 ### Added
