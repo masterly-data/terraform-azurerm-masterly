@@ -234,8 +234,8 @@ or self-contained subsystem has its own file, so a change to one is a diff in on
 The README's release table is **generated** from `MANIFEST.json` by
 `python3 scripts/check_release_manifest.py --write`. Never hand-edit it. `RUNTIME_ENV.json` is generated
 the same way, from the `.tf` files, by `python3 scripts/check_runtime_env.py --write`: a change to any
-local that feeds an app's `env` or `env_secret_refs` — in `main.tf`, `email.tf`, `keyvault.tf`,
-`redis.tf` or `workers.tf` — fails CI until it is regenerated and committed.
+local that feeds an app's `env` or `env_secret_refs` — in `main.tf`, `email.tf`, `entra-auth.tf`,
+`keyvault.tf`, `redis.tf` or `workers.tf` — fails CI until it is regenerated and committed.
 
 ## The contract with the application images
 

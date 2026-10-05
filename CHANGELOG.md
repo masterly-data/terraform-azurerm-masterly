@@ -22,6 +22,39 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Added
+
+- `database_auth` (`"entra"` | `"password"`) and `redis_auth` (`"entra"` | `"key"`): how the apps
+  authenticate to the starter Postgres server and to Redis. `"entra"` is Microsoft Entra ID only,
+  Azure's recommended baseline: password authentication and access keys are off, the apps'
+  identity is the server's Microsoft Entra administrator and holds a data access policy on
+  whichever `redis_offering` is active, the connection strings carry no credential, and
+  `ca-api` / `ca-workers` get `MASTERLY_DATABASE_AUTH` / `MASTERLY_REDIS_AUTH`. It needs api images
+  `v0.133.7` or later. `"password"` and `"key"` keep today's behaviour and are documented
+  departures. BYO-DB (`external_database_url`) is unaffected and refuses `database_auth = "entra"`
+  (MAS-1085).
+
+### Changed
+
+- `mode = "production"` now defaults a **new** install's starter Postgres server and Redis to
+  Microsoft Entra ID authentication (`"entra"`). An existing server or cache is never switched by
+  the default: when an input is unset, the module reads what the server or cache already uses (a
+  `masterly-auth` tag it now sets; untagged means password or key), and a production install
+  whose existing server or cache still uses a password or key **no longer plans until you
+  choose**. Set `database_auth = "password"` and `redis_auth = "key"` to keep the install exactly
+  as it is, or follow "Moving an existing install to Microsoft Entra authentication" in the README
+  — it includes the ownership steps the starter server needs first. Every change on that path is
+  made in place; none replaces the server or the cache. Evaluation installs keep the password and
+  the key (MAS-1085).
+- The starter Postgres server now carries a second tag, `masterly-admin-password` (`"generated"`
+  or `"none"`), recording whether it holds the module's generated `masterly_admin` password. A
+  server that moves to `"entra"` keeps that password, unused, so the move plans no password change
+  and the server can move back; a server created on `"entra"` is never sent one. Replacing
+  `random_password.postgres_admin` still changes the password on the server and in the apps'
+  connection string in the same apply; the README's "The generated admin password" says how.
+  `database_auth = "entra"` therefore still reads the subscription's server listing, as an unset
+  input does (MAS-1085).
+
 ## [0.17.0] - 2026-10-05
 
 ### Added

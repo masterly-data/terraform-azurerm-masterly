@@ -16,9 +16,9 @@ its own code and runbook against, so the three descriptions cannot part quietly.
 
 **It is generated, never edited.** `scripts/check_runtime_env.py --write` derives it from the
 `.tf` files at the module root — the env a container receives is assembled from locals spread
-over `main.tf`, `email.tf`, `keyvault.tf`, `redis.tf` and `workers.tf` and merged into each
-app's `env` and `env_secret_refs` — and the same script, without `--write`, fails CI on every
-pull request where the committed file is not what the `.tf` files produce. A name that appears
+over `main.tf`, `email.tf`, `entra-auth.tf`, `keyvault.tf`, `redis.tf` and `workers.tf` and
+merged into each app's `env` and `env_secret_refs` — and the same script, without `--write`,
+fails CI on every pull request where the committed file is not what the `.tf` files produce. A name that appears
 only in a comment is not set and is not listed.
 
 
