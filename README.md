@@ -11,7 +11,7 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.16"
+  version = "~> 0.17"
 }
 ```
 
@@ -50,7 +50,7 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.16"
+  version = "~> 0.17"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -68,8 +68,8 @@ module "masterly" {
   # Two floors sit below it: an api older than v0.132.2 registers no job handlers on
   # ca-workers, silently, and a frontend older than v0.138.2 leaves a fresh install unable to
   # create its first Environment. api v0.133.1 has no published image.
-  api_image           = "masterly.azurecr.io/api:v0.133.5"
-  frontend_image      = "masterly.azurecr.io/frontend:v0.139.0"
+  api_image           = "masterly.azurecr.io/api:v0.133.11"
+  frontend_image      = "masterly.azurecr.io/frontend:v0.139.5"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -192,7 +192,7 @@ they bite, so confirm them before you plan.
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
-| Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding |
+| Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding. In `mode = "production"`, `enable_service_bus = true` also requires **`servicebus_sku`**, which has no default there: `"Premium"` (recommended) runs the namespace private, behind a **private endpoint** with public network access disabled, at about $677 per month; `"Standard"` keeps a public endpoint. See [Where this module departs from Azure's recommended baseline](#where-this-module-departs-from-azures-recommended-baseline). |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
 | Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer and Crypto Officer grants to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
 | Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the keyed URL rides as a Container App secret). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
@@ -356,7 +356,9 @@ Landing-zone accommodations:
   allocation sets `aca_subnet_prefix` + `private_endpoints_subnet_prefix` explicitly.
 - Hub-and-spoke shops that centralize private DNS pass
   `postgres_private_dns_zone_id` — the module then creates no zone and no VNet link
-  (linking the central zone to this VNet is the platform team's side).
+  (linking the central zone to this VNet is the platform team's side). The same holds for
+  `key_vault_private_dns_zone_id`, `redis_private_dns_zone_id` and
+  `servicebus_private_dns_zone_id`.
 
 > Upgrading from v0.1: `infrastructure_subnet_id` is create-time-only, so the apply
 > REPLACES the Container App Environment and the apps — their FQDNs change. The Postgres
@@ -414,34 +416,62 @@ The Microsoft cloud security benchmark v2 (`e3ec7e09-768c-4b64-882c-fcada3772047
 opt-in preview; each item says whether its definitions are in it. Whether a finding appears
 on your subscription therefore depends on the standards and policies you have assigned.
 
-#### Service Bus keeps public network access enabled
+#### Service Bus on Basic or Standard keeps public network access enabled
 
-This applies only with `enable_service_bus = true`. The namespace leaves public network access
-at Azure's default, enabled, and the module creates no private endpoint for it. Azure
-recommends the Premium tier with a private endpoint and public network access disabled. The
-namespace's minimum TLS version is set to 1.2 explicitly (`minimum_tls_version`).
+This applies only with `enable_service_bus = true`. Azure recommends the Premium tier with a
+private endpoint and public network access disabled. The namespace's minimum TLS version is set
+to 1.2 explicitly (`minimum_tls_version`) on every tier.
 
-Why it holds today:
+In `mode = "production"` with Service Bus enabled, the module makes you choose the tier:
+`servicebus_sku` has no default there, and the plan is refused until you set it. That is
+deliberate. A Premium default would replace the namespace of every existing install that never
+set the tier, and a Standard default would leave a new install off Azure's recommendation
+without anyone having chosen that. The choice is:
 
-- Private endpoints are a Premium-tier feature. The module's default `servicebus_sku` is
-  Standard, and the module does not create a private endpoint on Premium either.
+- `servicebus_sku = "Premium"`, the recommendation. Public network access is disabled, and the
+  apps reach the namespace over a private endpoint in the install's private-endpoints subnet,
+  with a `privatelink.servicebus.windows.net` private DNS zone linked to the install's VNet (or
+  the zone you pass in `servicebus_private_dns_zone_id`). Premium is priced per messaging unit.
+  The module provisions one, which costs about **$677 per month** in Sweden Central at list
+  price (USD 0.9275 per messaging-unit hour). Check the price for your region and agreement.
+- `servicebus_sku = "Standard"`, the documented opt-down, at a base charge of about $10 per
+  month. The namespace keeps public network access enabled. This is also the value that keeps
+  an existing Standard namespace unchanged.
+
+Outside production an unset `servicebus_sku` means Standard, and a Premium namespace keeps
+public access, for ease of evaluation.
+
+On Basic or Standard the namespace keeps public network access enabled. Why that departure
+exists:
+
+- Private endpoints are a Premium-tier feature, so Basic and Standard cannot be made private.
 - IP firewall rules are available on Standard, but they leave public network access enabled,
   so they do not meet the recommendation. They would also need a stable source address, which
   this module's Consumption-only Container Apps environment does not have.
+- Premium costs about $677 per month against Standard's $10, which is a choice the module
+  leaves to you rather than making on your behalf.
 
-To follow Azure's recommendation now, leave `enable_service_bus` at its default, `false`. The
-apps then run their job queue in the install's Postgres database (the polling bus binding),
-no broker is provisioned, and `mode = "production"` accepts that configuration.
-`examples/production` sets `enable_service_bus = true`; remove that line to follow this.
+To follow Azure's recommendation, either:
+
+- leave `enable_service_bus` at its default, `false`. The apps then run their job queue in the
+  install's Postgres database (the polling bus binding), no broker is provisioned, and
+  `mode = "production"` accepts that configuration, with no `servicebus_sku`. Or
+- set `servicebus_sku = "Premium"` in production, as `examples/production` does. **On an
+  install that already runs a Basic or Standard namespace, this replaces it.** Azure does not
+  convert a namespace between Premium and the other tiers in place, so the plan destroys the
+  namespace, its `masterly-jobs` queue and the apps' two role assignments, and creates them
+  again. Job notifications still in the queue are lost with it; the jobs themselves are in the
+  Environment's database. Moving back from Premium replaces it the same way. Read the plan
+  before you apply it.
 
 Definitions that flag this:
 
 - *Service Bus Namespaces should disable public network access*
   (`cbd11fd3-3002-4907-b6c8-579f0e700e13`). It is in the benchmark v2 initiative and applies
-  to every SKU.
+  to every SKU. A production Premium namespace passes it.
 - *Azure Service Bus namespaces should use private link*
   (`1c06e275-d63d-4540-b761-71f364c2111d`). It is in the benchmark v2 initiative, but it
-  evaluates Premium namespaces only, so the Standard default does not trigger it.
+  evaluates Premium namespaces only, so a Standard namespace does not trigger it.
 
 #### Redis and the starter Postgres authenticate with a key or password
 
@@ -726,9 +756,15 @@ The script does not delete those lines — the statement that failed is often th
 diagnosis — and it does not refuse the bundle over them either, because a tool that refuses to
 hand over the evidence during an incident does not get used. It **names the files**: on the
 terminal at the end of the run, and in `manifest.json` under
-`record_data.needs_line_by_line_review`, which lists the files in *that* bundle where
-statement text was actually found. Read those files line by line, delete any line you are not
-willing to send, and say in your message that you did.
+`record_data.needs_line_by_line_review`, which lists the files in *that* bundle that must be
+read line by line — every one of the two above that the run collected, whether or not the
+script found statement text in it. The script's scan for statement shapes (`STATEMENT:`,
+`DETAIL: Key (…)`, `PARAMETERS:`) is a heuristic for what Postgres writes at its defaults; an
+attribute value has no shape of its own, so the scan finding nothing is not the file being
+clear, and a read-first instruction gated on the scan would go quiet exactly when it is least
+able to tell (MAS-423). Where the scan did find statement text, the file is also listed under
+`record_data.statement_text_found_in` and the terminal says so. Read the named files line by
+line, delete any line you are not willing to send, and say in your message that you did.
 
 Before it finishes it scans everything it wrote for anything shaped like a secret — a URL
 with credentials, a JWT, a private key, a `password=` — and **refuses** a bundle that trips
@@ -740,10 +776,12 @@ report, not a line to forward.
 two strengths of claim apart rather than blurring them: each seeded secret, credential,
 address and key is asserted **absent**, and the record-data class is asserted **present in
 `q6` and flagged** — the value in the file, the file named in `manifest.json`, the operator
-told on the terminal, and the run still exiting 0. Its `--selftest` breaks the script five
-ways — allow-list bypassed, secret values kept, refusal gate disabled, statement-echo warning
-disabled, version taken from the release manifest — to insist the harness notices. CI runs both
-on every change.
+told on the terminal, and the run still exiting 0 — and a `q6` carrying a Postgres error with
+no statement marker at all is asserted to be named just the same. Its `--selftest` breaks the
+script seven ways — allow-list bypassed, secret values kept, refusal gate disabled,
+statement-echo warning disabled, its pattern scan alone disabled, the review list seeded from
+the scan alone, version taken from the release manifest — to insist the harness notices. CI
+runs both on every change.
 
 ## If you front this install with a WAF, CDN, or gateway
 
@@ -1030,6 +1068,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.17.0` | `masterly.azurecr.io/api:v0.133.11` | `masterly.azurecr.io/frontend:v0.139.5` | 2026-10-05 |
 | `0.16.0` | `masterly.azurecr.io/api:v0.133.5` | `masterly.azurecr.io/frontend:v0.139.0` | 2026-09-24 |
 | `0.15.0` | `masterly.azurecr.io/api:v0.133.2` | `masterly.azurecr.io/frontend:v0.138.2` | 2026-09-07 |
 <!-- release-manifest:end -->
@@ -1078,6 +1117,11 @@ one commit, on `main`, before the tag:
 4. Merge, wait for `main`'s CI run on that commit to pass, then run the **cut-release** workflow
    (Actions → cut-release → Run workflow, from `main`) with the version and the release commit's
    full SHA. Do not create the tag by hand.
+5. After the registry publishes the version, the public
+   [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) adopt it — and the
+   install page's upgrade notes ("Coming from module N.x") are rewritten for the new release as
+   part of that, because the docs' own check refuses the adoption until they are. Until the docs
+   name the new version, the scheduled check above goes red.
 
 A tag on this repository is the release: the Terraform Registry publishes the version from its own
 webhook the moment the tag appears, and a published version cannot be withdrawn, only superseded.

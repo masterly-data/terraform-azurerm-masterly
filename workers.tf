@@ -88,6 +88,8 @@ module "workers" {
     azurerm_role_assignment.kv_secrets_officer,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
+    azurerm_private_endpoint.servicebus,
+    azurerm_private_dns_zone_virtual_network_link.servicebus,
   ]
 }
 

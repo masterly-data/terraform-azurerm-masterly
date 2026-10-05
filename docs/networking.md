@@ -81,6 +81,9 @@ platform team's side:
 postgres_private_dns_zone_id  = "/subscriptions/.../privateDnsZones/privatelink.postgres.database.azure.com"
 key_vault_private_dns_zone_id = "/subscriptions/.../privateDnsZones/privatelink.vaultcore.azure.net"
 redis_private_dns_zone_id     = "/subscriptions/.../privateDnsZones/privatelink.redis.azure.net"
+
+# Only used by a private Service Bus namespace (servicebus_sku = "Premium" in production).
+servicebus_private_dns_zone_id = "/subscriptions/.../privateDnsZones/privatelink.servicebus.windows.net"
 ```
 
 Each is independent: inject the ones your hub owns and let the module create the rest.
@@ -121,6 +124,10 @@ begins to apply to private-endpoint traffic too.
 
 Azure Managed Redis picks "an available port" rather than guaranteeing 10000, so when that
 offering is enabled the module reads the real port from the database and admits it alongside.
+
+A private Service Bus namespace (`enable_service_bus = true` with `servicebus_sku = "Premium"`
+in `mode = "production"`) adds TCP 5671, AMQP over TLS, which is how the apps' Service Bus
+client connects. Its AMQP-over-WebSockets fallback uses 443, which the rule already admits.
 
 **Outbound is untouched.** Azure's default `AllowInternetOutBound` stays. Container Apps needs
 a long, Microsoft-versioned egress set — image pull, Microsoft Container Registry, Entra ID,
