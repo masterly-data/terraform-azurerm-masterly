@@ -15,8 +15,18 @@ module "masterly" {
 }
 ```
 
-Pin a version — a `~>` constraint takes patches within a minor, `=` pins one release
-exactly. Sourcing straight from GitHub also works
+<!-- release-manifest:pins:begin -->
+Pin a version. `version = "~> 0.17.0"` takes patches of 0.17 only: releases that
+add no capability, no new input or required setting and no database migration, so you
+can take them without reading the changelog. Use it if that is all you want to receive.
+`version = "~> 0.17"`, as in the examples on this page, also takes every later
+0.x minor. Before 1.0.0 a minor may carry a breaking change, listed under its own heading in
+the changelog, so read it before you take one.
+`=` pins one release exactly. [Versioning](#versioning) says what each kind of
+release promises.
+<!-- release-manifest:pins:end -->
+
+Sourcing straight from GitHub also works
 (`github.com/masterly-data/terraform-azurerm-masterly?ref=v<version>`) and is what air-gapped
 mirrors do, but the registry gives you version constraints and needs no `git` on the runner.
 Which version is current, and which images go with it, is [`MANIFEST.json`](MANIFEST.json) —
@@ -1170,9 +1180,26 @@ Custom domains · the per-install Entra identity toward Masterly's control plane
 ## Versioning
 
 Semver tags; consumers pin a registry `version` constraint, or `?ref=vX.Y.Z` from GitHub.
-Breaking input/output changes bump the major. The module version is the one customer-facing
-version (ADR 0062): the tag, the registry version and the pin in the docs are all the same
-number.
+The module version is the one customer-facing version (ADR 0062): the tag, the registry version
+and the pin in the docs are all the same number.
+
+What each kind of release means — for the module, and for the `api` and `frontend` images it
+names:
+
+| Release | What it may contain | What you do |
+|---|---|---|
+| Patch (`X.Y.Z` → `X.Y.Z+1`) | Fixes only: no new capability, no new Terraform input, no new required setting, no database migration | Take it without reading the changelog. An image patch rolls with `az containerapp update` and rolls back by redeploying the previous image. |
+| Minor (`X.Y` → `X.Y+1`) | New capabilities, new inputs or settings, migrations. Before 1.0.0, also breaking changes, listed under their own heading in the changelog | Read the changelog, `terraform apply` the new module version, and roll the images its manifest entry names. |
+| Major (from 1.0.0) | A breaking change to an input, an output or a generally available contract | Read the migration guide first. |
+
+The versions stay on 0.x until Masterly's general availability. At that point the module and both
+images move to 1.0.0 together, and from then on a breaking change bumps the major rather than the
+minor.
+
+A module release bumps at least as far as the images it names: if either image moves by a minor
+between one release's manifest entry and the next, the module release is a minor too. So a module
+patch never moves an image by more than a patch, and a `~> X.Y.0` pin never brings you a minor
+release of either image. `scripts/check_release_manifest.py` refuses a release that breaks this.
 
 [`MANIFEST.json`](MANIFEST.json) is the machine-readable statement of what each published
 version was released against, and [`CHANGELOG.md`](CHANGELOG.md) is what changed. Read the
@@ -1222,7 +1249,10 @@ one commit, on `main`, before the tag:
 
 1. Add the version to `MANIFEST.json` (`releases`, plus `latest`), naming the `api` and
    `frontend` images the release is tested against. That pair is what Masterly's own install
-   has applied — take it from the install, not from prose.
+   has applied — take it from the install, not from prose. Choose the version by the rules in
+   [Versioning](#versioning): at least as large a bump as the module's own change needs, and at
+   least as large as the larger of the two image bumps since the previous release. The check
+   in step 3 refuses a module bump smaller than an image bump, naming both.
 2. Rename the changelog's `Unreleased` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a fresh
    `Unreleased`.
 3. Run `python3 scripts/check_release_manifest.py --write` to bring this README into line, and

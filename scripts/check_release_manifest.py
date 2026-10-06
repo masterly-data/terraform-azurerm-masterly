@@ -13,7 +13,9 @@ forcing function, and CI runs it three times over:
 
   * on every pull request and push to main — the manifest, the changelog and the README must
     agree with each other, so the release commit that bumps them is validated BEFORE it merges,
-    and no script the module ships may hand-type a module version in its header (MAS-479);
+    the newest release must bump the module at least as far as it bumps either image (ADR 0062,
+    amended 2026-10-05), and no script the module ships may hand-type a module version in its
+    header (MAS-479);
   * on a tag push (`--tag vX.Y.Z`) — the tag must be the manifest's `latest` and must have a
     changelog entry, so a tag cut without them turns the release build red immediately;
   * before either, as `--selftest` — synthetic trees prove the check still rejects a missing,
@@ -76,6 +78,11 @@ IMAGE_PIN_RE = re.compile(r'^(?P<head>\s*(?P<name>api_image|frontend_image)\s*=\
 
 BEGIN_MARKER = "<!-- release-manifest:begin -->"
 END_MARKER = "<!-- release-manifest:end -->"
+
+# The README's pin guidance names real constraints, so it is generated too: typed by hand, the
+# example versions in it would be right until the next minor and wrong after it.
+PINS_BEGIN_MARKER = "<!-- release-manifest:pins:begin -->"
+PINS_END_MARKER = "<!-- release-manifest:pins:end -->"
 
 # Which manifest image a README `<name>_image` line takes its value from.
 IMAGE_INPUTS = {"api_image": "api", "frontend_image": "frontend"}
@@ -159,6 +166,75 @@ def load_manifest() -> dict:
     return manifest
 
 
+# How far a version moved, as a rank: a release that moves nothing ranks 0, a patch 1, a minor 2,
+# a major 3. The module's rank must be at least the larger of its images' ranks.
+BUMP_NAMES = {0: "no change", 1: "patch", 2: "minor", 3: "major"}
+
+
+def bump(before: tuple[int, int, int], after: tuple[int, int, int]) -> int:
+    """The rank of the most significant component that differs between two versions."""
+    for rank, (old, new) in zip((3, 2, 1), zip(before, after)):
+        if old != new:
+            return rank
+    return 0
+
+
+def image_version(where: str, image: str) -> tuple[int, int, int]:
+    """The `vX.Y.Z` (or `X.Y.Z`) tag of a `registry/repository:tag` image, as a version."""
+    tag = IMAGE_RE.match(image).group("tag")  # load_manifest has already proved the shape
+    match = SEMVER_RE.match(tag.removeprefix("v"))
+    if not match:
+        raise CheckFailed(
+            f"{where}: the image {image!r} has the tag {tag!r}, which is not a vX.Y.Z version. "
+            f"The size of a module release is checked against the size of its image bumps, so "
+            f"the newest release and the one before it have to name versioned image tags."
+        )
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def check_bump(manifest: dict) -> None:
+    """The newest release bumps the module at least as far as it bumps either image.
+
+    ADR 0062, amended 2026-10-05: a module release bumps at least as far as the larger of the
+    api and frontend image bumps between its manifest entry and the previous version's. So a
+    module patch moves its images by patches at most, and a customer who takes module patches
+    only (`~> X.Y.0`) never receives an image minor through one. The comparison is between
+    `latest` and the release just below it; released entries are never rewritten, so the
+    newest pair is the one a release commit can still change.
+    """
+    releases = manifest["releases"]
+    if len(releases) < 2:
+        return
+    ordered = sorted(releases, key=semver)
+    previous, newest = ordered[-2], ordered[-1]
+    module_rank = bump(semver(previous), semver(newest))
+
+    image_bumps = []
+    for name in IMAGE_INPUTS.values():
+        before = image_version(f"{MANIFEST_PATH.name}: release {previous}",
+                               releases[previous]["images"][name])
+        after = image_version(f"{MANIFEST_PATH.name}: release {newest}",
+                              releases[newest]["images"][name])
+        image_bumps.append((bump(before, after), name, before, after))
+
+    image_rank, name, before, after = max(image_bumps, key=lambda item: item[0])
+    if module_rank >= image_rank:
+        return
+    described = "; ".join(
+        f"{n} {'.'.join(map(str, b))} -> {'.'.join(map(str, a))}: {BUMP_NAMES[r]}"
+        for r, n, b, a in image_bumps
+    )
+    raise CheckFailed(
+        f"{MANIFEST_PATH.name}: module {previous} -> {newest} is a {BUMP_NAMES[module_rank]} "
+        f"bump, but the {name} image moves by a {BUMP_NAMES[image_rank]} "
+        f"({'.'.join(map(str, before))} -> {'.'.join(map(str, after))}). A module release bumps "
+        f"at least as far as the larger of its image bumps ({described}), so a customer pinned "
+        f"to module patches never receives an image {BUMP_NAMES[image_rank]} through one. "
+        f"Release this as a {BUMP_NAMES[image_rank]} of the module, or name image versions that "
+        f"move no further than a {BUMP_NAMES[module_rank]}."
+    )
+
+
 def check_changelog(manifest: dict) -> None:
     """Every released version in the manifest has a changelog section, dated the same day."""
     try:
@@ -208,6 +284,39 @@ def release_table(manifest: dict) -> list[str]:
     return lines
 
 
+def pin_guidance(manifest: dict) -> list[str]:
+    """The README's paragraph on choosing a `version` constraint, for the manifest's `latest`."""
+    major, minor, _ = semver(manifest["latest"])
+    line = f"{major}.{minor}"
+    lines = [
+        f'Pin a version. `version = "~> {line}.0"` takes patches of {line} only: releases that',
+        "add no capability, no new input or required setting and no database migration, so you",
+        "can take them without reading the changelog. Use it if that is all you want to receive.",
+        f'`version = "~> {line}"`, as in the examples on this page, also takes every later',
+        f"{major}.x minor.",
+    ]
+    if major == 0:
+        lines[-1] += (
+            " Before 1.0.0 a minor may carry a breaking change, listed under its own heading in"
+        )
+        lines.append("the changelog, so read it before you take one.")
+    lines.append("`=` pins one release exactly. [Versioning](#versioning) says what each kind of")
+    lines.append("release promises.")
+    return lines
+
+
+def _replace_region(body: str, begin: str, end: str, content: list[str], what: str) -> str:
+    """`body` with the one region between `begin` and `end` replaced by `content`."""
+    before, marker, rest = body.partition(begin)
+    inner, end_marker, after = rest.partition(end)
+    if not marker or not end_marker:
+        raise CheckFailed(f"{README_PATH} has no {begin} … {end} region for the generated {what}.")
+    if begin in after or end in inner:
+        raise CheckFailed(f"{README_PATH} has more than one generated {what} region.")
+    text = "\n".join(content)
+    return f"{before}{begin}\n{text}\n{end}{after}"
+
+
 def render_readme(manifest: dict, readme: str) -> str:
     """`readme` with every fact the manifest owns replaced by the manifest's value."""
     latest = manifest["releases"][manifest["latest"]]
@@ -239,17 +348,12 @@ def render_readme(manifest: dict, readme: str) -> str:
             )
 
     body = "\n".join(rendered)
-    before, marker, rest = body.partition(BEGIN_MARKER)
-    inner, end_marker, after = rest.partition(END_MARKER)
-    if not marker or not end_marker:
-        raise CheckFailed(
-            f"{README_PATH} has no {BEGIN_MARKER} … {END_MARKER} region for the generated release "
-            f"table."
-        )
-    if BEGIN_MARKER in after or END_MARKER in inner:
-        raise CheckFailed(f"{README_PATH} has more than one generated release-table region.")
-    table = "\n".join(release_table(manifest))
-    return f"{before}{BEGIN_MARKER}\n{table}\n{END_MARKER}{after}"
+    body = _replace_region(
+        body, BEGIN_MARKER, END_MARKER, release_table(manifest), "release table"
+    )
+    return _replace_region(
+        body, PINS_BEGIN_MARKER, PINS_END_MARKER, pin_guidance(manifest), "pin guidance"
+    )
 
 
 def check_readme(manifest: dict, write: bool) -> None:
@@ -424,6 +528,10 @@ module "example" {
 }
 ```
 
+<!-- release-manifest:pins:begin -->
+Stale pin guidance.
+<!-- release-manifest:pins:end -->
+
 <!-- release-manifest:begin -->
 <!-- release-manifest:end -->
 
@@ -516,6 +624,83 @@ def _swapped_images(version: str):
     images = manifest["releases"][version]["images"]
     images["api"], images["frontend"] = images["frontend"], images["api"]
     return manifest
+
+
+def _release_tree(newest: str, api: str, frontend: str) -> tuple[dict, str, str]:
+    """A consistent fixture tree whose newest release is `newest`, on the given image tags.
+
+    The release below it is the fixture's oldest, so every bump scenario is measured from the
+    same base, and the changelog and README are derived for `newest` — a scenario that passes
+    or fails does so on the bump alone.
+    """
+    manifest = copy.deepcopy(FIXTURE_MANIFEST)
+    base = min(manifest["releases"], key=semver)
+    manifest["releases"] = {
+        base: manifest["releases"][base],
+        newest: {
+            "date": "2026-02-06",
+            "images": {
+                "api": f"registry.example.invalid/api:{api}",
+                "frontend": f"registry.example.invalid/frontend:{frontend}",
+            },
+        },
+    }
+    manifest["latest"] = newest
+    changelog = (
+        f"# Changelog (fixture)\n\n## [Unreleased]\n\n## [{newest}] - 2026-02-06\n\n"
+        f"- a fixture entry.\n\n## [{base}] - "
+        f"{manifest['releases'][base]['date']}\n\n- a fixture entry.\n"
+    )
+    return manifest, changelog, render_readme(manifest, FIXTURE_README_SKELETON)
+
+
+def _bump_scenarios() -> list[tuple]:
+    """The module bump rule (ADR 0062, amended 2026-10-05), from the fixture's 2.0.0 on v1.0.0."""
+    cases = [
+        # (name, newest module, api tag, frontend tag, exit, fragment)
+        (
+            "a module patch whose images move by patches passes",
+            "2.0.1", "v1.0.3", "v1.0.1", 0, "agree with it",
+        ),
+        (
+            "a module patch whose images do not move passes",
+            "2.0.1", "v1.0.0", "v1.0.0", 0, "agree with it",
+        ),
+        (
+            "a module minor whose image moves by a minor passes",
+            "2.1.0", "v1.1.0", "v1.0.4", 0, "agree with it",
+        ),
+        (
+            "a module major whose images move by a minor passes",
+            "3.0.0", "v1.2.0", "v1.1.0", 0, "agree with it",
+        ),
+        (
+            "a module patch whose api image moves by a minor is refused",
+            "2.0.1", "v1.1.0", "v1.0.1", 1,
+            "module 2.0.0 -> 2.0.1 is a patch bump, but the api image moves by a minor "
+            "(1.0.0 -> 1.1.0)",
+        ),
+        (
+            "a module patch whose frontend image moves by a minor is refused",
+            "2.0.1", "v1.0.1", "v1.1.0", 1,
+            "module 2.0.0 -> 2.0.1 is a patch bump, but the frontend image moves by a minor "
+            "(1.0.0 -> 1.1.0)",
+        ),
+        (
+            "a module minor whose image moves by a major is refused",
+            "2.1.0", "v2.0.0", "v1.1.0", 1,
+            "module 2.0.0 -> 2.1.0 is a minor bump, but the api image moves by a major",
+        ),
+        (
+            "an image tag that is not a version cannot be measured and is refused",
+            "2.0.1", "latest", "v1.0.0", 1, "is not a vX.Y.Z version",
+        ),
+    ]
+    scenarios = []
+    for name, newest, api, frontend, expected_exit, fragment in cases:
+        manifest, changelog, readme = _release_tree(newest, api, frontend)
+        scenarios.append((name, manifest, changelog, readme, [], expected_exit, fragment))
+    return scenarios
 
 
 def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
@@ -629,6 +814,17 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
             "the README lost the generated release table",
             base, log, ok.replace(BEGIN_MARKER, ""), [], 1, "region for the generated release",
         ),
+        (
+            "the README lost the generated pin guidance",
+            base, log, ok.replace(PINS_END_MARKER, ""), [], 1, "generated pin guidance",
+        ),
+        (
+            "the README's pin guidance was edited by hand",
+            base, log, ok.replace("patches of", "patches and minors of"), [], 1,
+            "restates versions",
+        ),
+        # The module bump rule: a module release bumps at least as far as its images.
+        *_bump_scenarios(),
         # The header rule (MAS-479). The third case is the one that keeps the rule from being
         # answered with an exception list: a version BELOW the header is not the defect.
         (
@@ -692,8 +888,9 @@ def selftest() -> int:
         return 1
     print(
         f"\nrelease-manifest selftest — {total} scenarios: a well-formed release passes, and "
-        f"every way a release can be missing, malformed or mis-tagged — or a shipped script's "
-        f"header can hand-type a module version — is rejected by name."
+        f"every way a release can be missing, malformed, mis-tagged or bumped less than its "
+        f"images — or a shipped script's header can hand-type a module version — is rejected "
+        f"by name."
     )
     return 0
 
@@ -722,6 +919,7 @@ def main() -> int:
 
     try:
         manifest = load_manifest()
+        check_bump(manifest)
         check_changelog(manifest)
         check_readme(manifest, args.write)
         check_script_banners()
