@@ -11,7 +11,9 @@ tag appears on this repository. Nothing in GitHub Actions takes part in that, an
 version cannot be withdrawn, only superseded by the next one. Any check that runs because a tag
 was pushed therefore runs too late to refuse it.
 
-So the checks run before the tag exists. The `cut-release` workflow
+So the checks run before the tag exists. The commit being tagged merged to `main` earlier, as
+the release-cut commit, and was tested as a release candidate in between; it may be behind
+`main`'s head by the time it is tagged. The `cut-release` workflow
 ([`.github/workflows/cut-release.yml`](../.github/workflows/cut-release.yml)) takes a version and a
 full commit SHA, and creates the tag only when all of these hold:
 

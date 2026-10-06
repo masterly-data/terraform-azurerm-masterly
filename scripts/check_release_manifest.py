@@ -22,6 +22,20 @@ forcing function, and CI runs it three times over:
     malformed or mis-tagged release, so a detector that has quietly stopped detecting fails
     loudly instead of passing this repo for the wrong reason.
 
+The release-cut commit merges to `main` BEFORE its tag exists, and the tag is a later, separate
+step (ADR 0106: the merged commit is a release candidate, tested before it is published). So the
+pull-request and push checks never ask whether a version's tag, or its images' tags, have been
+published: an entry nobody has tagged yet is exactly what a release-cut pull request carries.
+Only `--tag` ties the manifest to a tag, and only once the tag is being built.
+
+A release entry may carry `digests`, the `api` and `frontend` image digests of the release
+candidate. Offline, which is all CI ever is here, the check proves their shape: both images
+present, each a `sha256:` digest, none for an image the entry does not name, and no digest given
+for two images. Whether a digest is what its image tag's build actually resolves to is a registry
+question, and this script makes no network call. `--observed-digests FILE` answers it from a file
+of digests someone read from the registry, and refuses any disagreement naming both digests.
+CI does not run that mode; whoever cuts the release runs it, with the digests they observed.
+
 The shape the manifest guarantees to whoever parses it — field by field, and what may change
 without warning — is `docs/release-manifest.md`. That document and this script move together.
 
@@ -33,7 +47,13 @@ Run:
     python3 scripts/check_release_manifest.py            # check (what CI runs)
     python3 scripts/check_release_manifest.py --write    # regenerate README.md from the manifest
     python3 scripts/check_release_manifest.py --tag vX.Y.Z
+    python3 scripts/check_release_manifest.py --observed-digests observed.json
     python3 scripts/check_release_manifest.py --selftest  # the check still rejects bad releases
+
+`observed.json` maps each image reference of the newest release to the digest the registry
+resolves it to, for example `{"<registry>/api:<tag>": "sha256:<64 hex>", ...}` with one key per
+image the entry names. `az acr repository show --name <registry> --image api:<tag> --query digest
+-o tsv` or `docker buildx imagetools inspect <registry>/api:<tag>` reads one.
 
 Paths are overridable through the environment (`RELEASE_MANIFEST_PATH`, `RELEASE_CHANGELOG_PATH`,
 `RELEASE_README_PATH`), which is how the check is exercised against a mutated copy of the tree
@@ -70,6 +90,7 @@ SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)$")
 IMAGE_RE = re.compile(r"^(?P<registry>[^/\s]+)/(?P<repo>[^:\s]+):(?P<tag>[^\s\"]+)$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 # The README lines that restate a manifest fact. Each keeps everything up to the opening quote —
 # the HCL blocks in the README are aligned, and a rewrite must not disturb that.
@@ -153,6 +174,8 @@ def load_manifest() -> dict:
                     f"{where}: the {name!r} image is {value!r}, whose repository is not {name!r}. "
                     f"A pair swapped in the manifest is worse than no manifest."
                 )
+        if "digests" in entry:
+            check_digest_shape(where, images, entry["digests"])
 
     latest = manifest["latest"]
     if latest not in releases:
@@ -164,6 +187,94 @@ def load_manifest() -> dict:
             f"present. Bumping one without the other is how the copy goes stale."
         )
     return manifest
+
+
+def check_digest_shape(where: str, images: dict, digests: object) -> None:
+    """A release entry's optional `digests`: one sha256 digest per image the entry names.
+
+    `digests` records the release candidate (ADR 0106): the exact `api` and `frontend` builds the
+    release-cut commit was tested with. It is optional, because releases cut before it existed
+    have none and inventing one now would be a retyped value. When present it is complete, since a
+    candidate with one image pinned by digest and the other by tag alone is not one combination.
+    """
+    if not isinstance(digests, dict):
+        raise CheckFailed(
+            f"{where}: 'digests' must be an object naming each image's digest, like 'images'"
+        )
+    for name in digests:
+        if name not in images:
+            raise CheckFailed(
+                f"{where}: 'digests' names {name!r}, an image the entry's 'images' does not name. "
+                f"A digest is the build of one of the entry's own images, never an extra one."
+            )
+    for name in IMAGE_INPUTS.values():
+        if name not in digests:
+            raise CheckFailed(
+                f"{where}: 'digests' has no {name!r} digest. A candidate is the module commit "
+                f"and every image it names, so the digests are recorded for all of them or none."
+            )
+    for name, value in digests.items():
+        if not isinstance(value, str) or not DIGEST_RE.match(value):
+            raise CheckFailed(
+                f"{where}: the {name!r} digest is {value!r}, which is not 'sha256:' followed by "
+                f"64 lowercase hex characters, the form a registry reports a digest in."
+            )
+    repeated = sorted(n for n in digests if list(digests.values()).count(digests[n]) > 1)
+    if repeated:
+        raise CheckFailed(
+            f"{where}: the {' and '.join(repr(n) for n in repeated)} images have the same digest, "
+            f"{digests[repeated[0]]}. Two different images cannot be one build; one of them was "
+            f"copied into the wrong key."
+        )
+
+
+def check_observed_digests(manifest: dict, observed_path: Path) -> None:
+    """The newest release's digests are what its image tags resolved to, as someone observed.
+
+    The comparison needs a registry read, which this script never makes. The caller makes it
+    and passes the result as a file, so the check itself stays offline and testable. Every image
+    the newest release names must have an observation, and each must equal the recorded digest.
+    """
+    version = manifest["latest"]
+    entry = manifest["releases"][version]
+    where = f"{MANIFEST_PATH.name}: release {version}"
+    if "digests" not in entry:
+        raise CheckFailed(
+            f"{where} records no 'digests', so there is nothing to compare {observed_path} with. "
+            f"Add the candidate's digests to the entry first."
+        )
+    try:
+        observed = json.loads(observed_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise CheckFailed(f"{observed_path} is missing") from None
+    except json.JSONDecodeError as exc:
+        raise CheckFailed(f"{observed_path} is not valid JSON: {exc}") from None
+    if not isinstance(observed, dict):
+        raise CheckFailed(
+            f"{observed_path} must be an object mapping each image reference to its digest"
+        )
+
+    for name, recorded in entry["digests"].items():
+        image = entry["images"][name]
+        seen = observed.get(image)
+        if seen is None:
+            raise CheckFailed(
+                f"{observed_path} has no digest for {image}, the {name!r} image of {version}. "
+                f"Observe every image the release names; an unobserved one is unverified."
+            )
+        if not isinstance(seen, str) or not DIGEST_RE.match(seen):
+            raise CheckFailed(
+                f"{observed_path}: the digest observed for {image} is {seen!r}, which is not "
+                f"'sha256:' followed by 64 lowercase hex characters."
+            )
+        if seen != recorded:
+            raise CheckFailed(
+                f"{where}: the {name!r} digest disagrees with its tag's build. "
+                f"{MANIFEST_PATH.name} records {recorded}, but {image} resolves to {seen} "
+                f"(observed in {observed_path}). The release would ship a different build from "
+                f"the one recorded as its candidate: record the digest that was tested, or "
+                f"name the tag that build carries."
+            )
 
 
 # How far a version moved, as a rank: a release that moves nothing ranks 0, a patch 1, a minor 2,
@@ -571,8 +682,14 @@ echo fixture
 """
 
 
-def _stage(root: Path, manifest, changelog, readme, scripts=None) -> dict:
-    """Write one synthetic module tree and return the environment that points the script at it."""
+def _stage(root: Path, manifest, changelog, readme, scripts=None, observed=None,
+           tags=None) -> dict:
+    """Write one synthetic module tree and return the environment that points the script at it.
+
+    `observed` is written to `observed.json` beside the tree, for `--observed-digests`. `tags`
+    makes the tree a git repository carrying exactly those tags, so a scenario can show what the
+    check does when a version's tag does not exist yet.
+    """
     manifest_path = root / "MANIFEST.json"
     changelog_path = root / "CHANGELOG.md"
     readme_path = root / "README.md"
@@ -589,6 +706,18 @@ def _stage(root: Path, manifest, changelog, readme, scripts=None) -> dict:
         script_path = root / name
         script_path.parent.mkdir(parents=True, exist_ok=True)
         script_path.write_text(body, encoding="utf-8")
+    if observed is not None:
+        (root / "observed.json").write_text(
+            observed if isinstance(observed, str) else json.dumps(observed, indent=2),
+            encoding="utf-8",
+        )
+    if tags is not None:
+        git = ["git", "-C", str(root), "-c", "user.name=fixture", "-c",
+               "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+               "-c", "tag.gpgsign=false"]
+        for command in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "fixture"],
+                        *(["tag", tag] for tag in tags)):
+            subprocess.run([*git, *command], check=True, capture_output=True)
     env = dict(os.environ)
     env.pop("RELEASE_TAG", None)
     # The banner scan walks the staged tree, never this repo: a scenario must be able to fail for
@@ -652,6 +781,100 @@ def _release_tree(newest: str, api: str, frontend: str) -> tuple[dict, str, str]
         f"{manifest['releases'][base]['date']}\n\n- a fixture entry.\n"
     )
     return manifest, changelog, render_readme(manifest, FIXTURE_README_SKELETON)
+
+
+# Digests for the fixture's images. Synthetic, like every fixture value here: each is the hex of one
+# repeated character, so no digest of a real build is transcribed into this file.
+FIXTURE_DIGESTS = {"api": "sha256:" + "a" * 64, "frontend": "sha256:" + "b" * 64}
+OTHER_DIGEST = "sha256:" + "c" * 64
+
+
+def _with_digests(digests):
+    """The fixture manifest with `digests` on its newest release."""
+    manifest = copy.deepcopy(FIXTURE_MANIFEST)
+    manifest["releases"][manifest["latest"]]["digests"] = digests
+    return manifest
+
+
+def _observed(manifest: dict, digests: dict) -> dict:
+    """An observed-digests file for the newest release's images: image reference -> digest."""
+    images = manifest["releases"][manifest["latest"]]["images"]
+    return {images[name]: digest for name, digest in digests.items()}
+
+
+def _digest_scenarios() -> list[tuple]:
+    """The optional `digests` key, and the explicit check against digests a caller observed."""
+    newest = FIXTURE_MANIFEST["latest"]
+    older = min(FIXTURE_MANIFEST["releases"], key=semver)
+    images = FIXTURE_MANIFEST["releases"][newest]["images"]
+    good = _with_digests(dict(FIXTURE_DIGESTS))
+    observe = ["--observed-digests", "{root}/observed.json"]
+    log = FIXTURE_CHANGELOG
+    ok = render_readme(FIXTURE_MANIFEST, FIXTURE_README_SKELETON)
+    return [
+        # Merge-then-tag: the release-cut commit is on main before its tag exists, so the PR-time
+        # check must pass a tree whose newest version has no tag, and the tag build still ties
+        # the two together.
+        (
+            "a release-cut entry whose tag does not exist yet passes the pull-request check",
+            good, log, ok, [], 0, newest, {"tags": [f"v{older}"]},
+        ),
+        ("a release entry with digests passes", good, log, ok, [], 0, newest),
+        (
+            "digests that agree with what the tags resolve to pass the observed check",
+            good, log, ok, observe, 0, newest,
+            {"observed": _observed(good, FIXTURE_DIGESTS)},
+        ),
+        (
+            "a digest that disagrees with its tag's build is refused, naming both",
+            good, log, ok, observe, 1,
+            f"records {FIXTURE_DIGESTS['api']}, but {images['api']} resolves to {OTHER_DIGEST}",
+            {"observed": _observed(good, {**FIXTURE_DIGESTS, "api": OTHER_DIGEST})},
+        ),
+        (
+            "an image the observation does not cover is refused",
+            good, log, ok, observe, 1, f"has no digest for {images['frontend']}",
+            {"observed": _observed(good, {"api": FIXTURE_DIGESTS["api"]})},
+        ),
+        (
+            "an observed value that is not a digest is refused",
+            good, log, ok, observe, 1, "digest observed for",
+            {"observed": _observed(good, {**FIXTURE_DIGESTS, "frontend": "v1.1.0"})},
+        ),
+        (
+            "an observed-digests file that is not JSON is refused",
+            good, log, ok, observe, 1, "not valid JSON", {"observed": "{"},
+        ),
+        (
+            "an observation for a release that records no digests is refused",
+            FIXTURE_MANIFEST, log, ok, observe, 1, "records no 'digests'",
+            {"observed": _observed(good, FIXTURE_DIGESTS)},
+        ),
+        (
+            "digests that are not an object are refused",
+            _with_digests(FIXTURE_DIGESTS["api"]), log, ok, [], 1, "'digests' must be an object",
+        ),
+        (
+            "digests missing the frontend image are refused",
+            _with_digests({"api": FIXTURE_DIGESTS["api"]}), log, ok, [], 1,
+            "has no 'frontend' digest",
+        ),
+        (
+            "a digest that is not sha256 hex is refused",
+            _with_digests({**FIXTURE_DIGESTS, "api": "sha256:ABC"}), log, ok, [], 1,
+            "is not 'sha256:' followed by",
+        ),
+        (
+            "a digest for an image the entry does not name is refused",
+            _with_digests({**FIXTURE_DIGESTS, "worker": OTHER_DIGEST}), log, ok, [], 1,
+            "an image the entry's 'images' does not name",
+        ),
+        (
+            "one digest given for both images is refused",
+            _with_digests({"api": OTHER_DIGEST, "frontend": OTHER_DIGEST}), log, ok, [], 1,
+            "have the same digest",
+        ),
+    ]
 
 
 def _bump_scenarios() -> list[tuple]:
@@ -825,22 +1048,28 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
         ),
         # The module bump rule: a module release bumps at least as far as its images.
         *_bump_scenarios(),
+        # The release candidate's digests (ADR 0106), and the release cut that merges untagged.
+        *_digest_scenarios(),
         # The header rule (MAS-479). The third case is the one that keeps the rule from being
         # answered with an exception list: a version BELOW the header is not the defect.
         (
             "a shipped script states a module version in its header",
             base, log, ok, [], 1, "states a module version in its header",
-            {"scripts/fixture.sh": FIXTURE_SCRIPT_WITH_VERSION_BANNER.format(version=newest)},
+            {"scripts": {
+                "scripts/fixture.sh": FIXTURE_SCRIPT_WITH_VERSION_BANNER.format(version=newest),
+            }},
         ),
         (
             "a shipped script whose header claims no version passes",
             base, log, ok, [], 0, base["module"],
-            {"scripts/fixture.sh": FIXTURE_SCRIPT_CLEAN_BANNER},
+            {"scripts": {"scripts/fixture.sh": FIXTURE_SCRIPT_CLEAN_BANNER}},
         ),
         (
             "a version below the header, where a script derives or illustrates one, passes",
             base, log, ok, [], 0, base["module"],
-            {"scripts/fixture.sh": FIXTURE_SCRIPT_VERSION_BELOW_BANNER.format(version=newest)},
+            {"scripts": {
+                "scripts/fixture.sh": FIXTURE_SCRIPT_VERSION_BELOW_BANNER.format(version=newest),
+            }},
         ),
     ]
 
@@ -853,10 +1082,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         for index, scenario in enumerate(scenarios):
             name, manifest, changelog, readme, args, expected_exit, fragment, *rest = scenario
-            scripts = rest[0] if rest else None
+            options = rest[0] if rest else {}
             root = Path(tmp) / f"case-{index:02d}"
             root.mkdir()
-            env = _stage(root, manifest, changelog, readme, scripts)
+            env = _stage(root, manifest, changelog, readme, **options)
+            args = [arg.replace("{root}", str(root)) for arg in args]
             result = subprocess.run(
                 [sys.executable, str(Path(__file__).resolve()), *args],
                 env=env,
@@ -888,9 +1118,9 @@ def selftest() -> int:
         return 1
     print(
         f"\nrelease-manifest selftest — {total} scenarios: a well-formed release passes, and "
-        f"every way a release can be missing, malformed, mis-tagged or bumped less than its "
-        f"images — or a shipped script's header can hand-type a module version — is rejected "
-        f"by name."
+        f"every way a release can be missing, malformed, mis-tagged, bumped less than its "
+        f"images or recorded with digests its tags' builds disagree with — or a shipped "
+        f"script's header can hand-type a module version — is rejected by name."
     )
     return 0
 
@@ -906,6 +1136,12 @@ def main() -> int:
         "--tag",
         default=os.environ.get("RELEASE_TAG", ""),
         help="the vX.Y.Z tag being built; also assert it is the manifest's newest release",
+    )
+    parser.add_argument(
+        "--observed-digests",
+        type=Path,
+        help="a JSON file mapping each image reference of the newest release to the digest the "
+        "registry resolves it to; refuse any that disagrees with the entry's 'digests'",
     )
     parser.add_argument(
         "--selftest",
@@ -925,6 +1161,8 @@ def main() -> int:
         check_script_banners()
         if args.tag:
             check_tag(manifest, args.tag)
+        if args.observed_digests:
+            check_observed_digests(manifest, args.observed_digests)
     except CheckFailed as exc:
         for line in str(exc).split("\n"):
             print(f"release-manifest — {line}", file=sys.stderr)
