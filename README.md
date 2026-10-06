@@ -1216,6 +1216,8 @@ manifest rather than copying out of this table — the table itself is generated
 The image pair is what the module version was released against — the pair Masterly's own
 install ran when the version was tagged. Your install's running tags move on from it: the
 module seeds a newly created app and then ignores image drift, so CD owns the tag thereafter.
+Read on `main` rather than on a release tag, the newest row can be a release that is cut but not
+tagged yet; a version is published once its `vX.Y.Z` tag exists.
 
 If you are reading the manifest from a program rather than from this page,
 [docs/release-manifest.md](docs/release-manifest.md) is the contract: where to fetch it, every
@@ -1244,23 +1246,56 @@ walkthrough a customer follows behind. It reads two public endpoints and holds n
 ### Cutting a release
 
 Release-please is deliberately not used here: the module's version is a release decision, not
-one computed from commit messages. So the bump is made by hand — but not the copies of it. In
-one commit, on `main`, before the tag:
+one computed from commit messages. So the bump is made by hand — but not the copies of it.
+
+A release happens in two separate steps. First the **release-cut commit** — the manifest entry
+and the changelog section for the new version — merges to `main` through a pull request. That
+merged commit, with the images it records, is a release candidate: it is tested before anything
+is published. Tagging it is a later step, and the tag is what publishes. Until then `main`
+carries an entry for a version the registry does not serve yet, which every check here accepts.
+
+The release-cut pull request, in one commit:
 
 1. Add the version to `MANIFEST.json` (`releases`, plus `latest`), naming the `api` and
    `frontend` images the release is tested against. That pair is what Masterly's own install
    has applied — take it from the install, not from prose. Choose the version by the rules in
    [Versioning](#versioning): at least as large a bump as the module's own change needs, and at
    least as large as the larger of the two image bumps since the previous release. The check
-   in step 3 refuses a module bump smaller than an image bump, naming both.
-2. Rename the changelog's `Unreleased` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a fresh
+   in step 4 refuses a module bump smaller than an image bump, naming both.
+2. Record the candidate's image digests in the entry's `digests` (`api` and `frontend`, each
+   `sha256:…`), read from the registry rather than copied from prose.
+   [docs/release-manifest.md](docs/release-manifest.md) documents the field.
+3. Rename the changelog's `Unreleased` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a fresh
    `Unreleased`.
-3. Run `python3 scripts/check_release_manifest.py --write` to bring this README into line, and
-   `python3 scripts/check_release_manifest.py` to check the result.
-4. Merge, wait for `main`'s CI run on that commit to pass, then run the **cut-release** workflow
-   (Actions → cut-release → Run workflow, from `main`) with the version and the release commit's
-   full SHA. Do not create the tag by hand.
-5. After the registry publishes the version, the public
+4. Run `python3 scripts/check_release_manifest.py --write` to bring this README into line, and
+   `python3 scripts/check_release_manifest.py` to check the result. CI runs the same check, and
+   it checks the digests' shape only, because it makes no network call. To check that each
+   digest is what its image tag resolves to, write the digests you read from the registry to a
+   file, one `"<image>": "sha256:…"` pair for each image the entry names, and run
+   `python3 scripts/check_release_manifest.py --observed-digests <file>`. It refuses a
+   disagreement and names both digests. Say in the pull request that you ran it.
+5. Merge. The merged commit is the candidate.
+
+If the candidate fails its tests, it is not patched. The fix merges to `main`, and the version's
+manifest entry and changelog section are updated in the same pull request: new images and
+digests where the code changed, and the new date, and the changelog entries that merged under
+`Unreleased` since the previous candidate move into the version's section. That later commit is
+the next candidate. A
+version is not published until it is tagged, so its entry can still change until then.
+
+More than one cut can be untagged at a time, but a version is only tagged once every other
+version its commit's manifest lists is already tagged, so the file at every tag lists only
+published versions. A cut that will not be released has its manifest entry and changelog section
+removed before another version is tagged. `cut-release` refuses otherwise, naming the untagged
+version.
+
+Tagging, later and separately:
+
+6. Wait for `main`'s CI run on the candidate's commit to pass, then run the **cut-release**
+   workflow (Actions → cut-release → Run workflow, from `main`) with the version and the
+   candidate commit's full SHA. That commit may be behind `main`'s head, and every other version
+   its manifest lists must already be tagged. Do not create the tag by hand.
+7. After the registry publishes the version, the public
    [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) adopt it — and the
    install page's upgrade notes ("Coming from module N.x") are rewritten for the new release as
    part of that, because the docs' own check refuses the adoption until they are. Until the docs

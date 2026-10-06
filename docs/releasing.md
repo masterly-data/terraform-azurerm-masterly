@@ -11,7 +11,9 @@ tag appears on this repository. Nothing in GitHub Actions takes part in that, an
 version cannot be withdrawn, only superseded by the next one. Any check that runs because a tag
 was pushed therefore runs too late to refuse it.
 
-So the checks run before the tag exists. The `cut-release` workflow
+So the checks run before the tag exists. The commit being tagged merged to `main` earlier, as
+the release-cut commit, and was tested as a release candidate in between; it may be behind
+`main`'s head by the time it is tagged. The `cut-release` workflow
 ([`.github/workflows/cut-release.yml`](../.github/workflows/cut-release.yml)) takes a version and a
 full commit SHA, and creates the tag only when all of these hold:
 
@@ -22,6 +24,7 @@ full commit SHA, and creates the tag only when all of these hold:
 | The most recent `ci` run from the commit's push to `main` concluded success, which covers every job in `ci.yml` | `scripts/release_gate.py` |
 | The commit is on `main` | `git merge-base --is-ancestor` |
 | The commit's `MANIFEST.json`, `CHANGELOG.md` and README publish exactly this version | `scripts/check_release_manifest.py --tag`, `scripts/release_notes.py`, run against the commit's own tree |
+| Every other version the commit's `MANIFEST.json` lists already has its tag, so the file at the new tag names only published versions | `scripts/check_release_manifest.py --tag --published-tags` |
 
 `python3 scripts/release_gate.py --selftest` shows the gate refusing each of those faults, and CI
 runs it on every pull request.

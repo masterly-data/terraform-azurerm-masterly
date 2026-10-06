@@ -30,6 +30,14 @@ what the newest version is. Both are plain static files over HTTPS: no credentia
 no rate-limited API call. The file is small enough to fetch on every build; cache it on ETag if
 you fetch it often.
 
+A version is published when its tag exists, not when its entry reaches `main`. A release is cut
+in a commit that merges to `main` first; that commit is a release candidate, tested before it is
+tagged, and the tag that publishes it is a later, separate step. So for a while `main`'s
+`latest`, and possibly other recent entries, can name a version the registry does not serve yet.
+A tag URL never does: the file at `vX.Y.Z` is the one that was published. If you need the newest
+*published* version, take the highest key of `releases` on `main` whose `vX.Y.Z` tag exists
+(`git ls-remote --tags` on this repository, or the registry's version list).
+
 The manifest names no commit. It cannot: a release's entry is written in the commit that is then
 tagged, so it would have to contain its own hash. The tag is the commit pointer — `git rev-parse
 "vX.Y.Z^{commit}"` resolves it locally, and the GitHub ref API resolves it remotely.
@@ -48,6 +56,10 @@ tagged, so it would have to contain its own hash. The tag is the commit pointer 
       "images": {
         "api": "masterly.azurecr.io/api:vA.B.C",
         "frontend": "masterly.azurecr.io/frontend:vD.E.F"
+      },
+      "digests": {
+        "api": "sha256:<64 hex characters>",
+        "frontend": "sha256:<64 hex characters>"
       }
     }
   }
@@ -61,13 +73,16 @@ your own source is the defect this manifest exists to kill.
 |---|---|---|---|
 | `schema_version` | integer | yes | The version of *this shape*. `1` today. See "Compatibility". |
 | `module` | string | yes | The Terraform Registry source, `namespace/name/provider`. |
-| `latest` | string | yes | The newest published module version. Always a key of `releases`, and always the highest of them by semver. |
-| `releases` | object | yes | Published releases, keyed by module version. Never empty. |
+| `latest` | string | yes | The newest module version. Always a key of `releases`, and always the highest of them by semver. On `main` it may be a release cut but not tagged yet; see "Where to get it". |
+| `releases` | object | yes | Releases, keyed by module version. Never empty. A key is published once its `vX.Y.Z` tag exists; on `main`, the newest keys may be cut but not tagged yet. |
 | `releases["X.Y.Z"]` | object | yes | One release. The key is a bare semver — `1.2.3`, **not** `v1.2.3`. |
-| `releases["X.Y.Z"].date` | string | yes | The release date, `YYYY-MM-DD`. The day the version was tagged. |
+| `releases["X.Y.Z"].date` | string | yes | The release date, `YYYY-MM-DD`: the day the release was cut. The tag follows the merged release commit, so it may be dated later. |
 | `releases["X.Y.Z"].images` | object | yes | The image pair the release was tested against. |
 | `releases["X.Y.Z"].images.api` | string | yes | `registry/repository:tag`. The repository's last path segment is `api`. |
 | `releases["X.Y.Z"].images.frontend` | string | yes | Same form; last path segment is `frontend`. |
+| `releases["X.Y.Z"].digests` | object | no | The image digests of the release candidate. Absent from releases cut before the field existed. See "The digests". |
+| `releases["X.Y.Z"].digests.api` | string | with `digests` | `sha256:` and 64 lowercase hex characters: the `api` build the release candidate was tested with. |
+| `releases["X.Y.Z"].digests.frontend` | string | with `digests` | Same form, for the `frontend` image. |
 | `$comment` | string | no | A note to human readers. **Ignore it.** It carries no data and may change or vanish at any time. |
 
 One rule holds between releases as well as within one: the newest release bumps the module at
@@ -94,12 +109,44 @@ a live install's tags against the manifest is measuring drift, which may be enti
 it is not measuring a fault.
 
 
+## The digests
+
+`digests` was added within `schema_version` 1, as the compatibility rules below allow: a new key
+inside a release entry. A consumer that ignores keys it does not recognise needs no change.
+
+A release candidate is a commit of this module together with the exact `api` and `frontend`
+builds it was tested with. A tag can be moved to another build and a digest cannot, so `digests`
+is how an entry says which builds those were. The image values stay `registry/repository:tag`:
+the tag is still what an install pins, and the digest is the build that tag was recorded against.
+
+When an entry has `digests`, it has one for every image it names, and no other. Older releases
+have none, and none will be added to them after the fact.
+
+What the release check proves about digests on every pull request is their shape: both present,
+each a `sha256:` digest, and not the same digest for two images. It makes no network call, so it
+cannot see what a tag resolves to in the registry. That comparison is a separate, explicit step:
+whoever cuts the release reads each image's digest from the registry and passes them with
+`--observed-digests`, and the check refuses any digest that disagrees with what its tag
+resolves to, naming both: a tag that names another build is not the build that was tested.
+If you are verifying an install yourself, compare the digest your registry reports for each
+pinned tag with `digests`.
+
 ## Compatibility
 
 **Stable while `schema_version` is `1`.** Every field in the table above keeps its name, its type
 and its meaning. `latest` stays a key of `releases` and stays the highest version present.
 `releases` stays an object keyed by bare semver. Image values stay parseable as
 `registry/repository:tag`.
+
+**One deliberate change of meaning, 2026-10-06 (ADR 0106).** Releases are now cut in a commit
+that merges to `main` before the version is tagged, so the meanings of `latest`, `releases` and
+`date` broadened once, within `schema_version` 1. On `main`, `latest` (and any entry whose tag
+does not exist yet) may name a release that is cut but not yet tagged, and `date` is the day the
+release was cut. The file read at any `vX.Y.Z` tag keeps its old meaning exactly: every version
+in it is published, and `latest` is the newest published version as of that tag; the release
+workflow refuses to create a tag whose commit lists any other version that has no tag yet. No
+field was renamed, removed or retyped. This is a one-time change; any further change of meaning comes with
+a `schema_version` bump.
 
 **May appear without a `schema_version` bump — parse permissively:**
 
