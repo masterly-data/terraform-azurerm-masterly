@@ -90,6 +90,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   later), so the duration is the margin left after a failed renewal, not a limit on how long a
   drain may take. On the next apply this is an in-place update of the queue: it is not
   recreated, no message is lost and nothing goes down (MAS-1285).
+- **Version numbers carry a promise, and the module's follows its images.** A patch adds no
+  capability, no new input or required setting and no database migration; a minor may add all of
+  those, and before 1.0.0 may also carry a breaking change; the module and both images move to
+  1.0.0 together at general availability. A module release now bumps at least as far as the
+  larger of its `api` and `frontend` image bumps, so a module patch never moves an image by more
+  than a patch: `scripts/check_release_manifest.py` refuses a release that would, naming both
+  bumps. The README's pin guidance is corrected: `~> X.Y.0` takes patches of `X.Y` only, while
+  `~> X.Y` takes every later minor too. It said `~>` took "patches within a minor" beside an
+  example that takes minors. No change to any resource; nothing to apply (MAS-1663).
 
 ### Fixed
 

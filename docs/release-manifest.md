@@ -70,6 +70,11 @@ your own source is the defect this manifest exists to kill.
 | `releases["X.Y.Z"].images.frontend` | string | yes | Same form; last path segment is `frontend`. |
 | `$comment` | string | no | A note to human readers. **Ignore it.** It carries no data and may change or vanish at any time. |
 
+One rule holds between releases as well as within one: the newest release bumps the module at
+least as far as the larger of its `api` and `frontend` image bumps since the release before it.
+A module patch therefore moves its images by patches at most. Image tags are `vX.Y.Z` for that
+comparison to be made.
+
 Every one of these is enforced on each pull request and on each tag build by
 [`scripts/check_release_manifest.py`](../scripts/check_release_manifest.py), so a release that
 violates the table above does not reach you quietly. That checker is itself checked:
