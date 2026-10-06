@@ -1482,6 +1482,13 @@ run "service_bus_enabled_provisions_broker_and_grants" {
     )
     error_message = "The jobs queue must redeliver and dead-letter rather than drop work."
   }
+
+  # The lock duration is stated, at Azure's maximum, rather than left to the one-minute
+  # default. The worker renews it during a drain; this is the margin after a failed renewal.
+  assert {
+    condition     = azurerm_servicebus_queue.jobs[0].lock_duration == "PT5M"
+    error_message = "The jobs queue must set a five-minute lock duration, not Azure's one-minute default."
+  }
 }
 
 # Dead-lettered job messages (MAS-1291): any message in the job queue's dead-letter sub-queue,

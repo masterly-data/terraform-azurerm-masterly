@@ -792,6 +792,14 @@ resource "azurerm_servicebus_queue" "jobs" {
   # dead-letter past the max delivery count rather than dropping work.
   max_delivery_count                   = 10
   dead_lettering_on_message_expiration = true
+
+  # How long a worker holds a received message before Service Bus hands it to another
+  # receiver. Five minutes is the most Azure allows; left unset it would be Azure's default of
+  # one minute. The worker renews the lock for as long as a drain runs (api images v0.133.12
+  # and later), so this is the margin after a failed renewal, not a cap on how long a drain
+  # may take: a renewal that fails ends renewal for that message, and the message then
+  # redelivers once this duration lapses.
+  lock_duration = "PT5M"
 }
 
 # The apps' managed identity sends (publish) and receives (the in-process worker) — the two

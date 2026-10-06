@@ -84,6 +84,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `database_auth = "entra"` therefore still reads the subscription's server listing, as an unset
   input does (MAS-1085).
 
+- The `masterly-jobs` Service Bus queue (`enable_service_bus = true`) now sets its message lock
+  duration to five minutes, Azure's maximum, where it previously left Azure's one-minute default
+  in place. The worker renews the lock for as long as a drain runs (api images `v0.133.12` and
+  later), so the duration is the margin left after a failed renewal, not a limit on how long a
+  drain may take. On the next apply this is an in-place update of the queue: it is not
+  recreated, no message is lost and nothing goes down (MAS-1285).
+
 ### Fixed
 
 - The `postgres-silent` alert rule is accepted by Azure. Azure refused it on create (`400`: the
