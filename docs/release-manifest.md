@@ -26,17 +26,17 @@ The manifest lives at the repository root and is published with every tag.
 | A local checkout | `MANIFEST.json` at the root of the module |
 
 Prefer the tag URL when you are asking about a particular version, and `main` when you are asking
-what the newest version is.
+what the newest version is. Both are plain static files over HTTPS: no credential, no API token,
+no rate-limited API call. The file is small enough to fetch on every build; cache it on ETag if
+you fetch it often.
 
 A version is published when its tag exists, not when its entry reaches `main`. A release is cut
 in a commit that merges to `main` first; that commit is a release candidate, tested before it is
 tagged, and the tag that publishes it is a later, separate step. So for a while `main`'s
-`latest` can name a version the registry does not serve yet. A tag URL never does: the file at
-`vX.Y.Z` is the one that was published. If you need the newest *published* version, take
-`latest` from `main` and confirm its `vX.Y.Z` tag exists (`git ls-remote --tags` on this
-repository, or the registry's version list) before you act on it. Both are plain static files over HTTPS: no credential, no API token,
-no rate-limited API call. The file is small enough to fetch on every build; cache it on ETag if
-you fetch it often.
+`latest`, and possibly other recent entries, can name a version the registry does not serve yet.
+A tag URL never does: the file at `vX.Y.Z` is the one that was published. If you need the newest
+*published* version, take the highest key of `releases` on `main` whose `vX.Y.Z` tag exists
+(`git ls-remote --tags` on this repository, or the registry's version list).
 
 The manifest names no commit. It cannot: a release's entry is written in the commit that is then
 tagged, so it would have to contain its own hash. The tag is the commit pointer — `git rev-parse
@@ -74,7 +74,7 @@ your own source is the defect this manifest exists to kill.
 | `schema_version` | integer | yes | The version of *this shape*. `1` today. See "Compatibility". |
 | `module` | string | yes | The Terraform Registry source, `namespace/name/provider`. |
 | `latest` | string | yes | The newest module version. Always a key of `releases`, and always the highest of them by semver. On `main` it may be a release cut but not tagged yet; see "Where to get it". |
-| `releases` | object | yes | Releases, keyed by module version. Never empty. Every key below `latest` is published. |
+| `releases` | object | yes | Releases, keyed by module version. Never empty. A key is published once its `vX.Y.Z` tag exists; on `main`, the newest keys may be cut but not tagged yet. |
 | `releases["X.Y.Z"]` | object | yes | One release. The key is a bare semver — `1.2.3`, **not** `v1.2.3`. |
 | `releases["X.Y.Z"].date` | string | yes | The release date, `YYYY-MM-DD`: the day the release was cut. The tag follows the merged release commit, so it may be dated later. |
 | `releases["X.Y.Z"].images` | object | yes | The image pair the release was tested against. |
@@ -137,6 +137,16 @@ pinned tag with `digests`.
 and its meaning. `latest` stays a key of `releases` and stays the highest version present.
 `releases` stays an object keyed by bare semver. Image values stay parseable as
 `registry/repository:tag`.
+
+**One deliberate change of meaning, 2026-10-06 (ADR 0106).** Releases are now cut in a commit
+that merges to `main` before the version is tagged, so the meanings of `latest`, `releases` and
+`date` broadened once, within `schema_version` 1. On `main`, `latest` (and any entry whose tag
+does not exist yet) may name a release that is cut but not yet tagged, and `date` is the day the
+release was cut. The file read at any `vX.Y.Z` tag keeps its old meaning exactly: every version
+in it is published, and `latest` is the newest published version as of that tag; the release
+workflow refuses to create a tag whose commit lists any other version that has no tag yet. No
+field was renamed, removed or retyped. This is a one-time change; any further change of meaning comes with
+a `schema_version` bump.
 
 **May appear without a `schema_version` bump — parse permissively:**
 

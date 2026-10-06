@@ -24,6 +24,7 @@ full commit SHA, and creates the tag only when all of these hold:
 | The most recent `ci` run from the commit's push to `main` concluded success, which covers every job in `ci.yml` | `scripts/release_gate.py` |
 | The commit is on `main` | `git merge-base --is-ancestor` |
 | The commit's `MANIFEST.json`, `CHANGELOG.md` and README publish exactly this version | `scripts/check_release_manifest.py --tag`, `scripts/release_notes.py`, run against the commit's own tree |
+| Every other version the commit's `MANIFEST.json` lists already has its tag, so the file at the new tag names only published versions | `scripts/check_release_manifest.py --tag --published-tags` |
 
 `python3 scripts/release_gate.py --selftest` shows the gate refusing each of those faults, and CI
 runs it on every pull request.

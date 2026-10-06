@@ -46,8 +46,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - A release is cut in a commit that merges to `main` before the version is tagged, and is tested
   as a release candidate in between. So `MANIFEST.json` on `main` can name, as `latest`, a
   version whose tag does not exist yet, and an entry's `date` is the day the release was cut.
-  The file at a `vX.Y.Z` tag is unchanged in meaning: every version in it is published. To find
-  the newest published version from `main`, confirm its tag exists
+  The file at a `vX.Y.Z` tag is unchanged in meaning: every version in it is published, and
+  `cut-release` refuses a tag whose commit lists another version with no tag yet
+  (`check_release_manifest.py --published-tags`). To find the newest published version from
+  `main`, take the highest version whose tag exists
   ([docs/release-manifest.md](docs/release-manifest.md), "Where to get it") (MAS-1692).
 
 - **Breaking: the module now requires azurerm `~> 5.8`** (was `~> 4.61`), and its nested modules

@@ -149,7 +149,11 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/release" "$COMMIT"
           cd "$RUNNER_TEMP/release"
           python3 scripts/check_release_manifest.py
-          python3 scripts/check_release_manifest.py --tag "$TAG"
+          # --published-tags: every other version this commit's manifest lists already has its
+          # tag, so the file at the new tag names only published versions. The release commit
+          # merges before its tag, so main can carry a cut that was never tagged.
+          python3 scripts/check_release_manifest.py --tag "$TAG" \
+            --published-tags "$RUNNER_TEMP/tags.txt"
           python3 scripts/release_notes.py "$TAG" > /dev/null
 
   tag:

@@ -1283,12 +1283,18 @@ digests where the code changed, and the new date, and the changelog entries that
 the next candidate. A
 version is not published until it is tagged, so its entry can still change until then.
 
+More than one cut can be untagged at a time, but a version is only tagged once every other
+version its commit's manifest lists is already tagged, so the file at every tag lists only
+published versions. A cut that will not be released has its manifest entry and changelog section
+removed before another version is tagged. `cut-release` refuses otherwise, naming the untagged
+version.
+
 Tagging, later and separately:
 
 6. Wait for `main`'s CI run on the candidate's commit to pass, then run the **cut-release**
    workflow (Actions → cut-release → Run workflow, from `main`) with the version and the
-   candidate commit's full SHA. That commit may be behind `main`'s head. Do not create the tag
-   by hand.
+   candidate commit's full SHA. That commit may be behind `main`'s head, and every other version
+   its manifest lists must already be tagged. Do not create the tag by hand.
 7. After the registry publishes the version, the public
    [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) adopt it — and the
    install page's upgrade notes ("Coming from module N.x") are rewritten for the new release as

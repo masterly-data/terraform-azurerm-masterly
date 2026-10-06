@@ -26,7 +26,9 @@ The release-cut commit merges to `main` BEFORE its tag exists, and the tag is a 
 step (ADR 0106: the merged commit is a release candidate, tested before it is published). So the
 pull-request and push checks never ask whether a version's tag, or its images' tags, have been
 published: an entry nobody has tagged yet is exactly what a release-cut pull request carries.
-Only `--tag` ties the manifest to a tag, and only once the tag is being built.
+Only `--tag` ties the manifest to a tag. With `--published-tags`, which `cut-release` passes
+before it creates a tag, it also refuses a tag whose commit lists another version that has no
+tag yet, so the file at every tag still lists only published versions.
 
 A release entry may carry `digests`, the `api` and `frontend` image digests of the release
 candidate. Offline, which is all CI ever is here, the check proves their shape: both images
@@ -47,6 +49,7 @@ Run:
     python3 scripts/check_release_manifest.py            # check (what CI runs)
     python3 scripts/check_release_manifest.py --write    # regenerate README.md from the manifest
     python3 scripts/check_release_manifest.py --tag vX.Y.Z
+    python3 scripts/check_release_manifest.py --tag vX.Y.Z --published-tags tags.txt
     python3 scripts/check_release_manifest.py --observed-digests observed.json
     python3 scripts/check_release_manifest.py --selftest  # the check still rejects bad releases
 
@@ -207,7 +210,7 @@ def check_digest_shape(where: str, images: dict, digests: object) -> None:
                 f"{where}: 'digests' names {name!r}, an image the entry's 'images' does not name. "
                 f"A digest is the build of one of the entry's own images, never an extra one."
             )
-    for name in IMAGE_INPUTS.values():
+    for name in images:
         if name not in digests:
             raise CheckFailed(
                 f"{where}: 'digests' has no {name!r} digest. A candidate is the module commit "
@@ -569,6 +572,40 @@ def check_tag(manifest: dict, tag: str) -> None:
         )
 
 
+def check_published_tags(manifest: dict, tag: str, tags_path: Path) -> None:
+    """Every other version in the manifest being tagged is already published.
+
+    The release-cut commit merges before its tag, so `main` can carry entries nobody has tagged.
+    The file at a tag must still list only published versions, plus the one that tag publishes
+    (docs/release-manifest.md, "Compatibility"). So before a tag is created, every other entry in
+    the commit's manifest must already have its own tag: a version that will not be released has
+    its entry removed before another is tagged. `tags_path` lists the repository's tags, one per
+    line, as `git ls-remote --tags --refs` prints them once stripped.
+    """
+    try:
+        existing = {
+            line.strip() for line in tags_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+    except FileNotFoundError:
+        raise CheckFailed(f"{tags_path} is missing") from None
+    being_tagged = TAG_RE.match(tag).group(1)  # check_tag has already proved the form
+    untagged = sorted(
+        (version for version in manifest["releases"]
+         if version != being_tagged and f"v{version}" not in existing),
+        key=semver,
+    )
+    if untagged:
+        one = len(untagged) == 1
+        raise CheckFailed(
+            f"{MANIFEST_PATH.name} at this commit lists {', '.join(untagged)}, which "
+            f"{'has' if one else 'have'} no tag. Tagging {tag} here would publish a manifest "
+            f"naming a version the registry does not serve. Tag "
+            f"{'that version' if one else 'those versions'} first, or remove the entry and its "
+            f"changelog section if it will not be released."
+        )
+
+
 # ---------------------------------------------------------------------------
 # The selftest: watching the detector fail
 # ---------------------------------------------------------------------------
@@ -683,7 +720,7 @@ echo fixture
 
 
 def _stage(root: Path, manifest, changelog, readme, scripts=None, observed=None,
-           tags=None) -> dict:
+           tags=None, tags_file=None) -> dict:
     """Write one synthetic module tree and return the environment that points the script at it.
 
     `observed` is written to `observed.json` beside the tree, for `--observed-digests`. `tags`
@@ -711,6 +748,8 @@ def _stage(root: Path, manifest, changelog, readme, scripts=None, observed=None,
             observed if isinstance(observed, str) else json.dumps(observed, indent=2),
             encoding="utf-8",
         )
+    if tags_file is not None:
+        (root / "tags.txt").write_text(tags_file, encoding="utf-8")
     if tags is not None:
         git = ["git", "-C", str(root), "-c", "user.name=fixture", "-c",
                "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
@@ -796,6 +835,13 @@ def _with_digests(digests):
     return manifest
 
 
+def _with_extra_image(manifest: dict, name: str, image: str) -> dict:
+    """`manifest` with one more named image on its newest release, as compatibility allows."""
+    manifest = copy.deepcopy(manifest)
+    manifest["releases"][manifest["latest"]]["images"][name] = image
+    return manifest
+
+
 def _observed(manifest: dict, digests: dict) -> dict:
     """An observed-digests file for the newest release's images: image reference -> digest."""
     images = manifest["releases"][manifest["latest"]]["images"]
@@ -818,6 +864,24 @@ def _digest_scenarios() -> list[tuple]:
         (
             "a release-cut entry whose tag does not exist yet passes the pull-request check",
             good, log, ok, [], 0, newest, {"tags": [f"v{older}"]},
+        ),
+        (
+            "a tag whose other versions are all tagged passes the published-tags check",
+            good, log, ok,
+            ["--tag", f"v{newest}", "--published-tags", "{root}/tags.txt"], 0, newest,
+            {"tags_file": f"v{older}\n"},
+        ),
+        (
+            "a tag whose commit lists another untagged version is refused",
+            good, log, ok,
+            ["--tag", f"v{newest}", "--published-tags", "{root}/tags.txt"], 1,
+            f"lists {older}, which has no tag",
+            {"tags_file": "v0.0.1\n"},
+        ),
+        (
+            "--published-tags without --tag is refused",
+            good, log, ok, ["--published-tags", "{root}/tags.txt"], 1, "needs --tag",
+            {"tags_file": f"v{older}\n"},
         ),
         ("a release entry with digests passes", good, log, ok, [], 0, newest),
         (
@@ -858,6 +922,11 @@ def _digest_scenarios() -> list[tuple]:
             "digests missing the frontend image are refused",
             _with_digests({"api": FIXTURE_DIGESTS["api"]}), log, ok, [], 1,
             "has no 'frontend' digest",
+        ),
+        (
+            "an entry naming a third image needs a digest for it too",
+            _with_extra_image(good, "worker", "registry.example.invalid/worker:v1.1.0"),
+            log, ok, [], 1, "has no 'worker' digest",
         ),
         (
             "a digest that is not sha256 hex is refused",
@@ -1138,6 +1207,12 @@ def main() -> int:
         help="the vX.Y.Z tag being built; also assert it is the manifest's newest release",
     )
     parser.add_argument(
+        "--published-tags",
+        type=Path,
+        help="with --tag: a file of the repository's tags, one per line; refuse when any other "
+        "version in the manifest has no tag yet",
+    )
+    parser.add_argument(
         "--observed-digests",
         type=Path,
         help="a JSON file mapping each image reference of the newest release to the digest the "
@@ -1161,6 +1236,10 @@ def main() -> int:
         check_script_banners()
         if args.tag:
             check_tag(manifest, args.tag)
+        if args.published_tags:
+            if not args.tag:
+                raise CheckFailed("--published-tags needs --tag: it checks what a tag publishes")
+            check_published_tags(manifest, args.tag, args.published_tags)
         if args.observed_digests:
             check_observed_digests(manifest, args.observed_digests)
     except CheckFailed as exc:
