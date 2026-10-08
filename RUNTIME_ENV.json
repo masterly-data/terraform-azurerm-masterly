@@ -28,6 +28,7 @@
         "MASTERLY_OIDC_JWKS_URI",
         "MASTERLY_ORG_ID",
         "MASTERLY_ORG_NAME",
+        "MASTERLY_PUBLIC_API_URL",
         "MASTERLY_REDIS_AUTH",
         "MASTERLY_REGION",
         "MASTERLY_SECRET_STORE",
@@ -57,6 +58,7 @@
         "MASTERLY_OIDC_CLIENT_ID",
         "MASTERLY_OIDC_REDIRECT_URI",
         "MASTERLY_OIDC_SCOPES",
+        "MASTERLY_PUBLIC_API_URL",
         "MASTERLY_REGION"
       ],
       "env_secret_refs": [
@@ -89,6 +91,7 @@
         "MASTERLY_OIDC_JWKS_URI",
         "MASTERLY_ORG_ID",
         "MASTERLY_ORG_NAME",
+        "MASTERLY_PUBLIC_API_URL",
         "MASTERLY_REDIS_AUTH",
         "MASTERLY_REGION",
         "MASTERLY_SECRET_STORE",
