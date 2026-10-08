@@ -581,6 +581,78 @@ variable "frontend_min_replicas" {
   }
 }
 
+variable "frontend_max_replicas" {
+  type        = number
+  default     = 3
+  description = "Maximum frontend replicas. Container Apps adds replicas on HTTP load up to this number. The default of 3 is what every install had before this input existed, so an install that does not set it plans no change. Must be at least 1 and at least frontend_min_replicas."
+
+  validation {
+    condition     = var.frontend_max_replicas >= 1
+    error_message = "frontend_max_replicas must be at least 1."
+  }
+
+  validation {
+    condition     = var.frontend_min_replicas <= var.frontend_max_replicas
+    error_message = "frontend_min_replicas must not exceed frontend_max_replicas."
+  }
+}
+
+# Per-app CPU and memory, keyed by the app's name rather than one flat input per app, so that
+# a later input that runs more than one workers app can size each of them in this same map
+# under its own name without renaming anything here.
+variable "app_resources" {
+  type = map(object({
+    cpu    = optional(number)
+    memory = optional(string)
+  }))
+  default     = {}
+  description = <<-EOT
+    CPU (vCPU) and memory per replica, by app: keys "api", "frontend" and "workers". An app that
+    is not listed, and an attribute that is not set, keeps the size every app had before this
+    input existed: 0.5 vCPU and 1Gi. Container Apps accepts CPU and memory only in the ratio
+    1 vCPU : 2 GiB, from 0.25 vCPU / 0.5Gi to 2 vCPU / 4Gi in steps of 0.25 vCPU, so either
+    attribute alone is enough and the other follows from it; set both and they must agree. For
+    example, { api = { cpu = 1 } } runs the api at 1 vCPU / 2Gi, which is what the production
+    example sets. Changing an app's size rolls that app to a new revision on the next apply.
+  EOT
+
+  validation {
+    condition     = alltrue([for k in keys(var.app_resources) : contains(["api", "frontend", "workers"], k)])
+    error_message = "app_resources keys must be \"api\", \"frontend\" or \"workers\"."
+  }
+
+  validation {
+    condition = alltrue([
+      for r in values(var.app_resources) : r.memory == null ? true : can(regex("^[0-9]+(\\.[0-9]+)?Gi$", r.memory))
+    ])
+    error_message = "app_resources memory must be a number of Gi, e.g. \"1Gi\" or \"1.5Gi\"."
+  }
+
+  # The combinations Container Apps accepts on the Consumption profile: 0.25 to 2 vCPU in
+  # steps of 0.25, each with twice as many GiB. Refused here because Azure refuses any other
+  # pair at apply, after the rest of the plan has already started to land.
+  validation {
+    condition = alltrue([
+      # try(): Terraform 1.10 does not short-circuit || and &&, so a null memory must not
+      # reach trimsuffix. A malformed memory is the format validation's to report.
+      for r in values(var.app_resources) : (
+        r.cpu == null ? true : contains([0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2], r.cpu)
+        ) && (
+        try(contains([0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4], tonumber(trimsuffix(r.memory, "Gi"))), true)
+      )
+    ])
+    error_message = "app_resources cpu must be one of 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75 or 2, and memory one of 0.5Gi to 4Gi in steps of 0.5Gi."
+  }
+
+  validation {
+    condition = alltrue([
+      for r in values(var.app_resources) :
+      try(tonumber(trimsuffix(r.memory, "Gi")) == r.cpu * 2, true)
+    ])
+    error_message = "app_resources memory must be twice the cpu, in Gi: Container Apps accepts only the ratio 1 vCPU : 2 GiB (for example cpu = 1 with memory = \"2Gi\")."
+  }
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}

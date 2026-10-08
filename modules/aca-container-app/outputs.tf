@@ -16,6 +16,26 @@ output "memory" {
   description = "Memory per replica as configured (e.g. \"1Gi\")."
 }
 
+# CPU per replica as configured, beside memory, so a test can pin an app's size.
+output "cpu" {
+  value       = var.cpu
+  description = "CPU cores per replica as configured."
+}
+
+# Scaling as configured: replica bounds, the termination grace period and the custom scale
+# rules. Config values, known at plan time, for the same reason as the outputs around it: a
+# test must be able to pin them, and `custom_scale_rule` is a dynamic block a test cannot read
+# off the resource.
+output "scale" {
+  value = {
+    min_replicas                     = var.min_replicas
+    max_replicas                     = var.max_replicas
+    termination_grace_period_seconds = var.termination_grace_period_seconds
+    custom_scale_rules               = var.custom_scale_rules
+  }
+  description = "Replica bounds, termination grace period (null = Azure's default) and custom scale rules, as configured."
+}
+
 # Informational only. Do NOT wire app-to-app traffic to this: Azure has been observed to
 # report an internal app's fqdn in the external form, and terraform reads it back as drift
 # ("changed outside of Terraform"). Address another app in the same environment by `name`.

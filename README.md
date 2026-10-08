@@ -97,6 +97,8 @@ module "masterly" {
   redis_offering   = "managed"
   enable_workers   = true
   api_max_replicas = 3
+  # The api at 1 vCPU / 2Gi; the other apps keep 0.5 vCPU / 1Gi. See "Scaling".
+  app_resources = { api = { cpu = 1 } }
 
   # Identity (ADR 0024): your own OIDC IdP — Entra, Okta, Keycloak, …
   identity_binding     = "oidc"
@@ -688,9 +690,9 @@ Definitions that flag this:
 `ca-api` defaults to a **single replica** — with the in-memory session registry a second
 replica would drop sessions. `enable_redis` switches sessions to the redis registry and
 unlocks `api_max_replicas > 1` (the module refuses the combination scale-out-without-Redis
-at plan time). `enable_workers` moves the async-pipeline loop to its own `ca-workers` app;
-extra workers replicas add throughput across Environments (the per-Environment drain is
-advisory-locked), not duplicate work.
+at plan time). `enable_workers` moves the async-pipeline loop to its own `ca-workers` app.
+`frontend_max_replicas` (default 3, at least `frontend_min_replicas`) caps the frontend, which
+Container Apps scales on HTTP load.
 
 **Scale-to-zero** (`api_min_replicas = 0` / `frontend_min_replicas = 0`) is the idle-cost
 posture for evaluation installs (the demo runs it): Container Apps stops the replicas when
@@ -717,6 +719,50 @@ undetected. But it also applies to a *healthy* install during a long backend out
 app would otherwise have loaded and shown its degraded-data-plane banner. The gate is not
 currently an input — it is fixed in the module — so if that trade is wrong for your
 environment, raise it with us rather than editing a vendored copy.
+
+### How `ca-workers` scales
+
+`ca-workers` runs between `workers_min_replicas` (default 1) and `workers_max_replicas` (default
+1). What moves it between the two depends on the bus:
+
+- **On the Service Bus binding** (`enable_service_bus = true`) the module adds an
+  `azure-servicebus` scale rule on the jobs queue the workers receive from. Container Apps adds
+  about one replica per 5 messages waiting in the queue, up to `workers_max_replicas`, and removes
+  them again once the queue has drained (after Container Apps' cool-down of 5 minutes). The rule
+  authenticates as the apps' managed identity, which the module grants **Azure Service Bus Data
+  Owner** on the jobs queue alone: reading a queue's message count needs the Manage right, which
+  the Sender and Receiver roles do not carry.
+- **On the polling binding** (the default) each Environment's queue lives in its own Postgres
+  database and there is no single queue length to scale on, so `ca-workers` stays at
+  `workers_min_replicas` whatever `workers_max_replicas` says. The module plans such a
+  configuration but warns about it. Raise `workers_min_replicas` to run more workers there.
+
+Jobs are claimed per Environment and job kind across all replicas: jobs of different kinds, or in
+different Environments, run in parallel, and two jobs of the same kind in one Environment never
+overlap. An extra replica adds throughput and never duplicates work.
+
+A stopping worker (scale-in, a new revision, a restart) claims no new job and finishes the jobs
+it is running. `workers_termination_grace_period_seconds` (default **600**, the most Container
+Apps allows; 0-600) is how long it has before it is killed. A job cut off by a kill is retried
+only after its lease expires, so a grace period long enough for your longest jobs is what keeps a
+scale-in from delaying them.
+
+### CPU and memory per replica
+
+`app_resources` sizes each app's replicas, keyed by app name (`api`, `frontend`, `workers`). An
+app that is not listed keeps 0.5 vCPU / 1Gi. Container Apps accepts only the ratio 1 vCPU : 2 GiB,
+from 0.25 vCPU / 0.5Gi to 2 vCPU / 4Gi in steps of 0.25 vCPU, so either attribute alone is
+enough; set both and they must agree, or the plan is refused:
+
+```hcl
+app_resources = {
+  api     = { cpu = 1 }                   # 1 vCPU / 2Gi, what the production example sets
+  workers = { cpu = 1.5, memory = "3Gi" } # both stated: they must be in the ratio
+}
+```
+
+Changing an app's size rolls that app to a new revision on the next apply. The `workers-memory`
+alert follows the workers' size: its threshold is a share of whatever memory the replica has.
 
 ## Diagnostics + alerts
 

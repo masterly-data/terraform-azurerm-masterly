@@ -138,6 +138,12 @@ module "masterly" {
   api_max_replicas      = 3
   frontend_min_replicas = 1
 
+  # Per-replica size. Unlisted apps keep the module's default of 0.5 vCPU / 1Gi; the api gets
+  # 1 vCPU / 2Gi in production, where it carries every interactive request.
+  app_resources = {
+    api = { cpu = 1, memory = "2Gi" }
+  }
+
   tags = var.tags
 }
 

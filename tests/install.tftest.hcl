@@ -2077,6 +2077,7 @@ run "no_data_plane_grant_reaches_the_frontend" {
       azurerm_role_assignment.kv_secrets_officer[0].principal_id == module.apps_identity.principal_id &&
       azurerm_role_assignment.sb_sender[0].principal_id == module.apps_identity.principal_id &&
       azurerm_role_assignment.sb_receiver[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.sb_scaler[0].principal_id == module.apps_identity.principal_id &&
       azurerm_role_assignment.acs_email_sender[0].principal_id == module.apps_identity.principal_id
     )
     error_message = "Key Vault, Service Bus and ACS grants must go to the backend apps' identity."
@@ -2090,6 +2091,7 @@ run "no_data_plane_grant_reaches_the_frontend" {
       azurerm_role_assignment.kv_secrets_officer[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_sender[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_receiver[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.sb_scaler[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.acs_email_sender[0].principal_id != module.frontend_identity.principal_id &&
       length(azurerm_role_assignment.kv_secrets_user_frontend) == 0
     )
@@ -4214,6 +4216,10 @@ run "workers_at_zero_floor_gets_no_replica_alert" {
     )
     error_message = "A workers app allowed to sit at zero replicas must not carry a no-replica alert; the serving apps still must."
   }
+
+  # Floor 0 below the default ceiling of 1, on the polling binding: the workers have no scale
+  # rule, so they stay at 0, and the module says so.
+  expect_failures = [check.workers_scale_on_the_polling_binding]
 }
 
 # --- Geo-redundant backup on the starter Postgres server (MAS-1087) ----------------------
@@ -5294,5 +5300,357 @@ run "a_moved_server_keeps_its_password_on_later_plans" {
       azurerm_postgresql_flexible_server.this[0].administrator_password == random_password.postgres_admin[0].result
     )
     error_message = "A moved server must stay on \"entra\" and keep being sent the password it holds."
+  }
+}
+
+# --- Sizing and scaling: app_resources, frontend_max_replicas, the workers' scale rule and
+# --- termination grace period (MAS-1296) ---------------------------------------------------
+
+# An existing install that sets none of the new inputs plans the size and replica bounds every
+# app had before they existed: 0.5 vCPU / 1Gi, api 1-1, frontend 1-3, workers 1-1, and no scale
+# rule on the polling binding. The workers' grace period is the one deliberate change.
+run "unchanged_install_plans_no_compute_change" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+  }
+
+  assert {
+    condition = alltrue([
+      for app in [module.api, module.frontend, module.workers[0]] : app.cpu == 0.5 && app.memory == "1Gi"
+    ])
+    error_message = "With app_resources unset every app must keep 0.5 vCPU / 1Gi."
+  }
+
+  assert {
+    condition = (
+      module.api.scale.min_replicas == 1 && module.api.scale.max_replicas == 1 &&
+      module.frontend.scale.min_replicas == 1 && module.frontend.scale.max_replicas == 3 &&
+      module.workers[0].scale.min_replicas == 1 && module.workers[0].scale.max_replicas == 1
+    )
+    error_message = "With the new inputs unset every app must keep its replica bounds (api 1-1, frontend 1-3, workers 1-1)."
+  }
+
+  assert {
+    condition = (
+      module.api.scale.termination_grace_period_seconds == null &&
+      module.frontend.scale.termination_grace_period_seconds == null &&
+      length(module.api.scale.custom_scale_rules) == 0 &&
+      length(module.frontend.scale.custom_scale_rules) == 0 &&
+      length(module.workers[0].scale.custom_scale_rules) == 0
+    )
+    error_message = "The api and frontend must keep Azure's default grace period, and no app may get a scale rule on the polling binding."
+  }
+
+  assert {
+    condition     = module.workers[0].scale.termination_grace_period_seconds == 600 && length(azurerm_role_assignment.sb_scaler) == 0
+    error_message = "ca-workers must default to a 600-second grace period, and the polling binding must plan no queue grant."
+  }
+
+  # The workers memory alert follows the configured size: 85% of 1Gi.
+  assert {
+    condition     = local.workers_memory_bytes == 1073741824
+    error_message = "The workers memory alert's base must be the workers' configured memory."
+  }
+}
+
+# The production example's sizing: the api at 1 vCPU / 2Gi, the other two apps unchanged. This
+# is the shape examples/production sets on a production Premium Service Bus install.
+run "production_example_runs_the_api_at_one_vcpu" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "managed"
+    enable_workers        = true
+    enable_service_bus    = true
+    servicebus_sku        = "Premium"
+    api_min_replicas      = 2
+    api_max_replicas      = 3
+    frontend_min_replicas = 1
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+
+    app_resources = {
+      api = { cpu = 1, memory = "2Gi" }
+    }
+  }
+
+  assert {
+    condition     = module.api.cpu == 1 && module.api.memory == "2Gi"
+    error_message = "The production example must plan the api at 1 vCPU / 2Gi."
+  }
+
+  assert {
+    condition = (
+      module.frontend.cpu == 0.5 && module.frontend.memory == "1Gi" &&
+      module.workers[0].cpu == 0.5 && module.workers[0].memory == "1Gi"
+    )
+    error_message = "Apps not listed in app_resources must keep 0.5 vCPU / 1Gi."
+  }
+}
+
+# Either half of a size determines the other, at Container Apps' 1 vCPU : 2 GiB.
+run "app_resources_derives_the_missing_half" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    app_resources = {
+      api      = { cpu = 1 }
+      workers  = { memory = "3Gi" }
+      frontend = { cpu = 0.25, memory = "0.5Gi" }
+    }
+  }
+
+  assert {
+    condition = (
+      module.api.cpu == 1 && module.api.memory == "2Gi" &&
+      module.workers[0].cpu == 1.5 && module.workers[0].memory == "3Gi" &&
+      module.frontend.cpu == 0.25 && module.frontend.memory == "0.5Gi"
+    )
+    error_message = "app_resources must reach each app, deriving an unset half at 1 vCPU : 2 GiB."
+  }
+
+  # The workers memory alert takes its threshold as a share of the workers' size.
+  assert {
+    condition     = local.workers_memory_bytes == 3 * 1073741824
+    error_message = "The workers memory alert must follow the workers' configured memory."
+  }
+}
+
+run "app_resources_refuses_a_pair_out_of_ratio" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    app_resources         = { api = { cpu = 1, memory = "1Gi" } }
+  }
+
+  expect_failures = [var.app_resources]
+}
+
+run "app_resources_refuses_a_size_container_apps_does_not_offer" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    app_resources         = { workers = { cpu = 4 } }
+  }
+
+  expect_failures = [var.app_resources]
+}
+
+run "app_resources_refuses_memory_in_another_unit" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    app_resources         = { api = { memory = "2048Mi" } }
+  }
+
+  expect_failures = [var.app_resources]
+}
+
+run "app_resources_refuses_an_unknown_app" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    app_resources         = { worker = { cpu = 1 } }
+  }
+
+  expect_failures = [var.app_resources]
+}
+
+run "frontend_max_replicas_reaches_the_frontend" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    frontend_min_replicas = 2
+    frontend_max_replicas = 5
+  }
+
+  assert {
+    condition     = module.frontend.scale.min_replicas == 2 && module.frontend.scale.max_replicas == 5
+    error_message = "frontend_max_replicas must reach the frontend."
+  }
+}
+
+run "frontend_max_below_min_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    frontend_min_replicas = 2
+    frontend_max_replicas = 1
+  }
+
+  expect_failures = [var.frontend_max_replicas]
+}
+
+run "frontend_max_of_zero_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    frontend_min_replicas = 0
+    frontend_max_replicas = 0
+  }
+
+  expect_failures = [var.frontend_max_replicas]
+}
+
+run "workers_max_below_min_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    workers_min_replicas  = 2
+    workers_max_replicas  = 1
+  }
+
+  expect_failures = [var.workers_max_replicas]
+}
+
+run "workers_grace_period_is_an_input" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs                    = ["203.0.113.7/32"]
+    enable_workers                           = true
+    workers_termination_grace_period_seconds = 120
+  }
+
+  assert {
+    condition     = module.workers[0].scale.termination_grace_period_seconds == 120
+    error_message = "workers_termination_grace_period_seconds must reach ca-workers."
+  }
+}
+
+run "workers_grace_period_above_azure_maximum_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs                    = ["203.0.113.7/32"]
+    enable_workers                           = true
+    workers_termination_grace_period_seconds = 601
+  }
+
+  expect_failures = [var.workers_termination_grace_period_seconds]
+}
+
+# On the polling binding there is no queue length to scale on: max above min plans, with no
+# scale rule, and the check says the workers will stay at their minimum.
+run "polling_binding_workers_above_min_are_warned" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    workers_max_replicas  = 3
+  }
+
+  assert {
+    condition     = length(module.workers[0].scale.custom_scale_rules) == 0 && length(azurerm_role_assignment.sb_scaler) == 0
+    error_message = "The polling binding must plan no scale rule and no queue grant."
+  }
+
+  expect_failures = [check.workers_scale_on_the_polling_binding]
+}
+
+# The Service Bus binding: ca-workers scales on the jobs queue it receives from, authenticated as
+# the apps' identity, which holds the Manage right on that queue alone. An install whose replica
+# bounds are unchanged keeps them; only the rule and the grant are added.
+run "service_bus_workers_scale_on_the_jobs_queue" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_service_bus    = true
+    enable_workers        = true
+    workers_max_replicas  = 4
+  }
+
+  override_module {
+    target = module.apps_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
+      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-apps"
+    }
+  }
+
+  assert {
+    condition = (
+      length(module.workers[0].scale.custom_scale_rules) == 1 &&
+      module.workers[0].scale.custom_scale_rules[0].custom_rule_type == "azure-servicebus" &&
+      module.workers[0].scale.custom_scale_rules[0].metadata["queueName"] == azurerm_servicebus_queue.jobs[0].name &&
+      module.workers[0].scale.custom_scale_rules[0].metadata["messageCount"] == "5" &&
+      module.workers[0].scale.custom_scale_rules[0].identity_id == module.apps_identity.id
+    )
+    error_message = "ca-workers must scale on the jobs queue's message count, authenticated as the apps' identity."
+  }
+
+  # The rule watches the namespace the workers receive from: the same name the workers' env
+  # is given as MASTERLY_SERVICEBUS_NAMESPACE.
+  assert {
+    condition     = module.workers[0].scale.custom_scale_rules[0].metadata["namespace"] == local.servicebus_env["MASTERLY_SERVICEBUS_NAMESPACE"]
+    error_message = "The scale rule must watch the namespace the workers receive from."
+  }
+
+  assert {
+    condition     = module.workers[0].scale.min_replicas == 1 && module.workers[0].scale.max_replicas == 4
+    error_message = "The scale rule must work between workers_min_replicas and workers_max_replicas."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.sb_scaler) == 1 &&
+      azurerm_role_assignment.sb_scaler[0].role_definition_name == "Azure Service Bus Data Owner" &&
+      azurerm_role_assignment.sb_scaler[0].principal_id == module.apps_identity.principal_id
+    )
+    error_message = "The apps' identity must hold Azure Service Bus Data Owner for the scale rule to read the queue."
+  }
+
+  # The api has its own HTTP scale rule and no grace-period change.
+  assert {
+    condition     = length(module.api.scale.custom_scale_rules) == 0 && module.api.scale.termination_grace_period_seconds == null
+    error_message = "Only ca-workers gets the queue scale rule and the grace period."
+  }
+}
+
+# Service Bus without the workers app: the api runs the loop in-process and scales on HTTP, so
+# there is no workers app to scale and no reason for the Manage grant.
+run "service_bus_without_workers_plans_no_scaler_grant" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_service_bus    = true
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.sb_scaler) == 0 && length(module.api.scale.custom_scale_rules) == 0
+    error_message = "Without enable_workers there is no queue scale rule and no Data Owner grant."
   }
 }

@@ -1117,6 +1117,29 @@ locals {
   } : {}
 }
 
+# --- Per-app CPU and memory (app_resources) -----------------------------------------
+#
+# Either attribute alone determines the other, because Container Apps accepts only the ratio
+# 1 vCPU : 2 GiB (the variable's validations refuse any other pair). An app that is not
+# listed gets 0.5 vCPU / 1Gi, the size every app ran at before the input existed, so an
+# install that does not set it plans no change to any app's size.
+locals {
+  app_resources = {
+    for app in ["api", "frontend", "workers"] : app => {
+      cpu = coalesce(
+        try(var.app_resources[app].cpu, null),
+        try(tonumber(trimsuffix(var.app_resources[app].memory, "Gi")) / 2, null),
+        0.5,
+      )
+      memory = coalesce(
+        try(var.app_resources[app].memory, null),
+        try("${var.app_resources[app].cpu * 2}Gi", null),
+        "1Gi",
+      )
+    }
+  }
+}
+
 # --- The api (internal ingress: only the frontend's BFF reaches it) ---------------
 
 module "api" {
@@ -1180,6 +1203,9 @@ module "api" {
   # the variable spell out what an idle stop drops).
   min_replicas = var.api_min_replicas
   max_replicas = var.api_max_replicas
+
+  cpu    = local.app_resources.api.cpu
+  memory = local.app_resources.api.memory
 
   env                = local.api_env
   secrets            = local.api_value_secrets
@@ -1272,6 +1298,10 @@ module "frontend" {
   ingress_target_port = 3000
 
   min_replicas = var.frontend_min_replicas
+  max_replicas = var.frontend_max_replicas
+
+  cpu    = local.app_resources.frontend.cpu
+  memory = local.app_resources.frontend.memory
 
   ingress_allowed_ip_security_restrictions = [
     for index, cidr in var.ingress_allowed_cidrs : {
