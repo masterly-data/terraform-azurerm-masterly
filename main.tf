@@ -939,6 +939,16 @@ locals {
     var.allow_private_egress ? { MASTERLY_ALLOW_PRIVATE_EGRESS = "true" } : {}, # deprecated
   )
 
+  # The api's public base URL (ADR 0092): the address something outside the install calls the
+  # api on. One setting under one name for all three apps — the frontend shows it in the
+  # catalog's Consume card, the api and the workers build an external step's callback URL from
+  # it. Written only when the input is set, like the egress allowlist above: unset is the
+  # absence of a setting, so an install that does not set it plans exactly as before. Trailing
+  # slashes are dropped so that appending "/v1/..." never yields a double slash.
+  public_api_url_env = var.public_api_url != null ? {
+    MASTERLY_PUBLIC_API_URL = replace(var.public_api_url, "/\\/+$/", "")
+  } : {}
+
   # Trusting a private CA (MAS-446): the allowlist above says WHERE the application may
   # connect; this says whether it TRUSTS what answers there. A CA bundle is file-shaped, not
   # env-shaped, so it rides the secret-backed file mount below (modules/aca-container-app
@@ -983,6 +993,7 @@ locals {
     local.install_env,
     local.identity_env,
     local.private_egress_env, # the egress guard's allowlist (and deprecated override), empty unless set
+    local.public_api_url_env, # the api's public base URL, empty unless set
     local.ca_bundle_env,      # SSL_CERT_FILE, pointed at the mounted bundle, empty unless set
     local.servicebus_env,
     local.acs_email_env,          # ACS endpoint + sender auto-wired when email is enabled (ADR 0040)
@@ -1304,6 +1315,8 @@ module "frontend" {
     # non-empty ingress_allowed_cidrs (see variables.tf). A separate flag would add no safety
     # this module does not already enforce, and its absence is a silent outage.
     var.identity_binding == "dev" ? { MASTERLY_ALLOW_DEV_BINDING = "true" } : {},
+    # The same value the api and the workers get, for the catalog's Consume card (empty unless set).
+    local.public_api_url_env,
     var.identity_binding == "oidc" ? merge(
       {
         MASTERLY_OIDC_CLIENT_ID    = var.oidc_client_id

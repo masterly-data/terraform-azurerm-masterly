@@ -476,6 +476,27 @@ Landing-zone accommodations:
 > REPLACES the Container App Environment and the apps — their FQDNs change. The Postgres
 > server (and its data) is untouched.
 
+### The API's public address
+
+`public_api_url` tells the install the address something outside it calls the API on: an
+absolute `https://` URL with no query string, fragment or credentials — the `api_url` output, or
+your own domain in front of the API. When it is set, the module puts it on `ca-api`,
+`ca-workers` and `ca-frontend` as `MASTERLY_PUBLIC_API_URL`, with any trailing slash dropped.
+The frontend shows it in the catalog's Consume card; the API and the workers build the callback
+URL of an external pipeline step from it. Unset (the default), no app gets the variable.
+
+The module writes the value; it cannot tell whether the value works. It does when all three hold:
+
+- `api_ingress_external = true` — otherwise nothing outside the environment reaches the API;
+- `ingress_allowed_cidrs` admits whoever calls the API — for an external pipeline step, the
+  outbound addresses of the service that runs your code;
+- on an internal environment (`aca_internal_load_balancer`), "external" means reachable from the
+  VNet, so the caller must be on the VNet or a network connected to it.
+
+The `api_url` output is known only after the API is published, so on a new install either set
+your own domain from the start or apply once, then set `public_api_url` from `api_url` and apply
+again.
+
 ### Transport security
 
 Everything published by the install is HTTPS-only. `ca-frontend` always redirects `http://`

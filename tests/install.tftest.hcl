@@ -3434,6 +3434,190 @@ run "private_egress_allowlist_refuses_the_deprecated_flag_beside_it" {
   expect_failures = [var.allowed_private_egress_cidrs]
 }
 
+# --- The api's public base URL (MAS-1148, ADR 0092) ------------------------------------------
+# One input, one variable, three apps: ca-api and ca-workers build an external step's callback
+# URL from it, ca-frontend shows it in the catalog's Consume card. These runs pin that unset
+# writes nothing anywhere, that a value reaches all three apps (through module.<app>.env_names,
+# inside the submodule, so dropping it from either merge fails), and the plan-time refusals.
+
+run "public_api_url_is_absent_by_default" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition = (
+      !contains(module.api.env_names, "MASTERLY_PUBLIC_API_URL") &&
+      !contains(module.workers[0].env_names, "MASTERLY_PUBLIC_API_URL") &&
+      !contains(module.frontend.env_names, "MASTERLY_PUBLIC_API_URL")
+    )
+    error_message = "public_api_url unset must not put MASTERLY_PUBLIC_API_URL on any app -- an install that does not set it must plan exactly as before this input existed."
+  }
+}
+
+run "public_api_url_reaches_all_three_apps" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+
+    api_ingress_external  = true
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    public_api_url        = "https://api.example.com/masterly//"
+  }
+
+  # Verbatim but for the trailing slashes, which are dropped so "/v1/..." appends cleanly.
+  assert {
+    condition     = local.public_api_url_env["MASTERLY_PUBLIC_API_URL"] == "https://api.example.com/masterly"
+    error_message = "public_api_url must reach the apps as given, with trailing slashes dropped."
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_PUBLIC_API_URL"] == "https://api.example.com/masterly"
+    error_message = "The api's environment must carry the public API URL."
+  }
+
+  assert {
+    condition     = contains(module.api.env_names, "MASTERLY_PUBLIC_API_URL")
+    error_message = "MASTERLY_PUBLIC_API_URL must reach ca-api's container environment."
+  }
+
+  assert {
+    condition     = contains(module.workers[0].env_names, "MASTERLY_PUBLIC_API_URL")
+    error_message = "MASTERLY_PUBLIC_API_URL must reach ca-workers too -- the workers build the callback URL."
+  }
+
+  assert {
+    condition     = contains(module.frontend.env_names, "MASTERLY_PUBLIC_API_URL")
+    error_message = "MASTERLY_PUBLIC_API_URL must reach ca-frontend -- the catalog's Consume card shows it."
+  }
+}
+
+# A bare origin with no path is the common case and must plan clean.
+run "public_api_url_accepts_a_bare_origin" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    public_api_url        = "https://ca-api.example-env.swedencentral.azurecontainerapps.io"
+  }
+
+  assert {
+    condition     = local.public_api_url_env["MASTERLY_PUBLIC_API_URL"] == "https://ca-api.example-env.swedencentral.azurecontainerapps.io"
+    error_message = "A bare https origin must be accepted and passed through unchanged."
+  }
+}
+
+# Guard: plain http is refused -- the URL is handed to callers outside the install.
+run "public_api_url_refuses_plain_http" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    public_api_url        = "http://api.example.com"
+  }
+
+  expect_failures = [var.public_api_url]
+}
+
+# Guard: a query string is refused -- the apps append paths to this value.
+run "public_api_url_refuses_a_query_string" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    public_api_url        = "https://api.example.com/?tenant=a"
+  }
+
+  expect_failures = [var.public_api_url]
+}
+
+# Guard: a relative URL is refused -- a caller outside the install cannot resolve it.
+run "public_api_url_refuses_a_relative_url" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    public_api_url        = "/api"
+  }
+
+  expect_failures = [var.public_api_url]
+}
+
+# Guard: a host without a scheme is not an absolute URL.
+run "public_api_url_refuses_a_bare_host" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    public_api_url        = "api.example.com"
+  }
+
+  expect_failures = [var.public_api_url]
+}
+
+# Guard: a fragment is refused for the same reason as a query string.
+run "public_api_url_refuses_a_fragment" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    public_api_url        = "https://api.example.com/#v1"
+  }
+
+  expect_failures = [var.public_api_url]
+}
+
+# Guard: credentials in the URL are refused -- it is shown to readers and handed to callers.
+run "public_api_url_refuses_credentials" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    public_api_url        = "https://user:pw@api.example.com"
+  }
+
+  expect_failures = [var.public_api_url]
+}
+
 # --- Trusting a private CA (MAS-446) ---------------------------------------------------------
 # The allowlist above answers WHERE the application may connect; ca_bundle_pem answers whether
 # it TRUSTS what answers there (MAS-375 made SMTP STARTTLS verify rather than accept anything).

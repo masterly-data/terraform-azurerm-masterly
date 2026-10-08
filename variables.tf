@@ -605,6 +605,17 @@ variable "api_ingress_external" {
   description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session. Set true only when something outside the environment must call /v1 directly — the Python SDK, a customer's own pipeline, an integration — and narrow it with ingress_allowed_cidrs, which is applied to the api whenever this is true — an empty list is refused at plan, because empty means unrestricted in Azure. On an internal environment (aca_internal_load_balancer) `external` still means \"reachable from the VNet\", not from the internet."
 }
 
+variable "public_api_url" {
+  type        = string
+  default     = null
+  description = "The api's public base URL, as an absolute https:// URL with no query string, fragment or credentials — the api Container App's external FQDN (\"https://ca-api.<environment default domain>\") or your own domain in front of it (\"https://api.example.com\"); a path prefix is allowed and trailing slashes are dropped. It is the address something OUTSIDE the install calls the api on: the frontend shows it in the catalog's Consume card, and the backend uses it to build the callback URL it hands an external pipeline step. Set as MASTERLY_PUBLIC_API_URL on ca-api, ca-workers and ca-frontend. The value is only usable when three things hold, and this module does not check them for you: api_ingress_external is true, or nothing outside the environment can reach the api at all; ingress_allowed_cidrs admits whoever calls the api — for an external pipeline step, the outbound addresses of the service that runs your code; and on an internal environment (aca_internal_load_balancer) \"external\" means reachable from the VNet, not from the internet, so the caller must be on the VNet or a network peered with it. Null (the default) sets nothing on any app, exactly as before this input existed."
+
+  validation {
+    condition     = var.public_api_url == null || can(regex("^https://[^/?#@[:space:]]+(/[^?#[:space:]]*)?$", var.public_api_url))
+    error_message = "public_api_url must be an absolute https:// URL with no query string, fragment or credentials — for example \"https://api.example.com\" or \"https://ca-api.<environment default domain>\"."
+  }
+}
+
 variable "frontend_ingress_external" {
   type        = bool
   default     = true

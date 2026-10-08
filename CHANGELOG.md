@@ -24,6 +24,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `public_api_url`: the API's public base URL, an absolute `https://` URL with no query string,
+  fragment or credentials. When set, `ca-api`, `ca-workers` and `ca-frontend` get it as
+  `MASTERLY_PUBLIC_API_URL`, with trailing slashes dropped; unset (the default), no app gets it,
+  so an install that does not set it plans as before. Until now the frontend's value had to be
+  set by hand and the next `terraform apply` removed it. The input's description and
+  [The API's public address](README.md#the-apis-public-address) name the three conditions under
+  which the value works (MAS-1148).
+
 - `MANIFEST.json` release entries may carry `digests`: the `api` and `frontend` image digests of
   the release candidate, each `sha256:…`. It is a new key inside a release entry, which
   `schema_version` 1 allows, so a consumer that ignores unknown keys needs no change;
