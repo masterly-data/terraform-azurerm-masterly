@@ -215,12 +215,12 @@ or self-contained subsystem has its own file, so a change to one is a diff in on
 | Path | What is in it |
 |---|---|
 | `main.tf` | The core: two resource groups, the VNet and its two subnets, the ACA environment and the Log Analytics workspace, the `api` and `frontend` Container Apps, both user-assigned identities, the starter Postgres flexible server with its private DNS zone and endpoint, and the optional Service Bus namespace + queue |
-| `diagnostics.tf` | The observability surface: one action group, five diagnostic settings, twelve metric alerts and three log-search alert rules |
+| `diagnostics.tf` | The observability surface: one action group, the diagnostic settings (five data-plane, one per Container App), twelve metric alerts and four log-search alert rules (one of them per Container App) |
 | `keyvault.tf` | The opt-in durable secret store (ADR 0066) — vault, private endpoint and DNS, RBAC grants, and the install's own secrets as Key Vault references |
 | `redis.tf` | The opt-in session registry (ADR 0071) — both offerings (`managed` / `cache`), each private-endpoint only |
 | `workers.tf`, `email.tf` | The two smallest opt-ins: the `ca-workers` app, and customer-owned ACS email |
 | `variables.tf`, `outputs.tf`, `versions.tf` | The module's public surface. Every variable description is customer documentation |
-| `modules/` | Five nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `log-analytics-workspace`, `user-assigned-identity` |
+| `modules/` | Six nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `license-claims-floor` (the plan-time licence claims-floor check; no resources), `log-analytics-workspace`, `user-assigned-identity` |
 | `tests/` | `install.tftest.hcl` (the mock-provider run blocks) and `diagnostic_bundle_test.sh` with its `fixtures/` — the harness that proves the diagnostic bundle carries no secrets |
 | `examples/production/` | The production-posture example a customer copies. It consumes the module by relative path, so it validates the working tree |
 | `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the two release/docs gates), `check_runtime_env.py` (generates and checks `RUNTIME_ENV.json`, and that the bundle's env allowlist names only what the module sets), `release_notes.py` (a version's changelog section, as its GitHub Release body), `release_gate.py` (the check `cut-release.yml` runs before it creates a tag). Standard library only — release metadata should not depend on anything resolving |

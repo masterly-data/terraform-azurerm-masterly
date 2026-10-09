@@ -60,7 +60,8 @@ tagged, so it would have to contain its own hash. The tag is the commit pointer 
       "digests": {
         "api": "sha256:<64 hex characters>",
         "frontend": "sha256:<64 hex characters>"
-      }
+      },
+      "api_claims_version": 1
     }
   }
 }
@@ -83,6 +84,7 @@ your own source is the defect this manifest exists to kill.
 | `releases["X.Y.Z"].digests` | object | no | The image digests of the release candidate. Absent from releases cut before the field existed. See "The digests". |
 | `releases["X.Y.Z"].digests.api` | string | with `digests` | `sha256:` and 64 lowercase hex characters: the `api` build the release candidate was tested with. |
 | `releases["X.Y.Z"].digests.frontend` | string | with `digests` | Same form, for the `frontend` image. |
+| `releases["X.Y.Z"].api_claims_version` | integer | see "The api claims version" | The licence claims version the release's `api` image verifies, `0` or more. May be absent from releases cut before the field existed; read an absent value as `0`. |
 | `$comment` | string | no | A note to human readers. **Ignore it.** It carries no data and may change or vanish at any time. |
 
 One rule holds between releases as well as within one: the newest release bumps the module at
@@ -130,6 +132,25 @@ whoever cuts the release reads each image's digest from the registry and passes 
 resolves to, naming both: a tag that names another build is not the build that was tested.
 If you are verifying an install yourself, compare the digest your registry reports for each
 pinned tag with `digests`.
+
+## The api claims version
+
+`api_claims_version` was added within `schema_version` 1, as the compatibility rules below allow:
+a new key inside a release entry.
+
+A licence states, in its signed header, the lowest licence claims version an install may verify
+it with — its claims floor. Each `api` build verifies one claims version, and refuses at startup a
+licence whose floor is above it. `api_claims_version` records that number for the release's `api`
+image, so the question "can this image run on this licence?" can be answered without the image.
+The module answers it at `terraform plan`: when a licence's floor is above the claims version
+recorded for the pinned `api_image`, the plan fails and names the `api` release to move to. It
+reads the manifest that ships inside the module, so the answer needs no network call.
+
+A release cut before the field existed has no value, and an absent value reads as `0`: every
+`api` image released before the field existed verifies claims version 0. From the first release
+that records it, every newer release records it too, and the value never decreases as the `api`
+image moves forward — a build never forgets a claims version an older build verified. The release
+check enforces both.
 
 ## Compatibility
 

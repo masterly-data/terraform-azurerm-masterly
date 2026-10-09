@@ -176,6 +176,20 @@ resource "random_string" "install" {
   special = false
 }
 
+# --- The licence and the api image it will be verified by (ADR 0013, amended 2026-10-06) --
+# A licence's signed header states the lowest claims version an api build may hold and still
+# verify it. A re-issued licence applied here reaches the application's startup check directly,
+# so the plan answers that question first, against the api_image pinned below and the claims
+# version this module's own MANIFEST.json records for it — offline, with no registry call. The
+# refusal is the precondition on the first resource group.
+module "license_claims_floor" {
+  source = "./modules/license-claims-floor"
+
+  license_token = var.license_token
+  api_image     = var.api_image
+  manifest      = jsondecode(file("${path.module}/MANIFEST.json"))
+}
+
 # --- Resource groups (customer naming: rg-masterly-<purpose>) -----------------
 
 resource "azurerm_resource_group" "aca" {
@@ -240,6 +254,13 @@ resource "azurerm_resource_group" "aca" {
     precondition {
       condition     = var.frontend_ingress_external || !var.aca_internal_load_balancer
       error_message = "aca_internal_load_balancer with frontend_ingress_external = false leaves the frontend reachable from nothing outside the environment — not over VPN either. On an internal environment `external` already means \"reachable from the VNet only\", so leave frontend_ingress_external true."
+    }
+
+    # The licence must be one the pinned api image can verify. Checked only when the manifest
+    # records the image's tag; see modules/license-claims-floor for what passes unchecked.
+    precondition {
+      condition     = !module.license_claims_floor.refused
+      error_message = coalesce(module.license_claims_floor.message, "The licence cannot run on the pinned api image.")
     }
 
     precondition {

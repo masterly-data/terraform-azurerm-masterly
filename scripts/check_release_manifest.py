@@ -38,6 +38,13 @@ question, and this script makes no network call. `--observed-digests FILE` answe
 of digests someone read from the registry, and refuses any disagreement naming both digests.
 CI does not run that mode; whoever cuts the release runs it, with the digests they observed.
 
+A release entry records `api_claims_version`: the licence claims version its `api` image verifies
+(ADR 0013, amended 2026-10-06), which the module reads at plan time to refuse a licence whose
+signed floor that image would refuse at startup. Entries cut before the field existed omit it and
+read as 0, the version every `api` image released before it verifies. Once one release carries it,
+every newer release must, so a release cut without it fails here; and it never decreases as the
+`api` image moves forward, because a build never forgets a claims version an older build knew.
+
 The shape the manifest guarantees to whoever parses it — field by field, and what may change
 without warning — is `docs/release-manifest.md`. That document and this script move together.
 
@@ -179,6 +186,15 @@ def load_manifest() -> dict:
                 )
         if "digests" in entry:
             check_digest_shape(where, images, entry["digests"])
+        if "api_claims_version" in entry:
+            value = entry["api_claims_version"]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise CheckFailed(
+                    f"{where}: 'api_claims_version' is {value!r}, which is not a non-negative "
+                    f"integer. It is the licence claims version the release's api image verifies: "
+                    f"CLAIMS_VERSION in that image's licence verify half, or 0 for a build that "
+                    f"predates it."
+                )
 
     latest = manifest["latest"]
     if latest not in releases:
@@ -347,6 +363,57 @@ def check_bump(manifest: dict) -> None:
         f"Release this as a {BUMP_NAMES[image_rank]} of the module, or name image versions that "
         f"move no further than a {BUMP_NAMES[module_rank]}."
     )
+
+
+def check_claims_versions(manifest: dict) -> None:
+    """Every release from the first that records `api_claims_version` records it, and it never
+    falls as the api image moves forward.
+
+    The module refuses at plan a licence whose signed claims floor is above the pinned api image's
+    claims version (ADR 0013, amended 2026-10-06, point 5), and that comparison reads this field.
+    A release cut without it would read as 0 and refuse every licence with a floor, so a release
+    newer than one that records it must record it too. A release cut before the field existed
+    reads as 0, which is what every api image released before it verifies.
+    """
+    releases = manifest["releases"]
+    ordered = sorted(releases, key=semver)
+    carrying = [version for version in ordered if "api_claims_version" in releases[version]]
+    if not carrying:
+        raise CheckFailed(
+            f"{MANIFEST_PATH.name}: no release records 'api_claims_version'. The newest release "
+            f"must: it is what the module compares a licence's claims floor with at plan time."
+        )
+    for version in ordered[ordered.index(carrying[0]):]:
+        if "api_claims_version" not in releases[version]:
+            raise CheckFailed(
+                f"{MANIFEST_PATH.name}: release {version} records no 'api_claims_version', but "
+                f"release {carrying[0]} before it does, so every release from it on must. Record "
+                f"the licence claims version the release's api image "
+                f"({releases[version]['images']['api']}) verifies: CLAIMS_VERSION in that "
+                f"image's licence verify half at its tag, or 0 for a build that predates it."
+            )
+
+    # Ordered by the api image's own version, not the module's: the claims version belongs to the
+    # build. Two releases on one api tag record one build, so they must agree too.
+    by_image = []
+    for version in ordered:
+        tag = IMAGE_RE.match(releases[version]["images"]["api"]).group("tag")
+        match = SEMVER_RE.match(tag.removeprefix("v"))
+        if match:
+            image = tuple(int(part) for part in match.groups())
+            by_image.append((image, releases[version].get("api_claims_version", 0), version))
+    by_image.sort(key=lambda item: item[0])
+    for (image_a, claims_a, version_a), (image_b, claims_b, version_b) in zip(
+        by_image, by_image[1:]
+    ):
+        if claims_b < claims_a or (image_a == image_b and claims_a != claims_b):
+            raise CheckFailed(
+                f"{MANIFEST_PATH.name}: release {version_b} records api_claims_version "
+                f"{claims_b} for api {'.'.join(map(str, image_b))}, but release {version_a} "
+                f"records {claims_a} for api {'.'.join(map(str, image_a))}. A build never "
+                f"forgets a claims version an older build verified, and one build has one "
+                f"claims version, so one of the two is wrong."
+            )
 
 
 def check_changelog(manifest: dict) -> None:
@@ -642,6 +709,7 @@ FIXTURE_MANIFEST: dict = {
                 "api": "registry.example.invalid/api:v1.1.0",
                 "frontend": "registry.example.invalid/frontend:v1.1.0",
             },
+            "api_claims_version": 1,
         },
     },
 }
@@ -811,6 +879,9 @@ def _release_tree(newest: str, api: str, frontend: str) -> tuple[dict, str, str]
                 "api": f"registry.example.invalid/api:{api}",
                 "frontend": f"registry.example.invalid/frontend:{frontend}",
             },
+            # 0, as the base release reads: a bump scenario may keep the base's api tag, and one
+            # build has one claims version.
+            "api_claims_version": 0,
         },
     }
     manifest["latest"] = newest
@@ -944,6 +1015,93 @@ def _digest_scenarios() -> list[tuple]:
             "have the same digest",
         ),
     ]
+
+
+def _with_claims_versions(versions: dict) -> dict:
+    """The fixture manifest with `api_claims_version` set per release; None removes it."""
+    manifest = copy.deepcopy(FIXTURE_MANIFEST)
+    for version, value in versions.items():
+        if value is None:
+            manifest["releases"][version].pop("api_claims_version", None)
+        else:
+            manifest["releases"][version]["api_claims_version"] = value
+    return manifest
+
+
+def _with_release(manifest: dict, version: str, api: str, claims_version) -> dict:
+    """`manifest` with one more release on top, on the given api tag, with or without the field."""
+    manifest = copy.deepcopy(manifest)
+    newest = manifest["releases"][manifest["latest"]]
+    entry = {"date": newest["date"], "images": dict(newest["images"])}
+    entry["images"]["api"] = f"registry.example.invalid/api:{api}"
+    if claims_version is not None:
+        entry["api_claims_version"] = claims_version
+    manifest["releases"][version] = entry
+    manifest["latest"] = version
+    return manifest
+
+
+def _claims_version_scenarios() -> list[tuple]:
+    """`api_claims_version`: what the module compares a licence's claims floor with (MAS-1756)."""
+    older = min(FIXTURE_MANIFEST["releases"], key=semver)
+    newest = FIXTURE_MANIFEST["latest"]
+    log = FIXTURE_CHANGELOG
+    ok = render_readme(FIXTURE_MANIFEST, FIXTURE_README_SKELETON)
+
+    def tree(manifest: dict) -> tuple[dict, str, str]:
+        # A scenario that adds a release needs a changelog and README for it, or it would fail
+        # on those instead of on the claims version.
+        added = manifest["latest"]
+        if added == newest:
+            return manifest, log, ok
+        changelog = log.replace(
+            "## [Unreleased]\n",
+            f"## [Unreleased]\n\n## [{added}] - {manifest['releases'][added]['date']}\n\n"
+            f"- a fixture entry.\n",
+        )
+        return manifest, changelog, render_readme(manifest, FIXTURE_README_SKELETON)
+
+    cases = [
+        (
+            "a release cut before the field existed may omit it, and reads as 0",
+            _with_claims_versions({older: None, newest: 1}), 0, "agree with it",
+        ),
+        (
+            "every release recording it passes",
+            _with_claims_versions({older: 0, newest: 1}), 0, "agree with it",
+        ),
+        (
+            "a release newer than one that records it, cut without it, is refused",
+            _with_release(FIXTURE_MANIFEST, "2.2.0", "v1.2.0", None), 1,
+            "release 2.2.0 records no 'api_claims_version'",
+        ),
+        (
+            "a manifest in which no release records it is refused",
+            _with_claims_versions({older: None, newest: None}), 1,
+            "no release records 'api_claims_version'",
+        ),
+        (
+            "a value that is not a non-negative integer is refused",
+            _with_claims_versions({newest: -1}), 1, "not a non-negative integer",
+        ),
+        (
+            "a boolean is not a claims version",
+            _with_claims_versions({newest: True}), 1, "not a non-negative integer",
+        ),
+        (
+            "a claims version that falls as the api image moves forward is refused",
+            _with_claims_versions({older: 2, newest: 1}), 1, "never forgets",
+        ),
+        (
+            "two releases on one api tag that disagree on its claims version are refused",
+            _with_release(FIXTURE_MANIFEST, "2.1.1", "v1.1.0", 2), 1, "one build has one",
+        ),
+    ]
+    scenarios = []
+    for name, manifest, expected_exit, fragment in cases:
+        manifest, changelog, readme = tree(manifest)
+        scenarios.append((name, manifest, changelog, readme, [], expected_exit, fragment))
+    return scenarios
 
 
 def _bump_scenarios() -> list[tuple]:
@@ -1119,6 +1277,8 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
         *_bump_scenarios(),
         # The release candidate's digests (ADR 0106), and the release cut that merges untagged.
         *_digest_scenarios(),
+        # The api image's licence claims version, which the module reads at plan time.
+        *_claims_version_scenarios(),
         # The header rule (MAS-479). The third case is the one that keeps the rule from being
         # answered with an exception list: a version BELOW the header is not the defect.
         (
@@ -1188,7 +1348,8 @@ def selftest() -> int:
     print(
         f"\nrelease-manifest selftest — {total} scenarios: a well-formed release passes, and "
         f"every way a release can be missing, malformed, mis-tagged, bumped less than its "
-        f"images or recorded with digests its tags' builds disagree with — or a shipped "
+        f"images, recorded with digests its tags' builds disagree with or without the api "
+        f"image's claims version — or a shipped "
         f"script's header can hand-type a module version — is rejected by name."
     )
     return 0
@@ -1231,6 +1392,7 @@ def main() -> int:
     try:
         manifest = load_manifest()
         check_bump(manifest)
+        check_claims_versions(manifest)
         check_changelog(manifest)
         check_readme(manifest, args.write)
         check_script_banners()
