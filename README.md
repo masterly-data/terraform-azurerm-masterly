@@ -434,17 +434,17 @@ ownership through `masterly_owner`.
 
 ### Trusting a private CA
 
-The allowlist above says **where** the application may connect. It says nothing about whether
-it **trusts** what answers there — a TLS handshake, STARTTLS included, verifies the peer's
-certificate, and a relay, pull-connector DSN, stream push endpoint or local AI endpoint on your
-own network commonly presents one from an internal CA rather than a public one. Set
-`ca_bundle_pem` to your CA certificate(s) — just your own internal CA(s), PEM-encoded and
-concatenated if there is more than one — and the module mounts a bundle into `ca-api` and
-`ca-workers` and points `SSL_CERT_FILE` at it — OpenSSL's default-verify-paths mechanism, which
-every outbound TLS connection those two apps make reads, not only the one target that needed it.
-That includes `httpx` (pull connectors, stream push, telemetry, licence refresh, the AI router):
-it reads `SSL_CERT_FILE` itself when set, the same as the standard-library `ssl` module SMTP
-delivery uses, so one file covers both.
+The allowlist above says **where** the application may connect. It says nothing about whether it
+**trusts** what answers there — a TLS handshake, STARTTLS included, verifies the peer's
+certificate, and a relay, stream push endpoint or local AI endpoint on your own network commonly
+presents one from an internal CA rather than a public one. Set `ca_bundle_pem` to your CA
+certificate(s) — just your own internal CA(s), PEM-encoded and concatenated if there is more
+than one — and the module mounts a bundle into `ca-api` and `ca-workers` and points
+`SSL_CERT_FILE` at it — OpenSSL's default-verify-paths mechanism, which every outbound TLS
+connection those two apps make reads, not only the one target that needed it. That includes
+`httpx` (stream push, telemetry, licence refresh, the AI router): it reads `SSL_CERT_FILE`
+itself when set, the same as the standard-library `ssl` module SMTP delivery uses, so one file
+covers both.
 
 **The mounted file is your bundle *added to* the image's own trust store, not a replacement for
 it.** The module writes the image's public roots

@@ -134,8 +134,8 @@ module "workers" {
 
   # The full api env contract: build_services in the workers process reads the same
   # settings (identity, license, bus, secret store, redis) as the api. That includes the
-  # CA bundle mount (MAS-446): SMTP/webhook/stream-push delivery and pull connectors run
-  # here, so ca-workers needs the same trusted CA the api does, at the same path.
+  # CA bundle mount (MAS-446): SMTP/webhook/stream-push delivery runs here, so ca-workers
+  # needs the same trusted CA the api does, at the same path.
   env                = local.api_env
   secrets            = local.api_value_secrets
   secret_refs        = local.api_vault_secret_refs

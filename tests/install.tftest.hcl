@@ -3380,8 +3380,8 @@ run "private_egress_override_reaches_the_backend_apps" {
   }
 
   # ca-workers runs the same image and the async pipeline behind it: stream push delivery,
-  # webhook and SMTP delivery, and pull connectors all call the same guard, so an override the
-  # api has and the workers do not would fix the create call and leave every job refusing.
+  # webhook and SMTP delivery all call the same guard, so an override the api has and the
+  # workers do not would fix the create call and leave every job refusing.
   assert {
     condition     = contains(module.workers[0].env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
     error_message = "The egress override must reach ca-workers too -- the pipeline makes the same guarded connections."
@@ -3750,8 +3750,8 @@ run "ca_bundle_reaches_the_backend_apps" {
     error_message = "SSL_CERT_FILE must name the exact path the CA bundle is mounted at."
   }
 
-  # ca-api makes the SMTP STARTTLS handshake (core/delivery), resolves pull-connector DSNs,
-  # and reaches stream push / local-LLM endpoints -- the targets the card names.
+  # ca-api makes the SMTP STARTTLS handshake (core/delivery) and reaches stream push /
+  # local-LLM endpoints -- the targets the card names.
   assert {
     condition     = contains(module.api.env_names, "SSL_CERT_FILE")
     error_message = "SSL_CERT_FILE must reach ca-api's container environment."
@@ -3779,7 +3779,7 @@ run "ca_bundle_reaches_the_backend_apps" {
   }
 
   # ca-workers runs the same image and makes the same guarded connections (SMTP, webhook and
-  # stream-push delivery, pull connectors) -- an install trusting the CA on the api alone
+  # stream-push delivery) -- an install trusting the CA on the api alone
   # would still fail every job that ran in the workers process.
   assert {
     condition     = contains(module.workers[0].env_names, "SSL_CERT_FILE")
