@@ -757,6 +757,10 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   Postgres, Redis, Key Vault, and Service Bus (each only when that resource exists). On
   `redis_offering = "managed"` this is two settings, not one: metrics are cluster-level but
   the connection log lives on the `redisEnterprise/databases` child.
+- **App availability diagnostics** — an `AllMetrics` diagnostic setting on `ca-api`,
+  `ca-frontend` and `ca-workers`, and one absence alert per app, `<app>-silent`. See
+  "App availability diagnostics" below: it is on by default in production only, it has its own
+  opt-out, and it adds a standing cost to your Azure bill.
 - **Saturation alerts** — the install is under strain. Postgres storage nearly full, B-series
   CPU-credit exhaustion (burstable installs only), Redis memory nearly full, Redis key evictions
   (which under the no-eviction policy mean the policy has been changed out from under the
@@ -775,6 +779,37 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
 Alerts fire and record with no notification target; to be paged, set `alert_email` (the
 module creates an action group) or point `alert_action_group_id` at an existing group
 (a shared ops group, a PagerDuty webhook group).
+
+### App availability diagnostics
+
+The `<app>-unavailable` alerts read the platform's `Replicas` metric, so they catch an app that
+is scaled down or crash-looping. They cannot catch an app that is **gone** — deleted, its
+Container Apps environment torn down, its revision deprovisioned — because a gone app publishes
+no metric at all, and a metric alert with no data does not fire. To cover that, the module sends
+each Container App's platform metrics to the install's Log Analytics workspace (an `AllMetrics`
+diagnostic setting, `diag-<name_prefix>-<app>`) and adds one log search alert per app,
+`<app>-silent`, which fires when the app has sent no metrics for 45 minutes. It works the same
+way as `postgres-silent`.
+
+This is controlled by `enable_app_availability_diagnostics`:
+
+| `enable_app_availability_diagnostics` | `mode = "production"` | Outside production |
+|---|---|---|
+| unset (default) | on, when diagnostics are on (the production default) | off |
+| `false` | off | off |
+| `true` | on, when diagnostics are on | on, and refused at plan unless `enable_diagnostics = true` |
+
+It is part of the diagnostics surface and never outlives it: with `enable_diagnostics = false`
+there are no app diagnostic settings and no `<app>-silent` rules, whatever this input says. Every
+Container App the install runs gets the diagnostic setting; `<app>-silent` is created only for an
+app whose `min_replicas` is 1 or more, because an app at zero replicas by design publishes nothing.
+
+**It costs money, continuously.** The metrics are ingested into your workspace every minute for
+as long as the apps run, and your Azure subscription pays for that ingest and its retention. Each
+`<app>-silent` rule is also billed, per rule, by its 10-minute evaluation frequency. Three apps'
+platform metrics are low volume, but the cost starts on the first apply of the module version
+that carries this, with no variable changed. Set `enable_app_availability_diagnostics = false` to
+keep the previous behaviour; the `<app>-unavailable` alerts stay either way.
 
 ### Load alerts
 
@@ -827,6 +862,7 @@ precise about how far they reach.
 | Database reports itself down | `postgres-unavailable` | Reads the platform's own `is_db_alive`. Fastest signal here: 5-minute window. |
 | Database stopped, deleted, or its telemetry broke | `postgres-silent` | Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. It pages after 45 minutes of silence, within one 10-minute evaluation, deliberately. On a brand-new install it can fire once before the first metrics land; it clears itself when they do. |
 | An app has no running replica | `<app>-unavailable` | One per Container App the install runs — `api`, `frontend` and, with `enable_workers`, `workers`. Only created for an app whose `min_replicas` is 1 or more. Counts replicas, not readiness — the alert below is what reads readiness. |
+| An app is gone: deleted, its environment torn down, or its revision deprovisioned | `<app>-silent` | Fires on the **absence** of the app's metrics in the workspace, the case `<app>-unavailable` cannot see, because a gone app publishes no `Replicas` value. One per Container App with a replica floor of 1 or more, when app availability diagnostics are on (the production default; see "App availability diagnostics"). It pages after 45 minutes of silence, within one 10-minute evaluation. Like `postgres-silent`, it can fire once on a brand-new install before the first metrics land, and clears itself when they do. |
 | An app is running but never becomes ready | `app-not-ready` | One rule for both serving apps, split by app name. `ca-api` and `ca-frontend` each log one line per **failing** readiness probe (and nothing on a passing one); the rule fires when an app has failed readiness in at least 30 of the last 60 minutes, so ~30–40 minutes to page. That is the case `<app>-unavailable` structurally cannot see — an unready replica is never routed to, but it still counts as a replica. A cold start legitimately fails readiness for minutes at a time, which is why the bar is half an hour rather than a single failure. Needs no input beyond diagnostics being on. |
 | The async pipeline has no worker running | `workers-unavailable` | The same alert, and the one nothing else in the set can stand in for: `ca-workers` has no ingress, so it emits no requests and `<app>-5xx` is blind to it by construction. Without this, a dead workers app is silent — the install keeps answering, the queue keeps growing, and the first signal is somebody asking why yesterday's ingest never landed. |
 | Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. |
@@ -852,6 +888,12 @@ Not detected, and no alert here should be read as covering it:
   unclaimed job from the application side if you need that — `GET /v1/ops/metrics` reports both
   (see "Load alerts" above) — and keep this alert for the case it does cover, the workers app
   being gone.
+- **An app that is gone, on an install with app availability diagnostics off.** With
+  `enable_app_availability_diagnostics = false`, or outside production unless you set it to
+  `true`, the apps' metrics never reach the workspace, so no `<app>-silent` rule exists and
+  `<app>-unavailable` is the only app alert. It goes quiet when an app is deleted rather than
+  firing, because a metric alert with no data does not fire. The same is true for an app with
+  `min_replicas = 0`, which gets no `<app>-silent` rule.
 - **A BYO-DB install's database.** With `external_database_url` set, the module wires no
   diagnostic setting to a server it does not own, so it has no telemetry stream whose end it
   could notice. Alert on your own database from wherever it runs.

@@ -38,6 +38,20 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   [docs/release-manifest.md](docs/release-manifest.md) allows. The 0.17.0 entry records 0, which
   is what its `api` image verifies; the release check requires the field on every newer release.
 
+- App availability diagnostics, **on by default in `mode = "production"`**: an `AllMetrics`
+  diagnostic setting on `ca-api`, `ca-frontend` and `ca-workers` that sends their platform
+  metrics to the install's Log Analytics workspace, and one log search alert per app,
+  `<app>-silent`, that fires when an app has sent no metrics for 45 minutes. It covers an app
+  that is gone — deleted, its environment torn down, its revision deprovisioned — which the
+  `<app>-unavailable` metric alerts cannot see, because a metric alert with no data does not
+  fire. A production install's next apply creates these with no variable changed, and **adds a
+  standing cost to its Azure bill**: continuous metric ingest into the workspace, and each rule
+  billed by its evaluation frequency. The new input `enable_app_availability_diagnostics` turns
+  both off (`false`), or on outside production (`true`, which needs `enable_diagnostics = true`).
+  The rule is created only for an app whose `min_replicas` is 1 or more. See
+  [App availability diagnostics](README.md#app-availability-diagnostics) (ADR 0080, amendment of
+  2026-10-07; MAS-372).
+
 - `public_api_url`: the API's public base URL, an absolute `https://` URL with no query string,
   fragment or credentials. When set, `ca-api`, `ca-workers` and `ca-frontend` get it as
   `MASTERLY_PUBLIC_API_URL`, with trailing slashes dropped; unset (the default), no app gets it,
