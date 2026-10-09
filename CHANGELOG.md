@@ -66,7 +66,11 @@ inventing one now would be exactly the retyped-value failure the manifest exists
     `enable_workers` are both on. It scales on the jobs queue's message count, about one replica
     per 5 messages, between `workers_min_replicas` and `workers_max_replicas`, and authenticates
     as the apps' managed identity. That identity is granted **Azure Service Bus Data Owner** on
-    the jobs queue alone, because reading a queue's message count needs the Manage right.
+    the jobs queue alone, for the scaler to read the queue's message count. With the rule,
+    `workers_min_replicas = 0` becomes usable on Service Bus: the rule starts a worker when jobs
+    arrive. The rule has been checked under mock providers only; that queue-scope Data Owner is
+    enough, and that the scaler reaches a Premium namespace with public network access disabled,
+    are checked on a live install before this version is released.
   - A warning (a `check`, not a refusal) when `workers_max_replicas` is above
     `workers_min_replicas` on the polling binding, where the workers have no queue length to
     scale on and stay at the minimum.
@@ -107,7 +111,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - **`ca-workers` now has a 600-second termination grace period** instead of Azure's default of
   30 seconds, so a worker scaled in or replaced mid-job finishes it rather than being killed and
   leaving the job to wait out its lease. This is the one change the next apply makes to every
-  install that runs `enable_workers`: it rolls `ca-workers` to a new revision once. Set
+  install that runs `enable_workers`: it rolls `ca-workers` to a new revision once. It also means
+  a later revision swap can wait up to 600 seconds for a busy worker to stop. Set
   `workers_termination_grace_period_seconds` to choose another value (MAS-1296).
 
 - With `enable_workers`, `workers_max_replicas` must now be at least `workers_min_replicas`

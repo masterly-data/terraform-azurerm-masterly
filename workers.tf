@@ -35,7 +35,7 @@ variable "workers_min_replicas" {
 variable "workers_max_replicas" {
   type        = number
   default     = 1
-  description = "Maximum workers replicas. ca-workers scales above workers_min_replicas only on the Service Bus binding (enable_service_bus = true), where a scale rule adds about one replica per 5 messages waiting in the jobs queue, up to this number, and removes them again once the queue drains. On the polling binding (the default) there is no queue length to scale on, so ca-workers stays at workers_min_replicas whatever this is set to. Jobs are claimed per Environment and job kind across all replicas: jobs of different kinds, or in different Environments, run in parallel, and two jobs of the same kind in one Environment never overlap, so an extra replica adds throughput and never duplicates work."
+  description = "Maximum workers replicas. ca-workers scales above workers_min_replicas only on the Service Bus binding (enable_service_bus = true), where a scale rule on the jobs queue targets 5 waiting messages per replica, up to this number. On the polling binding (the default) there is no queue length to scale on, so ca-workers stays at workers_min_replicas whatever this is set to. Jobs are claimed per Environment and job kind across all replicas: jobs of different kinds, or in different Environments, run in parallel, and two jobs of the same kind in one Environment never overlap, so an extra replica adds throughput and never duplicates work."
 
   validation {
     condition     = !var.enable_workers || var.workers_max_replicas >= var.workers_min_replicas
@@ -72,10 +72,11 @@ locals {
   workers_scale_message_count = 5
 }
 
-# The scale rule reads the queue's message count, which Service Bus answers only to a caller
-# holding the Manage right on the queue. The data-plane Sender and Receiver roles in main.tf do
-# not carry it; of the built-in roles only Azure Service Bus Data Owner does. It is granted on
-# the jobs queue only, not on the namespace, so it reaches no other entity.
+# The scale rule reads the queue's message count, which the scaler's documentation says needs
+# the Manage right. The data-plane Sender and Receiver roles in main.tf do not carry it; of the
+# built-in roles only Azure Service Bus Data Owner does. It is granted on the jobs queue only, not
+# on the namespace, so it reaches no other entity. That queue scope is enough is checked on a
+# live install before the release that carries this rule; namespace scope is the fallback.
 resource "azurerm_role_assignment" "sb_scaler" {
   count = local.workers_scale_on_queue ? 1 : 0
 

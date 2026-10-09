@@ -755,12 +755,19 @@ environment, raise it with us rather than editing a vendored copy.
 1). What moves it between the two depends on the bus:
 
 - **On the Service Bus binding** (`enable_service_bus = true`) the module adds an
-  `azure-servicebus` scale rule on the jobs queue the workers receive from. Container Apps adds
-  about one replica per 5 messages waiting in the queue, up to `workers_max_replicas`, and removes
-  them again once the queue has drained (after Container Apps' cool-down of 5 minutes). The rule
+  `azure-servicebus` scale rule on the jobs queue the workers receive from, with a target of 5
+  messages per replica, between `workers_min_replicas` and `workers_max_replicas`. The rule
   authenticates as the apps' managed identity, which the module grants **Azure Service Bus Data
-  Owner** on the jobs queue alone: reading a queue's message count needs the Manage right, which
-  the Sender and Receiver roles do not carry.
+  Owner** on the jobs queue alone, to let the scaler read the queue's message count. With the
+  rule in place, `workers_min_replicas = 0` is a usable setting on this binding: the rule is what
+  starts a worker when jobs arrive.
+- **Not yet proven on a live install.** Three things about the Service Bus rule rest on Azure's
+  documentation and have not yet been shown on a running install: that Data Owner at queue scope
+  is enough for the scaler (if it is not, the grant moves to the namespace); that the scaler
+  reaches a Premium namespace with public network access disabled, which is the production
+  shape; and how quickly replicas are added and removed as the queue fills and drains. They are
+  checked on a live install before the version that carries this rule is released, and this
+  section will say what that showed.
 - **On the polling binding** (the default) each Environment's queue lives in its own Postgres
   database and there is no single queue length to scale on, so `ca-workers` stays at
   `workers_min_replicas` whatever `workers_max_replicas` says. The module plans such a
@@ -774,7 +781,8 @@ A stopping worker (scale-in, a new revision, a restart) claims no new job and fi
 it is running. `workers_termination_grace_period_seconds` (default **600**, the most Container
 Apps allows; 0-600) is how long it has before it is killed. A job cut off by a kill is retried
 only after its lease expires, so a grace period long enough for your longest jobs is what keeps a
-scale-in from delaying them.
+scale-in from delaying them. The cost is on the other side: a revision swap (a new image, a
+changed setting) can wait up to that long for the old worker to stop.
 
 ### CPU and memory per replica
 
@@ -1433,7 +1441,10 @@ version.
 
 Tagging, later and separately:
 
-6. Wait for `main`'s CI run on the candidate's commit to pass, then run the **cut-release**
+6. Read the open live checks in
+   [docs/releasing.md](docs/releasing.md#live-checks-before-the-next-tag): a version is not
+   tagged while one is open for a change it carries. Then wait for `main`'s CI run on the
+   candidate's commit to pass, and run the **cut-release**
    workflow (Actions → cut-release → Run workflow, from `main`) with the version and the
    candidate commit's full SHA. That commit may be behind `main`'s head, and every other version
    its manifest lists must already be tagged. Do not create the tag by hand.
