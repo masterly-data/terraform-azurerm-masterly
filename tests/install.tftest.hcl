@@ -5296,3 +5296,58 @@ run "a_moved_server_keeps_its_password_on_later_plans" {
     error_message = "A moved server must stay on \"entra\" and keep being sent the password it holds."
   }
 }
+
+# --- The licence and the pinned api image (ADR 0013, amended 2026-10-06, point 5) ----------
+# The plan refuses a licence whose signed claims floor is above the claims version the module's
+# own MANIFEST.json records for the pinned api image. tests/license_claims_floor.tftest.hcl
+# proves the check against a synthetic manifest; these prove the root module wires it to the real
+# one and refuses the plan on it. The api image is a release the manifest recorded before
+# api_claims_version existed, so it reads as 0 — which every released api image verifies today.
+#
+# The token is the shape of a licence only: a JOSE header, an empty payload and no signature
+# anything could verify. Its header, base64url-decoded:
+#   {"alg":"ES256","typ":"JWT","kid":"fixture","masterly_claims_version":1,"masterly_claims_floor":1}
+run "a_licence_floor_above_the_pinned_api_image_fails_the_plan" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/api:v0.133.2"
+    license_token         = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImZpeHR1cmUiLCJtYXN0ZXJseV9jbGFpbXNfdmVyc2lvbiI6MSwibWFzdGVybHlfY2xhaW1zX2Zsb29yIjoxfQ.e30.unsigned"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+run "a_headerless_licence_on_the_same_image_plans_clean" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/api:v0.133.2"
+    license_token         = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImZpeHR1cmUifQ.e30.unsigned"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+  }
+
+  assert {
+    condition     = !module.license_claims_floor.refused && module.license_claims_floor.image_claims_version == 0
+    error_message = "A licence with no claims-version header must plan clean, and the manifest's release cut before api_claims_version must read as 0."
+  }
+}
+
+# The file-wide api_image names a tag no release records, so the same licence is not checked.
+run "a_licence_floor_on_an_unrecorded_api_image_is_not_checked" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    license_token         = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImZpeHR1cmUiLCJtYXN0ZXJseV9jbGFpbXNfdmVyc2lvbiI6MSwibWFzdGVybHlfY2xhaW1zX2Zsb29yIjoxfQ.e30.unsigned"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+  }
+
+  assert {
+    condition     = !module.license_claims_floor.refused && module.license_claims_floor.image_claims_version == null
+    error_message = "An api image whose tag the manifest does not record must pass unchecked."
+  }
+}

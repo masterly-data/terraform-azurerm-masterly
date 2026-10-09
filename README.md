@@ -190,6 +190,35 @@ HA availability, and Container Apps environment cores (that quota is scoped to a
 environment that does not exist until the first apply). All three are support tickets when
 they bite, so confirm them before you plan.
 
+## A renewed licence and the api image it runs on
+
+A licence states, in its signed header, the oldest licence contract an install may verify it
+with — its claims floor — and each `api` image verifies one claims version. An `api` image refuses
+at startup a licence whose floor is above its version (ADR 0013, amended 2026-10-06). A licence
+you apply with `terraform apply` reaches that startup check directly, so the plan checks first:
+when `license_token`'s floor is above the claims version [`MANIFEST.json`](MANIFEST.json) records
+for your `api_image` (`api_claims_version`), `terraform plan` fails before anything is applied. The
+error names the floor, your `api_image` and its claims version, and the oldest `api` tag that
+verifies the licence. Move `api_image` to that tag, roll the running apps to it (see Upgrades in
+the install documentation — `terraform apply` does not roll a running image), then apply the
+licence. An install older than the floor upgrades before it renews.
+
+The check runs offline: it reads the manifest that ships inside this module, never a registry, so
+an air-gapped install plans exactly as a connected one does. It compares `api_image` by its tag,
+so an image mirrored into your own registry under the same tag is checked like the original.
+
+What passes unchecked, as it always has:
+
+- **no licence**, or a licence whose header carries no claims version: version 0, floor 0;
+- **a header that does not decode** — the application refuses a malformed licence at startup;
+- **an `api_image` whose tag no release in this module version's manifest records** — a build
+  newer than the module, or a hand-built image. Its claims version is not known here, and the
+  application's own check at startup is what stands.
+
+The check reads `api_image`, not the image the app is running. Terraform seeds the image and then
+leaves it to you to roll, so keep `api_image` at the tag your install runs: that is what this
+check, and a rebuilt app, both go by.
+
 ## What the module creates
 
 | Resource | Purpose |
@@ -1282,7 +1311,11 @@ The release-cut pull request, in one commit:
    has applied — take it from the install, not from prose. Choose the version by the rules in
    [Versioning](#versioning): at least as large a bump as the module's own change needs, and at
    least as large as the larger of the two image bumps since the previous release. The check
-   in step 4 refuses a module bump smaller than an image bump, naming both.
+   in step 4 refuses a module bump smaller than an image bump, naming both. Record the `api`
+   image's `api_claims_version` in the entry too: the licence claims version that build
+   verifies, which is `CLAIMS_VERSION` in its licence verify half at that image's tag, or 0 for a
+   build that has none. The plan reads it to refuse a licence the image cannot run on, so the
+   check in step 4 refuses an entry without it, or one lower than an older `api` image's.
 2. Record the candidate's image digests in the entry's `digests` (`api` and `frontend`, each
    `sha256:…`), read from the registry rather than copied from prose.
    [docs/release-manifest.md](docs/release-manifest.md) documents the field.

@@ -24,6 +24,20 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- The plan refuses a licence the pinned `api` image cannot run on. A licence's signed header
+  states its claims floor, the oldest licence contract an install may verify it with; when
+  `license_token`'s floor is above the claims version `MANIFEST.json` records for `api_image`,
+  `terraform plan` fails, naming the floor, the image's claims version and the oldest `api` tag
+  that verifies the licence (ADR 0013, amended 2026-10-06). It runs offline, from the manifest
+  inside the module, and compares `api_image` by its tag, so a mirrored image is checked too. A
+  licence with no claims-version header, and an `api_image` whose tag the manifest does not
+  record, plan as before. Licences issued today carry a floor of 0, so no plan fails on this yet.
+- `MANIFEST.json` release entries record `api_claims_version`, the licence claims version the
+  release's `api` image verifies; an entry without it reads as 0. Added within `schema_version` 1
+  as a new key inside a release entry, which
+  [docs/release-manifest.md](docs/release-manifest.md) allows. The 0.17.0 entry records 0, which
+  is what its `api` image verifies; the release check requires the field on every newer release.
+
 - `public_api_url`: the API's public base URL, an absolute `https://` URL with no query string,
   fragment or credentials. When set, `ca-api`, `ca-workers` and `ca-frontend` get it as
   `MASTERLY_PUBLIC_API_URL`, with trailing slashes dropped; unset (the default), no app gets it,
