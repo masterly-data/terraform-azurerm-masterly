@@ -323,6 +323,74 @@ run "production_mode_full_wiring_plans" {
     )
     error_message = "The readiness alert counts failing minutes, so both serving apps must probe at least once a minute."
   }
+
+  # App availability diagnostics, on by default in production (ADR 0080, amendment of
+  # 2026-10-07; MAS-372). All three apps send their platform metrics to the workspace, and all
+  # three carry an absence rule, because production requires a replica floor on every one of
+  # them. The key set is asserted, not the count, for the reason app_unavailable's is.
+  assert {
+    condition = (
+      length(azurerm_monitor_diagnostic_setting.app) == 3 &&
+      contains(keys(azurerm_monitor_diagnostic_setting.app), "api") &&
+      contains(keys(azurerm_monitor_diagnostic_setting.app), "frontend") &&
+      contains(keys(azurerm_monitor_diagnostic_setting.app), "workers") &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 3 &&
+      contains(keys(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent), "api") &&
+      contains(keys(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent), "frontend") &&
+      contains(keys(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent), "workers")
+    )
+    error_message = "Production must send all three apps' metrics to the workspace and carry an absence rule for each of api, frontend and workers by default."
+  }
+
+  # What the setting sends. AllMetrics is what puts `Replicas` and its siblings in AzureMetrics,
+  # which is all the absence rule reads; no log category, because the environment already sends
+  # the apps' console and system logs to the same workspace and a second copy is billed twice.
+  assert {
+    condition = alltrue([
+      for app, setting in azurerm_monitor_diagnostic_setting.app : (
+        length(setting.enabled_log) == 0 &&
+        length(setting.enabled_metric) == 1 &&
+        one([for m in setting.enabled_metric : m.category]) == "AllMetrics" &&
+        setting.name == "diag-masterly-${app}"
+      )
+    ])
+    error_message = "Each app's diagnostic setting must send AllMetrics and no log category."
+  }
+
+  # The criteria, pinned for the reason postgres_silent's are: SILENCE has to be the firing
+  # state. GreaterThan, or a threshold of 0, plans and applies exactly as cleanly and inverts the
+  # rule into one that fires on every healthy evaluation or never fires at all. The single
+  # evaluation period is what Azure accepts for a query that projects no TimeGenerated (more is
+  # a 400 on create), so the 45-minute window carries the silence and is pinned beside it.
+  assert {
+    condition = alltrue([
+      for app, rule in azurerm_monitor_scheduled_query_rules_alert_v2.app_silent : (
+        rule.criteria[0].time_aggregation_method == "Count" &&
+        rule.criteria[0].operator == "LessThan" &&
+        rule.criteria[0].threshold == 1 &&
+        rule.criteria[0].failing_periods[0].number_of_evaluation_periods == 1 &&
+        rule.criteria[0].failing_periods[0].minimum_failing_periods_to_trigger_alert == 1 &&
+        rule.window_duration == "PT45M" &&
+        rule.evaluation_frequency == "PT10M" &&
+        rule.auto_mitigation_enabled == true &&
+        rule.skip_query_validation == false &&
+        rule.severity == 0 &&
+        rule.name == "alert-masterly-${app}-silent"
+      )
+    ])
+    error_message = "Each app absence rule must fire on an empty result (Count < 1) over one 45-minute period, at the availability severity, resolving itself."
+  }
+
+  # The sentence an operator reads: a silent ca-workers is a stopped pipeline, not a down
+  # install — the distinction app_unavailable draws, carried over rather than retyped.
+  assert {
+    condition = (
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["workers"].description, "async pipeline has STOPPED") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["api"].description, "this install is DOWN") &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["api"].description, "no metrics for 45 minutes")
+    )
+    error_message = "The app absence rules must say what stopped: the pipeline for workers, the install for the serving apps."
+  }
 }
 
 run "production_mode_load_alerts_on_byo_db" {
@@ -980,7 +1048,9 @@ run "key_vault_enabled_provisions_vault_and_grant" {
       length(azurerm_monitor_metric_alert.postgres_cpu) == 0 &&
       length(azurerm_monitor_metric_alert.postgres_connections) == 0 &&
       length(azurerm_monitor_metric_alert.postgres_iops) == 0 &&
-      length(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency) == 0
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.app) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 0
     )
     error_message = "Diagnostics must be off by default outside production."
   }
@@ -4152,6 +4222,99 @@ run "scale_to_zero_apps_get_no_replica_alert" {
     )
     error_message = "Enabling diagnostics outside production must still bring the database availability alerts."
   }
+
+  # Turning diagnostics on outside production does NOT turn on the apps' metric ingest: its
+  # default is production only, because it is a standing cost (ADR 0080, amendment of
+  # 2026-10-07). An evaluation install opts in with enable_app_availability_diagnostics = true.
+  assert {
+    condition = (
+      length(azurerm_monitor_diagnostic_setting.app) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 0
+    )
+    error_message = "App availability diagnostics must stay off outside production unless enable_app_availability_diagnostics is set."
+  }
+}
+
+# The opt-in outside production, and the replica-floor gate. Every app that exists gets the
+# diagnostic setting, but only an app with a floor gets the absence rule: a scale-to-zero api
+# publishes nothing while it sits at zero, which is its intended state.
+#
+# Not asserted, for the reason the postgres_silent query text is not (see the starter-server
+# run above): each rule's query interpolates its app's resource id, which is unknown at plan
+# under mock providers, so the whole string is unknown here. Reviewing the interpolation in
+# diagnostics.tf is what covers that each rule reads AzureMetrics for its own app.
+run "app_availability_diagnostics_opt_in_outside_production" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs               = ["203.0.113.7/32"]
+    enable_diagnostics                  = true
+    enable_app_availability_diagnostics = true
+    enable_workers                      = true
+    api_min_replicas                    = 0
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_diagnostic_setting.app) == 3 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 2 &&
+      contains(keys(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent), "frontend") &&
+      contains(keys(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent), "workers")
+    )
+    error_message = "Opted in, every app must get the diagnostic setting, and only the apps with a replica floor the absence rule."
+  }
+}
+
+# The opt-out, in production: both halves go, and the replica alerts stay. The opt-out is for
+# the ingest cost; it must not take the rest of the availability set with it.
+run "app_availability_diagnostics_opt_out_in_production" {
+  command = plan
+
+  variables {
+    mode                                = "production"
+    identity_binding                    = "oidc"
+    oidc_allowed_issuers                = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                       = "api-client-id"
+    oidc_jwks_uri                       = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                      = "bff-client-id"
+    oidc_client_secret                  = "s3cret"
+    oidc_authority                      = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri                   = "https://app.example.com/api/auth/callback"
+    license_token                       = "eyJ.fake.jwt"
+    license_public_jwk                  = "{\"kty\":\"EC\"}"
+    initial_owner_email                 = "owner@example.com"
+    enable_key_vault                    = true
+    enable_redis                        = true
+    redis_offering                      = "cache"
+    enable_workers                      = true
+    api_max_replicas                    = 3
+    enable_app_availability_diagnostics = false
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_diagnostic_setting.app) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 0 &&
+      length(azurerm_monitor_metric_alert.app_unavailable) == 3 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1
+    )
+    error_message = "enable_app_availability_diagnostics = false must remove the app diagnostic settings and absence rules, and keep the replica and readiness alerts."
+  }
+}
+
+# true with diagnostics off is refused rather than ignored: the input would otherwise read as
+# coverage the install does not have.
+run "app_availability_diagnostics_without_diagnostics_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs               = ["203.0.113.7/32"]
+    enable_app_availability_diagnostics = true
+  }
+
+  expect_failures = [var.enable_app_availability_diagnostics]
 }
 
 # ca-workers earns a no-replica alert on the same terms as the serving apps, and outside

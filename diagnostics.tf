@@ -18,6 +18,17 @@ variable "enable_diagnostics" {
   description = "Wire the data-plane resources' diagnostic settings + metric alerts to the install's Log Analytics workspace. Null (default) = on in mode=production, off otherwise. Set true/false to override."
 }
 
+variable "enable_app_availability_diagnostics" {
+  type        = bool
+  default     = null
+  description = "Send the platform metrics of ca-api, ca-frontend and ca-workers (AllMetrics) to the install's Log Analytics workspace, and alert when an app stops sending them: one log search rule per app, <app>-silent, which fires on an app that has been deleted, stopped or torn down — the case the <app>-unavailable metric alerts cannot see, because a metric alert with no data does not fire. The metrics are continuous ingest into your workspace, and each rule is billed per evaluation, so this adds a standing cost to your Azure bill. Null (default) = on in mode=production, off otherwise. Set false to turn both off. Set true to turn them on outside production; true needs diagnostics on (enable_diagnostics, which defaults to on in mode=production). The rule is created only for an app with a replica floor of at least 1."
+
+  validation {
+    condition     = var.enable_app_availability_diagnostics != true || coalesce(var.enable_diagnostics, var.mode == "production")
+    error_message = "enable_app_availability_diagnostics = true needs diagnostics on: the metrics go to the same workspace and the alert uses the same notification target. Set enable_diagnostics = true as well (it defaults to on only in mode = \"production\"), or leave enable_app_availability_diagnostics unset."
+  }
+}
+
 variable "alert_email" {
   type        = string
   default     = null
@@ -130,6 +141,29 @@ locals {
     var.alert_email != null ? azurerm_monitor_action_group.alerts[0].id : null
   )
   alert_action_group_ids = local.alert_action_group_id != null ? [local.alert_action_group_id] : []
+
+  # App availability diagnostics (ADR 0080, amendment of 2026-10-07): the apps' platform
+  # metrics in the workspace, and the absence rule that reads them. On by default in production
+  # only, because the metrics are continuous ingest the customer pays for; the input turns both
+  # off, or on outside production. It is part of the diagnostics surface and never outlives it —
+  # the variable's validation refuses true with diagnostics off rather than ignoring it.
+  app_availability_diagnostics_enabled = local.diagnostics_enabled && coalesce(var.enable_app_availability_diagnostics, var.mode == "production")
+
+  # Every Container App the install runs gets the diagnostic setting. Static keys, so the map's
+  # shape is known at plan even though the ids are not.
+  app_metrics_apps = local.app_availability_diagnostics_enabled ? merge(
+    { api = module.api.id, frontend = module.frontend.id },
+    var.enable_workers ? { workers = module.workers[0].id } : {},
+  ) : {}
+
+  # The absence rule only for an app with a replica floor, for the reason app_unavailable is
+  # gated the same way: an app scaled to zero publishes nothing while it sits at zero, which is
+  # its intended state, and a rule that read that silence as an outage would page every idle
+  # night.
+  app_silent_apps = {
+    for app, id in local.app_metrics_apps : app => id
+    if lookup({ api = var.api_min_replicas, frontend = var.frontend_min_replicas, workers = var.workers_min_replicas }, app) >= 1
+  }
 
   # Which apps get a replica-availability alert. See the alert itself for why an app that is
   # allowed to sit at zero replicas is deliberately left out rather than alerted on.
@@ -299,6 +333,26 @@ resource "azurerm_monitor_diagnostic_setting" "service_bus" {
   enabled_log {
     category_group = "allLogs"
   }
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+
+# The Container Apps' platform metrics (ADR 0080, amendment of 2026-10-07). This setting is what
+# puts an app's metrics in AzureMetrics in the workspace, which the app_silent rules below read;
+# without it the apps' metrics exist only in Azure Monitor's metric store, where a metric alert
+# can read them and nothing can notice their absence.
+#
+# Metrics only. The apps' console and system logs already reach this workspace through the
+# Container Apps environment, which modules/aca-env-consumption points at it, so a log category
+# here would at best be a second copy the customer pays for twice.
+resource "azurerm_monitor_diagnostic_setting" "app" {
+  for_each = local.app_metrics_apps
+
+  name                       = "diag-${var.name_prefix}-${each.key}"
+  target_resource_id         = each.value
+  log_analytics_workspace_id = module.logs.id
+
   enabled_metric {
     category = "AllMetrics"
   }
@@ -924,6 +978,12 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 # an ingress-less polling loop, so a workers app at zero replicas is a stalled pipeline whoever
 # configured it chose, not a fault this alert should page about.
 #
+# What this alert cannot see at all: an app that is GONE. A deleted app, or one whose
+# environment was torn down, publishes no `Replicas` value, and a metric alert with no data does
+# not fire, so this alert goes quiet at exactly the moment the app goes away. app_silent, at the
+# end of this file, covers that case from the workspace when app availability diagnostics are on
+# (enable_app_availability_diagnostics, on by default in production).
+#
 # What this alert cannot see on its own, and what now does. A replica that starts, never passes
 # its readiness probe, and is never routed to still counts toward `Replicas`. On an install with
 # a replica floor — which is every production install, and the only kind this alert is created
@@ -1241,6 +1301,83 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "postgres_silent" {
       action_groups = local.alert_action_group_ids
     }
   }
+
+  tags = local.tags
+}
+
+# The apps' absence signal: postgres_silent, once per Container App (ADR 0080, amendment of
+# 2026-10-07). app_unavailable above reads `Replicas`, so it catches an app that is scaled down
+# or crash-looping. It cannot catch an app that is GONE — deleted, its environment torn down,
+# its revision deprovisioned — because a gone app publishes no `Replicas` value and a metric
+# alert with no data does not fire. That failure mode is the one with the longest time to
+# notice, because nothing anywhere goes red. This rule asks the workspace what the app has sent
+# lately, through the diagnostic setting above, and an empty answer is what trips it.
+#
+# Everything the postgres_silent comment says about the shape applies here unchanged, and is not
+# repeated: the row count as the measure with LessThan 1 so that silence is the firing state, the
+# empty `datatable` anchor on the fuzzy union, one evaluation period because the query projects
+# no `TimeGenerated` (Azure refuses more, with a 400), the 45-minute window that absorbs log
+# ingestion delay, and the rule being filed with the workspace it queries.
+#
+# One rule per app rather than one rule over three: a single query can say "some app is
+# silent" only by naming the apps it expects and anti-joining, which is a different idiom, and
+# one incident per app is what an operator needs anyway — they do not share a cause.
+#
+# Created only for an app with a replica floor of at least 1 (local.app_silent_apps). An app
+# with replicas running publishes `Replicas`, CPU and memory every minute whether or not it
+# serves anything, so silence from it means the app is not there. An app at zero replicas by
+# design publishes nothing, and this rule would page every idle night.
+#
+# Container-log silence was the other candidate and is not the signal, for the reason given
+# under app_unavailable: ca-workers writes no periodic heartbeat, so on an idle install its log
+# is silent for hours, and silence there means "no work", not "no worker". Platform metrics do
+# not depend on the app saying anything.
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_silent" {
+  for_each = local.app_silent_apps
+
+  name = "alert-${var.name_prefix}-${each.key}-silent"
+
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  scopes              = [module.logs.id]
+
+  description = "The ${each.key} Container App has sent no metrics for 45 minutes — it is deleted, stopped, or its telemetry has broken. If the app is gone, ${local.app_unavailable_effect[each.key]}."
+  severity    = 0
+
+  evaluation_frequency = "PT10M"
+  window_duration      = "PT45M"
+
+  auto_mitigation_enabled = true
+
+  criteria {
+    query = <<-KQL
+      union isfuzzy=true
+        (datatable(TimeGenerated:datetime, _ResourceId:string)[]),
+        (AzureMetrics | where _ResourceId =~ "${each.value}")
+      | summarize Samples = count()
+      | where Samples > 0
+    KQL
+
+    time_aggregation_method = "Count"
+    operator                = "LessThan"
+    threshold               = 1
+
+    # One period, because the query projects no `TimeGenerated` — see postgres_silent.
+    failing_periods {
+      number_of_evaluation_periods             = 1
+      minimum_failing_periods_to_trigger_alert = 1
+    }
+  }
+
+  dynamic "action" {
+    for_each = length(local.alert_action_group_ids) > 0 ? [1] : []
+    content {
+      action_groups = local.alert_action_group_ids
+    }
+  }
+
+  # Azure validates the KQL on create. Nothing before apply can.
+  skip_query_validation = false
 
   tags = local.tags
 }
