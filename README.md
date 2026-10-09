@@ -97,6 +97,8 @@ module "masterly" {
   redis_offering   = "managed"
   enable_workers   = true
   api_max_replicas = 3
+  # The api at 1 vCPU / 2Gi; the other apps keep 0.5 vCPU / 1Gi. See "Scaling".
+  app_resources = { api = { cpu = 1 } }
 
   # Identity (ADR 0024): your own OIDC IdP — Entra, Okta, Keycloak, …
   identity_binding     = "oidc"
@@ -717,9 +719,9 @@ Definitions that flag this:
 `ca-api` defaults to a **single replica** — with the in-memory session registry a second
 replica would drop sessions. `enable_redis` switches sessions to the redis registry and
 unlocks `api_max_replicas > 1` (the module refuses the combination scale-out-without-Redis
-at plan time). `enable_workers` moves the async-pipeline loop to its own `ca-workers` app;
-extra workers replicas add throughput across Environments (the per-Environment drain is
-advisory-locked), not duplicate work.
+at plan time). `enable_workers` moves the async-pipeline loop to its own `ca-workers` app.
+`frontend_max_replicas` (default 3, at least `frontend_min_replicas`) caps the frontend, which
+Container Apps scales on HTTP load.
 
 **Scale-to-zero** (`api_min_replicas = 0` / `frontend_min_replicas = 0`) is the idle-cost
 posture for evaluation installs (the demo runs it): Container Apps stops the replicas when
@@ -746,6 +748,58 @@ undetected. But it also applies to a *healthy* install during a long backend out
 app would otherwise have loaded and shown its degraded-data-plane banner. The gate is not
 currently an input — it is fixed in the module — so if that trade is wrong for your
 environment, raise it with us rather than editing a vendored copy.
+
+### How `ca-workers` scales
+
+`ca-workers` runs between `workers_min_replicas` (default 1) and `workers_max_replicas` (default
+1). What moves it between the two depends on the bus:
+
+- **On the Service Bus binding** (`enable_service_bus = true`) the module adds an
+  `azure-servicebus` scale rule on the jobs queue the workers receive from, with a target of 5
+  messages per replica, between `workers_min_replicas` and `workers_max_replicas`. The rule
+  authenticates as the apps' managed identity, which the module grants **Azure Service Bus Data
+  Owner** on the jobs queue alone, to let the scaler read the queue's message count. With the
+  rule in place, `workers_min_replicas = 0` is a usable setting on this binding: the rule is what
+  starts a worker when jobs arrive.
+- **Not yet proven on a live install.** Three things about the Service Bus rule rest on Azure's
+  documentation and have not yet been shown on a running install: that Data Owner at queue scope
+  is enough for the scaler (if it is not, the grant moves to the namespace); that the scaler
+  reaches a Premium namespace with public network access disabled, which is the production
+  shape; and how quickly replicas are added and removed as the queue fills and drains. They are
+  checked on a live install before the version that carries this rule is released, and this
+  section will say what that showed.
+- **On the polling binding** (the default) each Environment's queue lives in its own Postgres
+  database and there is no single queue length to scale on, so `ca-workers` stays at
+  `workers_min_replicas` whatever `workers_max_replicas` says. The module plans such a
+  configuration but warns about it. Raise `workers_min_replicas` to run more workers there.
+
+Jobs are claimed per Environment and job kind across all replicas: jobs of different kinds, or in
+different Environments, run in parallel, and two jobs of the same kind in one Environment never
+overlap. An extra replica adds throughput and never duplicates work.
+
+A stopping worker (scale-in, a new revision, a restart) claims no new job and finishes the jobs
+it is running. `workers_termination_grace_period_seconds` (default **600**, the most Container
+Apps allows; 0-600) is how long it has before it is killed. A job cut off by a kill is retried
+only after its lease expires, so a grace period long enough for your longest jobs is what keeps a
+scale-in from delaying them. The cost is on the other side: a revision swap (a new image, a
+changed setting) can wait up to that long for the old worker to stop.
+
+### CPU and memory per replica
+
+`app_resources` sizes each app's replicas, keyed by app name (`api`, `frontend`, `workers`). An
+app that is not listed keeps 0.5 vCPU / 1Gi. Container Apps accepts only the ratio 1 vCPU : 2 GiB,
+from 0.25 vCPU / 0.5Gi to 2 vCPU / 4Gi in steps of 0.25 vCPU, so either attribute alone is
+enough; set both and they must agree, or the plan is refused:
+
+```hcl
+app_resources = {
+  api     = { cpu = 1 }                   # 1 vCPU / 2Gi, what the production example sets
+  workers = { cpu = 1.5, memory = "3Gi" } # both stated: they must be in the ratio
+}
+```
+
+Changing an app's size rolls that app to a new revision on the next apply. The `workers-memory`
+alert follows the workers' size: its threshold is a share of whatever memory the replica has.
 
 ## Diagnostics + alerts
 
@@ -1387,7 +1441,10 @@ version.
 
 Tagging, later and separately:
 
-6. Wait for `main`'s CI run on the candidate's commit to pass, then run the **cut-release**
+6. Read the open live checks in
+   [docs/releasing.md](docs/releasing.md#live-checks-before-the-next-tag): a version is not
+   tagged while one is open for a change it carries. Then wait for `main`'s CI run on the
+   candidate's commit to pass, and run the **cut-release**
    workflow (Actions → cut-release → Run workflow, from `main`) with the version and the
    candidate commit's full SHA. That commit may be behind `main`'s head, and every other version
    its manifest lists must already be tagged. Do not create the tag by hand.

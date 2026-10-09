@@ -52,6 +52,29 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   [App availability diagnostics](README.md#app-availability-diagnostics) (ADR 0080, amendment of
   2026-10-07; MAS-372).
 
+- Container Apps sizing and scaling inputs (MAS-1296). An install that sets none of them plans no
+  change to any app's CPU, memory or replica bounds:
+  - `app_resources`: CPU and memory per replica, keyed by app name (`api`, `frontend`,
+    `workers`). An app not listed keeps 0.5 vCPU / 1Gi. Values are refused at plan unless they
+    are a pair Container Apps accepts: 0.25 to 2 vCPU in steps of 0.25, at 1 vCPU : 2 GiB.
+    `examples/production` and the README's usage example now run the api at 1 vCPU / 2Gi.
+  - `frontend_max_replicas` (default 3, the maximum every frontend had before), at least 1 and
+    at least `frontend_min_replicas`.
+  - `workers_termination_grace_period_seconds` (default 600, 0-600): how long a stopping
+    `ca-workers` replica has to finish the jobs it is running before it is killed.
+  - An `azure-servicebus` scale rule on `ca-workers` when `enable_service_bus` and
+    `enable_workers` are both on. It scales on the jobs queue's message count, about one replica
+    per 5 messages, between `workers_min_replicas` and `workers_max_replicas`, and authenticates
+    as the apps' managed identity. That identity is granted **Azure Service Bus Data Owner** on
+    the jobs queue alone, for the scaler to read the queue's message count. With the rule,
+    `workers_min_replicas = 0` becomes usable on Service Bus: the rule starts a worker when jobs
+    arrive. The rule has been checked under mock providers only; that queue-scope Data Owner is
+    enough, and that the scaler reaches a Premium namespace with public network access disabled,
+    are checked on a live install before this version is released.
+  - A warning (a `check`, not a refusal) when `workers_max_replicas` is above
+    `workers_min_replicas` on the polling binding, where the workers have no queue length to
+    scale on and stay at the minimum.
+
 - `public_api_url`: the API's public base URL, an absolute `https://` URL with no query string,
   fragment or credentials. When set, `ca-api`, `ca-workers` and `ca-frontend` get it as
   `MASTERLY_PUBLIC_API_URL`, with trailing slashes dropped; unset (the default), no app gets it,
@@ -78,6 +101,23 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   (MAS-1085).
 
 ### Changed
+
+- **Service Bus installs now scale their workers.** Until now `ca-workers` had no scale rule, so
+  `workers_max_replicas` above `workers_min_replicas` did nothing. With `enable_service_bus` and
+  `enable_workers` on, the next apply adds the scale rule and the queue grant above, and the
+  workers then run up to `workers_max_replicas` while jobs are waiting. An install whose two
+  values are equal (both default to 1) keeps the same number of workers (MAS-1296).
+
+- **`ca-workers` now has a 600-second termination grace period** instead of Azure's default of
+  30 seconds, so a worker scaled in or replaced mid-job finishes it rather than being killed and
+  leaving the job to wait out its lease. This is the one change the next apply makes to every
+  install that runs `enable_workers`: it rolls `ca-workers` to a new revision once. It also means
+  a later revision swap can wait up to 600 seconds for a busy worker to stop. Set
+  `workers_termination_grace_period_seconds` to choose another value (MAS-1296).
+
+- With `enable_workers`, `workers_max_replicas` must now be at least `workers_min_replicas`
+  (Container Apps refuses the opposite at apply), and its description says how the workers
+  scale (MAS-1296).
 
 - A release is cut in a commit that merges to `main` before the version is tagged, and is tested
   as a release candidate in between. So `MANIFEST.json` on `main` can name, as `latest`, a

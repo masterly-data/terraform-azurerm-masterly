@@ -29,6 +29,46 @@ full commit SHA, and creates the tag only when all of these hold:
 `python3 scripts/release_gate.py --selftest` shows the gate refusing each of those faults, and CI
 runs it on every pull request.
 
+## Live checks before the next tag
+
+Every check above runs without Azure. `terraform test` uses mock providers, so nothing that only
+Azure can answer has been tested when CI is green: whether Azure accepts a resource, what a plan
+does to an install that already exists, whether a role is enough. The rule for those is to plan,
+and where needed apply, a live install against the release candidate before it is tagged.
+
+Some changes merge with a specific live check still owed. Each one is listed here until it has
+been done, and the version that carries the change is not tagged while any is open. When a check
+passes, delete its entry in the commit that records the result; when it fails, the change is
+fixed or reverted on `main` first, and the candidate is cut again. Nothing in the workflow above
+reads this list, so whoever runs `cut-release` reads it first.
+
+### Open
+
+**The `ca-workers` sizing and scaling inputs** (MAS-1296; in `Unreleased` in the
+[changelog](../CHANGELOG.md)). On a live install with `enable_service_bus` and `enable_workers`
+on, planned and applied from the candidate:
+
+1. **An existing install updates in place.** Its plan updates `ca-workers` in place (the scale
+   rule, the grace period) and adds the queue role assignment, and shows no grace-period diff on
+   `ca-api` or `ca-frontend`, which keep Azure's default. No app's CPU, memory or replica bounds
+   change unless the install set the new inputs.
+2. **Data Owner at queue scope is enough.** A queue backlog scales `ca-workers` above
+   `workers_min_replicas` and back down once the queue drains, with the role granted on the jobs
+   queue only. If the scaler cannot read the message count at that scope, the fallback is the
+   namespace, and the README, the changelog and the comment on the role assignment in
+   `workers.tf` change with it.
+3. **The scaler reaches a private Premium namespace.** The same, on a Premium namespace with
+   public network access disabled, which is the production shape. This is the largest open risk:
+   if the scaler cannot reach the namespace from the Container Apps environment, the rule fails
+   on exactly the installs that need it, and that needs a decision before release.
+4. **Role propagation on a first apply.** On an install where the role assignment is new, the
+   scaler starts working once the assignment has propagated, without a second apply. Note how
+   long that took.
+
+Afterwards, replace the "Not yet proven on a live install" paragraph in the README's
+"How `ca-workers` scales" and the matching sentence in the changelog entry with what the run
+showed.
+
 ## What makes the workflow the only path
 
 On its own, the workflow is the documented path, not an enforced one: GitHub still accepts a `v*`

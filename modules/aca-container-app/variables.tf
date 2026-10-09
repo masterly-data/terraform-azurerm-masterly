@@ -77,6 +77,30 @@ variable "max_replicas" {
   description = "Maximum replica count."
 }
 
+# SELF-HOSTED EXTENSION: how long a stopping replica has to finish before it is killed.
+variable "termination_grace_period_seconds" {
+  type        = number
+  default     = null
+  description = "Seconds between the termination signal and a forced kill when a replica stops (scale-in, a new revision, a restart), 0-600. Null leaves Azure's default of 30 seconds."
+
+  validation {
+    condition     = var.termination_grace_period_seconds == null ? true : (var.termination_grace_period_seconds >= 0 && var.termination_grace_period_seconds <= 600 && floor(var.termination_grace_period_seconds) == var.termination_grace_period_seconds)
+    error_message = "termination_grace_period_seconds must be a whole number of seconds from 0 to 600."
+  }
+}
+
+# SELF-HOSTED EXTENSION: KEDA custom scale rules (an app with no ingress has no HTTP rule).
+variable "custom_scale_rules" {
+  type = list(object({
+    name             = string
+    custom_rule_type = string
+    metadata         = map(string)
+    identity_id      = optional(string)
+  }))
+  default     = []
+  description = "Custom (KEDA) scale rules: name, custom_rule_type (e.g. \"azure-servicebus\"), metadata, and identity_id, the user-assigned identity the rule authenticates as, which must be one of user_assigned_identity_ids. Empty adds no rule."
+}
+
 # SELF-HOSTED EXTENSION: ingress-less apps (the workers loop).
 variable "ingress_enabled" {
   type        = bool

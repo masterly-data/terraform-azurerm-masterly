@@ -86,6 +86,22 @@ resource "azurerm_container_app" "this" {
     min_replicas = var.min_replicas
     max_replicas = var.max_replicas
 
+    # SELF-HOSTED EXTENSION: null leaves Azure's default (30 seconds), which is what every app
+    # ran with before this input existed.
+    termination_grace_period_seconds = var.termination_grace_period_seconds
+
+    # SELF-HOSTED EXTENSION: KEDA custom scale rules, authenticated as a managed identity
+    # rather than with a connection-string secret.
+    dynamic "custom_scale_rule" {
+      for_each = var.custom_scale_rules
+      content {
+        name             = custom_scale_rule.value.name
+        custom_rule_type = custom_scale_rule.value.custom_rule_type
+        metadata         = custom_scale_rule.value.metadata
+        identity_id      = custom_scale_rule.value.identity_id
+      }
+    }
+
     # SELF-HOSTED EXTENSION: secret-backed file mounts (MAS-446).
     #
     # `azurerm_container_app`'s `volume` block supports only `storage_type = "AzureFile"` and
@@ -261,6 +277,12 @@ resource "azurerm_container_app" "this" {
     precondition {
       condition     = alltrue([for s in values(var.secret_refs) : contains(var.user_assigned_identity_ids, s.identity_id)])
       error_message = "Every secret_refs[*].identity_id must be one of user_assigned_identity_ids."
+    }
+
+    # A scale rule authenticates as an identity attached to the app, as a vault reference does.
+    precondition {
+      condition     = alltrue([for r in var.custom_scale_rules : r.identity_id == null ? true : contains(var.user_assigned_identity_ids, r.identity_id)])
+      error_message = "Every custom_scale_rules[*].identity_id must be one of user_assigned_identity_ids."
     }
 
     precondition {
