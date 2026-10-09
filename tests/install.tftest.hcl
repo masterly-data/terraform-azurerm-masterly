@@ -5652,6 +5652,13 @@ run "app_resources_derives_the_missing_half" {
   }
 }
 
+# app_resources has four validations, and expect_failures cannot say which one refused a run. So
+# each refusal below is an input that fails exactly one of them and passes the other three: the
+# unit, the offered sizes and the ratio skip an attribute that is unset or malformed (try()), so a
+# run that sets one attribute cannot trip the ratio, and a run whose two values are each offered
+# can trip only the ratio.
+
+# Ratio only: 1 vCPU and 1Gi are each offered, but not together.
 run "app_resources_refuses_a_pair_out_of_ratio" {
   command = plan
 
@@ -5663,6 +5670,19 @@ run "app_resources_refuses_a_pair_out_of_ratio" {
   expect_failures = [var.app_resources]
 }
 
+# Ratio only, at the ends of the range: 0.25 vCPU and 4Gi are each offered.
+run "app_resources_refuses_the_smallest_cpu_with_the_largest_memory" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    app_resources         = { workers = { cpu = 0.25, memory = "4Gi" } }
+  }
+
+  expect_failures = [var.app_resources]
+}
+
+# Offered sizes only: above the range, memory unset.
 run "app_resources_refuses_a_size_container_apps_does_not_offer" {
   command = plan
 
@@ -5674,6 +5694,31 @@ run "app_resources_refuses_a_size_container_apps_does_not_offer" {
   expect_failures = [var.app_resources]
 }
 
+# Offered sizes only: inside the range but between two steps, memory unset.
+run "app_resources_refuses_a_cpu_between_steps" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    app_resources         = { api = { cpu = 0.3 } }
+  }
+
+  expect_failures = [var.app_resources]
+}
+
+# Offered sizes only: a well-formed memory above the range, cpu unset.
+run "app_resources_refuses_memory_container_apps_does_not_offer" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    app_resources         = { frontend = { memory = "5Gi" } }
+  }
+
+  expect_failures = [var.app_resources]
+}
+
+# Unit only: "2048Mi" does not parse as Gi, so the offered-size and ratio checks skip it.
 run "app_resources_refuses_memory_in_another_unit" {
   command = plan
 
@@ -5685,6 +5730,7 @@ run "app_resources_refuses_memory_in_another_unit" {
   expect_failures = [var.app_resources]
 }
 
+# Keys only: the size is valid.
 run "app_resources_refuses_an_unknown_app" {
   command = plan
 
@@ -5773,6 +5819,46 @@ run "workers_grace_period_above_azure_maximum_is_rejected" {
   }
 
   expect_failures = [var.workers_termination_grace_period_seconds]
+}
+
+run "workers_grace_period_below_zero_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs                    = ["203.0.113.7/32"]
+    enable_workers                           = true
+    workers_termination_grace_period_seconds = -1
+  }
+
+  expect_failures = [var.workers_termination_grace_period_seconds]
+}
+
+run "workers_grace_period_in_fractions_of_a_second_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs                    = ["203.0.113.7/32"]
+    enable_workers                           = true
+    workers_termination_grace_period_seconds = 30.5
+  }
+
+  expect_failures = [var.workers_termination_grace_period_seconds]
+}
+
+# 0, the bottom of Container Apps' range, is accepted: a worker is stopped at once.
+run "workers_grace_period_of_zero_is_accepted" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs                    = ["203.0.113.7/32"]
+    enable_workers                           = true
+    workers_termination_grace_period_seconds = 0
+  }
+
+  assert {
+    condition     = module.workers[0].scale.termination_grace_period_seconds == 0
+    error_message = "A grace period of 0 must plan and reach ca-workers."
+  }
 }
 
 # On the polling binding there is no queue length to scale on: max above min plans, with no
