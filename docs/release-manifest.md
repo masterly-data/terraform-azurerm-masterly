@@ -50,6 +50,17 @@ tagged, so it would have to contain its own hash. The tag is the commit pointer 
   "schema_version": 1,
   "module": "masterly-data/masterly/azurerm",
   "latest": "1.2.3",
+  "image_floors": {
+    "api": {
+      "minimum": "vA.B.C",
+      "below_minimum": "what an api image older than vA.B.C does wrong",
+      "unpublished": ["vA.B.D"]
+    },
+    "frontend": {
+      "minimum": "vD.E.F",
+      "below_minimum": "what a frontend image older than vD.E.F does wrong"
+    }
+  },
   "releases": {
     "1.2.3": {
       "date": "2026-01-31",
@@ -85,6 +96,10 @@ your own source is the defect this manifest exists to kill.
 | `releases["X.Y.Z"].digests.api` | string | with `digests` | `sha256:` and 64 lowercase hex characters: the `api` build the release candidate was tested with. |
 | `releases["X.Y.Z"].digests.frontend` | string | with `digests` | Same form, for the `frontend` image. |
 | `releases["X.Y.Z"].api_claims_version` | integer | see "The api claims version" | The licence claims version the release's `api` image verifies, `0` or more. May be absent from releases cut before the field existed; read an absent value as `0`. |
+| `image_floors` | object | no | The oldest image of each app an install can run, and the image tags with no published image, keyed by image name (`api`, `frontend`). Added within `schema_version` 1; absent from the file at tags cut before it existed. See "The image floors". |
+| `image_floors.<image>.minimum` | string | with the image | The floor: the oldest image tag, `vX.Y.Z`, an install can run for that app. |
+| `image_floors.<image>.below_minimum` | string | with the image | What an image older than `minimum` does wrong, as plain text completing "an image older than the floor …". For people; do not parse it. |
+| `image_floors.<image>.unpublished` | array of strings | no | Image tags, `vX.Y.Z`, that have no published image in the registry. An absent list means none. |
 | `$comment` | string | no | A note to human readers. **Ignore it.** It carries no data and may change or vanish at any time. |
 
 One rule holds between releases as well as within one: the newest release bumps the module at
@@ -151,6 +166,26 @@ A release cut before the field existed has no value, and an absent value reads a
 that records it, every newer release records it too, and the value never decreases as the `api`
 image moves forward — a build never forgets a claims version an older build verified. The release
 check enforces both.
+
+## The image floors
+
+`image_floors` was added within `schema_version` 1, as the compatibility rules below allow: a new
+top-level key. A consumer that ignores keys it does not recognise needs no change.
+
+A floor is a fact about an app's images, not about one module release: an image older than it
+misbehaves in a way no `terraform plan` can see, whichever module version names it. So it is
+stated once, at the top level, rather than in every release entry. `below_minimum` says what goes
+wrong below it. `unpublished` names tags that exist in the application's history but have no
+image in the registry, so a pin naming one fails when the image is pulled.
+
+Use it to refuse, before an apply, an `api_image` or `frontend_image` older than its app's
+`minimum` or named in its `unpublished` list. Compare tags by semver, as below, never as text. An
+app with no entry has no stated floor; do not read that as permission to pin any image.
+
+The release check holds every release entry to the floors: no release names an image below its
+app's `minimum`, or a tag in its `unpublished` list, because a release recorded as tested against
+either would contradict the floor. A floor therefore never rises above an image a recorded
+release names. The README's statement of the floors is generated from this key.
 
 ## Compatibility
 

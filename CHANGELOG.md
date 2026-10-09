@@ -37,6 +37,12 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   as a new key inside a release entry, which
   [docs/release-manifest.md](docs/release-manifest.md) allows. The 0.17.0 entry records 0, which
   is what its `api` image verifies; the release check requires the field on every newer release.
+- `MANIFEST.json` records `image_floors`: for each app, the oldest image an install can run, why,
+  and the image tags that have no published image. Added within `schema_version` 1 as a new
+  top-level key, which [docs/release-manifest.md](docs/release-manifest.md) allows. The README's
+  statement of the floors, which used to be typed into the usage example's comments, is now
+  generated from it, and the release check refuses a release that names an image below its
+  app's floor or a tag with no published image.
 
 - App availability diagnostics, **on by default in `mode = "production"`**: an `AllMetrics`
   diagnostic setting on `ca-api`, `ca-frontend` and `ca-workers` that sends their platform

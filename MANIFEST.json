@@ -1,8 +1,19 @@
 {
-  "$comment": "The release manifest for terraform-azurerm-masterly. One entry per released module version, keyed by that version - the module version is the one customer-facing version (ADR 0062). A release is cut in a commit that merges to main before its vX.Y.Z tag exists, so on main the newest entries may not be published yet; a version is published once its tag exists, and the file at a tag lists only published versions. Each entry names the api and frontend images that module version was released against: the pair Masterly's own reference install had applied when the release was cut, optionally the digests of those builds, and the licence claims version the api image verifies (api_claims_version; it may be absent from a release cut before the field, and then reads as 0). Machine-readable on purpose - the README, the public docs and any pinned install are meant to READ this, never to retype it. The shape is a published contract: docs/release-manifest.md documents every field, what is stable and what may be added. Checked by scripts/check_release_manifest.py; see 'Cutting a release' in the README.",
+  "$comment": "The release manifest for terraform-azurerm-masterly. One entry per released module version, keyed by that version - the module version is the one customer-facing version (ADR 0062). A release is cut in a commit that merges to main before its vX.Y.Z tag exists, so on main the newest entries may not be published yet; a version is published once its tag exists, and the file at a tag lists only published versions. Each entry names the api and frontend images that module version was released against: the pair Masterly's own reference install had applied when the release was cut, optionally the digests of those builds, and the licence claims version the api image verifies (api_claims_version; it may be absent from a release cut before the field, and then reads as 0). image_floors states, per app, the oldest image an install can run and the image tags that have no published image. Machine-readable on purpose - the README, the public docs and any pinned install are meant to READ this, never to retype it. The shape is a published contract: docs/release-manifest.md documents every field, what is stable and what may be added. Checked by scripts/check_release_manifest.py; see 'Cutting a release' in the README.",
   "schema_version": 1,
   "module": "masterly-data/masterly/azurerm",
   "latest": "0.17.0",
+  "image_floors": {
+    "api": {
+      "minimum": "v0.132.2",
+      "below_minimum": "registers no job handlers on ca-workers, so the pipeline is silently inert",
+      "unpublished": ["v0.133.1"]
+    },
+    "frontend": {
+      "minimum": "v0.138.2",
+      "below_minimum": "leaves a fresh install unable to create its first Environment"
+    }
+  },
   "releases": {
     "0.17.0": {
       "date": "2026-10-05",
