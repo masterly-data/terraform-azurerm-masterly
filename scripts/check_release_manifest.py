@@ -45,6 +45,11 @@ read as 0, the version every `api` image released before it verifies. Once one r
 every newer release must, so a release cut without it fails here; and it never decreases as the
 `api` image moves forward, because a build never forgets a claims version an older build knew.
 
+The manifest's `image_floors` states, per app, the oldest image an install can run and the image
+tags that have no published image (MAS-1793). The README's prose about them is rendered from it
+like the release table, and no release may name an image below its app's floor or a tag listed
+as having no image: a release recorded against either contradicts the floor.
+
 The shape the manifest guarantees to whoever parses it — field by field, and what may change
 without warning — is `docs/release-manifest.md`. That document and this script move together.
 
@@ -114,6 +119,11 @@ END_MARKER = "<!-- release-manifest:end -->"
 # example versions in it would be right until the next minor and wrong after it.
 PINS_BEGIN_MARKER = "<!-- release-manifest:pins:begin -->"
 PINS_END_MARKER = "<!-- release-manifest:pins:end -->"
+
+# Each image's floor, and the image tags with no published image, are the manifest's
+# `image_floors`; the README's prose about them is generated so it cannot drift from it (MAS-1793).
+FLOORS_BEGIN_MARKER = "<!-- release-manifest:floors:begin -->"
+FLOORS_END_MARKER = "<!-- release-manifest:floors:end -->"
 
 # Which manifest image a README `<name>_image` line takes its value from.
 IMAGE_INPUTS = {"api_image": "api", "frontend_image": "frontend"}
@@ -416,6 +426,77 @@ def check_claims_versions(manifest: dict) -> None:
             )
 
 
+def check_image_floors(manifest: dict) -> None:
+    """`image_floors` is well formed, and no release names an image below its floor or a tag that
+    has no published image.
+
+    A floor is the oldest image of one app an install can run: an older build misbehaves in a way
+    no plan can see. `unpublished` lists tags at or above the floor that have no image in the
+    registry, so a pin naming one fails at pull. Both are stated once, in the manifest, and the
+    README's prose about them is rendered from it (MAS-1793). A release recorded as tested against
+    an image below its app's floor, or against a tag with no image, contradicts the floor, so one
+    of the two is wrong and the check refuses both.
+    """
+    where = f"{MANIFEST_PATH.name}: 'image_floors'"
+    floors = manifest.get("image_floors")
+    if not isinstance(floors, dict) or not floors:
+        raise CheckFailed(
+            f"{where} is missing or empty. It states the oldest image of each app an install can "
+            f"run, and the image tags that have no published image. The README's floor prose is "
+            f"rendered from it, so it is the one place those facts are written down."
+        )
+    parsed: dict[str, tuple[tuple[int, int, int], list[str]]] = {}
+    for name, floor in floors.items():
+        here = f"{where}[{name!r}]"
+        if not isinstance(floor, dict):
+            raise CheckFailed(f"{here} is not an object")
+        minimum = floor.get("minimum")
+        if not isinstance(minimum, str) or not TAG_RE.match(minimum):
+            raise CheckFailed(f"{here} has no 'minimum' image tag of the form vX.Y.Z")
+        below = floor.get("below_minimum")
+        if not isinstance(below, str) or not below.strip():
+            raise CheckFailed(
+                f"{here} has no 'below_minimum': what an image older than {minimum} does wrong. "
+                f"It is the reason the floor exists, and the README states it."
+            )
+        unpublished = floor.get("unpublished", [])
+        if not isinstance(unpublished, list) or not all(
+            isinstance(tag, str) and TAG_RE.match(tag) for tag in unpublished
+        ):
+            raise CheckFailed(f"{here}: 'unpublished' must be a list of vX.Y.Z image tags")
+        if len(set(unpublished)) != len(unpublished):
+            raise CheckFailed(f"{here}: 'unpublished' lists a tag more than once")
+        parsed[name] = (semver(minimum.removeprefix("v")), unpublished)
+
+    for version in sorted(manifest["releases"], key=semver):
+        images = manifest["releases"][version]["images"]
+        for name, (minimum, unpublished) in parsed.items():
+            image = images.get(name)
+            if not isinstance(image, str):
+                continue
+            here = f"{MANIFEST_PATH.name}: release {version} names {image}"
+            tag = IMAGE_RE.match(image).group("tag")  # load_manifest has already proved the shape
+            if tag in unpublished:
+                raise CheckFailed(
+                    f"{here}, but 'image_floors' lists {name} {tag} as having no published "
+                    f"image. A release cannot have been tested against an image nobody can pull, "
+                    f"so one of the two is wrong."
+                )
+            match = SEMVER_RE.match(tag.removeprefix("v"))
+            if not match:
+                raise CheckFailed(
+                    f"{here}, whose tag is not a vX.Y.Z version, so it cannot be compared with "
+                    f"the {name} floor {floors[name]['minimum']} in 'image_floors'."
+                )
+            if tuple(int(part) for part in match.groups()) < minimum:
+                raise CheckFailed(
+                    f"{here}, which is below the {name} floor {floors[name]['minimum']} in "
+                    f"'image_floors'. {_article(name).capitalize()} {name} image older than "
+                    f"the floor {floors[name]['below_minimum']}, so a release recorded against one "
+                    f"contradicts the floor, and one of the two is wrong."
+                )
+
+
 def check_changelog(manifest: dict) -> None:
     """Every released version in the manifest has a changelog section, dated the same day."""
     try:
@@ -486,6 +567,40 @@ def pin_guidance(manifest: dict) -> list[str]:
     return lines
 
 
+def _article(word: str) -> str:
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
+
+def floor_prose(manifest: dict) -> list[str]:
+    """The README's statement of each image's floor, and of the tags with no published image."""
+    floors = manifest["image_floors"]
+    # The two apps the README pins first, in that order, then any other the manifest names.
+    names = [name for name in IMAGE_INPUTS.values() if name in floors]
+    names += sorted(name for name in floors if name not in names)
+    lines = [
+        "Each app has a floor: the oldest image an install can run. Below it the image misbehaves",
+        "in a way no plan can see, so never pin an image older than its floor, whichever release",
+        "you start from. The floors, and the image tags that have no published image, are the",
+        "manifest's `image_floors`:",
+        "",
+    ]
+    for name in names:
+        floor = floors[name]
+        lines.append(
+            f"- {_article(name).capitalize()} `{name}` image older than `{floor['minimum']}` "
+            f"{floor['below_minimum']}."
+        )
+        unpublished = sorted(floor.get("unpublished", []), key=lambda tag: semver(tag[1:]))
+        if unpublished:
+            tags = ", ".join(f"`{tag}`" for tag in unpublished)
+            one = len(unpublished) == 1
+            lines.append(
+                f"- The `{name}` {'tag' if one else 'tags'} {tags} {'has' if one else 'have'} "
+                f"no published image."
+            )
+    return lines
+
+
 def _replace_region(body: str, begin: str, end: str, content: list[str], what: str) -> str:
     """`body` with the one region between `begin` and `end` replaced by `content`."""
     before, marker, rest = body.partition(begin)
@@ -532,8 +647,11 @@ def render_readme(manifest: dict, readme: str) -> str:
     body = _replace_region(
         body, BEGIN_MARKER, END_MARKER, release_table(manifest), "release table"
     )
-    return _replace_region(
+    body = _replace_region(
         body, PINS_BEGIN_MARKER, PINS_END_MARKER, pin_guidance(manifest), "pin guidance"
+    )
+    return _replace_region(
+        body, FLOORS_BEGIN_MARKER, FLOORS_END_MARKER, floor_prose(manifest), "image floors"
     )
 
 
@@ -695,6 +813,17 @@ FIXTURE_MANIFEST: dict = {
     "schema_version": SCHEMA_VERSION,
     "module": "example-org/example/azurerm",
     "latest": "2.1.0",
+    "image_floors": {
+        "api": {
+            "minimum": "v1.0.0",
+            "below_minimum": "does something a fixture api should not",
+            "unpublished": ["v1.0.2"],
+        },
+        "frontend": {
+            "minimum": "v1.0.0",
+            "below_minimum": "does something a fixture frontend should not",
+        },
+    },
     "releases": {
         "2.0.0": {
             "date": "2026-01-05",
@@ -750,6 +879,10 @@ Stale pin guidance.
 
 <!-- release-manifest:begin -->
 <!-- release-manifest:end -->
+
+<!-- release-manifest:floors:begin -->
+Stale floor prose.
+<!-- release-manifest:floors:end -->
 
 Trailing prose.
 """
@@ -897,6 +1030,84 @@ def _release_tree(newest: str, api: str, frontend: str) -> tuple[dict, str, str]
 # repeated character, so no digest of a real build is transcribed into this file.
 FIXTURE_DIGESTS = {"api": "sha256:" + "a" * 64, "frontend": "sha256:" + "b" * 64}
 OTHER_DIGEST = "sha256:" + "c" * 64
+
+
+def _with_floor(name: str, **changes):
+    """The fixture manifest with `changes` applied to one image's floor; None deletes a key."""
+    manifest = copy.deepcopy(FIXTURE_MANIFEST)
+    floor = manifest["image_floors"][name]
+    for key, value in changes.items():
+        if value is None:
+            floor.pop(key, None)
+        else:
+            floor[key] = value
+    return manifest
+
+
+def _floor_scenarios(canonical_readme: str) -> list[tuple]:
+    """Each image's floor and its unpublished tags (MAS-1793): stated once, in the manifest."""
+    log = FIXTURE_CHANGELOG
+    ok = canonical_readme
+    api_floor = FIXTURE_MANIFEST["image_floors"]["api"]
+    unpublished = api_floor["unpublished"][0]
+    newest = FIXTURE_MANIFEST["latest"]
+    # A tag below the fixture's api floor, and a release older than the fixture's oldest that
+    # names it. Its frontend is the oldest release's, so the api floor is all that is wrong.
+    below = "v0.9.0"
+    assert semver(below[1:]) < semver(api_floor["minimum"][1:])
+    oldest = min(FIXTURE_MANIFEST["releases"], key=semver)
+    under_floor = copy.deepcopy(FIXTURE_MANIFEST)
+    under_floor["releases"]["1.9.0"] = {
+        "date": FIXTURE_MANIFEST["releases"][oldest]["date"],
+        "images": {
+            **FIXTURE_MANIFEST["releases"][oldest]["images"],
+            "api": f"registry.example.invalid/api:{below}",
+        },
+    }
+    assert semver("1.9.0") < semver(oldest)
+    return [
+        (
+            "the manifest states no image floors",
+            {k: v for k, v in FIXTURE_MANIFEST.items() if k != "image_floors"}, log, ok, [], 1,
+            "'image_floors' is missing or empty",
+        ),
+        (
+            "an image floor has no minimum tag",
+            _with_floor("api", minimum="1.0.0"), log, ok, [], 1, "has no 'minimum' image tag",
+        ),
+        (
+            "an image floor does not say why it exists",
+            _with_floor("api", below_minimum=None), log, ok, [], 1, "has no 'below_minimum'",
+        ),
+        (
+            "an unpublished tag is not a vX.Y.Z tag",
+            _with_floor("api", unpublished=["latest"]), log, ok, [], 1,
+            "must be a list of vX.Y.Z image tags",
+        ),
+        (
+            "a release names an image below its floor",
+            under_floor, log, ok, [], 1, f"below the api floor {api_floor['minimum']}",
+        ),
+        (
+            "a release names a tag that has no published image",
+            _with_image(newest, "api", f"registry.example.invalid/api:{unpublished}"), log, ok,
+            [], 1, "as having no published image",
+        ),
+        (
+            "the README's floor prose disagrees with the manifest",
+            FIXTURE_MANIFEST, log, ok.replace(f"`{api_floor['minimum']}`", f"`{below}`"), [], 1,
+            "restates versions",
+        ),
+        (
+            "the README still states a floor the manifest has moved",
+            _with_floor("api", minimum=below), log, ok, [], 1, "restates versions",
+        ),
+        (
+            "the README lost the generated image floors",
+            FIXTURE_MANIFEST, log, ok.replace(FLOORS_BEGIN_MARKER, ""), [], 1,
+            "region for the generated image floors",
+        ),
+    ]
 
 
 def _with_digests(digests):
@@ -1279,6 +1490,8 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
         *_digest_scenarios(),
         # The api image's licence claims version, which the module reads at plan time.
         *_claims_version_scenarios(),
+        # Each image's floor and the tags with no published image, and the README prose of them.
+        *_floor_scenarios(canonical_readme),
         # The header rule (MAS-479). The third case is the one that keeps the rule from being
         # answered with an exception list: a version BELOW the header is not the defect.
         (
@@ -1349,7 +1562,7 @@ def selftest() -> int:
         f"\nrelease-manifest selftest — {total} scenarios: a well-formed release passes, and "
         f"every way a release can be missing, malformed, mis-tagged, bumped less than its "
         f"images, recorded with digests its tags' builds disagree with or without the api "
-        f"image's claims version — or a shipped "
+        f"image's claims version, or against an image below its floor — or a shipped "
         f"script's header can hand-type a module version — is rejected by name."
     )
     return 0
@@ -1393,6 +1606,7 @@ def main() -> int:
         manifest = load_manifest()
         check_bump(manifest)
         check_claims_versions(manifest)
+        check_image_floors(manifest)
         check_changelog(manifest)
         check_readme(manifest, args.write)
         check_script_banners()

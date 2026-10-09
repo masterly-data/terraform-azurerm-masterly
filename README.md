@@ -74,10 +74,8 @@ module "masterly" {
   # the only geo a single data plane can hold. The module refuses at plan an install whose
   # declared geo contradicts its Azure location, or that permits a geo it cannot honour.
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
-  # The pair this module version was released against, from MANIFEST.json (see Versioning).
-  # Two floors sit below it: an api older than v0.132.2 registers no job handlers on
-  # ca-workers, silently, and a frontend older than v0.138.2 leaves a fresh install unable to
-  # create its first Environment. api v0.133.1 has no published image.
+  # The pair this module version was released against, from MANIFEST.json. Versioning names
+  # the oldest image each app can run on, and the tags that have no published image.
   api_image           = "masterly.azurecr.io/api:v0.133.11"
   frontend_image      = "masterly.azurecr.io/frontend:v0.139.5"
 
@@ -1364,6 +1362,17 @@ install ran when the version was tagged. Your install's running tags move on fro
 module seeds a newly created app and then ignores image drift, so CD owns the tag thereafter.
 Read on `main` rather than on a release tag, the newest row can be a release that is cut but not
 tagged yet; a version is published once its `vX.Y.Z` tag exists.
+
+<!-- release-manifest:floors:begin -->
+Each app has a floor: the oldest image an install can run. Below it the image misbehaves
+in a way no plan can see, so never pin an image older than its floor, whichever release
+you start from. The floors, and the image tags that have no published image, are the
+manifest's `image_floors`:
+
+- An `api` image older than `v0.132.2` registers no job handlers on ca-workers, so the pipeline is silently inert.
+- The `api` tag `v0.133.1` has no published image.
+- A `frontend` image older than `v0.138.2` leaves a fresh install unable to create its first Environment.
+<!-- release-manifest:floors:end -->
 
 If you are reading the manifest from a program rather than from this page,
 [docs/release-manifest.md](docs/release-manifest.md) is the contract: where to fetch it, every
