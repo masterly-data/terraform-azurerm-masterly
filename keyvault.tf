@@ -334,11 +334,12 @@ resource "azurerm_role_assignment" "kv_secrets_officer_deployer" {
   principal_id         = each.key
 }
 
-# The frontend resolves its own secrets (the OIDC client secret, the registry password), so its
-# identity needs data-plane READ on the vault — and only that. Deliberately Secrets User, not
-# the Officer grant the backend apps hold: the frontend never writes sealed material, and it is
-# the app an attacker reaches first. Only created when the frontend actually has a secret to
-# resolve, so an install with neither oidc nor a registry credential grants nothing.
+# The frontend resolves its own secrets (the BFF shared secret, and the OIDC client secret and
+# the registry password when those are set), so its identity needs data-plane READ on the vault
+# — and only that. Deliberately Secrets User, not the Officer grant the backend apps hold: the
+# frontend never writes sealed material, and it is the app an attacker reaches first. Created
+# whenever the frontend has a secret to resolve, which, since it carries the BFF shared secret
+# on every install, is whenever the vault is on.
 resource "azurerm_role_assignment" "kv_secrets_user_frontend" {
   count = var.enable_key_vault && length(local.frontend_secret_names) > 0 ? 1 : 0
 
@@ -361,9 +362,18 @@ locals {
   install_secret_names = distinct(concat(local.api_secret_names, local.frontend_secret_names))
 
   # The split the apps actually consume. With the vault on, no app carries a value; with it
-  # off (dev/demo, no vault to put them in) they carry values exactly as before.
+  # off (dev/demo, no vault to put them in) they carry values exactly as before. `backend_*`
+  # is what ca-workers carries: the api's set without the BFF shared secret.
+  backend_value_secrets  = var.enable_key_vault ? {} : local.backend_secrets
   api_value_secrets      = var.enable_key_vault ? {} : local.api_secrets
   frontend_value_secrets = var.enable_key_vault ? {} : local.frontend_secrets
+
+  backend_vault_secret_refs = var.enable_key_vault ? {
+    for name in local.backend_secret_names : name => {
+      kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id
+      identity_id  = module.apps_identity.id
+    }
+  } : {}
 
   api_vault_secret_refs = var.enable_key_vault ? {
     for name in local.api_secret_names : name => {
@@ -374,7 +384,7 @@ locals {
 
   # The FRONTEND's own identity, not the backend's. It carries AcrPull and nothing else by
   # design — it is the one internet-facing app — so it gets the narrowest thing that lets it
-  # resolve its two secrets: Key Vault Secrets User (read), never Officer.
+  # resolve its own secrets: Key Vault Secrets User (read), never Officer.
   frontend_vault_secret_refs = var.enable_key_vault ? {
     for name in local.frontend_secret_names : name => {
       kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id

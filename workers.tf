@@ -135,11 +135,13 @@ module "workers" {
   # The full api env contract: build_services in the workers process reads the same
   # settings (identity, license, bus, secret store, redis) as the api. That includes the
   # CA bundle mount (MAS-446): SMTP/webhook/stream-push delivery runs here, so ca-workers
-  # needs the same trusted CA the api does, at the same path.
+  # needs the same trusted CA the api does, at the same path. The one exception is the BFF
+  # shared secret: it authenticates the frontend's calls to the api, ca-workers serves no
+  # request, so it gets the backend_* set, which is the api's without it (main.tf).
   env                = local.api_env
-  secrets            = local.api_value_secrets
-  secret_refs        = local.api_vault_secret_refs
-  env_secret_refs    = local.api_env_secret_refs
+  secrets            = local.backend_value_secrets
+  secret_refs        = local.backend_vault_secret_refs
+  env_secret_refs    = local.backend_env_secret_refs
   secret_file_mounts = local.ca_bundle_secret_file_mounts
 
   tags = local.tags
