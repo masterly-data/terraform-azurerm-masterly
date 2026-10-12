@@ -1245,6 +1245,7 @@ run "production_secrets_are_vault_references" {
   # than counted: a count passes just as happily when a secret silently stops being wired.
   assert {
     condition = module.api.vault_backed_secret_names == tolist([
+      "bff-shared-secret",
       "breakglass-secret-hash",
       "database-url",
       "license-token",
@@ -1257,21 +1258,23 @@ run "production_secrets_are_vault_references" {
   }
 
   assert {
-    condition     = module.frontend.vault_backed_secret_names == tolist(["oidc-client-secret", "registry-password"])
-    error_message = "The frontend's BFF client secret and registry password must reach it as Key Vault references."
+    condition     = module.frontend.vault_backed_secret_names == tolist(["bff-shared-secret", "oidc-client-secret", "registry-password"])
+    error_message = "The frontend's BFF shared secret, BFF client secret and registry password must reach it as Key Vault references."
   }
 
-  # The workers app runs the same env contract as the api, so it needs the same secret set.
+  # The workers app runs the same env contract as the api, so it needs the same secret set —
+  # all but the BFF shared secret, which authenticates the frontend's calls to the api and
+  # belongs to those two apps alone.
   assert {
-    condition     = module.workers[0].vault_backed_secret_names == module.api.vault_backed_secret_names
-    error_message = "The workers app must carry the same secret set as the api — it builds the same services."
+    condition     = module.workers[0].vault_backed_secret_names == tolist([for name in module.api.vault_backed_secret_names : name if name != "bff-shared-secret"])
+    error_message = "The workers app must carry the api's secret set, less the BFF shared secret — it builds the same services and serves no request."
   }
 
   # Every one of them is written into the vault, under the install- prefix that keeps the
   # module's secrets clear of the ones the application seals at runtime (<slug>-<ulid>).
   assert {
     condition = (
-      length(azurerm_key_vault_secret.install) == 8 &&
+      length(azurerm_key_vault_secret.install) == 9 &&
       azurerm_key_vault_secret.install["database-url"].name == "install-database-url" &&
       azurerm_key_vault_secret.install["oidc-client-secret"].name == "install-oidc-client-secret"
     )
@@ -1299,7 +1302,7 @@ run "key_vault_off_keeps_value_based_secrets" {
 
   assert {
     condition = (
-      module.api.value_secret_names == tolist(["database-url", "redis-url", "session-secret"]) &&
+      module.api.value_secret_names == tolist(["bff-shared-secret", "database-url", "redis-url", "session-secret"]) &&
       length(module.api.vault_backed_secret_names) == 0 &&
       length(azurerm_key_vault_secret.install) == 0
     )
@@ -2153,9 +2156,10 @@ run "no_data_plane_grant_reaches_the_frontend" {
     error_message = "Key Vault, Service Bus and ACS grants must go to the backend apps' identity."
   }
 
-  # The point of the split: none of those reach the public app's identity. This run has the
-  # frontend carrying no secret of its own (dev binding, no registry credential), so the
-  # vault read grant is not created either — image pull really is the whole of it here.
+  # The point of the split: none of those reach the public app's identity. Even with the
+  # dev binding and no registry credential the frontend carries one secret of its own, the BFF
+  # shared secret, which it resolves from the vault itself — so the one vault grant it does get
+  # is read, and nothing more.
   assert {
     condition = (
       azurerm_role_assignment.kv_secrets_officer[0].principal_id != module.frontend_identity.principal_id &&
@@ -2163,9 +2167,10 @@ run "no_data_plane_grant_reaches_the_frontend" {
       azurerm_role_assignment.sb_receiver[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_scaler[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.acs_email_sender[0].principal_id != module.frontend_identity.principal_id &&
-      length(azurerm_role_assignment.kv_secrets_user_frontend) == 0
+      length(azurerm_role_assignment.kv_secrets_user_frontend) == 1 &&
+      azurerm_role_assignment.kv_secrets_user_frontend[0].role_definition_name == "Key Vault Secrets User"
     )
-    error_message = "No data-plane grant may reach the frontend's identity when it has no secret to resolve."
+    error_message = "The only data-plane grant that may reach the frontend's identity is Key Vault Secrets User, to resolve its own secrets."
   }
 
   assert {
@@ -3172,6 +3177,141 @@ run "a_weak_retired_session_secret_is_rejected" {
   }
 
   expect_failures = [var.session_secret_previous]
+}
+
+# --- The BFF shared secret ----------------------------------------------------------------
+# A break-glass attempt made in the GUI reaches the api from the frontend's BFF, so the api
+# attributes it to the browser's address only when the BFF presents MASTERLY_BFF_SHARED_SECRET
+# and the api holds the same value. Unset on either app, every GUI attempt shares the frontend
+# replica's throttle window. The module generates the value and sets it on exactly those two
+# apps, as a secret reference on both.
+
+run "bff_shared_secret_reaches_the_api_and_the_frontend_and_nothing_else" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+  }
+
+  assert {
+    condition = (
+      lookup(local.api_env_secret_refs, "MASTERLY_BFF_SHARED_SECRET", null) == "bff-shared-secret" &&
+      lookup(local.frontend_env_secret_refs, "MASTERLY_BFF_SHARED_SECRET", null) == "bff-shared-secret"
+    )
+    error_message = "MASTERLY_BFF_SHARED_SECRET must reach both ca-api and ca-frontend as a secret reference."
+  }
+
+  # Never plain env, on either app: anything that can read an app's configuration would then
+  # hold the credential that lets it state any caller address to the api.
+  assert {
+    condition = (
+      !contains(module.api.env_names, "MASTERLY_BFF_SHARED_SECRET") &&
+      !contains(module.frontend.env_names, "MASTERLY_BFF_SHARED_SECRET")
+    )
+    error_message = "MASTERLY_BFF_SHARED_SECRET must never appear in an app's plain environment."
+  }
+
+  # Each app carries the secret its reference names. Both fill it from the one catalogue entry,
+  # and so from one generated value: a mismatch would leave the mechanism silently off. (The
+  # value itself is unknown until apply, so it is the name that is asserted here.)
+  assert {
+    condition = (
+      contains(module.api.value_secret_names, "bff-shared-secret") &&
+      contains(module.frontend.value_secret_names, "bff-shared-secret")
+    )
+    error_message = "ca-api and ca-frontend must both carry the BFF shared secret their references name."
+  }
+
+  # ca-workers serves no request, so it has no use for the credential that authenticates the
+  # frontend's requests. It still gets the rest of the api's secrets.
+  assert {
+    condition = (
+      !contains(module.workers[0].value_secret_names, "bff-shared-secret") &&
+      !contains(keys(local.backend_env_secret_refs), "MASTERLY_BFF_SHARED_SECRET") &&
+      !contains(module.workers[0].env_names, "MASTERLY_BFF_SHARED_SECRET") &&
+      module.workers[0].value_secret_names == tolist([for name in module.api.value_secret_names : name if name != "bff-shared-secret"])
+    )
+    error_message = "ca-workers must carry the api's secrets except the BFF shared secret."
+  }
+
+  # The api refuses to start with fewer than 32 bytes. Alphanumeric, like the session secret.
+  assert {
+    condition     = random_password.bff_shared_secret.length >= 32 && random_password.bff_shared_secret.special == false
+    error_message = "The BFF shared secret must be at least 32 alphanumeric characters, the minimum the api accepts at startup."
+  }
+}
+
+# With the vault on it is a Key Vault reference like every other install secret — and it is
+# the frontend's own secret even when nothing else is, so the frontend resolves it with its
+# own identity, which gets read on the vault and nothing more.
+run "bff_shared_secret_is_a_vault_reference_on_both_apps" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_key_vault      = true
+    enable_workers        = true
+  }
+
+  override_module {
+    target = module.apps_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
+      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-apps"
+    }
+  }
+
+  override_module {
+    target = module.frontend_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"
+      principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      client_id    = "ffffffff-ffff-ffff-ffff-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-frontend"
+    }
+  }
+
+  assert {
+    condition = (
+      contains(module.api.vault_backed_secret_names, "bff-shared-secret") &&
+      module.frontend.vault_backed_secret_names == tolist(["bff-shared-secret"]) &&
+      !contains(module.api.value_secret_names, "bff-shared-secret") &&
+      length(module.frontend.value_secret_names) == 0
+    )
+    error_message = "With the vault on, the BFF shared secret must reach ca-api and ca-frontend as a Key Vault reference, never a value."
+  }
+
+  # Written once, under the install- prefix, and read by both apps from that one entry.
+  assert {
+    condition     = azurerm_key_vault_secret.install["bff-shared-secret"].name == "install-bff-shared-secret"
+    error_message = "The BFF shared secret must be written to the vault once, as install-bff-shared-secret."
+  }
+
+  assert {
+    condition = (
+      !contains(module.workers[0].vault_backed_secret_names, "bff-shared-secret") &&
+      !contains(module.workers[0].value_secret_names, "bff-shared-secret")
+    )
+    error_message = "ca-workers must not carry the BFF shared secret, as a reference or a value."
+  }
+
+  # The frontend resolves it with its own identity, which therefore holds Secrets User — read —
+  # on the vault. A reference naming the backend's identity would never resolve on an app that
+  # does not carry it, and the revision would never start.
+  assert {
+    condition = (
+      module.frontend.secret_ref_identity_ids == tolist([module.frontend_identity.id]) &&
+      length(azurerm_role_assignment.kv_secrets_user_frontend) == 1 &&
+      azurerm_role_assignment.kv_secrets_user_frontend[0].role_definition_name == "Key Vault Secrets User" &&
+      azurerm_role_assignment.kv_secrets_user_frontend[0].principal_id == module.frontend_identity.principal_id
+    )
+    error_message = "The frontend must resolve the BFF shared secret with its own identity, granted Key Vault Secrets User and nothing more."
+  }
 }
 
 # --- Telemetry to the control plane (ADR 0034/0056) --------------------------------------

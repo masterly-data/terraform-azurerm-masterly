@@ -200,6 +200,28 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Fixed
 
+- **A break-glass attempt made in the GUI is throttled and audited by the browser's address.**
+  The module now generates a shared secret (`random_password.bff_shared_secret`) and sets it as
+  `MASTERLY_BFF_SHARED_SECRET` on `ca-api` and `ca-frontend`, and on no other app, as a
+  Container App secret (a Key Vault reference with `enable_key_vault`), never as plain env.
+  Until now it set it on neither app, so the `api` attributed every GUI break-glass attempt to a
+  frontend replica: every GUI attempt shared one throttle window, so a few wrong guesses from
+  anyone throttled the genuine sign-in through the GUI as well, and the audit record named the
+  replica. It needs `api` image `v0.133.4` or later and `frontend` image `v0.139.0` or later,
+  which every image pair since 0.16.0 meets; with an older image on either app nothing reads the
+  variable and attempts are attributed as before. See
+  [The BFF shared secret](README.md#the-bff-shared-secret) (MAS-1405).
+
+  The next apply rolls `ca-api` and `ca-frontend` to a new revision once each; `ca-workers` is
+  unchanged. While one of the two runs with the secret and the other does not, the `api`
+  ignores the BFF's statement and attributes attempts as before; nothing fails because of the
+  mismatch itself. With `enable_key_vault` the secret is written to the vault as
+  `install-bff-shared-secret`, and an install whose frontend carried no secret before (neither
+  `identity_binding = "oidc"` nor `registry_username`) now also grants the frontend's identity
+  Key Vault Secrets User on the vault, which it needs to resolve the reference. Role assignments
+  take effect eventually, so if the frontend's new revision cannot resolve the secret on that
+  apply, run the apply again.
+
 - The `postgres-silent` alert rule is accepted by Azure. Azure refused it on create (`400`: the
   number of evaluation periods must be 1 for a query that does not project `TimeGenerated`), so
   `enable_diagnostics = true` with a provisioned Postgres server could not apply on 0.16.0 and

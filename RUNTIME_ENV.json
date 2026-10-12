@@ -40,6 +40,7 @@
         "SSL_CERT_FILE"
       ],
       "env_secret_refs": [
+        "MASTERLY_BFF_SHARED_SECRET",
         "MASTERLY_BREAKGLASS_SECRET_HASH",
         "MASTERLY_DATABASE_URL",
         "MASTERLY_LICENSE_TOKEN",
@@ -62,6 +63,7 @@
         "MASTERLY_REGION"
       ],
       "env_secret_refs": [
+        "MASTERLY_BFF_SHARED_SECRET",
         "MASTERLY_OIDC_CLIENT_SECRET"
       ]
     },

@@ -892,6 +892,27 @@ resource "random_password" "session_secret" {
   special = false
 }
 
+# The BFF shared secret (MASTERLY_BFF_SHARED_SECRET), held by ca-api and ca-frontend and by no
+# other app. A break-glass sign-in made in the GUI reaches the api from the frontend's BFF, not
+# from the browser, so on its own the api sees a frontend replica's address: every GUI attempt
+# then shares one throttle window, and the audit record names the replica. With this secret on
+# both apps, the BFF states the browser's address and presents the secret to show it is this
+# install's BFF; the api believes the address only on a request that carries the matching
+# value, so a caller that does not hold it cannot choose its own address, on the internal hop
+# or on a published api (api_ingress_external). Without the same value on both apps, the
+# mechanism is off.
+#
+# The same shape as the session secret: 48 alphanumeric characters, above the 32 bytes the api
+# requires at startup. To rotate it, replace it (`terraform apply
+# -replace=random_password.bff_shared_secret`): one apply gives both apps the new value. Until
+# both run with the same value the api ignores the BFF's statement and attributes GUI attempts
+# to the frontend replica, as it did before this secret existed; nothing fails because of the
+# mismatch itself.
+resource "random_password" "bff_shared_secret" {
+  length  = 48
+  special = false
+}
+
 locals {
   # The install-level DSN (ADR 0003): the customer's own database on BYO-DB (ADR 0065),
   # otherwise the provisioned starter server's admin connection: the masterly_admin login and
@@ -1051,6 +1072,7 @@ locals {
     "database-url"            = local.database_url
     "session-secret"          = random_password.session_secret.result
     "session-secret-previous" = var.session_secret_previous
+    "bff-shared-secret"       = random_password.bff_shared_secret.result
     "registry-password"       = var.registry_password
     "redis-url"               = local.redis_url # embeds the access key on redis_auth = "key" (ADR 0066)
     "license-token"           = var.license_token
@@ -1067,11 +1089,14 @@ locals {
   # Credential-based image pull (ADR 0067): the SP secret rides on every app that pulls.
   registry_secret_names = var.registry_username != null ? ["registry-password"] : []
 
+  # The secrets both backend processes carry: ca-api, and ca-workers, which builds the same
+  # services from the same settings (workers.tf).
+  #
   # nonsensitive() on the PRESENCE tests, not on any value: `var.license_token != null` is a
   # bool derived from a sensitive variable, so Terraform marks it, and a marked list cannot
   # drive for_each (the vault writes) or a precondition. Whether a licence was supplied is not
   # the secret — the same narrow unmarking, for the same reason, as redis_url_wired.
-  api_secret_names = concat(
+  backend_secret_names = concat(
     ["database-url", "session-secret"],
     # Only while a rotation is in flight; unset is the steady state (see the variable).
     nonsensitive(var.session_secret_previous != null) ? ["session-secret-previous"] : [],
@@ -1083,17 +1108,25 @@ locals {
     var.ca_bundle_pem != null ? ["ca-bundle-pem"] : [],
   )
 
-  # On oidc the frontend is the confidential BFF client: its client secret is used only
-  # server-side at token exchange.
+  # The api adds the BFF shared secret, which belongs to the api and the frontend alone
+  # (random_password.bff_shared_secret). ca-workers serves no request, so it does not get it.
+  api_secret_names = concat(local.backend_secret_names, ["bff-shared-secret"])
+
+  # The BFF shared secret on every install. On oidc the frontend is also the confidential BFF
+  # client: its client secret is used only server-side at token exchange.
   frontend_secret_names = concat(
+    ["bff-shared-secret"],
     local.registry_secret_names,
     var.identity_binding == "oidc" ? ["oidc-client-secret"] : [],
   )
 
+  backend_secrets  = { for name in local.backend_secret_names : name => local.secret_values[name] }
   api_secrets      = { for name in local.api_secret_names : name => local.secret_values[name] }
   frontend_secrets = { for name in local.frontend_secret_names : name => local.secret_values[name] }
 
-  api_env_secret_refs = merge(
+  # The env both backend processes read from their secrets; the api's adds the BFF shared
+  # secret below.
+  backend_env_secret_refs = merge(
     {
       MASTERLY_DATABASE_URL   = "database-url"
       MASTERLY_SESSION_SECRET = "session-secret"
@@ -1107,6 +1140,18 @@ locals {
     var.license_token != null ? { MASTERLY_LICENSE_TOKEN = "license-token" } : {},
     var.breakglass_secret_hash != null ? { MASTERLY_BREAKGLASS_SECRET_HASH = "breakglass-secret-hash" } : {},
     local.install_credential_configured ? { MASTERLY_TELEMETRY_CLIENT_SECRET = "telemetry-client-secret" } : {},
+  )
+
+  api_env_secret_refs = merge(
+    local.backend_env_secret_refs,
+    { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret" },
+  )
+
+  # The same name on the frontend, from the same generated value: the two apps agree on it
+  # because one apply sets both.
+  frontend_env_secret_refs = merge(
+    { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret" },
+    var.identity_binding == "oidc" ? { MASTERLY_OIDC_CLIENT_SECRET = "oidc-client-secret" } : {},
   )
 
   # The install credential (telemetry_client_id / _secret) is the install service account
@@ -1378,12 +1423,9 @@ module "frontend" {
     ) : {},
   )
 
-  secrets     = local.frontend_value_secrets
-  secret_refs = local.frontend_vault_secret_refs
-
-  env_secret_refs = var.identity_binding == "oidc" ? {
-    MASTERLY_OIDC_CLIENT_SECRET = "oidc-client-secret"
-  } : {}
+  secrets         = local.frontend_value_secrets
+  secret_refs     = local.frontend_vault_secret_refs
+  env_secret_refs = local.frontend_env_secret_refs
 
   liveness_probe_path  = "/api/healthz"
   readiness_probe_path = "/api/readyz"

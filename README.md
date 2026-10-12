@@ -227,7 +227,7 @@ check, and a rebuilt app, both go by.
 | VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Later install identity work (ADR 0020) |
-| `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull and nothing else: `ca-frontend` is the only internet-facing app and needs no data-plane access, so it does not carry the backend's grants |
+| `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) to resolve its own secrets, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
@@ -268,7 +268,9 @@ one and apply.
   `oidc_redirect_uri`). Optional break-glass local Owner via
   `breakglass_owner_email` + `breakglass_secret_hash` — a salted Argon2id value minted
   inside the api image with `python -m masterly_app.core.breakglass_credential`, never the
-  secret and never a sha256 digest, which the api refuses at startup. See
+  secret and never a sha256 digest, which the api refuses at startup. A break-glass attempt
+  made in the GUI is throttled by the browser's address rather than the frontend's, through
+  the [BFF shared secret](#the-bff-shared-secret) the module generates. See
   [Access and identity](https://masterlydata.com/docs/self-hosted/install/#access-and-identity).
 
   `oidc_allowed_issuers` normally holds **one** entry — this install's own issuer. Every
@@ -1078,9 +1080,10 @@ listed here so the decision is visible at the point where it becomes yours to ke
 
 A **value-based** Container App secret is stored in the app itself, and anything holding
 `Microsoft.App/containerApps/listSecrets/action` — which plain **Contributor** on the resource
-group has — can read it back in clear. That covers the DSN, the session secret, the licence
-JWT, the OIDC client secret, the Redis URL (access key and all), the registry password and the
-telemetry secret. Deploy rights and read-every-credential rights were the same thing.
+group has — can read it back in clear. That covers the DSN, the session secret, the BFF shared
+secret, the licence JWT, the OIDC client secret, the Redis URL (access key and all), the
+registry password and the telemetry secret. Deploy rights and read-every-credential rights were
+the same thing.
 
 With `enable_key_vault = true` they stop being the same thing. The module writes each secret
 into the install's vault as `install-<name>` and gives the apps a **reference**: the value is
@@ -1130,8 +1133,9 @@ makes the change durable rather than a manual patch the next apply reverts.
 
 1. **A data-plane grant.** The module grants **Key Vault Secrets Officer** on the install
    vault to the identity running the apply. (It also grants the *frontend's* identity **Key
-   Vault Secrets User** — read only — when that app carries a secret of its own, because it
-   resolves its own references and runs as `id-<prefix>-frontend`, not the backend identity.) If **plan and apply run as different service
+   Vault Secrets User** — read only — because that app carries secrets of its own, the
+   [BFF shared secret](#the-bff-shared-secret) on every install, resolves its own references and
+   runs as `id-<prefix>-frontend`, not the backend identity.) If **plan and apply run as different service
    principals** — a common CI shape, and the one Masterly runs — pin them instead:
    `key_vault_secret_operator_object_ids` for the apply identity, and
    `key_vault_secret_reader_object_ids` (Secrets User) for the planning one, which needs read
@@ -1274,6 +1278,40 @@ listed key verifies sessions exactly as well as the one that signs them.
 > the module version you are pinned to: with an image that predates it, the variable travels to
 > the app and nothing reads it, so step 2 signs everyone out after all.
 
+## The BFF shared secret
+
+A break-glass sign-in made in the GUI does not reach the `api` from the browser. The browser
+posts to the frontend's BFF, and the BFF calls the `api` server-side, so on its own the `api`
+sees a frontend replica's address. The `api` keys its break-glass throttle and audit record on
+the caller's address, so every GUI attempt would then share one throttle window: a few wrong
+guesses from anyone would throttle the genuine break-glass sign-in through the GUI as well, and
+the audit record would name the replica rather than the person.
+
+The module generates a secret for this (`random_password.bff_shared_secret`) and sets it as
+`MASTERLY_BFF_SHARED_SECRET` on `ca-api` and `ca-frontend`, and on no other app, as a Container
+App secret (a Key Vault reference with `enable_key_vault`). The BFF states the browser's address
+and presents the secret; the `api` believes that address only on a request carrying the same
+value, so a caller who does not hold it cannot choose its own address, whether it reaches the
+`api` through the BFF or directly on a published ingress (`api_ingress_external`).
+
+It needs `api` image `v0.133.4` or later and `frontend` image `v0.139.0` or later. With an older
+image on either app the variable reaches the container and nothing reads it, and GUI attempts
+are throttled per frontend replica as before.
+
+To rotate it, replace it:
+
+```bash
+terraform apply -replace=random_password.bff_shared_secret
+```
+
+One apply gives both apps the new value, but they do not start using it at the same moment:
+without the vault each app rolls to a new revision of its own, and with `enable_key_vault` each
+picks the value up from its versionless reference within about 30 minutes. While the two hold
+different values the `api` ignores the BFF's statement and attributes GUI attempts to the
+frontend replica, as it did before this secret existed; nothing fails because of the mismatch
+itself. There is no second step: unlike the session secret, nothing is signed with it, so
+nothing issued under the old value has to keep working.
+
 ## State security — your tfstate holds secrets in plaintext
 
 Terraform writes **plaintext secrets into your state file**, and moving the app secrets into
@@ -1284,6 +1322,7 @@ not what is in the state blob. For this module the state contains, among others:
 - the **generated Postgres admin password** (`random_password.postgres_admin` — only its
   hash never leaves; the value is in state and in the app's DSN secret)
 - the **generated session secret** (`random_password.session_secret`)
+- the **generated BFF shared secret** (`random_password.bff_shared_secret`)
 - the **Redis primary access key** (read back from the cache, embedded in the `redis-url`
   secret)
 - every secret you pass in: **OIDC client secret**, **license JWT**, **registry pull
@@ -1301,7 +1340,7 @@ Treat the state backend as a secrets store:
   scoped tightly. No SAS tokens, no shared keys in CI.
 - **Restrict RBAC** on the account to the deploying principal and break-glass admins only;
   audit access. Consider a private endpoint / firewall on the storage account.
-- **Rotate** on exposure: the Postgres/session/Redis material is module-generated, so a
+- **Rotate** on exposure: the Postgres/session/BFF/Redis material is module-generated, so a
   `terraform apply` after tainting the relevant `random_*`/cache regenerates it; the OIDC and
   license secrets rotate at their source. The session secret has a second step, or the
   rotation signs out every signed-in user — see
