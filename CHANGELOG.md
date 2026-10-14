@@ -108,6 +108,40 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- **The starter Postgres server's error log no longer carries values** (ADR 0080, amendment of
+  2026-09-10). The module sets three server parameters on the server it provisions:
+  `log_error_verbosity = TERSE` (no `DETAIL:`, `HINT:` or `CONTEXT:` lines — `DETAIL:` is where
+  a constraint violation prints the conflicting key values or the whole failing row),
+  `log_parameter_max_length_on_error = 0` and `log_parameter_max_length = 0` (no bound parameter
+  values). `log_min_error_statement` stays at its default, so a failing statement's text is
+  still logged. All three apply without a restart. A BYO-DB server (`external_database_url`) is
+  not touched.
+- **Every diagnostic setting names its log categories** instead of the `allLogs` category
+  group, so a category Azure adds to a resource type later no longer reaches your workspace on
+  its own. The next apply updates each setting in place, and these categories **stop being
+  sent**:
+  - Postgres: `PostgreSQLFlexSessions`, `PostgreSQLFlexQueryStoreRuntime`,
+    `PostgreSQLFlexQueryStoreWaitStats`, `PostgreSQLFlexTableStats` and
+    `PostgreSQLFlexDatabaseXacts`. `PostgreSQLLogs` is kept.
+  - Key Vault: `AzurePolicyEvaluationDetails`. `AuditEvent` is kept.
+  - Service Bus: `RuntimeAuditLogs`, `ApplicationMetricsLogs` and `VNetAndIPFilteringLogs`.
+    `OperationalLogs` and `DiagnosticErrorLogs` are kept.
+
+  Azure Cache for Redis keeps both of its categories (`ConnectedClientList`,
+  `MSEntraAuthenticationAuditLog`), the Azure Managed Redis database keeps `ConnectionEvents`,
+  and the per-app settings stay metrics-only. A workspace query or workbook of your own that
+  reads a dropped category finds no new rows after the apply.
+- **Key Vault audit events move to the `AZKVAuditLogs` table.** The Key Vault diagnostic
+  setting now writes `AuditEvent` to the resource-specific table
+  (`log_analytics_destination_type = "Dedicated"`) instead of `AzureDiagnostics`. Events
+  written before the apply stay in `AzureDiagnostics` until its retention ages them out; a query
+  of your own that reads vault audit events from `AzureDiagnostics` has to move to
+  `AZKVAuditLogs` for events after it.
+- The diagnostic bundle collects `logs/q7-key-vault-failures.json`: the vault's failed
+  operations from `AZKVAuditLogs`, by operation, result code and count, with no caller identity,
+  caller address or secret name. It is skipped on an install without a vault, and
+  `manifest.json` names the vault under `install.key_vault`.
+
 - **Service Bus installs now scale their workers.** Until now `ca-workers` had no scale rule, so
   `workers_max_replicas` above `workers_min_replicas` did nothing. With `enable_service_bus` and
   `enable_workers` on, the next apply adds the scale rule and the queue grant above, and the

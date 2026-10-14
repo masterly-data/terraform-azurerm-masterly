@@ -54,6 +54,23 @@ run "eval_defaults_provision_starter_postgres" {
     error_message = "The provisioned server must come with its private DNS zone and private endpoint."
   }
 
+  # What the server's error log may carry (ADR 0080, amendment of 2026-09-10): no DETAIL: line
+  # and no bound parameter values, on error or otherwise. log_min_error_statement is left at
+  # Postgres's default, so the module sets exactly these three and nothing else.
+  assert {
+    condition = (
+      length(azurerm_postgresql_flexible_server_configuration.log) == 3 &&
+      azurerm_postgresql_flexible_server_configuration.log["log_error_verbosity"].name == "log_error_verbosity" &&
+      azurerm_postgresql_flexible_server_configuration.log["log_error_verbosity"].value == "TERSE" &&
+      azurerm_postgresql_flexible_server_configuration.log["log_parameter_max_length_on_error"].name == "log_parameter_max_length_on_error" &&
+      azurerm_postgresql_flexible_server_configuration.log["log_parameter_max_length_on_error"].value == "0" &&
+      azurerm_postgresql_flexible_server_configuration.log["log_parameter_max_length"].name == "log_parameter_max_length" &&
+      azurerm_postgresql_flexible_server_configuration.log["log_parameter_max_length"].value == "0" &&
+      !contains(keys(azurerm_postgresql_flexible_server_configuration.log), "log_min_error_statement")
+    )
+    error_message = "The starter server must set log_error_verbosity = TERSE, log_parameter_max_length_on_error = 0 and log_parameter_max_length = 0, and leave log_min_error_statement at its default."
+  }
+
   # The derived layout of the default /16 must never drift — it is what live installs
   # (the demo) hold in state; a change here REPLACES their subnets.
   assert {
@@ -90,6 +107,13 @@ run "byo_db_provisions_no_database" {
       length(azurerm_private_dns_zone_virtual_network_link.postgres) == 0
     )
     error_message = "external_database_url must suppress every provisioned-database resource (ADR 0065)."
+  }
+
+  # The server parameters belong to the starter server. A BYO-DB server is the customer's, and
+  # its configuration is theirs.
+  assert {
+    condition     = length(azurerm_postgresql_flexible_server_configuration.log) == 0
+    error_message = "external_database_url must set no Postgres server parameters — the server is not the module's."
   }
 
   assert {
@@ -2660,12 +2684,106 @@ run "redis_managed_splits_diagnostics_across_cluster_and_database" {
     error_message = "The managed offering must wire cluster metrics and database logs as two diagnostic settings."
   }
 
+  # The database child's one category, named. The cluster carries no log category on this
+  # offering, so its setting sends metrics only.
+  assert {
+    condition = (
+      toset([for l in azurerm_monitor_diagnostic_setting.redis_database[0].enabled_log : l.category]) == toset(["ConnectionEvents"]) &&
+      alltrue([for l in azurerm_monitor_diagnostic_setting.redis_database[0].enabled_log : l.category_group == null]) &&
+      length(azurerm_monitor_diagnostic_setting.redis[0].enabled_log) == 0
+    )
+    error_message = "On the managed offering the database setting must name ConnectionEvents (no category group) and the cluster setting must send no log category."
+  }
+
   assert {
     condition = (
       azurerm_monitor_metric_alert.redis_evictions[0].criteria[0].metric_namespace == "Microsoft.Cache/redisEnterprise" &&
       azurerm_monitor_metric_alert.redis_memory[0].criteria[0].metric_namespace == "Microsoft.Cache/redisEnterprise"
     )
     error_message = "The Redis alerts must move to the Microsoft.Cache/redisEnterprise namespace on the managed offering."
+  }
+}
+
+# Every diagnostic setting names its log categories (ADR 0080, amendment of 2026-09-10). A
+# category group such as allLogs grows when Azure adds a category to the resource type, so the
+# install's workspace would start receiving content nobody chose — Query Store text from the
+# server, every Service Bus send and receive with its caller. This run turns on every setting
+# the module has except the managed-Redis database child (asserted in the run above, as the
+# two offerings are exclusive) and pins each one's categories, plus the Key Vault table.
+run "diagnostic_settings_name_their_log_categories" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs               = ["203.0.113.7/32"]
+    enable_diagnostics                  = true
+    enable_app_availability_diagnostics = true
+    enable_key_vault                    = true
+    enable_redis                        = true
+    redis_offering                      = "cache"
+    enable_service_bus                  = true
+    enable_workers                      = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_diagnostic_setting.postgres) == 1 &&
+      length(azurerm_monitor_diagnostic_setting.redis) == 1 &&
+      length(azurerm_monitor_diagnostic_setting.key_vault) == 1 &&
+      length(azurerm_monitor_diagnostic_setting.service_bus) == 1 &&
+      length(azurerm_monitor_diagnostic_setting.app) == 3
+    )
+    error_message = "This run must create the Postgres, Redis, Key Vault, Service Bus and per-app diagnostic settings, or the assertions below are vacuous."
+  }
+
+  # No setting in the module asks for a category group, and every log block names a category.
+  assert {
+    condition = alltrue(flatten([
+      for s in concat(
+        azurerm_monitor_diagnostic_setting.postgres,
+        azurerm_monitor_diagnostic_setting.redis,
+        azurerm_monitor_diagnostic_setting.redis_database,
+        azurerm_monitor_diagnostic_setting.key_vault,
+        azurerm_monitor_diagnostic_setting.service_bus,
+        values(azurerm_monitor_diagnostic_setting.app),
+        ) : [
+        for l in s.enabled_log : l.category_group == null && l.category != null && l.category != ""
+      ]
+    ]))
+    error_message = "A diagnostic setting uses category_group, or a log block names no category. Name each log category explicitly."
+  }
+
+  # The server's own log only. The bundle reads it from AzureDiagnostics as PostgreSQLLogs.
+  assert {
+    condition     = toset([for l in azurerm_monitor_diagnostic_setting.postgres[0].enabled_log : l.category]) == toset(["PostgreSQLLogs"])
+    error_message = "The Postgres setting must send PostgreSQLLogs and no other log category."
+  }
+
+  assert {
+    condition     = toset([for l in azurerm_monitor_diagnostic_setting.redis[0].enabled_log : l.category]) == toset(["ConnectedClientList", "MSEntraAuthenticationAuditLog"])
+    error_message = "The Azure Cache for Redis setting must send ConnectedClientList and MSEntraAuthenticationAuditLog and no other log category."
+  }
+
+  # AuditEvent, into the resource-specific AZKVAuditLogs table, which is where the diagnostic
+  # bundle reads it. "Dedicated" is the setting that selects that table.
+  assert {
+    condition = (
+      toset([for l in azurerm_monitor_diagnostic_setting.key_vault[0].enabled_log : l.category]) == toset(["AuditEvent"]) &&
+      azurerm_monitor_diagnostic_setting.key_vault[0].log_analytics_destination_type == "Dedicated"
+    )
+    error_message = "The Key Vault setting must send AuditEvent alone, to the resource-specific table (log_analytics_destination_type = Dedicated)."
+  }
+
+  assert {
+    condition     = toset([for l in azurerm_monitor_diagnostic_setting.service_bus[0].enabled_log : l.category]) == toset(["OperationalLogs", "DiagnosticErrorLogs"])
+    error_message = "The Service Bus setting must send OperationalLogs and DiagnosticErrorLogs and no other log category."
+  }
+
+  # The per-app settings stay metrics-only: the environment already sends the apps' logs.
+  assert {
+    condition = alltrue([
+      for app, setting in azurerm_monitor_diagnostic_setting.app : length(setting.enabled_log) == 0
+    ])
+    error_message = "The per-app diagnostic settings must send no log category."
   }
 }
 

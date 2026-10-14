@@ -720,6 +720,43 @@ resource "azurerm_postgresql_flexible_server" "this" {
   }
 }
 
+# What the server's own error log may carry (ADR 0080, amendment of 2026-09-10). That log
+# reaches the install's workspace through the diagnostic setting in diagnostics.tf, and from
+# there the diagnostic bundle, so it should say what failed without repeating the values
+# involved:
+#
+#   * log_error_verbosity = TERSE drops the DETAIL:, HINT: and CONTEXT: lines. DETAIL: is where
+#     a unique or foreign-key violation prints the conflicting key values, and a check or
+#     not-null violation the whole failing row.
+#   * log_parameter_max_length_on_error = 0 keeps a failing statement's bound parameter values
+#     out of the log.
+#   * log_parameter_max_length = 0 does the same for any statement logged for another reason,
+#     such as log_min_duration_statement.
+#
+# log_min_error_statement stays at Postgres's default, so a failing statement's text is still
+# logged: it is very often the whole diagnosis, and the apps send their values as bound
+# parameters, which the two settings above keep out. A statement that carries a literal value
+# in its text still logs it.
+#
+# All three are dynamic parameters: Azure applies them without restarting the server.
+locals {
+  postgres_log_parameters = {
+    log_error_verbosity               = "TERSE"
+    log_parameter_max_length_on_error = "0"
+    log_parameter_max_length          = "0"
+  }
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log" {
+  # nonsensitive() on the presence test alone: whether external_database_url was supplied is
+  # not the secret, and a marked value cannot drive for_each.
+  for_each = nonsensitive(local.provision_postgres) ? local.postgres_log_parameters : {}
+
+  name      = each.key
+  server_id = azurerm_postgresql_flexible_server.this[0].id
+  value     = each.value
+}
+
 # The server's only network presence: a private endpoint in the install's VNet. The
 # private DNS zone maps the server's FQDN to this endpoint, so the application DSN is
 # identical to the public-path one.

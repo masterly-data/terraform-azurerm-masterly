@@ -810,7 +810,26 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
 - **Diagnostic settings** (resource logs + `AllMetrics` → the workspace) for the provisioned
   Postgres, Redis, Key Vault, and Service Bus (each only when that resource exists). On
   `redis_offering = "managed"` this is two settings, not one: metrics are cluster-level but
-  the connection log lives on the `redisEnterprise/databases` child.
+  the connection log lives on the `redisEnterprise/databases` child. Each setting names its
+  log categories rather than taking a category group such as `allLogs`, so a category Azure
+  adds to a resource type later does not start flowing into your workspace unasked:
+
+  | Resource | Log categories |
+  |---|---|
+  | Postgres (starter server) | `PostgreSQLLogs` |
+  | Azure Cache for Redis | `ConnectedClientList`, `MSEntraAuthenticationAuditLog` |
+  | Azure Managed Redis database | `ConnectionEvents` |
+  | Key Vault | `AuditEvent` |
+  | Service Bus | `OperationalLogs`, `DiagnosticErrorLogs` |
+
+  Key Vault's `AuditEvent` goes to the resource-specific `AZKVAuditLogs` table, which is where
+  the diagnostic bundle reads it; the Postgres log stays in `AzureDiagnostics`. The per-app
+  settings below send metrics only. The starter server is also set to
+  `log_error_verbosity = TERSE`, `log_parameter_max_length_on_error = 0` and
+  `log_parameter_max_length = 0`, so its error log names what failed without the `DETAIL:`
+  line that carries a constraint violation's values, and without bound parameter values;
+  `log_min_error_statement` stays at its default, so the failing statement's text is still
+  logged (ADR 0080, amendment of 2026-09-10). A BYO-DB server is yours to configure.
 - **App availability diagnostics** — an `AllMetrics` diagnostic setting on `ca-api`,
   `ca-frontend` and `ca-workers`, and one absence alert per app, `<app>-silent`. See
   "App availability diagnostics" below: it is on by default in production only, it has its own
@@ -991,8 +1010,9 @@ of plain JSON that you **read before you send**: the apps' configuration state, 
 replicas (the image tags actually running, which Terraform cannot tell you), the alert set
 and whether anyone is listening to it, the six Log Analytics queries the public
 [operations page](https://masterlydata.com/docs/self-hosted/operations/#before-you-contact-us)
-publishes, the starter server's shape, and `GET /v1/ops/metrics` when you give it a token or
-a file. `manifest.json` says what was collected and what was not, and why — a denied
+publishes, the Key Vault operations that failed (`logs/q7`, read from `AZKVAuditLogs` and
+summarised to operation, result code and count — no caller identity, address or secret name),
+the starter server's shape, and `GET /v1/ops/metrics` when you give it a token or a file. `manifest.json` says what was collected and what was not, and why — a denied
 permission is a named gap, never a silently empty file. Its `tool` field describes the tree the
 script ran from (`git describe`, or the manifest's claim when there is no git tree, said as a
 claim); that is **not** the version your install is pinned to, which the bundle cannot see —
@@ -1014,11 +1034,14 @@ What it never carries, by construction:
 
 **Record data: guaranteed for the apps' own log lines, and not for `logs/q6`.** `q1`, `q2`,
 `q3` and `q5` export lines the applications redact at the formatter — identifiers, counts and
-durations, no attribute values. `logs/q6-postgres-logs.json` is not one of those: it is the
+durations, no attribute values — and `q7` is the vault's audit log reduced to operation names,
+result codes and counts. `logs/q6-postgres-logs.json` is not one of those: it is the
 **starter Postgres server's own log stream** (`AzureDiagnostics` / `PostgreSQLLogs`), which no
-Masterly formatter touches. At Postgres defaults a failing statement is logged with its text,
-and a constraint violation puts the conflicting values on its `DETAIL:` line — so `q6` can
-echo values from your own records. `logs/q4-request-trace.json` projects an exception string,
+Masterly formatter touches. A failing statement is logged with its text, which carries any
+literal value written into it. The module sets the starter server to terse errors with no
+bound parameter values, but a server that has not had that applied — or has had it changed —
+also puts a constraint violation's conflicting values on a `DETAIL:` line. So `q6` can echo
+values from your own records. `logs/q4-request-trace.json` projects an exception string,
 which carries the same text when the error came from the database.
 
 The script does not delete those lines — the statement that failed is often the whole

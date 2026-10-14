@@ -5,8 +5,9 @@
 # It collects, from YOUR subscription and YOUR Log Analytics workspace, what a support
 # conversation with Masterly starts from: the images actually running, boot posture per
 # revision, errors by logger, one request end to end (with --request-id), revision
-# provisioning failures, the starter server's Postgres logs, the apps' configuration STATE,
-# and the alert set. It writes all of it to a directory you read before you send it.
+# provisioning failures, the starter server's Postgres logs, the Key Vault operations that
+# failed, the apps' configuration STATE, and the alert set. It writes all of it to a
+# directory you read before you send it.
 #
 # What it never carries, by construction rather than by care:
 #   * no secret values — Container App secrets are listed by NAME only, and an environment
@@ -20,12 +21,16 @@
 #
 # Record data: guaranteed for the application's own log lines, NOT for logs/q6.
 #   The app queries (q1..q3, q5) export lines the apps already redact at the formatter —
-#   identifiers, counts and durations. logs/q6-postgres-logs.json is a different thing: it is
-#   the starter Postgres server's OWN log stream (AzureDiagnostics / PostgreSQLLogs), which no
-#   Masterly formatter touches. At Postgres defaults a failing statement is logged with its
-#   text, and a constraint violation carries the conflicting values on its DETAIL: line — so
-#   q6 CAN echo attribute values from your data. logs/q4-request-trace.json projects an
-#   exception string, which carries the same text when the error came from the database.
+#   identifiers, counts and durations — and q7 summarises the vault's audit log (AZKVAuditLogs)
+#   to operation names, result codes and counts. logs/q6-postgres-logs.json is a different
+#   thing: it is the starter Postgres server's OWN log stream (AzureDiagnostics /
+#   PostgreSQLLogs), which no Masterly formatter touches. A failing statement is logged with
+#   its text, and a statement carrying a literal value carries it there. The module sets the
+#   server to TERSE errors with no bound parameter values, but a server that has not had that
+#   applied, or has had it changed, also puts a constraint violation's conflicting values on a
+#   DETAIL: line — so q6 CAN echo attribute values from your data. logs/q4-request-trace.json
+#   projects an exception string, which carries the same text when the error came from the
+#   database.
 #   The script flags those files by name at the end of the run and in manifest.json, and asks
 #   you to read them line by line before you send the bundle. It does not delete them: the
 #   Postgres log stream is often the only place an incident's cause is visible.
@@ -211,6 +216,22 @@ else
   record "data-plane" true "starter server $POSTGRES_NAME"
 fi
 
+# The vault exists only with enable_key_vault. Its name is kv-<first 14 characters of the
+# prefix>-<suffix> (keyvault.tf), so the prefix is truncated the same way here.
+KEY_VAULT_NAME=""
+kv_list="ERROR"
+kv_list=$(az keyvault list -g "$RG_DATA" --subscription "$SUBSCRIPTION" \
+            --query "[?starts_with(name, 'kv-${NAME_PREFIX:0:14}-')].name" -o tsv 2>/dev/null) \
+  || kv_list="ERROR"
+if [[ "$kv_list" == "ERROR" ]]; then
+  record "key-vault" false "could not list key vaults in $RG_DATA"
+elif [[ -z "$kv_list" ]]; then
+  record "key-vault" true "no vault in $RG_DATA (enable_key_vault = false)"
+else
+  KEY_VAULT_NAME=$(printf '%s\n' "$kv_list" | head -n1)
+  record "key-vault" true "vault $KEY_VAULT_NAME"
+fi
+
 # The workspace's customer id is what the query API addresses; the resource id is what the
 # diagnostic settings point at. Both are identifiers.
 WORKSPACE_CUSTOMER_ID=""
@@ -349,7 +370,7 @@ else
   record "alerts" false "partial — one or more alert listings failed; alerts.json holds what was readable"
 fi
 
-# --- 4. Log Analytics: the six published queries ------------------------------------------
+# --- 4. Log Analytics: the six published queries, and the vault's failed operations --------
 # Through the query REST API with az rest — part of the core CLI, so it needs no extension
 # that a locked-down workstation may not be allowed to install. Each answer is written as the
 # API returns it: {"tables": [{"name", "columns": [...], "rows": [...]}]}.
@@ -437,6 +458,22 @@ AzureDiagnostics
 | order by TimeGenerated desc'
 else
   record "logs:q6-postgres-logs" false "skipped — BYO-DB, or the starter server could not be resolved"
+fi
+
+# The vault's audit log is in the resource-specific AZKVAuditLogs table (the module's
+# diagnostic setting sends AuditEvent there). Only the operations that failed, summarised:
+# a 401 or 403 here is the usual reason an app cannot read its secrets. The caller's identity
+# and address and the request URI, which names the secret, are deliberately not projected.
+if [[ -n "$KEY_VAULT_NAME" ]]; then
+  kql "logs:q7-key-vault-failures" "$BUNDLE/logs/q7-key-vault-failures.json" "$SINCE" '
+AZKVAuditLogs
+| where _ResourceId endswith "/vaults/'"$KEY_VAULT_NAME"'"
+| where HttpStatusCode >= 400
+| summarize events = count(), latest = max(TimeGenerated)
+    by OperationName, ResultSignature, HttpStatusCode
+| order by events desc'
+else
+  record "logs:q7-key-vault-failures" false "skipped — no vault (enable_key_vault = false), or it could not be resolved"
 fi
 
 # --- 5. /v1/ops/metrics ------------------------------------------------------------------
@@ -573,7 +610,7 @@ jq -n \
   --arg subscription "$SUBSCRIPTION" --arg prefix "$NAME_PREFIX" \
   --arg rg_aca "$RG_ACA" --arg rg_data "$RG_DATA" --arg env "$ACA_ENV" \
   --arg workspace "$WORKSPACE" --arg workspace_id "$WORKSPACE_CUSTOMER_ID" \
-  --arg data_plane "$DATA_PLANE" --arg postgres "$POSTGRES_NAME" \
+  --arg data_plane "$DATA_PLANE" --arg postgres "$POSTGRES_NAME" --arg key_vault "$KEY_VAULT_NAME" \
   --arg request_id "$REQUEST_ID" --arg since "$SINCE" \
   --argjson review "$REVIEW_JSON" --argjson matched "$MATCHED_JSON" \
   --argjson not_guaranteed "$NOT_GUARANTEED_JSON" \
@@ -583,15 +620,16 @@ jq -n \
               resource_groups: [$rg_aca, $rg_data], environment: $env,
               workspace: {name: $workspace, customer_id: $workspace_id},
               data_plane: $data_plane,
-              postgres_server: (if $postgres == "" then null else $postgres end)},
+              postgres_server: (if $postgres == "" then null else $postgres end),
+              key_vault: (if $key_vault == "" then null else $key_vault end)},
     request_id: (if $request_id == "" then null else $request_id end),
     window: $since,
     carries: "identifiers, counts, durations, versions and configuration state",
     omits: "connection strings, secret values, credentials, and every environment variable value not on the allow-list in the script",
     record_data: {
-      guaranteed_absent_in: "the log lines the applications themselves write (logs/q1, q2, q3, q5), redacted at the formatter to identifiers, counts and durations, plus every file this script builds from Azure Resource Manager or /v1/ops/metrics",
+      guaranteed_absent_in: "the log lines the applications themselves write (logs/q1, q2, q3, q5), redacted at the formatter to identifiers, counts and durations; the vault audit summary (logs/q7), which projects operation names, result codes and counts only; plus every file this script builds from Azure Resource Manager or /v1/ops/metrics",
       not_guaranteed_in: $not_guaranteed,
-      why: "q6 is the log stream of the Postgres server itself, which no Masterly formatter touches: at Postgres defaults a failing statement is logged with its text, and a constraint violation carries the conflicting values on its DETAIL: line. q4 projects an exception string, which carries the same text when the error came from the database.",
+      why: "q6 is the log stream of the Postgres server itself, which no Masterly formatter touches: a failing statement is logged with its text, which carries any literal value in it, and a server not set to TERSE errors also carries the conflicting values of a constraint violation on its DETAIL: line. q4 projects an exception string, which carries the same text when the error came from the database.",
       needs_line_by_line_review: $review,
       statement_text_found_in: $matched,
       what_to_do: "Read the files listed in needs_line_by_line_review before sending this bundle: every collected file from not_guaranteed_in is on that list, whether or not the script found statement text in it, because an attribute value has no shape a scan can rule out. statement_text_found_in is the subset where it did find some. Delete any line you are not willing to send, and say in your message that you did."
@@ -617,6 +655,9 @@ What is here
                            revisions and their replicas — the image tags actually running
   alerts.json              the alert set, and how many receivers each action group has
   logs/q1..q6-*.json       the six published Log Analytics queries, as the API returned them
+  logs/q7-key-vault-failures.json
+                           the vault's failed operations from AZKVAuditLogs, by operation
+                           and result code (absent without a vault)
   ops-metrics.json         GET /v1/ops/metrics, when it was fetched or attached
 
 What is not here, by construction
@@ -626,12 +667,14 @@ What is not here, by construction
 
 Record data — what is guaranteed, and where it is not
   logs/q1, q2, q3 and q5 are the applications' own log lines, redacted at the formatter to
-  identifiers, counts and durations. Those carry no attribute values.
+  identifiers, counts and durations. logs/q7 is the vault's audit log reduced to operation
+  names, result codes and counts. Those carry no attribute values.
 
   logs/q6-postgres-logs.json is NOT one of those. It is the starter Postgres server's own
-  log stream, which no Masterly formatter touches: at Postgres defaults a failing statement
-  is logged with its text, and a constraint violation puts the conflicting values on its
-  DETAIL: line. logs/q4-request-trace.json projects an exception string, which carries the
+  log stream, which no Masterly formatter touches: a failing statement is logged with its
+  text, which carries any literal value in it, and a server not set to TERSE errors also
+  puts a constraint violation's conflicting values on a DETAIL: line.
+  logs/q4-request-trace.json projects an exception string, which carries the
   same text when the error came from the database. Either file CAN therefore contain values
   from your own records. They are kept because the failing statement is often the whole
   diagnosis.
