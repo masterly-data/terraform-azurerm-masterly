@@ -443,7 +443,10 @@ run "production_mode_full_wiring_plans" {
 # plans is counted by its target rather than trusted by its name. Diagnostics are on, so the
 # per-app settings exist beside it and are shown NOT to target the environment. BYO-DB keeps the
 # starter server, whose id only an apply would make known, out of the run. The environment's
-# logs_destination is asserted by the production run above, which overrides nothing.
+# logs_destination is asserted by the production run above, which overrides nothing. A test cannot
+# enumerate every azurerm_monitor_diagnostic_setting, so the count covers the settings it names: a
+# new diagnostic setting added to the module has to be added to that list, or "exactly one" stops
+# counting it.
 run "one_diagnostic_setting_targets_the_environment" {
   command = plan
 
