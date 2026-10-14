@@ -824,7 +824,8 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
 
   Key Vault's `AuditEvent` goes to the resource-specific `AZKVAuditLogs` table, which is where
   the diagnostic bundle reads it; the Postgres log stays in `AzureDiagnostics`. The per-app
-  settings below send metrics only. The starter server is also set to
+  settings below send metrics only; the apps' logs come from the environment's setting (see
+  "Container logs" below). The starter server is also set to
   `log_error_verbosity = TERSE`, `log_parameter_max_length_on_error = 0` and
   `log_parameter_max_length = 0`, so its error log names what failed without the `DETAIL:`
   line that carries a constraint violation's values, and without bound parameter values;
@@ -852,6 +853,25 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
 Alerts fire and record with no notification target; to be paged, set `alert_email` (the
 module creates an action group) or point `alert_action_group_id` at an existing group
 (a shared ops group, a PagerDuty webhook group).
+
+### Container logs
+
+The Container Apps environment sends its logs through Azure Monitor
+(`logs_destination = "azure-monitor"`) rather than writing to the workspace with the
+workspace's shared key. One diagnostic setting on the environment, `diag-<name_prefix>-aca-env`,
+sends `ContainerAppConsoleLogs` and `ContainerAppSystemLogs` to the install's workspace, into the
+resource-specific tables of the same names (`log_analytics_destination_type = "Dedicated"`).
+Because it is on the environment, it covers `ca-api`, `ca-frontend`, `ca-workers`, the
+`ca-bundle-init` init containers that run inside them, and any app added to the environment
+later. It is created in every mode, whatever `enable_diagnostics` says: the diagnostic bundle
+reads these logs on any install.
+
+Installs created by an earlier version of the module have their older lines in the legacy
+custom tables `ContainerAppConsoleLogs_CL` and `ContainerAppSystemLogs_CL`, which get no new rows
+after the apply that moves the environment. The `api-latency` and `app-not-ready` alerts and the
+diagnostic bundle read both the legacy and the resource-specific tables for one release cycle; a
+query or workbook of your own that reads the `_CL` tables should move to the resource-specific
+ones.
 
 ### App availability diagnostics
 
@@ -911,10 +931,11 @@ the parameter on the server.
 
 None of these needs anything beyond `enable_diagnostics`: the metric alerts read the platform
 metrics every Postgres server, Container App and Service Bus namespace publishes, and the latency
-rule reads the console log the Container Apps environment already sends to the install's
-workspace. It reads both tables that log can land in, the resource-specific
-`ContainerAppConsoleLogs` and the legacy `ContainerAppConsoleLogs_CL`, and so does
-`app-not-ready`; the legacy table stays in both queries for one release cycle.
+rule reads the console log that the diagnostic setting on the Container Apps environment sends
+to the install's workspace in every mode (see "Container logs" above). It reads both tables that
+log can land in, the resource-specific `ContainerAppConsoleLogs` and the legacy
+`ContainerAppConsoleLogs_CL`, and so does `app-not-ready`; the legacy table stays in both queries
+for one release cycle.
 
 **Not covered: the age of the oldest queued job.** It is the most direct load signal for the
 async pipeline — how long work waits before a worker starts it — and the module does not alert

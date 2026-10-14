@@ -149,6 +149,29 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `ContainerAppConsoleLogs` before then. The apps each alert covers are unchanged — `ca-api` for
   latency, `ca-api` and `ca-frontend` for readiness. The next apply updates both rules in place
   (MAS-2038).
+- **Container logs reach the workspace through Azure Monitor.** The Container Apps environment's
+  `logs_destination` moves from `log-analytics` to `azure-monitor`, so the environment no longer
+  writes to the install's workspace with the workspace's shared key. A new diagnostic setting on
+  the environment, `diag-<name_prefix>-aca-env`, sends `ContainerAppConsoleLogs` and
+  `ContainerAppSystemLogs` to the workspace's resource-specific tables of the same names
+  (`log_analytics_destination_type = "Dedicated"`). Being on the environment, it covers `ca-api`,
+  `ca-frontend`, `ca-workers`, the `ca-bundle-init` init containers and any app added later, and it
+  is created in every mode, as the environment's logs always were. The per-app diagnostic
+  settings stay metrics-only. The next apply changes the environment and creates the setting.
+  The change has been planned under mock providers only, which cannot show whether Azure updates
+  the environment in place or replaces it (a replacement would also replace every app and change
+  its FQDN); a plan against a live install confirms an in-place update before this version is
+  released. From the apply on, the legacy `ContainerAppConsoleLogs_CL` and
+  `ContainerAppSystemLogs_CL` tables get no new rows, and their older rows stay until the
+  workspace's retention ages them out. The `api-latency` and `app-not-ready` alerts and the diagnostic bundle read both the `_CL`
+  tables and the resource-specific ones for one release cycle, which covers the move; a query or
+  workbook of your own that reads a `_CL` table should move to the resource-specific table.
+  **Apply this release before the release that locks the workspace down**: that release turns
+  off the workspace's shared-key access, which an environment still on `log-analytics` needs to
+  deliver its logs. **Breaking for a direct caller of `modules/aca-env-consumption`**: the
+  submodule no longer takes `log_analytics_workspace_id`, so passing it fails with "Unsupported
+  argument". Drop the argument and attach a diagnostic setting to the submodule's `id` output, as
+  the root module now does (MAS-2023).
 
 - **Service Bus installs now scale their workers.** Until now `ca-workers` had no scale rule, so
   `workers_max_replicas` above `workers_min_replicas` did nothing. With `enable_service_bus` and

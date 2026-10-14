@@ -367,18 +367,38 @@ run "production_mode_full_wiring_plans" {
   }
 
   # What the setting sends. AllMetrics is what puts `Replicas` and its siblings in AzureMetrics,
-  # which is all the absence rule reads; no log category, because the environment already sends
-  # the apps' console and system logs to the same workspace and a second copy is billed twice.
+  # which is all the absence rule reads; no log category, because the diagnostic setting on the
+  # environment sends every app's console and system logs to the same workspace, and a
+  # second copy is billed twice. Each app is named rather than iterated, so an app that dropped
+  # out of the map fails here instead of passing an empty loop.
   assert {
     condition = alltrue([
-      for app, setting in azurerm_monitor_diagnostic_setting.app : (
-        length(setting.enabled_log) == 0 &&
-        length(setting.enabled_metric) == 1 &&
-        one([for m in setting.enabled_metric : m.category]) == "AllMetrics" &&
-        setting.name == "diag-masterly-${app}"
+      for app in ["api", "frontend", "workers"] : (
+        length(azurerm_monitor_diagnostic_setting.app[app].enabled_log) == 0 &&
+        length(azurerm_monitor_diagnostic_setting.app[app].enabled_metric) == 1 &&
+        one([for m in azurerm_monitor_diagnostic_setting.app[app].enabled_metric : m.category]) == "AllMetrics" &&
+        azurerm_monitor_diagnostic_setting.app[app].name == "diag-masterly-${app}"
       )
     ])
-    error_message = "Each app's diagnostic setting must send AllMetrics and no log category."
+    error_message = "The api, frontend and workers diagnostic settings must each send AllMetrics and no log category."
+  }
+
+  # The apps' logs leave the environment through Azure Monitor, not with the workspace's shared
+  # key, and reach the workspace through the one diagnostic setting on the environment: both
+  # Container Apps log categories, into the resource-specific tables.
+  assert {
+    condition     = module.aca_env.logs_destination == "azure-monitor"
+    error_message = "The Container Apps environment must send its logs through Azure Monitor (logs_destination = \"azure-monitor\")."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_diagnostic_setting.aca_env.name == "diag-masterly-aca-env" &&
+      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == "Dedicated" &&
+      length(azurerm_monitor_diagnostic_setting.aca_env.enabled_log) == 2 &&
+      toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
+    )
+    error_message = "The environment's diagnostic setting must send ContainerAppConsoleLogs and ContainerAppSystemLogs, and nothing else, to the resource-specific (Dedicated) tables."
   }
 
   # The criteria, pinned for the reason postgres_silent's are: SILENCE has to be the firing
@@ -414,6 +434,128 @@ run "production_mode_full_wiring_plans" {
       strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["api"].description, "no metrics for 45 minutes")
     )
     error_message = "The app absence rules must say what stopped: the pipeline for workers, the install for the serving apps."
+  }
+}
+
+# Exactly one diagnostic setting carries the apps' logs, and it is on the environment. A plan
+# cannot compare the mock provider's computed ids, so `override_module` pins the environment's and
+# both serving apps' outputs to known, distinct values; with them pinned, every setting the run
+# plans is counted by its target rather than trusted by its name. Diagnostics are on, so the
+# per-app settings exist beside it and are shown NOT to target the environment. BYO-DB keeps the
+# starter server, whose id only an apply would make known, out of the run. The environment's
+# logs_destination is asserted by the production run above, which overrides nothing. A test cannot
+# enumerate every azurerm_monitor_diagnostic_setting, so the count covers the settings it names: a
+# new diagnostic setting added to the module has to be added to that list, or "exactly one" stops
+# counting it.
+run "one_diagnostic_setting_targets_the_environment" {
+  command = plan
+
+  variables {
+    identity_binding                    = "oidc"
+    oidc_allowed_issuers                = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                       = "api-client-id"
+    oidc_jwks_uri                       = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                      = "bff-client-id"
+    oidc_client_secret                  = "s3cret"
+    oidc_authority                      = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri                   = "https://app.example.com/api/auth/callback"
+    external_database_url               = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_diagnostics                  = true
+    enable_app_availability_diagnostics = true
+  }
+
+  override_module {
+    target = module.aca_env
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+    }
+  }
+
+  override_module {
+    target = module.api
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+      name                      = "ca-api"
+      fqdn                      = "ca-api.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = false
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = []
+    }
+  }
+
+  override_module {
+    target = module.frontend
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+      name                      = "ca-frontend"
+      fqdn                      = "ca-frontend.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = []
+    }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_diagnostic_setting.app) == 2 &&
+      length(azurerm_monitor_diagnostic_setting.postgres) == 0
+    )
+    error_message = "This run needs the per-app settings planned beside the environment's, or it proves nothing about them."
+  }
+
+  assert {
+    condition = length([
+      for target in concat(
+        [azurerm_monitor_diagnostic_setting.aca_env.target_resource_id],
+        [for s in azurerm_monitor_diagnostic_setting.app : s.target_resource_id],
+        azurerm_monitor_diagnostic_setting.postgres[*].target_resource_id,
+        azurerm_monitor_diagnostic_setting.redis[*].target_resource_id,
+        azurerm_monitor_diagnostic_setting.redis_database[*].target_resource_id,
+        azurerm_monitor_diagnostic_setting.key_vault[*].target_resource_id,
+        azurerm_monitor_diagnostic_setting.service_bus[*].target_resource_id,
+      ) : target if target == module.aca_env.id
+    ]) == 1
+    error_message = "Exactly one diagnostic setting must target the Container Apps environment."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_diagnostic_setting.aca_env.target_resource_id == module.aca_env.id &&
+      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == "Dedicated" &&
+      toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
+    )
+    error_message = "The setting on the environment must send ContainerAppConsoleLogs and ContainerAppSystemLogs to the resource-specific (Dedicated) tables."
+  }
+}
+
+# The environment's setting is not part of the diagnostics surface. The environment sent its logs
+# to the workspace in every mode before it moved to Azure Monitor, and the diagnostic bundle reads
+# them in every mode, so turning diagnostics off (the default outside production) must not take
+# the logs with it. Nothing is overridden, so the environment's logs_destination is the module's
+# own value.
+run "container_logs_reach_the_workspace_with_diagnostics_off" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = false
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_diagnostic_setting.app) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.postgres) == 0 &&
+      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == "Dedicated" &&
+      toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"]) &&
+      module.aca_env.logs_destination == "azure-monitor"
+    )
+    error_message = "With diagnostics off, the environment's diagnostic setting must still send both Container Apps log categories to the workspace."
   }
 }
 
@@ -2904,7 +3046,8 @@ run "diagnostic_settings_name_their_log_categories" {
     error_message = "The Service Bus setting must send OperationalLogs and DiagnosticErrorLogs and no other log category."
   }
 
-  # The per-app settings stay metrics-only: the environment already sends the apps' logs.
+  # The per-app settings stay metrics-only: the diagnostic setting on the environment already
+  # sends the apps' logs.
   assert {
     condition = alltrue([
       for app, setting in azurerm_monitor_diagnostic_setting.app : length(setting.enabled_log) == 0
