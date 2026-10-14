@@ -5,8 +5,10 @@
 # and are answered by different alerts. Lightweight and on-by-default in production;
 # opt-in-able elsewhere.
 #
-# Diagnostic settings use the portable "allLogs" category group + "AllMetrics" so category
-# names never drift per resource/API version. Alerts route to an optional action group; with
+# Each diagnostic setting names its log categories rather than asking for a category group
+# such as "allLogs": a group grows whenever Azure adds a category to the resource type, and a
+# new category can carry content (query text, caller identities) this install never chose to
+# send to its workspace. Metrics stay "AllMetrics". Alerts route to an optional action group; with
 # no alert_email set the alerts still fire and record, they just do not notify (wire the
 # action group by setting alert_email, or point alert_action_group_id at an existing group).
 #
@@ -261,8 +263,12 @@ resource "azurerm_monitor_diagnostic_setting" "postgres" {
   target_resource_id         = azurerm_postgresql_flexible_server.this[0].id
   log_analytics_workspace_id = module.logs.id
 
+  # The server's own log, which the diagnostic bundle reads (AzureDiagnostics, Category ==
+  # "PostgreSQLLogs"); main.tf sets what that log may carry. The session, Query Store, table
+  # and transaction categories are not sent: Query Store runtime carries query text, and
+  # nothing in this module or the bundle reads any of them.
   enabled_log {
-    category_group = "allLogs"
+    category = "PostgreSQLLogs"
   }
   enabled_metric {
     category = "AllMetrics"
@@ -277,14 +283,14 @@ resource "azurerm_monitor_diagnostic_setting" "redis" {
   log_analytics_workspace_id = module.logs.id
 
   # Logs split by offering (ADR 0071). Microsoft.Cache/redis carries its log categories on the
-  # cache itself. Microsoft.Cache/redisEnterprise carries NONE on the cluster — its only
+  # cache itself: the connected-client list, and the audit of Microsoft Entra authentication
+  # (entra-auth.tf). Microsoft.Cache/redisEnterprise carries NONE on the cluster — its only
   # category (ConnectionEvents -> REDConnectionEvents) lives on the redisEnterprise/databases
-  # child, so it is wired by the second setting below. Asking for allLogs on a resource type
-  # with no categories is what we are avoiding here.
+  # child, so it is wired by the second setting below.
   dynamic "enabled_log" {
-    for_each = local.use_legacy_redis ? [1] : []
+    for_each = local.use_legacy_redis ? toset(["ConnectedClientList", "MSEntraAuthenticationAuditLog"]) : toset([])
     content {
-      category_group = "allLogs"
+      category = enabled_log.value
     }
   }
 
@@ -304,25 +310,34 @@ resource "azurerm_monitor_diagnostic_setting" "redis_database" {
   log_analytics_workspace_id = module.logs.id
 
   enabled_log {
-    category_group = "allLogs"
+    category = "ConnectionEvents"
   }
 }
 
+# The vault's audit log, in the resource-specific AZKVAuditLogs table rather than the shared
+# AzureDiagnostics one: typed columns, and a table of its own that a retention or access rule
+# can be set on. The diagnostic bundle reads it there. The Azure Policy evaluation category is
+# not sent; it describes policy assignments, not the vault's own operations.
 resource "azurerm_monitor_diagnostic_setting" "key_vault" {
   count = local.diag_key_vault ? 1 : 0
 
-  name                       = "diag-${var.name_prefix}-kv"
-  target_resource_id         = azurerm_key_vault.this[0].id
-  log_analytics_workspace_id = module.logs.id
+  name                           = "diag-${var.name_prefix}-kv"
+  target_resource_id             = azurerm_key_vault.this[0].id
+  log_analytics_workspace_id     = module.logs.id
+  log_analytics_destination_type = "Dedicated"
 
   enabled_log {
-    category_group = "allLogs"
+    category = "AuditEvent"
   }
   enabled_metric {
     category = "AllMetrics"
   }
 }
 
+# Management operations on the namespace, and the errors its clients hit (throttling, quota,
+# authorization). The per-operation runtime audit, the application metrics and the network
+# filtering logs are not sent: the first records every send and receive with its caller, and
+# the metric alert on dead-lettered messages already reads the namespace's metrics.
 resource "azurerm_monitor_diagnostic_setting" "service_bus" {
   count = local.diag_service_bus ? 1 : 0
 
@@ -331,7 +346,10 @@ resource "azurerm_monitor_diagnostic_setting" "service_bus" {
   log_analytics_workspace_id = module.logs.id
 
   enabled_log {
-    category_group = "allLogs"
+    category = "OperationalLogs"
+  }
+  enabled_log {
+    category = "DiagnosticErrorLogs"
   }
   enabled_metric {
     category = "AllMetrics"

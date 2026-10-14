@@ -1,0 +1,1 @@
+{ "tables": [ { "name": "PrimaryResult", "columns": [ { "name": "OperationName", "type": "string" }, { "name": "ResultSignature", "type": "string" }, { "name": "HttpStatusCode", "type": "int" }, { "name": "events", "type": "long" }, { "name": "latest", "type": "datetime" } ], "rows": [ [ "SecretGet", "Forbidden", 403, 12, "2026-10-14T08:41:07Z" ] ] } ] }

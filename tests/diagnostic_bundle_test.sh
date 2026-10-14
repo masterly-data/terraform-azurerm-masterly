@@ -112,6 +112,7 @@ case "\$1 \${2:-} \${3:-}" in
   "version "*)                              echo "2.89.1" ;;
   "postgres flexible-server list")          echo "psql-masterly-x7k2q" ;;
   "postgres flexible-server show")          cat "\$F/postgres-show.json" ;;
+  "keyvault list "*)                        echo "kv-masterly-x7k2q" ;;
   "monitor log-analytics workspace")        echo "22222222-2222-2222-2222-222222222222" ;;
   "containerapp env show")                  cat "\$F/containerapp-env-show.json" ;;
   "containerapp show "*)
@@ -125,6 +126,9 @@ case "\$1 \${2:-} \${3:-}" in
     case "\$args" in
       *arg_max*)                       cat "\$F/rest-q1.json" ;;
       *"starting: mode="*)             cat "\$F/rest-q2.json" ;;
+      # Before q3's match: q7 summarises into an "events" column too. The query is kept so
+      # the test can read what q7 asks the workspace for.
+      *AZKVAuditLogs*)                 printf '%s\n' "\$args" > "$bindir/.q7-query"; cat "\$F/rest-q7.json" ;;
       *"summarize events"*)           cat "\$F/\$Q3" ;;
       *request_id*)                    cat "\$F/rest-q4.json" ;;
       *ContainerAppSystemLogs_CL*)     cat "\$F/rest-q5.json" ;;
@@ -184,7 +188,8 @@ scenario_clean() { # scenario_clean <script>
                 apps/ca-api.replicas.json apps/ca-workers.json apps/ca-frontend.json \
                 logs/q1-running-images.json logs/q2-boot-posture.json \
                 logs/q3-errors-by-logger.json logs/q4-request-trace.json \
-                logs/q5-revision-failures.json logs/q6-postgres-logs.json; do
+                logs/q5-revision-failures.json logs/q6-postgres-logs.json \
+                logs/q7-key-vault-failures.json; do
     if [[ -s "$bundle/$expect" ]]; then :; else fail "missing or empty: $expect"; fi
   done
   jq -e '.template.containers[0].env[] | select(.name == "MASTERLY_MODE" and .value == "production")' \
@@ -201,6 +206,25 @@ scenario_clean() { # scenario_clean <script>
     || fail "configuration.secrets should be the four names and nothing else"
   jq -e '.tables[0].rows[0][3] == "masterly.azurecr.io/api:v0.133.2"' "$bundle/logs/q1-running-images.json" >/dev/null \
     && pass "running image tags carried" || fail "q1 rows not carried as returned"
+  # The vault's audit log is read from the resource-specific table the module's diagnostic
+  # setting writes to, scoped to this install's vault, and projects no caller identity, caller
+  # address or request URI (which names the secret).
+  jq -e '.tables[0].rows[0][0] == "SecretGet" and .tables[0].rows[0][2] == 403' \
+    "$bundle/logs/q7-key-vault-failures.json" >/dev/null \
+    && pass "vault failures carried" || fail "q7 rows not carried as returned"
+  if grep -qF "AZKVAuditLogs" "$tmp/bin/.q7-query" 2>/dev/null \
+     && grep -qF 'endswith \"/vaults/kv-masterly-x7k2q\"' "$tmp/bin/.q7-query"; then
+    pass "q7 reads AZKVAuditLogs for this install's vault"
+  else
+    fail "q7 does not read AZKVAuditLogs scoped to kv-masterly-x7k2q"
+  fi
+  if grep -qiE 'Identity|CallerIpAddress|RequestUri' "$tmp/bin/.q7-query" 2>/dev/null; then
+    fail "q7 names a caller identity, caller address or request URI column"
+  else
+    pass "q7 projects no caller identity, address or request URI"
+  fi
+  jq -e '.install.key_vault == "kv-masterly-x7k2q"' "$bundle/manifest.json" >/dev/null \
+    && pass "vault named in the manifest" || fail "manifest install.key_vault is not the vault"
   jq -e '.jobs.completed_last_hour == 3' "$bundle/ops-metrics.json" >/dev/null \
     && pass "ops-metrics attached" || fail "ops-metrics.json not the fetched body"
   jq -e '[.items[] | select(.collected == false)] | length == 0' "$bundle/manifest.json" >/dev/null \
