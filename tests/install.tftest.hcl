@@ -332,7 +332,7 @@ run "production_mode_full_wiring_plans" {
       strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "union isfuzzy=true") &&
       strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]")
     )
-    error_message = "The readiness query must filter ContainerAppConsoleLogs_CL for both serving apps on the shared prefix, count distinct failing minutes against a 30-minute bar, and keep the union's empty-datatable anchor."
+    error_message = "The readiness query must filter the console log for both serving apps on the shared prefix, count distinct failing minutes against a 30-minute bar, and keep the union's empty-datatable anchor."
   }
 
   # The query's one premise, enforced rather than remembered: it counts distinct MINUTES in
@@ -551,6 +551,132 @@ run "load_alert_thresholds_are_tunable" {
       strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "P95Ms > 750")
     )
     error_message = "Each load threshold must follow its input; an explicit alert_postgres_max_connections must override the SKU-derived limit."
+  }
+}
+
+# The two console-log rules read both tables the console log can land in: the legacy custom
+# table ContainerAppConsoleLogs_CL and the resource-specific ContainerAppConsoleLogs, kept
+# together for one release cycle so neither rule goes blind while an install moves from one to
+# the other. Pinned as ONE union, in full: a second union, a dropped operand or a lost anchor
+# would each plan and apply cleanly and only show at evaluation time. The new table's columns
+# carry no `_s` suffix, so its operand renames them onto the legacy names the rest of each query,
+# and the readiness rule's ContainerAppName_s dimension, read.
+#
+# The app filters are taken from module outputs, never retyped, and pinned to exactly the apps
+# each rule is about: the api for latency, the two serving apps for readiness. ca-workers is
+# excluded from readiness by design — it has no probe and writes no readiness line — and this
+# run and the next prove the filters do not move with enable_workers, in either direction.
+run "container_log_alerts_read_both_tables_with_workers" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = true
+    enable_workers        = true
+  }
+
+  assert {
+    condition = (
+      output.workers_app_name == "ca-workers" &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency) == 1 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1
+    )
+    error_message = "This run must plan the workers app and both console-log rules, or the exclusions below prove nothing."
+  }
+
+  assert {
+    condition = (
+      length(regexall("union", azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query)) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "union isfuzzy=true\n  (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),\n  (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, Log_s),\n  (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName, Log_s = Log)\n| where ")
+    )
+    error_message = "The api latency query must read ContainerAppConsoleLogs_CL and ContainerAppConsoleLogs in one fuzzy union with the empty-datatable anchor, renaming the new table's ContainerAppName and Log onto ContainerAppName_s and Log_s."
+  }
+
+  assert {
+    condition = (
+      length(regexall("union", azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query)) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "union isfuzzy=true\n  (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),\n  (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, Log_s),\n  (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName, Log_s = Log)\n| where ")
+    )
+    error_message = "The readiness query must read ContainerAppConsoleLogs_CL and ContainerAppConsoleLogs in one fuzzy union with the empty-datatable anchor, renaming the new table's ContainerAppName and Log onto ContainerAppName_s and Log_s."
+  }
+
+  assert {
+    condition = (
+      module.api.name == "ca-api" &&
+      length(regexall("ContainerAppName_s (==|in) ", azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query)) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "| where ContainerAppName_s == \"${module.api.name}\"\n") &&
+      !strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "ca-frontend") &&
+      !strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "ca-workers")
+    )
+    error_message = "The api latency query must filter on exactly the api app, by its module output name."
+  }
+
+  assert {
+    condition = (
+      module.api.name == "ca-api" &&
+      module.frontend.name == "ca-frontend" &&
+      length(regexall("ContainerAppName_s (==|in) ", azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query)) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "| where ContainerAppName_s in (\"${module.api.name}\", \"${module.frontend.name}\")\n") &&
+      !strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "ca-workers")
+    )
+    error_message = "The readiness query must filter on exactly the api and the frontend, by their module output names, and never on ca-workers."
+  }
+}
+
+run "container_log_alerts_read_both_tables_without_workers" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = true
+    enable_workers        = false
+  }
+
+  assert {
+    condition = (
+      output.workers_app_name == null &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency) == 1 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1
+    )
+    error_message = "This run must plan no workers app and both console-log rules."
+  }
+
+  assert {
+    condition = (
+      length(regexall("union", azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query)) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "union isfuzzy=true\n  (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),\n  (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, Log_s),\n  (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName, Log_s = Log)\n| where ")
+    )
+    error_message = "The api latency query must read ContainerAppConsoleLogs_CL and ContainerAppConsoleLogs in one fuzzy union with the empty-datatable anchor, renaming the new table's ContainerAppName and Log onto ContainerAppName_s and Log_s."
+  }
+
+  assert {
+    condition = (
+      length(regexall("union", azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query)) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "union isfuzzy=true\n  (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),\n  (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, Log_s),\n  (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName, Log_s = Log)\n| where ")
+    )
+    error_message = "The readiness query must read ContainerAppConsoleLogs_CL and ContainerAppConsoleLogs in one fuzzy union with the empty-datatable anchor, renaming the new table's ContainerAppName and Log onto ContainerAppName_s and Log_s."
+  }
+
+  assert {
+    condition = (
+      module.api.name == "ca-api" &&
+      length(regexall("ContainerAppName_s (==|in) ", azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query)) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "| where ContainerAppName_s == \"${module.api.name}\"\n") &&
+      !strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "ca-frontend") &&
+      !strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "ca-workers")
+    )
+    error_message = "The api latency query must filter on exactly the api app, by its module output name."
+  }
+
+  assert {
+    condition = (
+      module.api.name == "ca-api" &&
+      module.frontend.name == "ca-frontend" &&
+      length(regexall("ContainerAppName_s (==|in) ", azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query)) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "| where ContainerAppName_s in (\"${module.api.name}\", \"${module.frontend.name}\")\n") &&
+      !strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "ca-workers")
+    )
+    error_message = "The readiness query must filter on exactly the api and the frontend, by their module output names; dropping the workers app must not drop a serving app."
   }
 }
 

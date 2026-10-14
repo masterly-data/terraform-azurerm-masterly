@@ -898,7 +898,7 @@ pages on a normal working day is one you will learn to ignore.
 | `postgres-connections` | Postgres `active_connections` averages above the threshold's share of `max_connections` for 15 minutes | `alert_postgres_connections_percent` (70), `alert_postgres_max_connections` (null) | The server is nearing its connection limit, past which it refuses new connections and requests fail. Each Masterly Environment keeps its own pool, so the count grows with Environments and replicas as well as with load. | Check how many api and workers replicas are running and how many Environments the install hosts. Size the server up (a larger SKU has a higher default limit) or raise its `max_connections` parameter. |
 | `postgres-iops` | Postgres `disk_iops_consumed_percentage` averages above the threshold for 15 minutes | `alert_postgres_iops_percent` (80) | The disk is near the IOPS its storage tier provides. At the limit, I/O queues and every query slows at once. | Raise `postgres_storage_mb` (IOPS grow with the storage size) or the server's storage performance tier. |
 | `servicebus-dead-letters` | The `masterly-jobs` queue's dead-letter sub-queue holds more messages than the threshold (`enable_service_bus` only) | `alert_servicebus_dead_letter_threshold` (0) | A worker failed to process a job notification ten times and Service Bus set it aside. The jobs themselves are still in the Environment's database, but the message that should have woken a worker for them is gone, so work can wait with nothing else reporting it. | Read the dead-letter reason on the messages and the `ca-workers` logs around that time. Resubmit the messages once the cause is fixed, or remove them. The alert stays active while dead-lettered messages remain, and clears when they are gone. |
-| `api-latency` | The 95th percentile of the api's own request durations exceeds the threshold over 15 minutes, with at least 50 requests in that window | `alert_api_p95_ms` (2000) | Requests are slowing under load. The duration is measured inside the api, so clients see at least this much. Bulk exports, the assistant's streaming chat and the MCP channel are left out, because their duration is the size of the answer. | Look at the Postgres load alerts first — a slow database is the usual cause. Then find the slow routes in the workspace: `ContainerAppConsoleLogs_CL` for `ca-api` carries one `<METHOD> <route> -> <status> in <ms>ms` line per request. The default is a placeholder: set it from a load test of your install. |
+| `api-latency` | The 95th percentile of the api's own request durations exceeds the threshold over 15 minutes, with at least 50 requests in that window | `alert_api_p95_ms` (2000) | Requests are slowing under load. The duration is measured inside the api, so clients see at least this much. Bulk exports, the assistant's streaming chat and the MCP channel are left out, because their duration is the size of the answer. | Look at the Postgres load alerts first — a slow database is the usual cause. Then find the slow routes in the workspace: the console log for `ca-api` carries one `<METHOD> <route> -> <status> in <ms>ms` line per request, in `ContainerAppConsoleLogs` (column `Log`) or the legacy `ContainerAppConsoleLogs_CL` (column `Log_s`). The rule reads both tables, and keeps the legacy one for one release cycle. The default is a placeholder: set it from a load test of your install. |
 | `workers-memory` | A `ca-workers` replica's memory working set rises above the threshold's share of its memory, at any point in 15 minutes (`enable_workers` only) | `alert_workers_memory_percent` (85) | A worker is close to its memory limit. A replica that reaches it is stopped mid-job, and the job is retried against the same data. | Find the job kind running at the time in the `ca-workers` logs. Split the work (smaller ingest batches) or give the workers more memory. |
 
 The connections alert needs the server's `max_connections`, which Azure publishes only as a
@@ -912,7 +912,9 @@ the parameter on the server.
 None of these needs anything beyond `enable_diagnostics`: the metric alerts read the platform
 metrics every Postgres server, Container App and Service Bus namespace publishes, and the latency
 rule reads the console log the Container Apps environment already sends to the install's
-workspace.
+workspace. It reads both tables that log can land in, the resource-specific
+`ContainerAppConsoleLogs` and the legacy `ContainerAppConsoleLogs_CL`, and so does
+`app-not-ready`; the legacy table stays in both queries for one release cycle.
 
 **Not covered: the age of the oldest queued job.** It is the most direct load signal for the
 async pipeline — how long work waits before a worker starts it — and the module does not alert
@@ -947,8 +949,9 @@ Not detected, and no alert here should be read as covering it:
   sustained case — the wedged replica that `<app>-unavailable` reads as a healthy 1 — but it is
   deliberately slow, because a cold start fails readiness legitimately for minutes at a time and
   an alert that pages on every deploy is one you learn to mute. A wedge that clears inside the
-  window is invisible here; it is visible in the workspace, in `ContainerAppConsoleLogs_CL`,
-  where the same line the alert reads is queryable at any resolution you like. A synthetic check
+  window is invisible here; it is visible in the workspace, in `ContainerAppConsoleLogs` (or the
+  legacy `ContainerAppConsoleLogs_CL`), where the same line the alert reads is queryable at any
+  resolution you like. A synthetic check
   against the install's own URL, run from wherever you already monitor, is still the faster
   signal and still worth having; the module ships none, for the vantage-point reason given in
   "An app that is up, answering, and wrong" below.
