@@ -4,10 +4,21 @@
 #
 # It collects, from YOUR subscription and YOUR Log Analytics workspace, what a support
 # conversation with Masterly starts from: the images actually running, boot posture per
-# revision, errors by logger, one request end to end (with --request-id), revision
-# provisioning failures, the starter server's Postgres logs, the Key Vault operations that
-# failed, the apps' configuration STATE, and the alert set. It writes all of it to a
-# directory you read before you send it.
+# revision, backend errors and frontend warnings by logger, one request end to end (with
+# --request-id), revision provisioning failures, the starter server's Postgres logs, the Key
+# Vault operations that failed, the apps' configuration STATE, and the alert set. It writes all
+# of it to a directory you read before you send it.
+#
+# The app log queries, and which apps each one covers:
+#   q1 running images         ca-api, ca-workers, ca-frontend
+#   q2 boot posture           ca-api, ca-workers
+#   q3 errors by logger       ERROR lines from ca-api and ca-workers, WARNING lines from ca-frontend
+#   q4 request trace          ca-api, ca-workers
+#   q5 revision failures      ca-api, ca-workers, ca-frontend
+# q1..q4 read the console logs and q5 the system logs. Each query reads both the legacy table
+# (ContainerAppConsoleLogs_CL / ContainerAppSystemLogs_CL) and the resource-specific one
+# (ContainerAppConsoleLogs / ContainerAppSystemLogs), so it finds the lines whichever way the
+# environment sends its logs, and its columns keep the legacy names in both cases.
 #
 # What it never carries, by construction rather than by care:
 #   * no secret values — Container App secrets are listed by NAME only, and an environment
@@ -112,12 +123,18 @@ if [[ -n "$API_URL" && -z "${MASTERLY_API_TOKEN:-}" ]]; then
   exit 2
 fi
 
-# --- Names the module fixes per install (main.tf) ------------------------------------
+# --- Names the module fixes per install (main.tf, workers.tf) -------------------------
 RG_ACA="rg-${NAME_PREFIX}-aca"
 RG_DATA="rg-${NAME_PREFIX}-data"
 ACA_ENV="aca-${NAME_PREFIX}"
 WORKSPACE="log-${NAME_PREFIX}"
-APPS="ca-api ca-workers ca-frontend"
+# The one list of app names. Every app filter in the log queries below is built from it, so a
+# query cannot name an app the module does not create, or quietly miss one it does.
+APPS=(ca-api ca-workers ca-frontend)
+# By position in APPS: the two apps that run the api image, and write the JSON log envelope
+# q2..q4 parse, and the frontend.
+BACKEND_APPS=("${APPS[0]}" "${APPS[1]}")
+FRONTEND_APP="${APPS[2]}"
 
 # Environment variables whose VALUE is copied into the bundle. Everything else the apps
 # carry is listed by name only. The rule for adding one: it must be configuration state a
@@ -268,7 +285,7 @@ fi
 
 # --- 2. The apps: configuration state, revisions, replicas -------------------------------
 head2 "Container Apps"
-for app in $APPS; do
+for app in "${APPS[@]}"; do
   # The filter is a jq program: `$allow` and `$n` are jq's own, bound by --argjson and by
   # `.name as $n`, and the single quotes are what keeps the shell from touching them.
   # shellcheck disable=SC2016
@@ -396,14 +413,53 @@ kql() { # kql <item> <outfile> <timespan> <query>
   fi
 }
 
-kql "logs:q1-running-images" "$BUNDLE/logs/q1-running-images.json" "PT2H" '
-ContainerAppConsoleLogs_CL
-| where ContainerAppName_s in ("ca-api", "ca-workers", "ca-frontend")
+# kql_names <app>... — the apps as the inside of a KQL `in (...)` list: "ca-api", "ca-workers"
+kql_names() {
+  local out="" app
+  for app in "$@"; do out="${out:+$out, }\"$app\""; done
+  printf '%s' "$out"
+}
+BACKEND_APPS_KQL=$(kql_names "${BACKEND_APPS[@]}")
+ALL_APPS_KQL=$(kql_names "${APPS[@]}")
+
+# The apps' logs can be in either of two tables, and q1..q5 read both. A Container App
+# Environment that sends its logs straight to the workspace writes the legacy custom tables,
+# ContainerAppConsoleLogs_CL and ContainerAppSystemLogs_CL. One that sends them through a
+# diagnostic setting writes the resource-specific tables, ContainerAppConsoleLogs and
+# ContainerAppSystemLogs. When an install moves from one to the other, the window a query reads
+# can span both tables. Each query reads both through one union:
+#
+#   * `isfuzzy=true` drops a table that does not exist. A workspace only has the tables that
+#     have received data, so on most installs one of the two is missing.
+#   * The empty `datatable` anchor keeps the union valid when NEITHER table exists yet. A fuzzy
+#     union whose only remaining operand is missing fails with SEM0104 instead of returning
+#     nothing. diagnostics.tf uses the same anchor, and explains it there.
+#   * The resource-specific table's columns are renamed to the legacy names (ContainerAppName
+#     to ContainerAppName_s, and so on), so each exported file keeps the column names it has
+#     always had, whichever table a row came from.
+CONSOLE_LOGS='union isfuzzy=true
+  (datatable(TimeGenerated:datetime, ContainerAppName_s:string, RevisionName_s:string,
+             ContainerImage_s:string, Log_s:string)[]),
+  (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, RevisionName_s,
+                                        ContainerImage_s, Log_s),
+  (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName,
+                                     RevisionName_s = RevisionName,
+                                     ContainerImage_s = ContainerImage, Log_s = Log)'
+SYSTEM_LOGS='union isfuzzy=true
+  (datatable(TimeGenerated:datetime, ContainerAppName_s:string, RevisionName_s:string,
+             Log_s:string)[]),
+  (ContainerAppSystemLogs_CL | project TimeGenerated, ContainerAppName_s, RevisionName_s, Log_s),
+  (ContainerAppSystemLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName,
+                                    RevisionName_s = RevisionName, Log_s = Log)'
+
+kql "logs:q1-running-images" "$BUNDLE/logs/q1-running-images.json" "PT2H" "
+$CONSOLE_LOGS"'
+| where ContainerAppName_s in ('"$ALL_APPS_KQL"')
 | summarize arg_max(TimeGenerated, RevisionName_s, ContainerImage_s) by ContainerAppName_s'
 
-kql "logs:q2-boot-posture" "$BUNDLE/logs/q2-boot-posture.json" "P7D" '
-ContainerAppConsoleLogs_CL
-| where ContainerAppName_s in ("ca-api", "ca-workers")
+kql "logs:q2-boot-posture" "$BUNDLE/logs/q2-boot-posture.json" "P7D" "
+$CONSOLE_LOGS"'
+| where ContainerAppName_s in ('"$BACKEND_APPS_KQL"')
 | where Log_s has "starting: mode="
 | extend b = parse_json(Log_s)
 | project TimeGenerated, ContainerAppName_s, RevisionName_s, ContainerImage_s,
@@ -415,11 +471,20 @@ ContainerAppConsoleLogs_CL
           bus_binding = tostring(b.bus_binding)
 | order by TimeGenerated desc'
 
-kql "logs:q3-errors-by-logger" "$BUNDLE/logs/q3-errors-by-logger.json" "$SINCE" '
-ContainerAppConsoleLogs_CL
-| where ContainerAppName_s in ("ca-api", "ca-workers")
+# q3 counts the backends' ERROR lines and the frontend's WARNING lines, by app and logger. A
+# ca-frontend row therefore counts warnings, and a ca-api or ca-workers row counts errors.
+# The frontend's lines count as warnings when they carry a JSON envelope at WARN or WARNING
+# level, or, with no envelope, when the line says warn or warning, or is the
+# `readiness check failed` line it writes at WARNING on a failing probe (diagnostics.tf).
+kql "logs:q3-errors-by-logger" "$BUNDLE/logs/q3-errors-by-logger.json" "$SINCE" "
+$CONSOLE_LOGS"'
+| where ContainerAppName_s in ('"$ALL_APPS_KQL"')
 | extend b = parse_json(Log_s)
-| where tostring(b.level) == "ERROR"
+| extend level = tostring(b.level)
+| where (ContainerAppName_s in ('"$BACKEND_APPS_KQL"') and level == "ERROR")
+     or (ContainerAppName_s == "'"$FRONTEND_APP"'" and (toupper(level) in ("WARN", "WARNING")
+         or (isempty(level) and (Log_s matches regex @"(?i)\bwarn(ing)?\b"
+                                 or Log_s contains "readiness check failed"))))
 | summarize events = count(), latest = max(TimeGenerated)
     by ContainerAppName_s, logger = tostring(b.logger)
 | order by events desc'
@@ -428,9 +493,9 @@ if [[ -n "$REQUEST_ID" ]]; then
   # The request id is interpolated as a KQL string literal; escape the two characters that
   # could end it. It is an identifier the caller typed, and it is recorded in the manifest.
   rid_lit=${REQUEST_ID//\\/\\\\}; rid_lit=${rid_lit//\"/\\\"}
-  kql "logs:q4-request-trace" "$BUNDLE/logs/q4-request-trace.json" "$SINCE" '
-ContainerAppConsoleLogs_CL
-| where ContainerAppName_s in ("ca-api", "ca-workers")
+  kql "logs:q4-request-trace" "$BUNDLE/logs/q4-request-trace.json" "$SINCE" "
+$CONSOLE_LOGS"'
+| where ContainerAppName_s in ('"$BACKEND_APPS_KQL"')
 | extend b = parse_json(Log_s)
 | where tostring(b.request_id) == "'"$rid_lit"'"
 | project TimeGenerated, ContainerAppName_s, RevisionName_s,
@@ -441,9 +506,9 @@ else
   record "logs:q4-request-trace" false "no --request-id given — the single highest-value item; re-run with the X-Request-Id of the failing call if you have one"
 fi
 
-kql "logs:q5-revision-failures" "$BUNDLE/logs/q5-revision-failures.json" "P7D" '
-ContainerAppSystemLogs_CL
-| where ContainerAppName_s in ("ca-api", "ca-workers", "ca-frontend")
+kql "logs:q5-revision-failures" "$BUNDLE/logs/q5-revision-failures.json" "P7D" "
+$SYSTEM_LOGS"'
+| where ContainerAppName_s in ('"$ALL_APPS_KQL"')
 | where Log_s has_any ("Error provisioning revision", "ErrImagePull",
                        "ContainerCrashing", "Timeout")
 | project TimeGenerated, ContainerAppName_s, RevisionName_s, Log_s
@@ -654,7 +719,16 @@ What is here
   apps/<app>.revisions.json, apps/<app>.replicas.json
                            revisions and their replicas — the image tags actually running
   alerts.json              the alert set, and how many receivers each action group has
-  logs/q1..q6-*.json       the six published Log Analytics queries, as the API returned them
+  logs/q1..q6-*.json       the six published Log Analytics queries, as the API returned them:
+                           q1 running images (ca-api, ca-workers, ca-frontend)
+                           q2 boot posture (ca-api, ca-workers)
+                           q3 errors by logger: ERROR lines from ca-api and ca-workers, and
+                              WARNING lines from ca-frontend, so a ca-frontend row counts warnings
+                           q4 request trace (ca-api, ca-workers; only with --request-id)
+                           q5 revision failures (ca-api, ca-workers, ca-frontend)
+                           q6 the starter server's Postgres logs (absent on BYO-DB)
+                           q1..q5 read both the legacy and the resource-specific Container Apps
+                           log tables, and keep the legacy column names in both cases
   logs/q7-key-vault-failures.json
                            the vault's failed operations from AZKVAuditLogs, by operation
                            and result code (absent without a vault)

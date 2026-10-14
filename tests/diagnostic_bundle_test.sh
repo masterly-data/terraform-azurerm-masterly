@@ -24,6 +24,12 @@
 #   3. manifest.json's `.tool` names the version of the TREE THE SCRIPT RAN FROM, and never a
 #      version that tree is not. That is asserted in its own scenario, against a staged module
 #      root, because inside this repository the true answer and the wrong one look alike.
+#   4. The app log queries q1..q5 read both the legacy _CL table and the resource-specific one,
+#      under the legacy column names, and each covers the apps it says it does: q1, q3 and q5
+#      ca-api, ca-workers and ca-frontend, and q2 and q4 ca-api and ca-workers, with q3 counting
+#      ca-frontend on its warning lines. The fake `az` answers a table's fixture rows only when
+#      the query names that table, and only for the apps the query's filter names, so rows from
+#      both tables reaching the bundle is evidence, not decoration.
 #
 # It runs the real script against a fake `az` and a fake `curl` (tests/fixtures/
 # diagnostic-bundle/) whose answers are SEEDED with values that must never reach the bundle:
@@ -39,11 +45,13 @@
 # allow-list cannot see, and asserts the refusal gate fires: exit 3, the directory renamed
 # `-REFUSED`, the finding reported by file and line and never by content.
 #
-# `--selftest` is the part that keeps this honest. It copies the script, breaks it seven ways
+# `--selftest` is the part that keeps this honest. It copies the script, breaks it eleven ways
 # a real regression would — keep every env value, keep secret values, disable the gate,
 # disable the statement-echo warning, disable only its pattern scan, name only the files the
-# scan matched, take the version from the release manifest when the tree could answer — and
-# asserts that THIS harness fails against each broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
+# scan matched, take the version from the release manifest when the tree could answer, drop
+# the resource-specific console or system table from its union, drop ca-frontend from the app
+# list, count ca-frontend on ERROR rather than warning lines — and asserts that THIS harness
+# fails against each broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
 # that a detector that has quietly stopped detecting fails the build instead of passing it.
 # Each break is checked to have actually changed the copy, so a stale sed cannot turn the
 # selftest vacuous.
@@ -97,47 +105,90 @@ fail() { printf '  FAIL    %s\n' "$*"; failures=$((failures + 1)); }
 # Answers the commands the script issues, from fixtures, by command — it evaluates no JMESPath,
 # so what it returns for a `--query` is what that query would have projected. The jq
 # projections under test run inside the real script, on these full documents.
+#
+# Log queries are answered from the query text. Each query is saved as $bindir/.<q>-query so
+# the test can read what the workspace was asked. q1..q5 are answered the way their union
+# would be: q1..q4 have a fixture per console-log table and q5 one per system-log table
+# (rest-<q>.json for the legacy _CL table, rest-<q>-new-table.json for the resource-specific
+# one). The answer carries a fixture's rows only when the query names that fixture's table, and
+# only the rows for the apps the query's `where ContainerAppName_s in (...)` filter names. So a
+# fixture row that reaches the bundle proves the query reads that table and covers that app.
 make_fakes() { # make_fakes <bindir> <fixtures> <q3 fixture name> [<q6 fixture name>]
   local bindir="$1" fixtures="$2" q3="$3" q6="${4:-rest-q6.json}"
   mkdir -p "$bindir"
-  cat > "$bindir/az" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-F="$fixtures"
-Q3="$q3"
-Q6="$q6"
-args="\$*"
-case "\$1 \${2:-} \${3:-}" in
+  {
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf 'F=%q\nB=%q\nQ3=%q\nQ6=%q\n' "$fixtures" "$bindir" "$q3" "$q6"
+    cat <<'EOF'
+args="$*"
+
+logs_query() { # logs_query <az args...> — the KQL in the --body the script posts
+  local prev="" a
+  for a in "$@"; do
+    if [[ "$prev" == "--body" ]]; then jq -r '.query' <<<"$a"; return 0; fi
+    prev="$a"
+  done
+  echo "fake az: a log query with no --body" >&2; return 1
+}
+
+union_answer() { # union_answer <query> <table> <legacy fixture> <new-table fixture>
+  local query="$1" table="$2" legacy="$3" new="$4" apps files=()
+  if grep -qE "(^|[^[:alnum:]_])${table}_CL([^[:alnum:]_]|$)" <<<"$query"; then files+=("$F/$legacy"); fi
+  if grep -qE "(^|[^[:alnum:]_])${table}([^[:alnum:]_]|$)" <<<"$query"; then files+=("$F/$new"); fi
+  apps=$(sed -nE 's/.*where ContainerAppName_s in \(([^)]*)\).*/\1/p' <<<"$query" | head -n1 \
+           | { grep -oE '"[^"]+"' || true; } | jq -s -c '.')
+  if [[ -z "${files[*]:-}" ]]; then jq -c '.tables[0].rows = []' "$F/$legacy"; return 0; fi
+  # Both tables answer under the same column names — the renames in the query's union are
+  # what makes that true of the real workspace, and the fixtures must agree on it too.
+  jq -s -c --argjson apps "$apps" '
+    .[0].tables[0].columns as $cols
+    | if any(.[]; .tables[0].columns != $cols) then error("fixtures disagree on the columns") else . end
+    | ($cols | map(.name) | index("ContainerAppName_s")) as $i
+    | {tables: [{name: "PrimaryResult", columns: $cols,
+                 rows: [.[].tables[0].rows[] | select(.[$i] as $app | $apps | index($app))]}]}' \
+    "${files[@]}"
+}
+
+case "$1 ${2:-} ${3:-}" in
   "account show "*)                         echo "Enabled" ;;
   "version "*)                              echo "2.89.1" ;;
   "postgres flexible-server list")          echo "psql-masterly-x7k2q" ;;
-  "postgres flexible-server show")          cat "\$F/postgres-show.json" ;;
+  "postgres flexible-server show")          cat "$F/postgres-show.json" ;;
   "keyvault list "*)                        echo "kv-masterly-x7k2q" ;;
   "monitor log-analytics workspace")        echo "22222222-2222-2222-2222-222222222222" ;;
-  "containerapp env show")                  cat "\$F/containerapp-env-show.json" ;;
+  "containerapp env show")                  cat "$F/containerapp-env-show.json" ;;
   "containerapp show "*)
-    app=\$(printf '%s\n' "\$args" | sed -E 's/.* -n ([^ ]+).*/\1/'); cat "\$F/containerapp-show-\$app.json" ;;
-  "containerapp revision list")             cat "\$F/containerapp-revision-list.json" ;;
-  "containerapp replica list")              cat "\$F/containerapp-replica-list.json" ;;
-  "monitor metrics alert")                  cat "\$F/metrics-alert-list.json" ;;
+    app=$(printf '%s\n' "$args" | sed -E 's/.* -n ([^ ]+).*/\1/'); cat "$F/containerapp-show-$app.json" ;;
+  "containerapp revision list")             cat "$F/containerapp-revision-list.json" ;;
+  "containerapp replica list")              cat "$F/containerapp-replica-list.json" ;;
+  "monitor metrics alert")                  cat "$F/metrics-alert-list.json" ;;
   "resource list "*)                        echo '["alert-masterly-postgres-silent"]' ;;
-  "monitor action-group list")              cat "\$F/action-group-list.json" ;;
+  "monitor action-group list")              cat "$F/action-group-list.json" ;;
   "rest "*)
-    case "\$args" in
-      *arg_max*)                       cat "\$F/rest-q1.json" ;;
-      *"starting: mode="*)             cat "\$F/rest-q2.json" ;;
-      # Before q3's match: q7 summarises into an "events" column too. The query is kept so
-      # the test can read what q7 asks the workspace for.
-      *AZKVAuditLogs*)                 printf '%s\n' "\$args" > "$bindir/.q7-query"; cat "\$F/rest-q7.json" ;;
-      *"summarize events"*)           cat "\$F/\$Q3" ;;
-      *request_id*)                    cat "\$F/rest-q4.json" ;;
-      *ContainerAppSystemLogs_CL*)     cat "\$F/rest-q5.json" ;;
-      *PostgreSQLLogs*)                cat "\$F/\$Q6" ;;
+    query=$(logs_query "$@")
+    case "$query" in
+      *arg_max*)                 q=q1 ;;
+      *"starting: mode="*)       q=q2 ;;
+      # Before q3's match: q7 summarises into an "events" column too.
+      *AZKVAuditLogs*)           q=q7 ;;
+      *"summarize events"*)      q=q3 ;;
+      *request_id*)              q=q4 ;;
+      *ContainerAppSystemLogs*)  q=q5 ;;
+      *PostgreSQLLogs*)          q=q6 ;;
       *) echo "fake az: unknown query" >&2; exit 1 ;;
+    esac
+    printf '%s\n' "$query" > "$B/.$q-query"
+    case "$q" in
+      q1|q2|q4) union_answer "$query" ContainerAppConsoleLogs "rest-$q.json" "rest-$q-new-table.json" ;;
+      q3)       union_answer "$query" ContainerAppConsoleLogs "$Q3" "rest-q3-new-table.json" ;;
+      q5)       union_answer "$query" ContainerAppSystemLogs "rest-q5.json" "rest-q5-new-table.json" ;;
+      q6)       cat "$F/$Q6" ;;
+      q7)       cat "$F/rest-q7.json" ;;
     esac ;;
-  *) echo "fake az: unhandled command: \$args" >&2; exit 1 ;;
+  *) echo "fake az: unhandled command: $args" >&2; exit 1 ;;
 esac
 EOF
+  } > "$bindir/az"
   # The fake curl records that it was handed a bearer token (so the test can prove the token
   # was USED and still never written) and answers with the metrics fixture.
   cat > "$bindir/curl" <<EOF
@@ -157,6 +208,11 @@ EOF
   chmod +x "$bindir/az" "$bindir/curl"
 }
 
+apps_in() { # apps_in — the apps quoted in the first `ContainerAppName_s in (...)` on stdin, sorted
+  sed -nE 's/.*ContainerAppName_s in \(([^)]*)\).*/\1/p' | head -n1 \
+    | { grep -oE '"[^"]+"' || true; } | tr -d '"' | sort | paste -sd' ' -
+}
+
 # --- Scenarios ------------------------------------------------------------------------------
 # Each scenario runs the script under test and returns non-zero when an assertion fails.
 
@@ -164,7 +220,9 @@ EOF
 # that A && B || C is not if-then-else in general. It is here: `pass` is a bare `printf`, so C
 # cannot run when A succeeded. Keep that true — an assertion helper that can fail would make
 # every line below report a failure it did not see.
-# shellcheck disable=SC2015
+# SC2016 too: the `$b`, `$f`, `$r` and `$i` in the single-quoted programs below are jq's own
+# variables, not the shell's.
+# shellcheck disable=SC2015,SC2016
 scenario_clean() { # scenario_clean <script>
   local script="$1" tmp bundle rc
   tmp=$(mktemp -d)
@@ -213,7 +271,7 @@ scenario_clean() { # scenario_clean <script>
     "$bundle/logs/q7-key-vault-failures.json" >/dev/null \
     && pass "vault failures carried" || fail "q7 rows not carried as returned"
   if grep -qF "AZKVAuditLogs" "$tmp/bin/.q7-query" 2>/dev/null \
-     && grep -qF 'endswith \"/vaults/kv-masterly-x7k2q\"' "$tmp/bin/.q7-query"; then
+     && grep -qF 'endswith "/vaults/kv-masterly-x7k2q"' "$tmp/bin/.q7-query"; then
     pass "q7 reads AZKVAuditLogs for this install's vault"
   else
     fail "q7 does not read AZKVAuditLogs scoped to kv-masterly-x7k2q"
@@ -223,6 +281,57 @@ scenario_clean() { # scenario_clean <script>
   else
     pass "q7 projects no caller identity, address or request URI"
   fi
+
+  # q1..q5 read both the legacy _CL table and the resource-specific one, in a fuzzy union that
+  # renames the resource-specific columns to the legacy names; each covers the apps it should;
+  # and rows from BOTH tables' fixtures reach the bundle (the fake answers a table's rows only
+  # when the query names it, and only for the apps its filter names).
+  local qs=(q1 q2 q3 q4 q5)
+  local files=(q1-running-images q2-boot-posture q3-errors-by-logger q4-request-trace q5-revision-failures)
+  local want_apps=("ca-api ca-frontend ca-workers" "ca-api ca-workers" "ca-api ca-frontend ca-workers"
+                   "ca-api ca-workers" "ca-api ca-frontend ca-workers")
+  local i q qf table got fx legacy
+  for i in "${!qs[@]}"; do
+    q="${qs[$i]}"; qf="$tmp/bin/.$q-query"
+    if [[ "$q" == q5 ]]; then table=ContainerAppSystemLogs; else table=ContainerAppConsoleLogs; fi
+    if grep -qE "(^|[^[:alnum:]_])${table}_CL([^[:alnum:]_]|$)" "$qf" 2>/dev/null \
+       && grep -qE "(^|[^[:alnum:]_])${table}([^[:alnum:]_]|$)" "$qf" \
+       && grep -qF "union isfuzzy=true" "$qf" && grep -qF "datatable(" "$qf" \
+       && grep -qF "ContainerAppName_s = ContainerAppName" "$qf" \
+       && grep -qF "RevisionName_s = RevisionName" "$qf" && grep -qF "Log_s = Log" "$qf"; then
+      pass "$q reads ${table}_CL and $table in an anchored fuzzy union under the legacy column names"
+    else
+      fail "$q does not read ${table}_CL and $table in an anchored fuzzy union renaming to the legacy columns"
+    fi
+    got=$({ grep -F 'where ContainerAppName_s in (' "$qf" 2>/dev/null || true; } | apps_in)
+    [[ "$got" == "${want_apps[$i]}" ]] && pass "$q covers exactly: $got" \
+      || fail "$q covers '$got', expected '${want_apps[$i]}'"
+    if [[ "$q" == q3 ]]; then legacy="rest-q3.json"; else legacy="rest-$q.json"; fi
+    for fx in "$legacy" "rest-$q-new-table.json"; do
+      jq -e --slurpfile f "$FIXTURES/$fx" '[.tables[0].rows[]] as $b
+          | ($f[0].tables[0].rows | length) > 0 and all($f[0].tables[0].rows[]; . as $r | any($b[]; . == $r))' \
+        "$bundle/logs/${files[$i]}.json" >/dev/null 2>&1 \
+        && pass "every row of $fx reaches logs/${files[$i]}.json" \
+        || fail "rows of $fx do not reach logs/${files[$i]}.json"
+    done
+  done
+  for i in 0 2 4; do
+    jq -e '(.tables[0].columns | map(.name) | index("ContainerAppName_s")) as $i
+           | any(.tables[0].rows[]; .[$i] == "ca-frontend")' "$bundle/logs/${files[$i]}.json" >/dev/null 2>&1 \
+      && pass "a ca-frontend row reaches logs/${files[$i]}.json" \
+      || fail "no ca-frontend row in logs/${files[$i]}.json"
+  done
+  # q3 counts the backends on ERROR lines and the frontend on WARNING lines, not the reverse.
+  got=$({ grep -F '"ERROR"' "$tmp/bin/.q3-query" 2>/dev/null || true; } | apps_in)
+  [[ "$got" == "ca-api ca-workers" ]] && pass "q3 counts ERROR lines for ca-api and ca-workers" \
+    || fail "q3's ERROR clause covers '$got', expected 'ca-api ca-workers'"
+  got=$(grep -F 'ContainerAppName_s == "ca-frontend"' "$tmp/bin/.q3-query" 2>/dev/null || true)
+  if [[ -n "$got" ]] && grep -qF '"WARN' <<<"$got" && ! grep -qF '"ERROR"' <<<"$got"; then
+    pass "q3 counts ca-frontend on its warning lines"
+  else
+    fail "q3 does not count ca-frontend on warning lines: ${got:-no ca-frontend clause}"
+  fi
+
   jq -e '.install.key_vault == "kv-masterly-x7k2q"' "$bundle/manifest.json" >/dev/null \
     && pass "vault named in the manifest" || fail "manifest install.key_vault is not the vault"
   jq -e '.jobs.completed_last_hour == 3' "$bundle/ops-metrics.json" >/dev/null \
@@ -549,6 +658,10 @@ selftest() {
     'pattern scan disabled (a found statement is no longer escalated)'
     'review list seeded from the scan alone (a collected q6 with no marker goes unnamed)'
     'provenance taken from the release manifest when the tree could answer'
+    'the resource-specific console-log table dropped from the q1..q4 union'
+    'the resource-specific system-log table dropped from the q5 union'
+    'ca-frontend dropped from the app list q1, q3 and q5 filter on'
+    'q3 counts ca-frontend on ERROR lines instead of warning lines'
   )
   local exprs=(
     's/elif (\.name as \$n | \$allow | index(\$n)) != null then/elif true then/'
@@ -558,6 +671,10 @@ selftest() {
     's/^MATCHED_FILES=\$(printf/MATCHED_FILES=""; : $(printf/'
     's/^  \[\[ -s "\$BUNDLE\/\$f" \]\] && REVIEW_FILES=/  false \&\& REVIEW_FILES=/'
     's/^git_root=\$(git -C "\$module_root" rev-parse --show-toplevel .*$/git_root=""/'
+    's/(ContainerAppConsoleLogs | project/(ContainerAppConsoleLogs_CL | project/'
+    's/(ContainerAppSystemLogs | project/(ContainerAppSystemLogs_CL | project/'
+    's/^ALL_APPS_KQL=\$(kql_names .*$/ALL_APPS_KQL=$BACKEND_APPS_KQL/'
+    's/toupper(level) in ("WARN", "WARNING")/level == "ERROR"/'
   )
   local gones=(
     'index($n)) != null then'
@@ -567,8 +684,12 @@ selftest() {
     'MATCHED_FILES=$(printf'
     '[[ -s "$BUNDLE/$f" ]] && REVIEW_FILES='
     'git_root=$(git -C "$module_root" rev-parse'
+    '(ContainerAppConsoleLogs | project'
+    '(ContainerAppSystemLogs | project'
+    'ALL_APPS_KQL=$(kql_names'
+    'toupper(level) in ("WARN", "WARNING")'
   )
-  for n in 0 1 2 3 4 5 6; do
+  for n in "${!exprs[@]}"; do
     total=$((total + 1))
     broken="$tmp/broken-$total.sh"
     sed -e "${exprs[$n]}" "$SCRIPT" > "$broken"
