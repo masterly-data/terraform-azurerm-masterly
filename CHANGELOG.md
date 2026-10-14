@@ -141,6 +141,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   operations from `AZKVAuditLogs`, by operation, result code and count, with no caller identity,
   caller address or secret name. It is skipped on an install without a vault, and
   `manifest.json` names the vault under `install.key_vault`.
+- **The `api-latency` and `app-not-ready` alerts read both container console-log tables**: the
+  resource-specific `ContainerAppConsoleLogs` and the legacy custom table
+  `ContainerAppConsoleLogs_CL`, so each keeps reading an install's console log while it moves from
+  one table to the other. The legacy table stays in both queries for one release cycle only; a
+  query or workbook of your own that reads `ContainerAppConsoleLogs_CL` should move to
+  `ContainerAppConsoleLogs` before then. The apps each alert covers are unchanged — `ca-api` for
+  latency, `ca-api` and `ca-frontend` for readiness. The next apply updates both rules in place
+  (MAS-2038).
 
 - **Service Bus installs now scale their workers.** Until now `ca-workers` had no scale rule, so
   `workers_max_replicas` above `workers_min_replicas` did nothing. With `enable_service_bus` and

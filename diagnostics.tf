@@ -589,9 +589,12 @@ resource "azurerm_monitor_metric_alert" "app_5xx" {
 #
 # None of these needs a diagnostic setting on the Container Apps. The metric alerts read Azure
 # Monitor platform metrics, which every Container App, Postgres server and Service Bus
-# namespace publishes without one; the latency rule reads ContainerAppConsoleLogs_CL, which the
-# Container Apps environment sends to the install's workspace itself (modules/aca-env-consumption
-# sets logs_destination unconditionally).
+# namespace publishes without one; the latency rule reads the console log the Container Apps
+# environment sends to the install's workspace itself (modules/aca-env-consumption sets
+# logs_destination unconditionally). It reads both tables that log can land in: the legacy
+# custom table ContainerAppConsoleLogs_CL and the resource-specific ContainerAppConsoleLogs. The
+# legacy table stays in the query for one release cycle, so the rule keeps reading an install's
+# console log while it moves from one table to the other.
 #
 # Each metric name is taken from Learn's supported-metrics reference for its resource type.
 # Azure validates the metric against the resource when the alert is created
@@ -803,9 +806,11 @@ resource "azurerm_monitor_metric_alert" "workers_memory" {
 # window a 95th percentile is two or three requests, so the rule stays quiet; this is an alert
 # on load, and an install without load has none to report.
 #
-# The empty `datatable` anchor is the one app_not_ready carries, for the same reason:
-# ContainerAppConsoleLogs_CL does not exist until the first console line lands, and a fuzzy
-# union whose only operand is missing still fails.
+# The union is the one app_not_ready carries, for the same reasons: it reads both the legacy
+# ContainerAppConsoleLogs_CL table and the resource-specific ContainerAppConsoleLogs table, the
+# legacy one kept for one release cycle, with the new table's columns renamed onto the legacy
+# names; and the empty `datatable` anchor keeps it resolving while neither table exists yet,
+# because a fuzzy union whose every table operand is missing still fails.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
   count = local.diagnostics_enabled ? 1 : 0
 
@@ -814,7 +819,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
   location            = var.location
   scopes              = [module.logs.id]
 
-  description = "The api's 95th-percentile request duration has exceeded ${var.alert_api_p95_ms} ms over 15 minutes — requests are slowing under load. Check the Postgres load alerts first, then which routes are slow in ContainerAppConsoleLogs_CL."
+  description = "The api's 95th-percentile request duration has exceeded ${var.alert_api_p95_ms} ms over 15 minutes — requests are slowing under load. Check the Postgres load alerts first, then which routes are slow in ContainerAppConsoleLogs (or, for one release cycle, the legacy ContainerAppConsoleLogs_CL)."
   severity    = 2
 
   evaluation_frequency = "PT5M"
@@ -826,11 +831,10 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
     query = <<-KQL
       union isfuzzy=true
         (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),
-        (
-          ContainerAppConsoleLogs_CL
-          | where ContainerAppName_s == "${module.api.name}"
-          | where Log_s contains " -> "
-        )
+        (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, Log_s),
+        (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName, Log_s = Log)
+      | where ContainerAppName_s == "${module.api.name}"
+      | where Log_s contains " -> "
       | extend Route = extract(@"${local.api_access_line_pattern}", 1, Log_s), DurationMs = todouble(extract(@"${local.api_access_line_pattern}", 2, Log_s))
       | where isnotempty(Route) and isnotnull(DurationMs)
       | where Route !contains ":export" and Route !endswith "/ai/chat" and Route !startswith "/mcp"
@@ -970,7 +974,7 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 #    counter is expressible, but not without a threshold nobody here can calibrate against a
 #    real install.
 #
-#  * Absence of the workers app's own log lines, the ContainerAppConsoleLogs_CL analogue of the
+#  * Absence of the workers app's own log lines, the console-log analogue of the
 #    postgres_silent rule below. Checked against the code rather than assumed, and it does not
 #    hold: masterly_app.workers logs once at startup ("workers ready: … starting … consume
 #    loop") and then only per job (core/jobqueue.py). It emits NO periodic heartbeat, so on a
@@ -1145,17 +1149,24 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
   auto_mitigation_enabled = true
 
   criteria {
+    # Two tables, because the console log can land in either. ContainerAppConsoleLogs_CL is the
+    # legacy custom table; ContainerAppConsoleLogs is the resource-specific one, whose columns
+    # carry no type suffix and are renamed here onto the legacy names (ContainerAppName ->
+    # ContainerAppName_s, Log -> Log_s), so everything after the union, the ContainerAppName_s
+    # dimension included, reads one shape. The legacy table stays in the query for one release
+    # cycle, so a wedge is read from whichever table an install's lines are in while it moves
+    # from one to the other.
+    #
     # The empty `datatable` anchor is load-bearing, and `isfuzzy` alone would not do its job.
-    # ContainerAppConsoleLogs_CL is a CUSTOM table that does not exist in a workspace until the
-    # first console line lands, and a query against a missing table FAILS rather than returning
-    # nothing — which would fail this rule's creation on a fresh install, or leave it unhealthy
-    # and, after a week of failures, disabled by Azure. `union isfuzzy=true` is the usual answer
-    # and it is NOT sufficient on its own: a fuzzy union whose only operand is missing still dies
-    # with SEM0104 ("Operator source expression should be table or column"), measured against a
-    # live workspace on 2026-09-09. Anchoring the union with an empty literal of the right shape
-    # gives it a schema that always resolves, so a missing table degrades to a partial-result
-    # warning and an empty answer instead. With the table present both operands resolve and the
-    # anchor contributes nothing.
+    # Neither table exists in a workspace until the first console line lands in it, and a query
+    # against a missing table FAILS rather than returning nothing — which would fail this rule's
+    # creation on a fresh install, or leave it unhealthy and, after a week of failures, disabled
+    # by Azure. `union isfuzzy=true` is the usual answer and it is NOT sufficient on its own: a
+    # fuzzy union whose only operand is missing still dies with SEM0104 ("Operator source
+    # expression should be table or column"), measured against a live workspace on 2026-09-09.
+    # Anchoring the union with an empty literal of the right shape gives it a schema that always
+    # resolves, so a missing table degrades to a partial-result warning and an empty answer
+    # instead. Once a table is present its operand resolves and the anchor contributes nothing.
     #
     # `contains` rather than `startswith`: the api writes the line through a JSON log handler, so
     # the prefix sits inside an envelope in Log_s, while the frontend writes it bare. One
@@ -1163,11 +1174,10 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
     query = <<-KQL
       union isfuzzy=true
         (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),
-        (
-          ContainerAppConsoleLogs_CL
-          | where ContainerAppName_s in (${join(", ", [for name in local.readiness_alertable_apps : "\"${name}\""])})
-          | where Log_s contains "readiness check failed"
-        )
+        (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, Log_s),
+        (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName, Log_s = Log)
+      | where ContainerAppName_s in (${join(", ", [for name in local.readiness_alertable_apps : "\"${name}\""])})
+      | where Log_s contains "readiness check failed"
       | summarize FailingMinutes = dcount(bin(TimeGenerated, 1m)) by ContainerAppName_s
       | where FailingMinutes >= 30
     KQL
@@ -1190,9 +1200,10 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
       minimum_failing_periods_to_trigger_alert = 1
     }
 
-    # No `resource_id_column`. ACA writes console logs to the workspace through the custom-table
-    # path, where `_ResourceId` is present in the schema but empty on every row — pointing the
-    # rule at it would file the alert against nothing. The dimension identifies the app instead.
+    # No `resource_id_column`. On the legacy custom-table path `_ResourceId` is present in the
+    # schema but empty on every row — pointing the rule at it would file the alert against
+    # nothing — and the union above keeps only the three columns both tables share. The
+    # dimension identifies the app instead.
     dimension {
       name     = "ContainerAppName_s"
       operator = "Include"
