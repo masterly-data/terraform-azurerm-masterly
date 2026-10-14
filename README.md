@@ -951,10 +951,9 @@ Not detected, and no alert here should be read as covering it:
   an alert that pages on every deploy is one you learn to mute. A wedge that clears inside the
   window is invisible here; it is visible in the workspace, in `ContainerAppConsoleLogs` (or the
   legacy `ContainerAppConsoleLogs_CL`), where the same line the alert reads is queryable at any
-  resolution you like. A synthetic check
-  against the install's own URL, run from wherever you already monitor, is still the faster
-  signal and still worth having; the module ships none, for the vantage-point reason given in
-  "An app that is up, answering, and wrong" below.
+  resolution you like. A synthetic check against the install's own URL, run from wherever you
+  already monitor, is still the faster signal and still worth having; the module ships none, for
+  the vantage-point reason given in "An app that is up, answering, and wrong" below.
 - **A workers app that is running but wedged.** The wedged shape again, one layer down, and here
   nothing reads it at all: `ca-workers` has no ingress, no `/readyz` and no probe, so it writes
   no readiness line for `app-not-ready` to see, and a replica whose consume loop is stuck still
