@@ -1,8 +1,8 @@
 # log-analytics-workspace
 
 Standard `PerGB2018` Log Analytics workspace. Deployed in Layer 2 and consumed by
-`aca-env-consumption` (container logs) and `app-insights` (workspace-based
-telemetry).
+the diagnostic setting on the `aca-env-consumption` environment (container logs)
+and `app-insights` (workspace-based telemetry).
 
 ## Inputs
 
