@@ -13,11 +13,6 @@ variable "location" {
   description = "Azure region for the environment."
 }
 
-variable "log_analytics_workspace_id" {
-  type        = string
-  description = "Resource ID of the Log Analytics workspace that receives container logs."
-}
-
 variable "tags" {
   type        = map(string)
   default     = {}

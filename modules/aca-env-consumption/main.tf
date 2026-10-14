@@ -3,11 +3,19 @@
 # install runs in its own VNet so the data plane can be private-endpoint-only.
 
 resource "azurerm_container_app_environment" "this" {
-  name                       = var.name
-  resource_group_name        = var.resource_group_name
-  location                   = var.location
-  log_analytics_workspace_id = var.log_analytics_workspace_id
-  logs_destination           = "log-analytics"
+  name                = var.name
+  resource_group_name = var.resource_group_name
+  location            = var.location
+
+  # SELF-HOSTED EXTENSION: logs go through Azure Monitor, not straight to a workspace. With
+  # "log-analytics" the environment writes to the workspace with the workspace's shared key,
+  # into the legacy ContainerAppConsoleLogs_CL / ContainerAppSystemLogs_CL tables. With
+  # "azure-monitor" it writes nowhere on its own: the caller attaches a diagnostic setting to
+  # this environment (the root module's azurerm_monitor_diagnostic_setting.aca_env), which
+  # authenticates as Azure Monitor and writes the resource-specific ContainerAppConsoleLogs /
+  # ContainerAppSystemLogs tables. The provider refuses log_analytics_workspace_id alongside
+  # "azure-monitor", which is why this module no longer takes a workspace.
+  logs_destination = "azure-monitor"
 
   # SELF-HOSTED EXTENSION: create-time only — changing it REPLACES the environment
   # (and with it the apps' FQDNs). Consumption-only environments need a /23 subnet.

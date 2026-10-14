@@ -362,8 +362,9 @@ resource "azurerm_monitor_diagnostic_setting" "service_bus" {
 # can read them and nothing can notice their absence.
 #
 # Metrics only. The apps' console and system logs already reach this workspace through the
-# Container Apps environment, which modules/aca-env-consumption points at it, so a log category
-# here would at best be a second copy the customer pays for twice.
+# diagnostic setting on the Container Apps environment (azurerm_monitor_diagnostic_setting.aca_env
+# in main.tf), which covers every app in it, so a log category here would at best be a second
+# copy the customer pays for twice.
 resource "azurerm_monitor_diagnostic_setting" "app" {
   for_each = local.app_metrics_apps
 
@@ -589,12 +590,13 @@ resource "azurerm_monitor_metric_alert" "app_5xx" {
 #
 # None of these needs a diagnostic setting on the Container Apps. The metric alerts read Azure
 # Monitor platform metrics, which every Container App, Postgres server and Service Bus
-# namespace publishes without one; the latency rule reads the console log the Container Apps
-# environment sends to the install's workspace itself (modules/aca-env-consumption sets
-# logs_destination unconditionally). It reads both tables that log can land in: the legacy
-# custom table ContainerAppConsoleLogs_CL and the resource-specific ContainerAppConsoleLogs. The
-# legacy table stays in the query for one release cycle, so the rule keeps reading an install's
-# console log while it moves from one table to the other.
+# namespace publishes without one; the latency rule reads the console log that the diagnostic
+# setting on the Container Apps environment (azurerm_monitor_diagnostic_setting.aca_env in
+# main.tf) sends to the install's workspace in every mode. It reads both tables that log can land
+# in: the legacy custom table ContainerAppConsoleLogs_CL, which the environment wrote before it
+# moved to Azure Monitor, and the resource-specific ContainerAppConsoleLogs, which the setting
+# writes. The legacy table stays in the query for one release cycle, so the rule keeps reading an
+# install's console log across the move.
 #
 # Each metric name is taken from Learn's supported-metrics reference for its resource type.
 # Azure validates the metric against the resource when the alert is created
@@ -1031,8 +1033,9 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 #
 #  * The platform's own words — still rejected, and the measurement that rejected them stands.
 #    ContainerAppSystemLogs_CL does carry the failure (`Reason_s == "ProbeFailed"`, e.g.
-#    "Container ca-api failed readiness probe") and it is populated in every install, because
-#    modules/aca-env-consumption sets logs_destination to module.logs unconditionally. It caught
+#    "Container ca-api failed readiness probe"), and so does its resource-specific successor
+#    ContainerAppSystemLogs, which the diagnostic setting on the Container Apps environment
+#    (azurerm_monitor_diagnostic_setting.aca_env in main.tf) populates in every install. It caught
 #    exactly this shape on Masterly's own reference install on 2026-09-07. But replaying a
 #    sustained-window rule over 30 days of that workspace fires on roughly a dozen occasions per
 #    app, most of them ordinary deploy churn, and separating a wedged app from a rolling one
