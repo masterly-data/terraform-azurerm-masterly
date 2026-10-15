@@ -106,7 +106,42 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   departures. BYO-DB (`external_database_url`) is unaffected and refuses `database_auth = "entra"`
   (MAS-1085).
 
+- Three inputs for the install's Log Analytics workspace. An install that sets none of them keeps
+  today's query access and retention, and gains the Key Vault audit retention below:
+  - `log_query_public_access` (default `true`): whether the workspace answers queries from the
+    public network. `false` leaves only queries through an Azure Monitor Private Link Scope
+    (AMPLS) of your own; the module creates none.
+  - `log_retention_days` (default `30`, 30-730): the workspace's retention, which every table
+    except `AZKVAuditLogs` follows. 30 is the retention the workspace already had.
+  - `security_log_retention_days` (default `90`, 30-730): the retention of the `AZKVAuditLogs`
+    table, the Key Vault audit events, set on that table alone. The next apply raises that table
+    from 30 to 90 days, which Azure bills per GB per month beyond the first 31.
+
+  A value outside 30-730 is refused at plan. See
+  [The Log Analytics workspace](README.md#the-log-analytics-workspace) for the roles that query
+  the workspace, how to set up an AMPLS, and why the workspace is not placed in a network
+  security perimeter.
+
 ### Changed
+
+- **The install's Log Analytics workspace accepts Microsoft Entra ID only and takes no ingestion
+  over the public network.** The module turns off the workspace's local (shared-key)
+  authentication and sets its public ingestion access to `Disabled`; both stay off whatever the
+  inputs say. The install's own logs and metrics arrive through diagnostic settings, which need
+  neither. Anything of your own that sends to the workspace with its shared key, or over the
+  public network (an agent, the Data Collector API, the Logs Ingestion API from outside an
+  AMPLS), stops being accepted from the apply on; send with a Microsoft Entra identity through an
+  AMPLS instead. Queries keep working from the public network by default, each signed in with
+  Microsoft Entra ID (Log Analytics Reader on the workspace).
+
+  **Apply the release that moves container logs to Azure Monitor first, and let its apply
+  finish, before applying this one.** That release moves the Container Apps environment from
+  `logs_destination = "log-analytics"`, which delivers the apps' logs with the workspace's shared
+  key over the public ingestion endpoint, to `azure-monitor` and a diagnostic setting. An
+  environment still on `log-analytics` when this change applies can no longer deliver its logs,
+  and the apps' console and system logs stop reaching the workspace. The change has been planned
+  under mock providers only; a plan against a live install confirms it updates the workspace in
+  place before this version is released.
 
 - **The starter Postgres server's error log no longer carries values** (ADR 0080, amendment of
   2026-09-10). The module sets three server parameters on the server it provisions:
@@ -262,6 +297,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   bumps. The README's pin guidance is corrected: `~> X.Y.0` takes patches of `X.Y` only, while
   `~> X.Y` takes every later minor too. It said `~>` took "patches within a minor" beside an
   example that takes minors. No change to any resource; nothing to apply (MAS-1663).
+
+### Removed
+
+- **Breaking for a direct caller of `modules/log-analytics-workspace`: its `primary_shared_key`
+  output is removed.** The workspace's shared keys authenticate nothing now, so there is no key
+  worth handing out, and nothing in the module reads one. Referring to
+  `module.<name>.primary_shared_key` fails with "Unsupported attribute"; authenticate to the
+  workspace with a Microsoft Entra identity instead. The root module never exposed the key, so a
+  caller of the root module has nothing to change.
 
 ### Fixed
 

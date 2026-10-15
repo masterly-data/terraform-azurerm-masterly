@@ -544,10 +544,13 @@ moved {
 module "logs" {
   source = "./modules/log-analytics-workspace"
 
-  name                = "log-${var.name_prefix}"
-  resource_group_name = azurerm_resource_group.aca.name
-  location            = var.location
-  tags                = local.tags
+  name                    = "log-${var.name_prefix}"
+  resource_group_name     = azurerm_resource_group.aca.name
+  location                = var.location
+  retention_days          = var.log_retention_days
+  security_retention_days = var.security_log_retention_days
+  internet_query_enabled  = var.log_query_public_access
+  tags                    = local.tags
 }
 
 module "aca_env" {
