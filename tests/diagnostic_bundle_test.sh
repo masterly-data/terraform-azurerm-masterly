@@ -51,9 +51,9 @@
 # disable the statement-echo warning, disable only its pattern scan, name only the files the
 # scan matched, take the version from the release manifest when the tree could answer, read
 # the legacy _CL console or system table in place of the resource-specific one, drop
-# ca-frontend from the app list, count ca-frontend on ERROR rather than warning lines — and
-# asserts that THIS harness
-# fails against each broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
+# ca-frontend from the app list, count ca-frontend on ERROR rather than warning lines — and then
+# checks that THIS harness fails against each broken copy. A test nobody has watched fail is a
+# hypothesis; CI runs the selftest first so
 # that a detector that has quietly stopped detecting fails the build instead of passing it.
 # Each break is checked to have actually changed the copy, so a stale sed cannot turn the
 # selftest vacuous.
