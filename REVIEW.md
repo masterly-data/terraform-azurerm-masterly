@@ -28,3 +28,10 @@ This repository is public; review wording as customer-visible text.
 - A change to the derived subnet layout can replace live subnets; only a plan shows it.
 - A `v*` tag publishes irreversibly; agents never tag or dispatch `cut-release`.
 - Nested `modules/*/versions.tf` provider constraints must move with the root floor.
+- A second copy of the module stays green while it drifts. Until MAS-42 deleted it on 2026-09-07, a
+  copy at `masterly-demo-iac`'s root lacked network injection, the internal load balancer, the
+  residency preconditions, the telemetry inputs and the external-api ingress guard, and CI kept
+  validating it the whole time.
+- A module change can describe application behaviour that is merged on an app's `main` but in no
+  released image tag; it plans and applies cleanly and then does nothing (skill
+  `check-app-behaviour-claim`).

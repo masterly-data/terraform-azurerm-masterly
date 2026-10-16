@@ -19,8 +19,9 @@
 /CLAUDE.md      export-ignore
 /AGENTS.md      export-ignore
 /REVIEW.md      export-ignore
-# The hook a Claude Code cloud session runs to load Masterly's project-wide agent guidance from a
-# clone alongside this one; the guidance itself is not in this repository. Nothing in an install.
+# Claude Code configuration: the skills (step-by-step procedures for agents working on this
+# repository) and the hook a cloud session runs to load Masterly's project-wide agent guidance from
+# a clone alongside this one. Nothing in an install.
 /.claude        export-ignore
 
 /.gitattributes export-ignore

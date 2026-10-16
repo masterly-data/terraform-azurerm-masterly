@@ -10,14 +10,16 @@ Project-wide context (architectural constraints, repo map, terminology) is loade
 
 Two facts govern everything below:
 
-1. **This repo is public and Apache-2.0.** Every comment, TODO, variable description and commit
+1. **This repo is public and Apache-2.0** (`LICENSE`; `NOTICE` carries the attribution). The whole
+   tree ships to customers and partners. Every comment, TODO, variable description and commit
    message is customer-readable, including this file.
 2. **The tag is the release.** Pushing a tag publishes to the public registry and a published version
    cannot be withdrawn.
 
 ## Commands
 
-Everything CI runs works locally with no cloud access and no secrets. Run all of it (skill
+Everything CI runs works locally with no cloud access and no secrets, because CI must be safe on a
+fork PR; the whole set takes under a minute after `init`. Run all of it (skill
 `validate-module-change` has the rationale, the example check and what these cannot prove):
 
 ```bash
@@ -32,33 +34,36 @@ bash tests/diagnostic_bundle_test.sh --selftest && bash tests/diagnostic_bundle_
 shellcheck --severity=style $(git ls-files '*.sh')   # any finding fails; never lower the severity
 ```
 
-CI pins Terraform 1.10.5 (the `required_version = ">= 1.10"` floor). Generated files:
+CI pins Terraform 1.10.5 (the `required_version = ">= 1.10"` floor). A green `terraform validate`
+and `terraform test` never called Azure (see "Nothing dogfoods a module change"). Generated files:
 
 ```bash
 python3 scripts/check_release_manifest.py --write   # README release table, from MANIFEST.json
 python3 scripts/check_runtime_env.py --write        # RUNTIME_ENV.json, from the .tf files
 ```
 
-A green `terraform validate` and `terraform test` never called Azure. A live `plan` against a real
-subscription is a human action; say plainly in the PR when a change is unproven against Azure.
-
 ## Layout
 
-The top level is one Terraform root module; `main.tf` is the always-created core and each optional
-subsystem has its own file.
+One Terraform root module: `main.tf` is the always-created core; each optional subsystem has a file.
 
 | Path | Contents |
 |---|---|
-| `main.tf` | Core: resource groups, VNet, ACA environment, Log Analytics, `api`/`frontend` apps, identities, starter Postgres, optional Service Bus |
-| `diagnostics.tf` | Diagnostic settings, metric alerts, log-search alerts, action group |
-| `keyvault.tf`, `redis.tf`, `workers.tf`, `email.tf`, `entra-auth.tf` | Opt-in subsystems (secret store, session registry, workers app, ACS email, Entra auth) |
+| `main.tf` | The core: two resource groups, the VNet and its two subnets, the ACA environment and the Log Analytics workspace, the `api` and `frontend` Container Apps, both user-assigned identities, the starter Postgres flexible server with its private DNS zone and endpoint, and the optional Service Bus namespace and queue |
+| `diagnostics.tf` | The observability surface: the action group, the diagnostic settings (data-plane, and one per Container App), the metric alerts and the log-search alert rules |
+| `keyvault.tf` | The opt-in durable secret store (ADR 0066): vault, private endpoint and DNS, RBAC grants, and the install's own secrets as Key Vault references |
+| `redis.tf` | The opt-in session registry (ADR 0071): both offerings (`managed` / `cache`), each private-endpoint only |
+| `workers.tf`, `email.tf`, `entra-auth.tf` | The opt-in `ca-workers` app, customer-owned ACS email, and Entra authentication |
 | `variables.tf`, `outputs.tf`, `versions.tf` | The public surface. Every variable description is customer documentation |
-| `modules/` | Six nested submodules the root composes |
-| `tests/` | `install.tftest.hcl` (mock-provider runs), `diagnostic_bundle_test.sh` and `fixtures/` |
-| `examples/production/` | The example a customer copies; `source = "../../"`, so it validates the working tree |
-| `scripts/` | `preflight.sh`, `diagnostic-bundle.sh`, release-metadata checkers. Standard library only |
-| `MANIFEST.json`, `RUNTIME_ENV.json` | Release manifest and runtime-environment manifest. Contracts: `docs/release-manifest.md`, `docs/runtime-env.md` |
-| `CHANGELOG.md`, `README.md`, `docs/` | Keep a Changelog (new entries under `Unreleased`); module surface reference; `networking.md`, `releasing.md` |
+| `modules/` | Six nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `license-claims-floor` (the plan-time licence claims-floor check; no resources), `log-analytics-workspace`, `user-assigned-identity` |
+| `tests/` | `install.tftest.hcl` (the mock-provider run blocks), and `diagnostic_bundle_test.sh` with its `fixtures/`: the harness that proves the diagnostic bundle carries no secrets |
+| `examples/production/` | The production-posture example a customer copies; `source = "../../"`, so it validates the working tree |
+| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the release and docs gates), `check_runtime_env.py` (generates and checks `RUNTIME_ENV.json`, and that the bundle's env allowlist names only what the module sets), `release_notes.py` (a version's changelog section, as its GitHub Release body), `release_gate.py` (the check `cut-release.yml` runs before it creates a tag). Standard library only: release metadata should not depend on anything resolving |
+| `MANIFEST.json` | The release manifest: which image pair each published module version was released against. Its published contract is `docs/release-manifest.md`; a change to its shape changes what other repositories and the public docs parse |
+| `RUNTIME_ENV.json` | Every env name the module sets, per app. Generated, never edited; contract `docs/runtime-env.md`. The application repositories vendor it and check their code and runbooks against it (MAS-545) |
+| `CHANGELOG.md` | Keep a Changelog. New entries go under `Unreleased`; cutting a release renames that heading |
+| `README.md` | The module surface reference. The customer walkthrough lives in the public docs, not here |
+| `docs/` | `networking.md` (the three topologies), `release-manifest.md`, `runtime-env.md`, and `releasing.md` (what gates a tag, and the repository settings that make `cut-release` the only path) |
+| `SECURITY.md` | The vulnerability-reporting policy we publish; hold to our half of it |
 
 ## Conventions
 
@@ -66,15 +71,20 @@ subsystem has its own file.
   default and a `validation` block for inputs a customer can get wrong. Skill `add-module-variable`.
 - **Departures from Azure's baseline are documented in the README** section "Where this module
   departs from Azure's recommended baseline". Skill `document-baseline-departure`.
-- **Provider floor.** `.terraform.lock.hcl` is gitignored (a lock inside a module is ignored), so the
-  constraint in `versions.tf` alone governs a customer's `init`. The floor is `~> 5.8`, and
-  `~> 5.0` in each `modules/*/versions.tf`, which must move with it. Do not lower it, or move to 6.x,
-  without a refreshing plan against a live install; a provider major is a breaking module release.
+- **Provider floor.** `.terraform.lock.hcl` is gitignored: Terraform reads the lock file of the root
+  configuration only, so the constraint in `versions.tf` alone governs a customer's `init`. The
+  floor is `~> 5.8` (`versions.tf` gives the reasoning: 5.8.0 is what a refreshing plan against a
+  live install resolved, replacing nothing), and `~> 5.0` in each `modules/*/versions.tf`, which
+  must move with it: a nested constraint that excludes a major keeps it out of every configuration
+  using the module. Do not lower it, or move to 6.x, without such a plan; a provider major is a
+  breaking module release.
 - **Versions derive from `MANIFEST.json`** through the checker. Never transcribe a version.
 - **Comments and commits are public.** Write for a customer: no internal shorthand that reads as a
-  defect, no speculation about a customer, no unexplained `TODO`. PR titles land on `main`:
-  Conventional Commits with the Linear key, e.g.
-  `fix: the api ingress guard refuses an empty allowlist (MAS-123)`.
+  defect, no speculation about a customer, no unexplained `TODO` that reads as a known-broken edge.
+  `versions.tf` is the calibration: it explains at length why the provider floor is where it is,
+  because a customer resolving a provider needs that reasoning. PRs are squash-merged, so the PR
+  title is what lands on `main` and what a customer greps: Conventional Commits with the Linear key,
+  e.g. `fix: the api ingress guard refuses an empty allowlist (MAS-123)`.
 - **Decisions.** ADRs live in `masterly-framework`, never here; cite them by number. A variable
   guard and its test, a new `.tf` split, CI, README wording and a new alert on an existing signal
   stay local. An ADR comes first for a topology change, a data-plane or secret-store model change
@@ -90,17 +100,22 @@ subsystem has its own file.
 - **Never hand-edit generated files** (README release table, `RUNTIME_ENV.json`).
 - **Never claim application behaviour a released image tag lacks.** Skill `check-app-behaviour-claim`.
 - **Never commit credentials or key material, not even fake ones.** CI writes a throwaway
-  `examples/production/license-issuer.jwk.json` and deletes it; `.gitignore` ignores `*.tfvars` with
-  no exception, on purpose.
+  `examples/production/license-issuer.jwk.json` and deletes it, because a fake key in a public repo
+  next to a real one is a worse trap than the one it closes. `.gitignore` ignores `*.tfvars` with no
+  exception, on purpose: customers copy it into their install repo, where a tfvars holds a licence
+  JWT and an OIDC client secret.
 - **Never add a public endpoint or a weaker default** without an owner decision.
 - **Never create a second copy of the module**, vendored or temporary, in another repo, and never
-  add root-level `.tf` files to `masterly-demo-iac`. Changes to module inputs, `modules/`,
+  add root-level `.tf` files to `masterly-demo-iac` (one root configuration, `deployments/demo-eu`,
+  plus the workflows that operate it). Changes to module inputs, `modules/`,
   `tests/install.tftest.hcl` or `scripts/preflight.sh` belong here; changes to what the demo install
-  is configured with do not.
+  is configured with do not. `REVIEW.md` records what the last duplicate cost.
 - **Never report a security flaw in public.** Use GitHub private vulnerability reporting or the
-  address in `SECURITY.md`, never a public issue or a PR title that explains the exploit.
+  address in `SECURITY.md`, never a public issue or a PR title that explains the exploit before a
+  fixed version exists. A flaw in a published version affects every install pinned to it.
 - **Never add a path to `.gitattributes` `export-ignore` casually.** `git archive` builds the
-  air-gapped install tarball; `tests/` and `examples/` ship on purpose.
+  air-gapped install tarball; `tests/` and `examples/` ship on purpose, and the file says why. It is
+  read as of the archived tag: tags up to and including v0.15.0 predate it and archive the whole tree.
 
 ## Definition of done
 
@@ -116,11 +131,14 @@ subsystem has its own file.
 
 ## Nothing dogfoods a module change
 
-The demo install (`masterly-demo-iac/deployments/demo-eu/main.tf`) and the production-mode rehearsal
-install (`masterly-test-install/main.tf`) pin a registry version, as a customer does, and neither
-sees a change made here until someone bumps the pin by hand. Read pins from those files; do not copy
-a version into this one. **Plan a live install against the module branch before tagging a release**;
-nothing enforces it, so it is yours to do or to hand to a human.
+Until the module was published (2026-08-31) the demo install consumed it by local path. Now the demo
+install (`masterly-demo-iac/deployments/demo-eu/main.tf`) and the production-mode rehearsal install
+(`masterly-test-install/main.tf`) pin a registry version, as a customer does, and neither sees a
+change made here until someone bumps the pin by hand. Read pins from those files; do not copy a
+version into this one. **Plan a live install against the module branch before tagging a release.**
+Nothing enforces it, and a live plan needs a real subscription and credential, so it is a human
+action, not an agent one. An agent's part is to say in the PR that the change is unproven against
+Azure and what a plan would have to cover.
 
 ## Workflows and publishing
 
