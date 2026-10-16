@@ -3,9 +3,10 @@
 #
 #   scripts/iac_scan.sh --selftest         the scanner reports the known-bad fixture
 #   scripts/iac_scan.sh --check-selftest   --check rejects each kind of bad entry (no trivy needed)
-#   scripts/iac_scan.sh --check            every .trivyignore.yaml entry has a rule ID, a path and a
-#                                          README departure heading that exists, and no tracked .tf
-#                                          file carries an inline ignore comment
+#   scripts/iac_scan.sh --check            every .trivyignore.yaml entry has a rule ID, paths that
+#                                          name real files (no glob, never empty) and a README
+#                                          departure heading that exists, and no tracked .tf file
+#                                          carries an inline ignore comment
 #   scripts/iac_scan.sh --sarif F          scan the module, write SARIF to F, never fail on findings
 #   scripts/iac_scan.sh --gate             scan the module, fail on HIGH/CRITICAL
 set -euo pipefail
@@ -41,12 +42,55 @@ departure_headings() {
   ' "$1"
 }
 
-# check_ignorefile IGNOREFILE README
-# Entries are "  - id:" blocks. Each needs paths (flow `[a.tf]` or a block list of `- a.tf`) and a
-# statement that names the README section and one of its departure headings, compared as a
-# literal string. With `misconfigurations: []` there is nothing to check.
+# bad_paths ENTRY ROOT PATHS -- PATHS is the flow list `[a.tf, b.tf]` or, from a block list, one
+# path per line. Trivy matches each path as a doublestar glob, so an empty list, a glob or a
+# directory would turn the entry into a suppression of its rule across many files: each path must
+# be a literal relative path to a file under ROOT.
+bad_paths() {
+  local entry="$1" root="$2" list="$3" p n=0 rc=0
+  case "$list" in
+    "["*"]")
+      list="${list#"["}"
+      list="${list%"]"}"
+      list="$(tr ',' '\n' <<<"$list")"
+      ;;
+    "["* | *"]") list="[" ;; # half a flow list: fails as a glob below
+  esac
+  while IFS= read -r p; do
+    p="$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" <<<"$p")"
+    [ -n "$p" ] || continue
+    n=$((n + 1))
+    case "$p" in
+      *[][*?{}!]*)
+        echo "::error::$ignorefile: entry '$entry' path '$p' is a glob; name the file"
+        rc=1
+        ;;
+      /* | ../* | */../* | *.. | ./* | *"/./"*)
+        echo "::error::$ignorefile: entry '$entry' path '$p' is not a plain path relative to the repository root"
+        rc=1
+        ;;
+      *)
+        if [ ! -f "$root/$p" ]; then
+          echo "::error::$ignorefile: entry '$entry' path '$p' is not a file in the repository"
+          rc=1
+        fi
+        ;;
+    esac
+  done <<<"$list"
+  if [ "$n" -eq 0 ]; then
+    echo "::error::$ignorefile: entry '$entry' has an empty paths list"
+    rc=1
+  fi
+  return "$rc"
+}
+
+# check_ignorefile IGNOREFILE README ROOT
+# Entries are "  - id:" blocks. Each needs paths (flow `[a.tf]` or a block list of `- a.tf`), each
+# a file under ROOT (see bad_paths), and a statement that names the README section and one of its
+# departure headings, compared as a literal string. With `misconfigurations: []` there is nothing
+# to check.
 check_ignorefile() {
-  local file="$1" readme="$2" departures entry id paths statement heading key bad=0 count=0
+  local file="$1" readme="$2" root="$3" departures entry id paths statement heading key bad=0 count=0
   departures="$(departure_headings "$readme")"
   id="" paths="" statement="" key=""
   # A sentinel entry flushes the last block.
@@ -57,6 +101,8 @@ check_ignorefile() {
           entry="$id"
           if [ -z "$id" ] || [ -z "$paths" ] || [ -z "$statement" ]; then
             echo "::error::$file: entry '$entry' lacks a rule ID, paths or statement"
+            bad=1
+          elif ! bad_paths "$entry" "$root" "$paths"; then
             bad=1
           elif ! grep -qF "README \"$phrase\" -> \"" <<<"$statement"; then
             echo "::error::$file: entry '$entry' does not name README \"$phrase\""
@@ -80,7 +126,7 @@ check_ignorefile() {
         paths="${line#    paths:}"
         paths="${paths# }"
         ;;
-      "      - "?*) if [ "$key" = paths ]; then paths="$paths${line#      - }"; fi ;;
+      "      - "?*) if [ "$key" = paths ]; then paths="$paths${line#      - }"$'\n'; fi ;;
       "    statement:"*)
         key=statement
         statement="${line#    statement:}"
@@ -171,14 +217,36 @@ EOF
     "$ok" >"$dir/block-paths"
   printf 'misconfigurations:\n  - id: AVD-AZU-0001\n    paths:\n    statement: %s\n' \
     "$ok" >"$dir/block-paths-empty"
+  # Paths: the synthetic repository root holds main.tf, modules/bus/main.tf and a directory.
+  local root="$dir/root"
+  mkdir -p "$root/modules/bus"
+  : >"$root/main.tf"
+  : >"$root/modules/bus/main.tf"
+  entry quoted-paths AVD-AZU-0001 '["main.tf", "modules/bus/main.tf"]' "$ok"
+  entry flow-paths-empty AVD-AZU-0001 "[]" "$ok"
+  entry flow-paths-blank AVD-AZU-0001 "[ ]" "$ok"
+  entry glob-all AVD-AZU-0001 '["**"]' "$ok"
+  entry glob-star AVD-AZU-0001 "[*.tf]" "$ok"
+  entry glob-one AVD-AZU-0001 "[main.t?]" "$ok"
+  entry glob-brace AVD-AZU-0001 "[{main,redis}.tf]" "$ok"
+  entry glob-second AVD-AZU-0001 "[main.tf, modules/**/main.tf]" "$ok"
+  entry missing-file AVD-AZU-0001 "[nope.tf]" "$ok"
+  entry directory AVD-AZU-0001 "[modules]" "$ok"
+  entry absolute AVD-AZU-0001 "[$root/main.tf]" "$ok"
+  entry parent AVD-AZU-0001 "[../root/main.tf]" "$ok"
+  entry half-flow AVD-AZU-0001 "[main.tf" "$ok"
+  printf 'misconfigurations:\n  - id: AVD-AZU-0001\n    paths:\n      - "**"\n    statement: %s\n' \
+    "$ok" >"$dir/block-glob"
 
-  for case_name in empty good block-paths no-entries no-id no-paths block-paths-empty \
-    no-statement no-section outside-section no-such-heading regex-heading section-as-heading; do
+  for case_name in empty good block-paths quoted-paths no-entries no-id no-paths block-paths-empty \
+    no-statement no-section outside-section no-such-heading regex-heading section-as-heading \
+    flow-paths-empty flow-paths-blank glob-all glob-star glob-one glob-brace glob-second \
+    missing-file directory absolute parent half-flow block-glob; do
     case "$case_name" in
-      empty | good | block-paths) want=pass ;;
+      empty | good | block-paths | quoted-paths) want=pass ;;
       *) want=fail ;;
     esac
-    if check_ignorefile "$dir/$case_name" "$readme" >/dev/null 2>&1; then got=pass; else got=fail; fi
+    if check_ignorefile "$dir/$case_name" "$readme" "$root" >/dev/null 2>&1; then got=pass; else got=fail; fi
     if [ "$got" != "$want" ]; then
       echo "::error::check self-test: '$case_name' should $want, but did $got"
       failed=1
@@ -222,7 +290,7 @@ case "${1:-}" in
   --selftest) selftest ;;
   --check-selftest) check_selftest ;;
   --check)
-    check_ignorefile "$ignorefile" README.md
+    check_ignorefile "$ignorefile" README.md .
     tf_files=()
     while IFS= read -r -d '' f; do tf_files+=("$f"); done < <(module_tf_files)
     check_inline ${tf_files[@]+"${tf_files[@]}"}

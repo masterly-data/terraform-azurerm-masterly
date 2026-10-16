@@ -8,6 +8,6 @@
 #
 # Entry shape:
 #   - id: <rule ID reported by the scan>
-#     paths: [<file that carries the departure>]
+#     paths: [<file that carries the departure>]   # real files only: never [], a glob or a directory
 #     statement: README "Where this module departs from Azure's recommended baseline" -> "<heading>"
 misconfigurations: []
