@@ -8,14 +8,15 @@ description: Prepare a module release commit (MANIFEST.json, CHANGELOG.md, READM
 **The tag is the release.** The Terraform Registry watches this repository's tags through its own
 webhook, outside GitHub Actions. A published version cannot be withdrawn, only superseded. The sequence
 on a tag push is: tag pushed, registry publishes, CI turns red if it is going to. `ci.yml` asserts the
-tag matches `MANIFEST.json`, but that is a notification, not a refusal.
+tag matches `MANIFEST.json`, but that is a notification, not a refusal. The GitHub Release page CI
+creates afterwards is release notes, not a release step.
 
 ## What an agent never does
 
 - Never push a tag and never dispatch `cut-release.yml`. Tagging is a human release decision. An
   agent's job ends at a merged release commit.
-- Never treat a green PR as release-readiness; the failure mode is a tag at the wrong commit or
-  before the release commit merged.
+- Never treat a green PR as release-readiness; the realistic failure MAS-274 names is a tag pushed at
+  the wrong commit, or before the release commit merged. Both look fine locally.
 - Never bump `MANIFEST.json` "to be ready". A manifest naming an unreleased version misleads every
   consumer, and `scripts/check_release_manifest.py` fails the PR.
 
@@ -24,9 +25,10 @@ tag matches `MANIFEST.json`, but that is a notification, not a refusal.
 1. Follow the order in the README section "Cutting a release". The manifest, the changelog and the
    README move in **one commit, on `main`, before the tag**.
 2. Rename the `Unreleased` heading in `CHANGELOG.md` to the version and date. `ci.yml`'s `release`
-   job publishes that section as the GitHub Release body via `scripts/release_notes.py` (MAS-258); it
-   fails on a missing or empty section, and a re-run rewrites the page. It runs after the registry has
-   published, so it is not a gate.
+   job runs after the other jobs pass on a tag build and publishes that section as the GitHub Release
+   body via `scripts/release_notes.py` (MAS-258); it fails on a missing or empty section, and a re-run
+   rewrites the page rather than creating a second one. It runs after the registry has published, so
+   it is not a gate: a tag whose checks fail simply gets no Release page.
 3. Update `MANIFEST.json` (the image pair the reference install had applied at tagging; the contract
    is `docs/release-manifest.md`) and regenerate the README release table with
    `python3 scripts/check_release_manifest.py --write`. Never hand-edit the table.

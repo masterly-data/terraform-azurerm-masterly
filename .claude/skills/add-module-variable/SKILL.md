@@ -28,7 +28,8 @@ output description is customer documentation.
    output breaks every configuration that reads it, as a variable change does.
 6. **Add a `run` block** to `tests/install.tftest.hcl` for each guard, conditional resource
    (`count`/`for_each`) and derived value: a run that passes and an `expect_failures` run for each
-   guard. A condition with no run block is a branch nothing exercises.
+   guard. The existing runs cover the variable guards, the residency preconditions, both data-plane
+   branches and the optional subsystems; a condition with no run block is a branch nothing exercises.
 7. **Update the README** (the module surface reference) and `examples/production/` when the variable
    belongs in a production-posture install.
 8. **Write the CHANGELOG entry** under `Unreleased`. A rename, removal, retyping or tightening of a

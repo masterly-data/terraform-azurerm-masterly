@@ -25,7 +25,8 @@ This repository is public; review wording as customer-visible text.
 ## Known traps
 
 - `terraform validate` and `terraform test` (mock providers) never call Azure; a green CI does not
-  prove Azure accepts the change. The PR should say so.
+  prove Azure accepts the change. The PR should say so. `validate` does not even run a provider's
+  argument validation (proven on `masterly-platform-iac`, MAS-74).
 - A change to the derived subnet layout can replace live subnets; only a plan shows it.
 - A `v*` tag publishes irreversibly; agents never tag or dispatch `cut-release`.
 - Nested `modules/*/versions.tf` provider constraints must move with the root floor.

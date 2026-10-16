@@ -51,9 +51,13 @@ rm -f examples/production/license-issuer.jwk.json
 
 ## What these checks cannot catch
 
-- `terraform validate` does not run a provider's argument validation (MAS-74: a malformed token passed
-  `validate` and failed at `plan`). The module declares no `provider` block, so provider arguments are
-  outside what CI can exercise.
+This is the part most likely to be got wrong:
+
+- `terraform validate` does not run a provider's argument validation; provider configuration only
+  happens on `plan`. Proven on `masterly-platform-iac` (MAS-74): a deliberately malformed API token
+  passed `validate` and was rejected at `plan`. The module declares no `provider` block, which is
+  correct for a module (the root configuration owns it), so provider arguments are outside what CI
+  can exercise.
 - `terraform test` uses `mock_provider`. Quota, SKU availability, global name uniqueness, RBAC of the
   deploying principal, resource-provider registration and API rejection of schema-valid field
   combinations are all untested. A green run proves the module's own logic only.
