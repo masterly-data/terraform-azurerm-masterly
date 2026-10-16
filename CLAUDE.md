@@ -119,5 +119,11 @@ subsystem has its own file.
 The demo install (`masterly-demo-iac/deployments/demo-eu/main.tf`) and the production-mode rehearsal
 install (`masterly-test-install/main.tf`) pin a registry version, as a customer does, and neither
 sees a change made here until someone bumps the pin by hand. Read pins from those files; do not copy
-a version into this one. Planning a live install against the module branch before a release is a
-human step that nothing enforces.
+a version into this one. **Plan a live install against the module branch before tagging a release**;
+nothing enforces it, so it is yours to do or to hand to a human.
+
+## Workflows and publishing
+
+`.github/workflows/` holds `ci.yml`, `public-docs-module-pin.yml` (a scheduled check that the public
+docs pin the current module version) and `cut-release.yml`. None of them publishes the module: the
+Terraform Registry watches this repository's tags through its own webhook, outside GitHub Actions.

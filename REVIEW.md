@@ -4,6 +4,7 @@ This repository is public; review wording as customer-visible text.
 
 ## What blocks
 
+- An acceptance criterion of the card or issue that the change does not meet.
 - A breaking change to a variable (renamed, removed, retyped or tightened) without a migration note
   in the `CHANGELOG.md` entry.
 - A new public endpoint, or a default weaker than the one it replaces.
