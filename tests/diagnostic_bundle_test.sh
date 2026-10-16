@@ -24,12 +24,12 @@
 #   3. manifest.json's `.tool` names the version of the TREE THE SCRIPT RAN FROM, and never a
 #      version that tree is not. That is asserted in its own scenario, against a staged module
 #      root, because inside this repository the true answer and the wrong one look alike.
-#   4. The app log queries q1..q5 read both the legacy _CL table and the resource-specific one,
-#      under the legacy column names, and each covers the apps it says it does: q1, q3 and q5
-#      ca-api, ca-workers and ca-frontend, and q2 and q4 ca-api and ca-workers, with q3 counting
-#      ca-frontend on its warning lines. The fake `az` answers a table's fixture rows only when
-#      the query names that table, and only for the apps the query's filter names, so rows from
-#      both tables reaching the bundle is evidence, not decoration.
+#   4. The app log queries q1..q5 read the resource-specific tables, never a legacy _CL table,
+#      under the column names the exported files have always had, and each covers the apps it
+#      says it does: q1, q3 and q5 ca-api, ca-workers and ca-frontend, and q2 and q4 ca-api and
+#      ca-workers, with q3 counting ca-frontend on its warning lines. The fake `az` answers a
+#      table's fixture rows only when the query names that table, and only for the apps the
+#      query's filter names, so every app's rows reaching the bundle is evidence, not decoration.
 #
 # It runs the real script against a fake `az` and a fake `curl` (tests/fixtures/
 # diagnostic-bundle/) whose answers are SEEDED with values that must never reach the bundle:
@@ -108,11 +108,11 @@ fail() { printf '  FAIL    %s\n' "$*"; failures=$((failures + 1)); }
 #
 # Log queries are answered from the query text. Each query is saved as $bindir/.<q>-query so
 # the test can read what the workspace was asked. q1..q5 are answered the way their union
-# would be: q1..q4 have a fixture per console-log table and q5 one per system-log table
-# (rest-<q>.json for the legacy _CL table, rest-<q>-new-table.json for the resource-specific
-# one). The answer carries a fixture's rows only when the query names that fixture's table, and
-# only the rows for the apps the query's `where ContainerAppName_s in (...)` filter names. So a
-# fixture row that reaches the bundle proves the query reads that table and covers that app.
+# would be: q1..q4 have a fixture for the console-log table and q5 one for the system-log
+# table (rest-<q>.json). The answer carries the fixture's rows only when the query names that
+# table, and only the rows for the apps the query's `where ContainerAppName_s in (...)` filter
+# names. So a fixture row that reaches the bundle proves the query reads that table and covers
+# that app.
 make_fakes() { # make_fakes <bindir> <fixtures> <q3 fixture name> [<q6 fixture name>]
   local bindir="$1" fixtures="$2" q3="$3" q6="${4:-rest-q6.json}"
   mkdir -p "$bindir"
@@ -131,22 +131,17 @@ logs_query() { # logs_query <az args...> — the KQL in the --body the script po
   echo "fake az: a log query with no --body" >&2; return 1
 }
 
-union_answer() { # union_answer <query> <table> <legacy fixture> <new-table fixture>
-  local query="$1" table="$2" legacy="$3" new="$4" apps files=()
-  if grep -qE "(^|[^[:alnum:]_])${table}_CL([^[:alnum:]_]|$)" <<<"$query"; then files+=("$F/$legacy"); fi
-  if grep -qE "(^|[^[:alnum:]_])${table}([^[:alnum:]_]|$)" <<<"$query"; then files+=("$F/$new"); fi
+table_answer() { # table_answer <query> <table> <fixture>
+  local query="$1" table="$2" fixture="$3" apps
   apps=$(sed -nE 's/.*where ContainerAppName_s in \(([^)]*)\).*/\1/p' <<<"$query" | head -n1 \
            | { grep -oE '"[^"]+"' || true; } | jq -s -c '.')
-  if [[ -z "${files[*]:-}" ]]; then jq -c '.tables[0].rows = []' "$F/$legacy"; return 0; fi
-  # Both tables answer under the same column names — the renames in the query's union are
-  # what makes that true of the real workspace, and the fixtures must agree on it too.
-  jq -s -c --argjson apps "$apps" '
-    .[0].tables[0].columns as $cols
-    | if any(.[]; .tables[0].columns != $cols) then error("fixtures disagree on the columns") else . end
-    | ($cols | map(.name) | index("ContainerAppName_s")) as $i
-    | {tables: [{name: "PrimaryResult", columns: $cols,
-                 rows: [.[].tables[0].rows[] | select(.[$i] as $app | $apps | index($app))]}]}' \
-    "${files[@]}"
+  if ! grep -qE "(^|[^[:alnum:]_])${table}([^[:alnum:]_]|$)" <<<"$query"; then
+    jq -c '.tables[0].rows = []' "$F/$fixture"; return 0
+  fi
+  # The columns carry the names the query's union renames them to, and the fixture must agree.
+  jq -c --argjson apps "$apps" '
+    (.tables[0].columns | map(.name) | index("ContainerAppName_s")) as $i
+    | .tables[0].rows |= map(select(.[$i] as $app | $apps | index($app)))' "$F/$fixture"
 }
 
 case "$1 ${2:-} ${3:-}" in
@@ -179,9 +174,9 @@ case "$1 ${2:-} ${3:-}" in
     esac
     printf '%s\n' "$query" > "$B/.$q-query"
     case "$q" in
-      q1|q2|q4) union_answer "$query" ContainerAppConsoleLogs "rest-$q.json" "rest-$q-new-table.json" ;;
-      q3)       union_answer "$query" ContainerAppConsoleLogs "$Q3" "rest-q3-new-table.json" ;;
-      q5)       union_answer "$query" ContainerAppSystemLogs "rest-q5.json" "rest-q5-new-table.json" ;;
+      q1|q2|q4) table_answer "$query" ContainerAppConsoleLogs "rest-$q.json" ;;
+      q3)       table_answer "$query" ContainerAppConsoleLogs "$Q3" ;;
+      q5)       table_answer "$query" ContainerAppSystemLogs "rest-q5.json" ;;
       q6)       cat "$F/$Q6" ;;
       q7)       cat "$F/rest-q7.json" ;;
     esac ;;
@@ -282,38 +277,40 @@ scenario_clean() { # scenario_clean <script>
     pass "q7 projects no caller identity, address or request URI"
   fi
 
-  # q1..q5 read both the legacy _CL table and the resource-specific one, in a fuzzy union that
-  # renames the resource-specific columns to the legacy names; each covers the apps it should;
-  # and rows from BOTH tables' fixtures reach the bundle (the fake answers a table's rows only
-  # when the query names it, and only for the apps its filter names).
+  # q1..q5 read the resource-specific table in a fuzzy union that renames its columns, and no
+  # legacy _CL table; each covers the apps it should; and every row of the fixture reaches the
+  # bundle (the fake answers a table's rows only when the query names it, and only for the apps
+  # its filter names).
   local qs=(q1 q2 q3 q4 q5)
   local files=(q1-running-images q2-boot-posture q3-errors-by-logger q4-request-trace q5-revision-failures)
   local want_apps=("ca-api ca-frontend ca-workers" "ca-api ca-workers" "ca-api ca-frontend ca-workers"
                    "ca-api ca-workers" "ca-api ca-frontend ca-workers")
-  local i q qf table got fx legacy
+  local i q qf table got fx
   for i in "${!qs[@]}"; do
     q="${qs[$i]}"; qf="$tmp/bin/.$q-query"
     if [[ "$q" == q5 ]]; then table=ContainerAppSystemLogs; else table=ContainerAppConsoleLogs; fi
-    if grep -qE "(^|[^[:alnum:]_])${table}_CL([^[:alnum:]_]|$)" "$qf" 2>/dev/null \
-       && grep -qE "(^|[^[:alnum:]_])${table}([^[:alnum:]_]|$)" "$qf" \
+    if grep -qE "(^|[^[:alnum:]_])${table}([^[:alnum:]_]|$)" "$qf" 2>/dev/null \
        && grep -qF "union isfuzzy=true" "$qf" && grep -qF "datatable(" "$qf" \
        && grep -qF "ContainerAppName_s = ContainerAppName" "$qf" \
        && grep -qF "RevisionName_s = RevisionName" "$qf" && grep -qF "Log_s = Log" "$qf"; then
-      pass "$q reads ${table}_CL and $table in an anchored fuzzy union under the legacy column names"
+      pass "$q reads $table in an anchored fuzzy union under the legacy column names"
     else
-      fail "$q does not read ${table}_CL and $table in an anchored fuzzy union renaming to the legacy columns"
+      fail "$q does not read $table in an anchored fuzzy union renaming to the legacy columns"
+    fi
+    if grep -qE "_CL([^[:alnum:]_]|$)" "$qf" 2>/dev/null; then
+      fail "$q reads a legacy _CL table"
+    else
+      pass "$q reads no legacy _CL table"
     fi
     got=$({ grep -F 'where ContainerAppName_s in (' "$qf" 2>/dev/null || true; } | apps_in)
     [[ "$got" == "${want_apps[$i]}" ]] && pass "$q covers exactly: $got" \
       || fail "$q covers '$got', expected '${want_apps[$i]}'"
-    if [[ "$q" == q3 ]]; then legacy="rest-q3.json"; else legacy="rest-$q.json"; fi
-    for fx in "$legacy" "rest-$q-new-table.json"; do
-      jq -e --slurpfile f "$FIXTURES/$fx" '[.tables[0].rows[]] as $b
-          | ($f[0].tables[0].rows | length) > 0 and all($f[0].tables[0].rows[]; . as $r | any($b[]; . == $r))' \
-        "$bundle/logs/${files[$i]}.json" >/dev/null 2>&1 \
-        && pass "every row of $fx reaches logs/${files[$i]}.json" \
-        || fail "rows of $fx do not reach logs/${files[$i]}.json"
-    done
+    fx="rest-$q.json"
+    jq -e --slurpfile f "$FIXTURES/$fx" '[.tables[0].rows[]] as $b
+        | ($f[0].tables[0].rows | length) > 0 and all($f[0].tables[0].rows[]; . as $r | any($b[]; . == $r))' \
+      "$bundle/logs/${files[$i]}.json" >/dev/null 2>&1 \
+      && pass "every row of $fx reaches logs/${files[$i]}.json" \
+      || fail "rows of $fx do not reach logs/${files[$i]}.json"
   done
   for i in 0 2 4; do
     jq -e '(.tables[0].columns | map(.name) | index("ContainerAppName_s")) as $i
@@ -658,8 +655,8 @@ selftest() {
     'pattern scan disabled (a found statement is no longer escalated)'
     'review list seeded from the scan alone (a collected q6 with no marker goes unnamed)'
     'provenance taken from the release manifest when the tree could answer'
-    'the resource-specific console-log table dropped from the q1..q4 union'
-    'the resource-specific system-log table dropped from the q5 union'
+    'the q1..q4 union reads the legacy console-log table instead of the resource-specific one'
+    'the q5 union reads the legacy system-log table instead of the resource-specific one'
     'ca-frontend dropped from the app list q1, q3 and q5 filter on'
     'q3 counts ca-frontend on ERROR lines instead of warning lines'
   )

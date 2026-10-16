@@ -1,1 +1,0 @@
-{ "tables": [ { "name": "PrimaryResult", "columns": [ { "name": "ContainerAppName_s", "type": "string" }, { "name": "TimeGenerated", "type": "datetime" }, { "name": "RevisionName_s", "type": "string" }, { "name": "ContainerImage_s", "type": "string" } ], "rows": [ [ "ca-frontend", "2026-09-10T01:00:00Z", "ca-frontend--0000017", "masterly.azurecr.io/frontend:v0.138.2" ] ] } ] }

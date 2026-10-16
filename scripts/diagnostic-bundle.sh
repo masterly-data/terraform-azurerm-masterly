@@ -15,10 +15,8 @@
 #   q3 errors by logger       ERROR lines from ca-api and ca-workers, WARNING lines from ca-frontend
 #   q4 request trace          ca-api, ca-workers
 #   q5 revision failures      ca-api, ca-workers, ca-frontend
-# q1..q4 read the console logs and q5 the system logs. Each query reads both the legacy table
-# (ContainerAppConsoleLogs_CL / ContainerAppSystemLogs_CL) and the resource-specific one
-# (ContainerAppConsoleLogs / ContainerAppSystemLogs), so it finds the lines whichever way the
-# environment sends its logs, and its columns keep the legacy names in both cases.
+# q1..q4 read the console logs (ContainerAppConsoleLogs) and q5 the system logs
+# (ContainerAppSystemLogs); the columns keep the names the exported files have always had.
 #
 # What it never carries, by construction rather than by care:
 #   * no secret values — Container App secrets are listed by NAME only, and an environment
@@ -422,33 +420,26 @@ kql_names() {
 BACKEND_APPS_KQL=$(kql_names "${BACKEND_APPS[@]}")
 ALL_APPS_KQL=$(kql_names "${APPS[@]}")
 
-# The apps' logs can be in either of two tables, and q1..q5 read both. A Container App
-# Environment that sends its logs straight to the workspace writes the legacy custom tables,
-# ContainerAppConsoleLogs_CL and ContainerAppSystemLogs_CL. One that sends them through a
-# diagnostic setting writes the resource-specific tables, ContainerAppConsoleLogs and
-# ContainerAppSystemLogs. When an install moves from one to the other, the window a query reads
-# can span both tables. Each query reads both through one union:
+# The apps' logs are in the resource-specific tables, ContainerAppConsoleLogs and
+# ContainerAppSystemLogs, which the diagnostic setting on the Container Apps environment
+# writes. q1..q5 read them through one union each:
 #
 #   * `isfuzzy=true` drops a table that does not exist. A workspace only has the tables that
-#     have received data, so on most installs one of the two is missing.
-#   * The empty `datatable` anchor keeps the union valid when NEITHER table exists yet. A fuzzy
-#     union whose only remaining operand is missing fails with SEM0104 instead of returning
-#     nothing. diagnostics.tf uses the same anchor, and explains it there.
-#   * The resource-specific table's columns are renamed to the legacy names (ContainerAppName
-#     to ContainerAppName_s, and so on), so each exported file keeps the column names it has
-#     always had, whichever table a row came from.
+#     have received data.
+#   * The empty `datatable` anchor keeps the union valid when the table does not exist yet. A
+#     fuzzy union whose only remaining operand is missing fails with SEM0104 instead of
+#     returning nothing. diagnostics.tf uses the same anchor, and explains it there.
+#   * The table's columns are renamed to the names the exported files have always carried
+#     (ContainerAppName to ContainerAppName_s, and so on).
 CONSOLE_LOGS='union isfuzzy=true
   (datatable(TimeGenerated:datetime, ContainerAppName_s:string, RevisionName_s:string,
              ContainerImage_s:string, Log_s:string)[]),
-  (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, RevisionName_s,
-                                        ContainerImage_s, Log_s),
   (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName,
                                      RevisionName_s = RevisionName,
                                      ContainerImage_s = ContainerImage, Log_s = Log)'
 SYSTEM_LOGS='union isfuzzy=true
   (datatable(TimeGenerated:datetime, ContainerAppName_s:string, RevisionName_s:string,
              Log_s:string)[]),
-  (ContainerAppSystemLogs_CL | project TimeGenerated, ContainerAppName_s, RevisionName_s, Log_s),
   (ContainerAppSystemLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName,
                                     RevisionName_s = RevisionName, Log_s = Log)'
 

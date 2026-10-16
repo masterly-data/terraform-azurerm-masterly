@@ -306,6 +306,18 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `module.<name>.primary_shared_key` fails with "Unsupported attribute"; authenticate to the
   workspace with a Microsoft Entra identity instead. The root module never exposed the key, so a
   caller of the root module has nothing to change.
+- **The `api-latency` and `app-not-ready` alerts and the diagnostic bundle no longer read the
+  legacy `ContainerAppConsoleLogs_CL` and `ContainerAppSystemLogs_CL` tables.** Their queries
+  read only the resource-specific `ContainerAppConsoleLogs` and `ContainerAppSystemLogs` tables,
+  which the diagnostic setting on the Container Apps environment has written since the release
+  that moved the environment to Azure Monitor. The apps each query covers are unchanged:
+  `ca-api` for latency, `ca-api` and `ca-frontend` for readiness, and the same apps in each
+  bundle query `q1`–`q5`. The legacy tables get no new rows, so an install that has not applied
+  the earlier release reads nothing from them until it does. **Saved queries, workbooks and
+  alerts of your own that read a `_CL` table should be migrated** to the resource-specific table
+  (`ContainerAppName_s` becomes `ContainerAppName`, `Log_s` becomes `Log`, and so on without the
+  type suffix); the older rows stay in the `_CL` tables until the workspace's retention ages them
+  out. The next apply updates both alert rules in place.
 
 ### Fixed
 
