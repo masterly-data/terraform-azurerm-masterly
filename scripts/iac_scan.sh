@@ -4,7 +4,8 @@
 #   scripts/iac_scan.sh --selftest         the scanner reports the known-bad fixture
 #   scripts/iac_scan.sh --check-selftest   --check rejects each kind of bad entry (no trivy needed)
 #   scripts/iac_scan.sh --check            every .trivyignore.yaml entry has a rule ID, a path and a
-#                                          README departure heading that exists
+#                                          README departure heading that exists, and no tracked .tf
+#                                          file carries an inline ignore comment
 #   scripts/iac_scan.sh --sarif F          scan the module, write SARIF to F, never fail on findings
 #   scripts/iac_scan.sh --gate             scan the module, fail on HIGH/CRITICAL
 set -euo pipefail
@@ -41,13 +42,13 @@ departure_headings() {
 }
 
 # check_ignorefile IGNOREFILE README
-# Entries are "  - id:" blocks. Each needs paths and a statement that names the README section
-# and one of its departure headings, compared as a literal string. With `misconfigurations: []`
-# there is nothing to check.
+# Entries are "  - id:" blocks. Each needs paths (flow `[a.tf]` or a block list of `- a.tf`) and a
+# statement that names the README section and one of its departure headings, compared as a
+# literal string. With `misconfigurations: []` there is nothing to check.
 check_ignorefile() {
-  local file="$1" readme="$2" departures entry id paths statement heading bad=0 count=0
+  local file="$1" readme="$2" departures entry id paths statement heading key bad=0 count=0
   departures="$(departure_headings "$readme")"
-  id="" paths="" statement=""
+  id="" paths="" statement="" key=""
   # A sentinel entry flushes the last block.
   while IFS= read -r line; do
     case "$line" in
@@ -72,10 +73,19 @@ check_ignorefile() {
         count=$((count + 1))
         id="${line#  - id:}"
         id="${id# }"
-        paths="" statement=""
+        paths="" statement="" key=""
         ;;
-      "    paths:"*) paths="${line#    paths:}" ;;
-      "    statement:"*) statement="${line#    statement:}" ;;
+      "    paths:"*)
+        key=paths
+        paths="${line#    paths:}"
+        paths="${paths# }"
+        ;;
+      "      - "?*) if [ "$key" = paths ]; then paths="$paths${line#      - }"; fi ;;
+      "    statement:"*)
+        key=statement
+        statement="${line#    statement:}"
+        ;;
+      "    "[a-z]*) key="" ;;
       *) ;;
     esac
   done < <(cat "$file"; echo "@@end")
@@ -85,6 +95,37 @@ check_ignorefile() {
   fi
   [ "$bad" -eq 0 ] || return 1
   echo "check: $count suppression(s), each with a rule ID and a README departure heading"
+}
+
+# check_inline FILE...
+# Trivy also honours inline ignore comments in Terraform (`#trivy:ignore:<id>`, the wildcard
+# `#trivy:ignore:*`, the legacy `#tfsec:ignore:<id>`), which would bypass the ignore file and its
+# README rule. Every suppression lives in .trivyignore.yaml, so any such comment fails.
+check_inline() {
+  local hits rc=0
+  if [ "$#" -eq 0 ]; then
+    echo "::error::no Terraform files to check for inline ignore comments"
+    return 1
+  fi
+  hits="$(grep -nHIiE '(trivy|tfsec):ignore|checkov:skip' -- "$@")" || rc=$?
+  case "$rc" in
+    0)
+      while IFS= read -r hit; do
+        echo "::error::inline ignore comment (suppress in $ignorefile instead): $hit"
+      done <<<"$hits"
+      return 1
+      ;;
+    1) echo "check: no inline ignore comment in $# Terraform file(s)" ;;
+    *)
+      echo "::error::could not read the Terraform files for inline ignore comments"
+      return 1
+      ;;
+  esac
+}
+
+# The tracked Terraform the scan reads; the known-bad fixtures are skipped by the scan.
+module_tf_files() {
+  git ls-files -z -- '*.tf' ":(exclude)$fixtures/**"
 }
 
 # The check must be seen to reject each kind of bad entry before its pass means anything. Runs
@@ -126,11 +167,15 @@ EOF
   entry no-such-heading AVD-AZU-0001 "[main.tf]" "README \"$phrase\" -> \"Key Vault is public\""
   entry regex-heading AVD-AZU-0001 "[main.tf]" "README \"$phrase\" -> \"Service Bus.*\""
   entry section-as-heading AVD-AZU-0001 "[main.tf]" "README \"$phrase\" -> \"$phrase\""
+  printf 'misconfigurations:\n  - id: AVD-AZU-0001\n    paths:\n      - main.tf\n    statement: %s\n' \
+    "$ok" >"$dir/block-paths"
+  printf 'misconfigurations:\n  - id: AVD-AZU-0001\n    paths:\n    statement: %s\n' \
+    "$ok" >"$dir/block-paths-empty"
 
-  for case_name in empty good no-entries no-id no-paths no-statement no-section outside-section \
-    no-such-heading regex-heading section-as-heading; do
+  for case_name in empty good block-paths no-entries no-id no-paths block-paths-empty \
+    no-statement no-section outside-section no-such-heading regex-heading section-as-heading; do
     case "$case_name" in
-      empty | good) want=pass ;;
+      empty | good | block-paths) want=pass ;;
       *) want=fail ;;
     esac
     if check_ignorefile "$dir/$case_name" "$readme" >/dev/null 2>&1; then got=pass; else got=fail; fi
@@ -139,6 +184,33 @@ EOF
       failed=1
     fi
   done
+
+  # Inline ignore comments: a clean file passes, each comment form fails, as does a file list
+  # with nothing in it.
+  local kv='resource "azurerm_key_vault" "kv" {'
+  printf '%s\n  public_network_access_enabled = false\n}\n' "$kv" >"$dir/clean.tf"
+  printf '#trivy:ignore:*\n%s\n}\n' "$kv" >"$dir/inline-wildcard.tf"
+  printf '%s\n  public_network_access_enabled = true #trivy:ignore:AVD-AZU-0013\n}\n' "$kv" \
+    >"$dir/inline-trivy.tf"
+  printf '// trivy:ignore:AVD-AZU-0013\n%s\n}\n' "$kv" >"$dir/inline-slash.tf"
+  printf '#tfsec:ignore:azure-keyvault-specify-network-acl\n%s\n}\n' "$kv" >"$dir/inline-tfsec.tf"
+  printf '#checkov:skip=CKV_AZURE_189\n%s\n}\n' "$kv" >"$dir/inline-checkov.tf"
+  for case_name in clean.tf inline-wildcard.tf inline-trivy.tf inline-slash.tf inline-tfsec.tf \
+    inline-checkov.tf; do
+    case "$case_name" in
+      clean.tf) want=pass ;;
+      *) want=fail ;;
+    esac
+    if check_inline "$dir/clean.tf" "$dir/$case_name" >/dev/null 2>&1; then got=pass; else got=fail; fi
+    if [ "$got" != "$want" ]; then
+      echo "::error::check self-test: '$case_name' should $want, but did $got"
+      failed=1
+    fi
+  done
+  if check_inline >/dev/null 2>&1; then
+    echo "::error::check self-test: an empty file list should fail, but passed"
+    failed=1
+  fi
   rm -rf "$dir"
   [ "$failed" -eq 0 ] || exit 1
   echo "check self-test: --check accepts the good entries and rejects every bad one"
@@ -149,7 +221,12 @@ scan_args=(--ignorefile "$ignorefile" --skip-dirs "$fixtures" .)
 case "${1:-}" in
   --selftest) selftest ;;
   --check-selftest) check_selftest ;;
-  --check) check_ignorefile "$ignorefile" README.md ;;
+  --check)
+    check_ignorefile "$ignorefile" README.md
+    tf_files=()
+    while IFS= read -r -d '' f; do tf_files+=("$f"); done < <(module_tf_files)
+    check_inline ${tf_files[@]+"${tf_files[@]}"}
+    ;;
   --sarif) trivy_config --format sarif --output "${2:?--sarif needs an output file}" "${scan_args[@]}" ;;
   --gate) trivy_config --exit-code 1 "${scan_args[@]}" ;;
   *)
