@@ -52,7 +52,7 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
 | `diagnostics.tf` | The observability surface: the action group, the diagnostic settings (data-plane, and one per Container App), the metric alerts and the log-search alert rules |
 | `keyvault.tf` | The opt-in durable secret store (ADR 0066): vault, private endpoint and DNS, RBAC grants, and the install's own secrets as Key Vault references |
 | `redis.tf` | The opt-in session registry (ADR 0071): both offerings (`managed` / `cache`), each private-endpoint only |
-| `workers.tf`, `email.tf`, `entra-auth.tf` | The opt-in `ca-workers` app, customer-owned ACS email, and Entra authentication |
+| `workers.tf`, `email.tf`, `entra-auth.tf` | The opt-in `ca-workers` app, customer-owned ACS email, and how the apps authenticate to the install's own Postgres and Redis (Entra token, or password and access key) |
 | `variables.tf`, `outputs.tf`, `versions.tf` | The public surface. Every variable description is customer documentation |
 | `modules/` | Six nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `license-claims-floor` (the plan-time licence claims-floor check; no resources), `log-analytics-workspace`, `user-assigned-identity` |
 | `tests/` | `install.tftest.hcl` (the mock-provider run blocks), and `diagnostic_bundle_test.sh` with its `fixtures/`: the harness that proves the diagnostic bundle carries no secrets |
@@ -67,8 +67,10 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
 
 ## Conventions
 
-- **Variables and outputs.** Every variable has a `type`, a customer-facing `description`, a safe
-  default and a `validation` block for inputs a customer can get wrong. Skill `add-module-variable`.
+- **Variables and outputs.** Every variable has a `type` and a customer-facing `description`; an
+  optional input has a safe default, a required input has none, and an input a customer can get
+  wrong has a `validation` block. Every output has a customer-facing `description`, and an output
+  that carries a secret is `sensitive = true`. Skill `add-module-variable`.
 - **Departures from Azure's baseline are documented in the README** section "Where this module
   departs from Azure's recommended baseline". Skill `document-baseline-departure`.
 - **Provider floor.** `.terraform.lock.hcl` is gitignored: Terraform reads the lock file of the root
