@@ -9,7 +9,7 @@ resource "azurerm_container_app_environment" "this" {
 
   # SELF-HOSTED EXTENSION: logs go through Azure Monitor, not straight to a workspace. With
   # "log-analytics" the environment writes to the workspace with the workspace's shared key,
-  # into the legacy custom log tables. With
+  # into the legacy ContainerAppConsoleLogs_CL / ContainerAppSystemLogs_CL tables. With
   # "azure-monitor" it writes nowhere on its own: the caller attaches a diagnostic setting to
   # this environment (the root module's azurerm_monitor_diagnostic_setting.aca_env), which
   # authenticates as Azure Monitor and writes the resource-specific ContainerAppConsoleLogs /

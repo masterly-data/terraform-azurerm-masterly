@@ -29,7 +29,8 @@
 #      says it does: q1, q3 and q5 ca-api, ca-workers and ca-frontend, and q2 and q4 ca-api and
 #      ca-workers, with q3 counting ca-frontend on its warning lines. The fake `az` answers a
 #      table's fixture rows only when the query names that table, and only for the apps the
-#      query's filter names, so every app's rows reaching the bundle is evidence, not decoration.
+#      query's filter names, so every app's resource-specific rows reaching the bundle, and no
+#      legacy row reaching it, is evidence, not decoration.
 #
 # It runs the real script against a fake `az` and a fake `curl` (tests/fixtures/
 # diagnostic-bundle/) whose answers are SEEDED with values that must never reach the bundle:
@@ -48,9 +49,10 @@
 # `--selftest` is the part that keeps this honest. It copies the script, breaks it eleven ways
 # a real regression would — keep every env value, keep secret values, disable the gate,
 # disable the statement-echo warning, disable only its pattern scan, name only the files the
-# scan matched, take the version from the release manifest when the tree could answer, drop
-# the resource-specific console or system table from its union, drop ca-frontend from the app
-# list, count ca-frontend on ERROR rather than warning lines — and asserts that THIS harness
+# scan matched, take the version from the release manifest when the tree could answer, read
+# the legacy _CL console or system table in place of the resource-specific one, drop
+# ca-frontend from the app list, count ca-frontend on ERROR rather than warning lines — and
+# asserts that THIS harness
 # fails against each broken copy. A test nobody has watched fail is a hypothesis; CI runs the selftest first so
 # that a detector that has quietly stopped detecting fails the build instead of passing it.
 # Each break is checked to have actually changed the copy, so a stale sed cannot turn the
@@ -108,12 +110,13 @@ fail() { printf '  FAIL    %s\n' "$*"; failures=$((failures + 1)); }
 #
 # Log queries are answered from the query text. Each query is saved as $bindir/.<q>-query so
 # the test can read what the workspace was asked. q1..q5 are answered the way their union
-# would be: q1..q4 have a fixture for the console-log table and q5 one for the system-log
-# table (rest-<q>.json). The answer carries the fixture's rows only when the query names that
-# table, and only the rows for the apps the query's `where ContainerAppName_s in (...)` filter
-# names. So a fixture row that reaches the bundle proves the query reads that table and covers
-# that app.
-make_fakes() { # make_fakes <bindir> <fixtures> <q3 fixture name> [<q6 fixture name>]
+# would be: q1..q4 have a fixture per console-log table and q5 one per system-log table
+# (rest-<q>.json for the legacy _CL table, rest-<q>-new-table.json for the resource-specific
+# one). The answer carries a fixture's rows only when the query names that fixture's table, and
+# only the rows for the apps the query's `where ContainerAppName_s in (...)` filter names. So a
+# fixture row that reaches the bundle proves the query reads that table and covers that app, and
+# a legacy row that reaches it proves the query still reads the legacy table.
+make_fakes() { # make_fakes <bindir> <fixtures> <q3 new-table fixture name> [<q6 fixture name>]
   local bindir="$1" fixtures="$2" q3="$3" q6="${4:-rest-q6.json}"
   mkdir -p "$bindir"
   {
@@ -131,17 +134,22 @@ logs_query() { # logs_query <az args...> — the KQL in the --body the script po
   echo "fake az: a log query with no --body" >&2; return 1
 }
 
-table_answer() { # table_answer <query> <table> <fixture>
-  local query="$1" table="$2" fixture="$3" apps
+union_answer() { # union_answer <query> <table> <legacy fixture> <new-table fixture>
+  local query="$1" table="$2" legacy="$3" new="$4" apps files=()
+  if grep -qE "(^|[^[:alnum:]_])${table}_CL([^[:alnum:]_]|$)" <<<"$query"; then files+=("$F/$legacy"); fi
+  if grep -qE "(^|[^[:alnum:]_])${table}([^[:alnum:]_]|$)" <<<"$query"; then files+=("$F/$new"); fi
   apps=$(sed -nE 's/.*where ContainerAppName_s in \(([^)]*)\).*/\1/p' <<<"$query" | head -n1 \
            | { grep -oE '"[^"]+"' || true; } | jq -s -c '.')
-  if ! grep -qE "(^|[^[:alnum:]_])${table}([^[:alnum:]_]|$)" <<<"$query"; then
-    jq -c '.tables[0].rows = []' "$F/$fixture"; return 0
-  fi
-  # The columns carry the names the query's union renames them to, and the fixture must agree.
-  jq -c --argjson apps "$apps" '
-    (.tables[0].columns | map(.name) | index("ContainerAppName_s")) as $i
-    | .tables[0].rows |= map(select(.[$i] as $app | $apps | index($app)))' "$F/$fixture"
+  if [[ -z "${files[*]:-}" ]]; then jq -c '.tables[0].rows = []' "$F/$new"; return 0; fi
+  # Both tables answer under the same column names — the renames in the query's union are
+  # what makes that true of the real workspace, and the fixtures must agree on it too.
+  jq -s -c --argjson apps "$apps" '
+    .[0].tables[0].columns as $cols
+    | if any(.[]; .tables[0].columns != $cols) then error("fixtures disagree on the columns") else . end
+    | ($cols | map(.name) | index("ContainerAppName_s")) as $i
+    | {tables: [{name: "PrimaryResult", columns: $cols,
+                 rows: [.[].tables[0].rows[] | select(.[$i] as $app | $apps | index($app))]}]}' \
+    "${files[@]}"
 }
 
 case "$1 ${2:-} ${3:-}" in
@@ -174,9 +182,9 @@ case "$1 ${2:-} ${3:-}" in
     esac
     printf '%s\n' "$query" > "$B/.$q-query"
     case "$q" in
-      q1|q2|q4) table_answer "$query" ContainerAppConsoleLogs "rest-$q.json" ;;
-      q3)       table_answer "$query" ContainerAppConsoleLogs "$Q3" ;;
-      q5)       table_answer "$query" ContainerAppSystemLogs "rest-q5.json" ;;
+      q1|q2|q4) union_answer "$query" ContainerAppConsoleLogs "rest-$q.json" "rest-$q-new-table.json" ;;
+      q3)       union_answer "$query" ContainerAppConsoleLogs "rest-q3.json" "$Q3" ;;
+      q5)       union_answer "$query" ContainerAppSystemLogs "rest-q5.json" "rest-q5-new-table.json" ;;
       q6)       cat "$F/$Q6" ;;
       q7)       cat "$F/rest-q7.json" ;;
     esac ;;
@@ -221,7 +229,7 @@ apps_in() { # apps_in — the apps quoted in the first `ContainerAppName_s in (.
 scenario_clean() { # scenario_clean <script>
   local script="$1" tmp bundle rc
   tmp=$(mktemp -d)
-  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3.json"
+  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3-new-table.json"
   rc=0
   PATH="$tmp/bin:$PATH" MASTERLY_API_TOKEN="CANARY-API-TOKEN-2e77" \
     bash "$script" --subscription 00000000-0000-0000-0000-000000000000 \
@@ -278,14 +286,15 @@ scenario_clean() { # scenario_clean <script>
   fi
 
   # q1..q5 read the resource-specific table in a fuzzy union that renames its columns, and no
-  # legacy _CL table; each covers the apps it should; and every row of the fixture reaches the
-  # bundle (the fake answers a table's rows only when the query names it, and only for the apps
+  # legacy _CL table; each covers the apps it should; the resource-specific fixture has a row
+  # for each of those apps and every one reaches the bundle, while no row of the legacy fixture
+  # does (the fake answers a table's rows only when the query names it, and only for the apps
   # its filter names).
   local qs=(q1 q2 q3 q4 q5)
   local files=(q1-running-images q2-boot-posture q3-errors-by-logger q4-request-trace q5-revision-failures)
   local want_apps=("ca-api ca-frontend ca-workers" "ca-api ca-workers" "ca-api ca-frontend ca-workers"
                    "ca-api ca-workers" "ca-api ca-frontend ca-workers")
-  local i q qf table got fx
+  local i q qf table got fx legacy
   for i in "${!qs[@]}"; do
     q="${qs[$i]}"; qf="$tmp/bin/.$q-query"
     if [[ "$q" == q5 ]]; then table=ContainerAppSystemLogs; else table=ContainerAppConsoleLogs; fi
@@ -305,12 +314,22 @@ scenario_clean() { # scenario_clean <script>
     got=$({ grep -F 'where ContainerAppName_s in (' "$qf" 2>/dev/null || true; } | apps_in)
     [[ "$got" == "${want_apps[$i]}" ]] && pass "$q covers exactly: $got" \
       || fail "$q covers '$got', expected '${want_apps[$i]}'"
-    fx="rest-$q.json"
+    fx="rest-$q-new-table.json"
+    got=$(jq -r '(.tables[0].columns | map(.name) | index("ContainerAppName_s")) as $i
+                 | [.tables[0].rows[][$i]] | unique | join(" ")' "$FIXTURES/$fx")
+    [[ "$got" == "${want_apps[$i]}" ]] && pass "$fx has rows for exactly: $got" \
+      || fail "$fx has rows for '$got', expected '${want_apps[$i]}' — the coverage check below is vacuous"
     jq -e --slurpfile f "$FIXTURES/$fx" '[.tables[0].rows[]] as $b
         | ($f[0].tables[0].rows | length) > 0 and all($f[0].tables[0].rows[]; . as $r | any($b[]; . == $r))' \
       "$bundle/logs/${files[$i]}.json" >/dev/null 2>&1 \
       && pass "every row of $fx reaches logs/${files[$i]}.json" \
       || fail "rows of $fx do not reach logs/${files[$i]}.json"
+    legacy="rest-$q.json"
+    jq -e --slurpfile f "$FIXTURES/$legacy" '[.tables[0].rows[]] as $b
+        | ($f[0].tables[0].rows | length) > 0 and all($f[0].tables[0].rows[]; . as $r | all($b[]; . != $r))' \
+      "$bundle/logs/${files[$i]}.json" >/dev/null 2>&1 \
+      && pass "no row of the legacy $legacy reaches logs/${files[$i]}.json" \
+      || fail "a row of the legacy $legacy reaches logs/${files[$i]}.json"
   done
   for i in 0 2 4; do
     jq -e '(.tables[0].columns | map(.name) | index("ContainerAppName_s")) as $i
@@ -447,7 +466,7 @@ scenario_refused() { # scenario_refused <script>
 scenario_gaps() { # scenario_gaps <script> — no token, no request id: the manifest says so.
   local script="$1" tmp bundle rc
   tmp=$(mktemp -d)
-  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3.json"
+  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3-new-table.json"
   rc=0
   PATH="$tmp/bin:$PATH" bash "$script" --subscription 00000000-0000-0000-0000-000000000000 \
     --out "$tmp/out" > "$tmp/stdout" 2> "$tmp/stderr" || rc=$?
@@ -482,7 +501,7 @@ scenario_gaps() { # scenario_gaps <script> — no token, no request id: the mani
 scenario_no_marker() { # scenario_no_marker <script>
   local script="$1" tmp bundle rc
   tmp=$(mktemp -d)
-  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3.json" "rest-q6-no-marker.json"
+  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3-new-table.json" "rest-q6-no-marker.json"
   rc=0
   PATH="$tmp/bin:$PATH" bash "$script" --subscription 00000000-0000-0000-0000-000000000000 \
     --out "$tmp/out" > "$tmp/stdout" 2> "$tmp/stderr" || rc=$?
@@ -566,7 +585,7 @@ run_staged() { # run_staged <root> <tmp> <label> — run the staged copy, echo i
 scenario_provenance() { # scenario_provenance <script>
   local script="$1" tmp tool
   tmp=$(mktemp -d)
-  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3.json"
+  make_fakes "$tmp/bin" "$FIXTURES" "rest-q3-new-table.json"
 
   # (a) The module's own git tree. The tag is the answer; the manifest is not consulted.
   stage_module "$tmp/clone" "$script"

@@ -312,8 +312,9 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   which the diagnostic setting on the Container Apps environment has written since the release
   that moved the environment to Azure Monitor. The apps each query covers are unchanged:
   `ca-api` for latency, `ca-api` and `ca-frontend` for readiness, and the same apps in each
-  bundle query `q1`–`q5`. The legacy tables get no new rows, so an install that has not applied
-  the earlier release reads nothing from them until it does. **Saved queries, workbooks and
+  bundle query `q1`–`q5`. Apply the release that moved the environment to Azure Monitor first:
+  until it is applied, an install's lines land only in the `_CL` tables, which these queries no
+  longer read. **Saved queries, workbooks and
   alerts of your own that read a `_CL` table should be migrated** to the resource-specific table
   (`ContainerAppName_s` becomes `ContainerAppName`, `Log_s` becomes `Log`, and so on without the
   type suffix); the older rows stay in the `_CL` tables until the workspace's retention ages them

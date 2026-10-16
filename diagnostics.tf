@@ -1028,15 +1028,15 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 #    interval from billing the customer for a log line every ten seconds.
 #
 #  * The platform's own words — still rejected, and the measurement that rejected them stands.
-#    ContainerAppSystemLogs does carry the failure (`Reason == "ProbeFailed"`, e.g.
-#    "Container ca-api failed readiness probe"); the diagnostic setting on the Container Apps environment
-#    (azurerm_monitor_diagnostic_setting.aca_env in main.tf) populates in every install. It caught
-#    exactly this shape on Masterly's own reference install on 2026-09-07. But replaying a
-#    sustained-window rule over 30 days of that workspace fires on roughly a dozen occasions per
-#    app, most of them ordinary deploy churn, and separating a wedged app from a rolling one
-#    there needs a rate threshold tied to the probe interval. The app-emitted line is the better
-#    source precisely because it is the application's own conclusion rather than the platform's
-#    retry count.
+#    ContainerAppSystemLogs, which the diagnostic setting on the Container Apps environment
+#    (azurerm_monitor_diagnostic_setting.aca_env in main.tf) populates in every install, does
+#    carry the failure (`Reason == "ProbeFailed"`, e.g. "Container ca-api failed readiness
+#    probe"). It caught exactly this shape on Masterly's own reference install on 2026-09-07.
+#    But replaying a sustained-window rule over 30 days of that workspace fires on roughly a
+#    dozen occasions per app, most of them ordinary deploy churn, and separating a wedged app
+#    from a rolling one there needs a rate threshold tied to the probe interval. The app-emitted
+#    line is the better source precisely because it is the application's own conclusion rather
+#    than the platform's retry count.
 #
 # What is still not covered — an app with no readiness probe at all (ca-workers), and a wedge
 # that clears inside the rule's window — is disclosed in the README rather than implied.
@@ -1153,8 +1153,8 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
     # keeps the names it has always had.
     #
     # The empty `datatable` anchor is load-bearing, and `isfuzzy` alone would not do its job.
-    # The table does not exist in a workspace until the first console line lands in it, and a query
-    # against a missing table FAILS rather than returning nothing — which would fail this rule's
+    # The table does not exist in a workspace until the first console line lands in it, and a
+    # query against a missing table FAILS rather than returning nothing — which would fail this rule's
     # creation on a fresh install, or leave it unhealthy and, after a week of failures, disabled
     # by Azure. `union isfuzzy=true` is the usual answer and it is NOT sufficient on its own: a
     # fuzzy union whose only operand is missing still dies with SEM0104 ("Operator source
