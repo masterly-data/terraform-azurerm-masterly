@@ -9,7 +9,8 @@ This repository is public; review wording as customer-visible text.
   in the `CHANGELOG.md` entry.
 - A new public endpoint, or a default weaker than the one it replaces.
 - A departure from Azure's recommended baseline that the README section "Where this module departs
-  from Azure's recommended baseline" does not document.
+  from Azure's recommended baseline" does not document, including a `.trivyignore.yaml` entry whose
+  statement names no such departure, or an inline `trivy:ignore` / `tfsec:ignore` comment.
 - A new variable guard, conditional resource or derived value with no `run` block in
   `tests/install.tftest.hcl`.
 - A claim about application behaviour that is not in a released image tag.

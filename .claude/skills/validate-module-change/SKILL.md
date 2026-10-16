@@ -20,6 +20,9 @@ python3 scripts/release_gate.py --selftest
 bash tests/diagnostic_bundle_test.sh --selftest
 bash tests/diagnostic_bundle_test.sh
 shellcheck --severity=style $(git ls-files '*.sh')
+bash scripts/iac_scan.sh --check-selftest        # needs python3 with PyYAML; the suppression check rejects each kind of bad entry
+bash scripts/iac_scan.sh --check                 # needs python3 with PyYAML; every suppression names a rule ID and a README departure; no inline ignore comments
+bash scripts/iac_scan.sh --selftest              # needs trivy; the scanner must flag the known-bad fixture
 ```
 
 - Shellcheck runs at `style` severity and any finding fails. A laxer line lets SC2086 (an unquoted
@@ -28,6 +31,9 @@ shellcheck --severity=style $(git ls-files '*.sh')
   lower the severity (MAS-428).
 - CI pins Terraform 1.10.5, the `required_version = ">= 1.10"` floor; a newer local CLI is fine.
 - `--selftest` runs first on purpose: a checker nobody has watched reject anything is a hypothesis.
+- A Trivy finding is answered by fixing it, or by an entry in `.trivyignore.yaml` that names the rule
+  ID, the file and the README departure (skill `document-baseline-departure`). Never an inline
+  `trivy:ignore` / `tfsec:ignore` comment; `--check` rejects those.
 
 ## Validating the example a customer copies
 

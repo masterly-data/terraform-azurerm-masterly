@@ -14,7 +14,10 @@ Two facts govern everything below:
    tree ships to customers and partners. Every comment, TODO, variable description and commit
    message is customer-readable, including this file.
 2. **The tag is the release.** Pushing a tag publishes to the public registry and a published version
-   cannot be withdrawn.
+   cannot be withdrawn. The registry watches tags through its own webhook, and none of the five
+   workflows publishes: `ci.yml`, `cut-release.yml`, `public-docs-module-pin.yml` (a scheduled check
+   that the public docs pin the current version), `workflow-hardening.yml` (zizmor) and
+   `iac-scan.yml` (Trivy over the Terraform, and dependency review on pull requests).
 
 ## Commands
 
@@ -32,6 +35,8 @@ python3 scripts/release_notes.py --selftest
 python3 scripts/release_gate.py --selftest
 bash tests/diagnostic_bundle_test.sh --selftest && bash tests/diagnostic_bundle_test.sh
 shellcheck --severity=style $(git ls-files '*.sh')   # any finding fails; never lower the severity
+bash scripts/iac_scan.sh --check-selftest && bash scripts/iac_scan.sh --check   # python3 + PyYAML
+bash scripts/iac_scan.sh --selftest              # needs trivy; must flag the known-bad fixture
 ```
 
 CI pins Terraform 1.10.5 (the `required_version = ">= 1.10"` floor). A green `terraform validate`
@@ -57,7 +62,7 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
 | `modules/` | Six nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `license-claims-floor` (the plan-time licence claims-floor check; no resources), `log-analytics-workspace`, `user-assigned-identity` |
 | `tests/` | `install.tftest.hcl` (the mock-provider run blocks), and `diagnostic_bundle_test.sh` with its `fixtures/`: the harness that proves the diagnostic bundle carries no secrets |
 | `examples/production/` | The production-posture example a customer copies; `source = "../../"`, so it validates the working tree |
-| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the release and docs gates), `check_runtime_env.py` (generates and checks `RUNTIME_ENV.json`, and that the bundle's env allowlist names only what the module sets), `release_notes.py` (a version's changelog section, as its GitHub Release body), `release_gate.py` (the check `cut-release.yml` runs before it creates a tag). Standard library only: release metadata should not depend on anything resolving |
+| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the release and docs gates), `check_runtime_env.py` (generates and checks `RUNTIME_ENV.json`, and that the bundle's env allowlist names only what the module sets), `release_notes.py` (a version's changelog section, as its GitHub Release body), `release_gate.py` (the check `cut-release.yml` runs before it creates a tag). Standard library only: release metadata should not depend on anything resolving. Also `iac_scan.sh`, the `iac-scan` job's Trivy scan and its check that every `.trivyignore.yaml` suppression names a rule ID and a README departure (and that no `.tf` file carries an inline `trivy:ignore`/`tfsec:ignore`, which would bypass it); CI only, so it is `export-ignore`d with its inputs |
 | `MANIFEST.json` | The release manifest: which image pair each published module version was released against. Its published contract is `docs/release-manifest.md`; a change to its shape changes what other repositories and the public docs parse |
 | `RUNTIME_ENV.json` | Every env name the module sets, per app. Generated, never edited; contract `docs/runtime-env.md`. The application repositories vendor it and check their code and runbooks against it (MAS-545) |
 | `CHANGELOG.md` | Keep a Changelog. New entries go under `Unreleased`; cutting a release renames that heading |
@@ -72,7 +77,8 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
   wrong has a `validation` block. Every output has a customer-facing `description`, and an output
   that carries a secret is `sensitive = true`. Skill `add-module-variable`.
 - **Departures from Azure's baseline are documented in the README** section "Where this module
-  departs from Azure's recommended baseline". Skill `document-baseline-departure`.
+  departs from Azure's recommended baseline"; a scan finding is suppressed only in
+  `.trivyignore.yaml`, naming that departure. Skill `document-baseline-departure`.
 - **Provider floor.** `.terraform.lock.hcl` is gitignored: Terraform reads the lock file of the root
   configuration only, so the constraint in `versions.tf` alone governs a customer's `init`. The
   floor is `~> 5.8` (`versions.tf` gives the reasoning: 5.8.0 is what a refreshing plan against a
@@ -141,9 +147,3 @@ version into this one. **Plan a live install against the module branch before ta
 Nothing enforces it, and a live plan needs a real subscription and credential, so it is a human
 action, not an agent one. An agent's part is to say in the PR that the change is unproven against
 Azure and what a plan would have to cover.
-
-## Workflows and publishing
-
-`.github/workflows/` holds `ci.yml`, `public-docs-module-pin.yml` (a scheduled check that the public
-docs pin the current module version) and `cut-release.yml`. None of them publishes the module: the
-Terraform Registry watches this repository's tags through its own webhook, outside GitHub Actions.

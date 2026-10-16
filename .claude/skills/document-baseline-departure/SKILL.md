@@ -1,6 +1,6 @@
 ---
 name: document-baseline-departure
-description: Document a place where the module departs from Azure's recommended baseline. Use when a change turns off, relaxes or replaces an Azure-recommended setting (network, identity, logging, SKU, TLS, public access).
+description: Document a place where the module departs from Azure's recommended baseline. Use when a change turns off, relaxes or replaces an Azure-recommended setting (network, identity, logging, SKU, TLS, public access), or when the IaC scan flags one.
 ---
 
 # Document a departure from Azure's baseline
@@ -15,6 +15,11 @@ A departure that the README does not document blocks review (see `REVIEW.md`).
    and the input that controls it.
 3. Where the departure is configurable, give the `variables.tf` description the same explanation, and
    add `run` blocks in `tests/install.tftest.hcl` covering both branches.
-4. Add a CHANGELOG entry under `Unreleased`.
-5. Write in plain, factual, customer-readable language: this repository is public. No internal
+4. If the `iac-scan` job (Trivy) flags the departure, add one entry to `.trivyignore.yaml` under
+   `misconfigurations`: the rule `id`, `paths` naming the real file that carries it, and a `statement`
+   naming the README heading from step 2. The file's header gives the exact shape. Never add a blanket
+   skip, a severity filter, a bare path or an inline `trivy:ignore` / `tfsec:ignore` comment; run
+   `bash scripts/iac_scan.sh --check` to confirm the entry is accepted.
+5. Add a CHANGELOG entry under `Unreleased`.
+6. Write in plain, factual, customer-readable language: this repository is public. No internal
    shorthand and no speculation about customers.

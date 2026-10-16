@@ -24,4 +24,9 @@
 # a clone alongside this one. Nothing in an install.
 /.claude        export-ignore
 
+# This repository's own IaC scan: its accepted-departures list and the script that reads it and
+# the fixtures under .github/. CI only; the script cannot run without those inputs.
+/.trivyignore.yaml   export-ignore
+/scripts/iac_scan.sh export-ignore
+
 /.gitattributes export-ignore
