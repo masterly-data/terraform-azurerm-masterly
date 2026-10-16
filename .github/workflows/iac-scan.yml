@@ -51,24 +51,17 @@ jobs:
       # reports at least one finding in it. Counting findings rather than naming a rule keeps it
       # from breaking when a rule is renumbered.
       - name: Self-test (the scanner reports the known-bad fixture)
-        run: |
-          trivy config --skip-check-update --severity HIGH,CRITICAL --format json \
-            --output "$RUNNER_TEMP/fixture.json" .github/iac-scan-fixtures
-          found=$(jq '[.Results[]?.Misconfigurations[]?] | length' "$RUNNER_TEMP/fixture.json")
-          if [ "$found" -lt 1 ]; then
-            echo "::error::iac-scan self-test: the known-bad fixture produced no finding, so a clean scan proves nothing"
-            exit 1
-          fi
-          echo "self-test: scanner reported $found finding(s) on the known-bad fixture"
+        run: bash scripts/iac_scan.sh --selftest
 
       # Accepted departures live in .trivyignore.yaml, by rule ID, each naming its README
-      # section. The scan runs twice over the same tree: first to write SARIF (never fails, so
-      # the findings reach code scanning even when the gate below fails), then to gate.
+      # section; this step fails an entry that lacks either. The scan then runs twice over the
+      # same tree: first to write SARIF (never fails, so the findings reach code scanning even
+      # when the gate below fails), then to gate. Suppressions at the time of writing: none.
+      - name: Check the suppressions name a rule ID and a README departure
+        run: bash scripts/iac_scan.sh --check
+
       - name: Scan Terraform (SARIF)
-        run: |
-          trivy config --skip-check-update --severity HIGH,CRITICAL --format sarif \
-            --output trivy-results.sarif --ignorefile .trivyignore.yaml \
-            --skip-dirs .github/iac-scan-fixtures .
+        run: bash scripts/iac_scan.sh --sarif trivy-results.sarif
 
       # Fork PRs get a read-only token, so the upload would fail there; the gate still runs.
       - name: Upload SARIF to code scanning
@@ -79,21 +72,21 @@ jobs:
           category: iac-scan
 
       - name: Fail on HIGH/CRITICAL misconfigurations
-        run: |
-          trivy config --skip-check-update --severity HIGH,CRITICAL --exit-code 1 \
-            --ignorefile .trivyignore.yaml --skip-dirs .github/iac-scan-fixtures .
+        run: bash scripts/iac_scan.sh --gate
 
-  # Pull requests only: the action compares the base and head of a pull request, and has
-  # nothing to compare in a merge group or on a push.
+  # Pull requests only: the action compares the base and head of a pull request through the
+  # API, and has nothing to compare in a merge group or on a push.
+  #
+  # Scratch PR to run once after merge, to watch it reject something: on a branch, pin one
+  # action in a workflow to a release with a known high-severity advisory (or add a lockfile
+  # with a vulnerable pin), open a PR, expect `dependency-review` to fail on
+  # fail-on-severity: high, then close the PR without merging.
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      contents: read # actions/checkout
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high

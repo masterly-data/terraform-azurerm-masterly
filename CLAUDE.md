@@ -150,6 +150,8 @@ python3 scripts/release_gate.py --selftest
 bash tests/diagnostic_bundle_test.sh --selftest
 bash tests/diagnostic_bundle_test.sh
 shellcheck --severity=style $(git ls-files '*.sh')
+bash scripts/iac_scan.sh --check                 # every suppression names a rule ID and a README departure
+bash scripts/iac_scan.sh --selftest              # needs trivy; the scanner must flag the known-bad fixture
 ```
 
 The shellcheck line is the same invocation CI runs, at the same severity: **any** finding fails.

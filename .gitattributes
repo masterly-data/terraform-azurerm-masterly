@@ -21,4 +21,7 @@
 # clone alongside this one; the guidance itself is not in this repository. Nothing in an install.
 /.claude        export-ignore
 
+# The accepted-departures list for this repository's own IaC scan; it configures CI only.
+/.trivyignore.yaml export-ignore
+
 /.gitattributes export-ignore
