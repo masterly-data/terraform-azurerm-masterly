@@ -1,0 +1,12 @@
+# Accepted departures from Azure's recommended baseline, read by the iac-scan job
+# (.github/workflows/iac-scan.yml). Each entry is one rule ID, scoped to the file that
+# carries the departure, with a statement naming the README section that documents it:
+# README.md, "Where this module departs from Azure's recommended baseline". Never add a
+# blanket skip, a severity filter or a bare path here; an entry without a rule ID and a
+# README section is a finding, not a suppression.
+#
+# Entry shape:
+#   - id: <rule ID reported by the scan>
+#     paths: [<file that carries the departure>]
+#     statement: README "Where this module departs from Azure's recommended baseline" -> "<heading>"
+misconfigurations: []
