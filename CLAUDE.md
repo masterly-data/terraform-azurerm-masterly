@@ -85,7 +85,7 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
   using the module. Do not lower it, or move to 6.x, without such a plan; a provider major is a
   breaking module release.
 - **Versions derive from `MANIFEST.json`** through the checker. Never transcribe a version: a
-  hand-typed pin is the failure this repo has had five cards about.
+  hand-typed pin is the most frequent defect in this repository's history.
 - **Comments and commits are public.** Write for a customer: no internal shorthand that reads as a
   defect, no speculation about a customer, no unexplained `TODO` that reads as a known-broken edge.
   `versions.tf` is the calibration: it explains at length why the provider floor is where it is,
