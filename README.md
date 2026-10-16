@@ -907,6 +907,41 @@ your whole estate, which the module cannot see. `log_query_public_access` with a
 restricts queries without one. If you associate the workspace with a perimeter of your own,
 start it in transition mode and confirm the install's logs still arrive before you enforce it.
 
+### The Log Analytics workspace
+
+The install's workspace, `log-<name_prefix>`, accepts Microsoft Entra ID only: local
+(shared-key) authentication is off, so its shared keys authenticate nothing, and the module has
+no output that carries one. It also takes no ingestion over the public network. The install's
+own logs and metrics arrive through diagnostic settings, which deliver inside Azure Monitor and
+need neither; an agent or a Logs Ingestion API client of your own that sends to this workspace
+has to authenticate with Microsoft Entra ID and send through an Azure Monitor Private Link Scope
+(AMPLS).
+
+| Input | Default | What it sets |
+|---|---|---|
+| `log_query_public_access` | `true` | Whether the workspace answers queries from the public network. `false` leaves only queries through an AMPLS |
+| `log_retention_days` | `30` | The workspace's retention, which every table except `AZKVAuditLogs` follows (30-730) |
+| `security_log_retention_days` | `90` | The retention of `AZKVAuditLogs`, the Key Vault audit events, set on that table alone (30-730) |
+
+Every query is signed in with Microsoft Entra ID. **Log Analytics Reader** on the workspace runs
+queries, which is what the [diagnostic bundle](#diagnostic-bundle) needs; **Log Analytics
+Contributor** also changes the workspace's settings.
+
+With `log_query_public_access = false`, the Azure portal, the diagnostic bundle and your own
+tools reach the workspace only from a network that resolves it through an AMPLS. The module
+creates no AMPLS, because an AMPLS changes how every Azure Monitor endpoint resolves for the
+whole network that uses its private DNS zones, not only this workspace's; it belongs to whoever
+owns that network. Add the workspace to your AMPLS, give the AMPLS a private endpoint in a
+network your operators query from, link its `privatelink` DNS zones to that network, and run
+the diagnostic bundle from inside it.
+
+The module does not place the workspace in a network security perimeter. An enforced perimeter
+decides which sources may send logs to the workspace and which may query it, including the
+diagnostic settings that deliver this install's logs, so its access rules have to be written for
+your whole estate, which the module cannot see. `log_query_public_access` with an AMPLS you own
+restricts queries without one. If you associate the workspace with a perimeter of your own,
+start it in transition mode and confirm the install's logs still arrive before you enforce it.
+
 ### App availability diagnostics
 
 The `<app>-unavailable` alerts read the platform's `Replicas` metric, so they catch an app that
