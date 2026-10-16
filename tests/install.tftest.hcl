@@ -534,6 +534,121 @@ run "one_diagnostic_setting_targets_the_environment" {
   }
 }
 
+# The workspace accepts Microsoft Entra ID only and takes no ingestion over the public network,
+# whatever the inputs say; by default it still answers queries from the public network, keeps
+# its tables for 30 days, and keeps the Key Vault audit table, and only that table, for 90.
+run "workspace_is_entra_only_with_no_public_ingestion" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = module.logs.local_authentication_enabled == false
+    error_message = "The workspace must refuse its shared keys (local authentication off)."
+  }
+
+  assert {
+    condition     = module.logs.internet_ingestion_access_type == "Disabled"
+    error_message = "The workspace must refuse ingestion over the public network."
+  }
+
+  assert {
+    condition     = var.log_query_public_access == true && module.logs.internet_query_access_type == "Enabled"
+    error_message = "By default the workspace must answer queries from the public network (log_query_public_access = true)."
+  }
+
+  assert {
+    condition     = var.log_retention_days == 30 && module.logs.retention_in_days == 30
+    error_message = "The workspace's retention must default to 30 days."
+  }
+
+  assert {
+    condition = (
+      var.security_log_retention_days == 90 &&
+      length(module.logs.table_retention_days) == 1 &&
+      module.logs.table_retention_days["AZKVAuditLogs"] == 90
+    )
+    error_message = "AZKVAuditLogs, and no other table, must carry its own retention, defaulting to 90 days."
+  }
+}
+
+# The query setting and both retentions follow their inputs, in production too; local
+# authentication and public ingestion stay off.
+run "workspace_query_access_and_retention_follow_the_inputs" {
+  command = plan
+
+  variables {
+    mode                        = "production"
+    identity_binding            = "oidc"
+    oidc_allowed_issuers        = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience               = "api-client-id"
+    oidc_jwks_uri               = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id              = "bff-client-id"
+    oidc_client_secret          = "s3cret"
+    oidc_authority              = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri           = "https://app.example.com/api/auth/callback"
+    license_token               = "eyJ.fake.jwt"
+    license_public_jwk          = "{\"kty\":\"EC\"}"
+    initial_owner_email         = "owner@example.com"
+    enable_key_vault            = true
+    enable_redis                = true
+    redis_offering              = "cache"
+    enable_workers              = true
+    api_max_replicas            = 3
+    external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    log_query_public_access     = false
+    log_retention_days          = 365
+    security_log_retention_days = 730
+  }
+
+  assert {
+    condition     = module.logs.internet_query_access_type == "Disabled"
+    error_message = "log_query_public_access = false must stop the workspace answering queries from the public network."
+  }
+
+  assert {
+    condition     = module.logs.local_authentication_enabled == false && module.logs.internet_ingestion_access_type == "Disabled"
+    error_message = "Local authentication and public ingestion must stay off whatever the other inputs say."
+  }
+
+  assert {
+    condition = (
+      module.logs.retention_in_days == 365 &&
+      length(module.logs.table_retention_days) == 1 &&
+      module.logs.table_retention_days["AZKVAuditLogs"] == 730
+    )
+    error_message = "The workspace's retention must follow log_retention_days, and AZKVAuditLogs's must follow security_log_retention_days."
+  }
+}
+
+# Guard: both retentions are refused below 30 days, the least the workspace accepts.
+run "log_retention_below_30_days_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    log_retention_days          = 29
+    security_log_retention_days = 29
+  }
+
+  expect_failures = [var.log_retention_days, var.security_log_retention_days]
+}
+
+# Guard: both retentions are refused above 730 days, the most a table keeps for querying.
+run "log_retention_above_730_days_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    log_retention_days          = 731
+    security_log_retention_days = 731
+  }
+
+  expect_failures = [var.log_retention_days, var.security_log_retention_days]
+}
+
 # The environment's setting is not part of the diagnostics surface. The environment sent its logs
 # to the workspace in every mode before it moved to Azure Monitor, and the diagnostic bundle reads
 # them in every mode, so turning diagnostics off (the default outside production) must not take
