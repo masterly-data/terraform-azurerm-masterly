@@ -1,0 +1,98 @@
+name: iac-scan
+
+# Two checks the public module did not have: nothing scanned the Terraform itself for insecure
+# configuration, and nothing looked at dependency changes. Both run on pull requests; iac-scan
+# also runs in the merge queue, where a required check that never reports stalls the queue.
+# Required-check names for the ruleset: `iac-scan` and `dependency-review`. Adding them is a
+# repository setting the owner applies.
+
+"on":
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  # Trivy is installed from the release binary and checked against a pinned digest, not through
+  # aquasecurity/trivy-action: the binary carries the misconfiguration checks, so with
+  # --skip-check-update the scan needs no network beyond this download. Bump version and digest
+  # together, from the release's checksums file.
+  TRIVY_VERSION: "0.75.0"
+  TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+
+jobs:
+  iac-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # actions/checkout
+      security-events: write # upload SARIF to code scanning
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Trivy (pinned binary, digest-checked)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/trivy"
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP/trivy" trivy
+          echo "$RUNNER_TEMP/trivy" >> "$GITHUB_PATH"
+
+      # The scanner must still see a misconfiguration before a clean result means anything. The
+      # fixture is one Key Vault with public network access; the step fails unless the scanner
+      # reports at least one finding in it. Counting findings rather than naming a rule keeps it
+      # from breaking when a rule is renumbered.
+      - name: Self-test (the scanner reports the known-bad fixture)
+        run: bash scripts/iac_scan.sh --selftest
+
+      # Accepted departures live in .trivyignore.yaml, by rule ID, each naming its README
+      # section; this step fails an entry that lacks either. The scan then runs twice over the
+      # same tree: first to write SARIF (never fails, so the findings reach code scanning even
+      # when the gate below fails), then to gate. Suppressions at the time of writing: none, so
+      # the check's self-test runs first: it must reject each kind of bad entry.
+      - name: Self-test (the suppression check rejects bad entries)
+        run: bash scripts/iac_scan.sh --check-selftest
+
+      - name: Check the suppressions name a rule ID and a README departure
+        run: bash scripts/iac_scan.sh --check
+
+      - name: Scan Terraform (SARIF)
+        run: bash scripts/iac_scan.sh --sarif trivy-results.sarif
+
+      # Fork PRs get a read-only token, so the upload would fail there; the gate still runs.
+      # hashFiles: when a step before the SARIF scan fails there is no file, and a second error
+      # from the upload would only hide the first.
+      - name: Upload SARIF to code scanning
+        if: ${{ !cancelled() && hashFiles('trivy-results.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-results.sarif
+          category: iac-scan
+
+      - name: Fail on HIGH/CRITICAL misconfigurations
+        run: bash scripts/iac_scan.sh --gate
+
+  # Pull requests only: the action compares the base and head of a pull request through the
+  # API, and has nothing to compare in a merge group or on a push.
+  #
+  # Scratch PR to run once after merge, to watch it reject something: on a branch, pin one
+  # action in a workflow to a release with a known high-severity advisory (or add a lockfile
+  # with a vulnerable pin), open a PR, expect `dependency-review` to fail on
+  # fail-on-severity: high, then close the PR without merging.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
