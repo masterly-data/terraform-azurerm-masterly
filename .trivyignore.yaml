@@ -5,6 +5,8 @@
 # blanket skip, a severity filter or a bare path here; an entry without a rule ID and a
 # README section is a finding, not a suppression. Inline `#trivy:ignore` / `#tfsec:ignore`
 # comments in the Terraform are rejected by the same check; suppress here instead.
+# The check parses this file as YAML, so key order and flow or block style do not matter,
+# but an entry may carry only these three keys, and no other top-level key is allowed.
 #
 # Entry shape:
 #   - id: <rule ID reported by the scan>

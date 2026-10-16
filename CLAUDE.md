@@ -151,8 +151,8 @@ python3 scripts/release_gate.py --selftest
 bash tests/diagnostic_bundle_test.sh --selftest
 bash tests/diagnostic_bundle_test.sh
 shellcheck --severity=style $(git ls-files '*.sh')
-bash scripts/iac_scan.sh --check-selftest        # the suppression check rejects each kind of bad entry
-bash scripts/iac_scan.sh --check                 # every suppression names a rule ID and a README departure; no inline ignore comments
+bash scripts/iac_scan.sh --check-selftest        # needs python3 with PyYAML; the suppression check rejects each kind of bad entry
+bash scripts/iac_scan.sh --check                 # needs python3 with PyYAML; every suppression names a rule ID and a README departure; no inline ignore comments
 bash scripts/iac_scan.sh --selftest              # needs trivy; the scanner must flag the known-bad fixture
 ```
 
