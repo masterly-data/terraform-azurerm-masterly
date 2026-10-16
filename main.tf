@@ -574,8 +574,8 @@ module "aca_env" {
 # mode before it moved to Azure Monitor, and the diagnostic bundle reads them in every mode.
 #
 # "Dedicated" writes the resource-specific ContainerAppConsoleLogs and ContainerAppSystemLogs
-# tables. The legacy ContainerAppConsoleLogs_CL and ContainerAppSystemLogs_CL tables get no new
-# rows after the apply; the alerts and the diagnostic bundle read both for one release cycle.
+# tables, the only ones the alerts and the diagnostic bundle read. The legacy custom-log (_CL)
+# tables get no new rows after the apply.
 resource "azurerm_monitor_diagnostic_setting" "aca_env" {
   name                           = "diag-${var.name_prefix}-aca-env"
   target_resource_id             = module.aca_env.id

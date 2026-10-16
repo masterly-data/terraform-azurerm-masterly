@@ -592,11 +592,8 @@ resource "azurerm_monitor_metric_alert" "app_5xx" {
 # Monitor platform metrics, which every Container App, Postgres server and Service Bus
 # namespace publishes without one; the latency rule reads the console log that the diagnostic
 # setting on the Container Apps environment (azurerm_monitor_diagnostic_setting.aca_env in
-# main.tf) sends to the install's workspace in every mode. It reads both tables that log can land
-# in: the legacy custom table ContainerAppConsoleLogs_CL, which the environment wrote before it
-# moved to Azure Monitor, and the resource-specific ContainerAppConsoleLogs, which the setting
-# writes. The legacy table stays in the query for one release cycle, so the rule keeps reading an
-# install's console log across the move.
+# main.tf) sends to the install's workspace in every mode. It reads the resource-specific
+# ContainerAppConsoleLogs table, which that setting writes.
 #
 # Each metric name is taken from Learn's supported-metrics reference for its resource type.
 # Azure validates the metric against the resource when the alert is created
@@ -808,11 +805,11 @@ resource "azurerm_monitor_metric_alert" "workers_memory" {
 # window a 95th percentile is two or three requests, so the rule stays quiet; this is an alert
 # on load, and an install without load has none to report.
 #
-# The union is the one app_not_ready carries, for the same reasons: it reads both the legacy
-# ContainerAppConsoleLogs_CL table and the resource-specific ContainerAppConsoleLogs table, the
-# legacy one kept for one release cycle, with the new table's columns renamed onto the legacy
-# names; and the empty `datatable` anchor keeps it resolving while neither table exists yet,
-# because a fuzzy union whose every table operand is missing still fails.
+# The union is the one app_not_ready carries, for the same reasons: it reads the
+# resource-specific ContainerAppConsoleLogs table with its columns renamed onto the
+# ContainerAppName_s and Log_s names the rest of the query uses; and the empty `datatable` anchor
+# keeps it resolving while the table does not exist yet, because a fuzzy union whose every table
+# operand is missing still fails.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
   count = local.diagnostics_enabled ? 1 : 0
 
@@ -821,7 +818,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
   location            = var.location
   scopes              = [module.logs.id]
 
-  description = "The api's 95th-percentile request duration has exceeded ${var.alert_api_p95_ms} ms over 15 minutes — requests are slowing under load. Check the Postgres load alerts first, then which routes are slow in ContainerAppConsoleLogs (or, for one release cycle, the legacy ContainerAppConsoleLogs_CL)."
+  description = "The api's 95th-percentile request duration has exceeded ${var.alert_api_p95_ms} ms over 15 minutes — requests are slowing under load. Check the Postgres load alerts first, then which routes are slow in ContainerAppConsoleLogs."
   severity    = 2
 
   evaluation_frequency = "PT5M"
@@ -833,7 +830,6 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
     query = <<-KQL
       union isfuzzy=true
         (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),
-        (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, Log_s),
         (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName, Log_s = Log)
       | where ContainerAppName_s == "${module.api.name}"
       | where Log_s contains " -> "
@@ -1032,16 +1028,15 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 #    interval from billing the customer for a log line every ten seconds.
 #
 #  * The platform's own words — still rejected, and the measurement that rejected them stands.
-#    ContainerAppSystemLogs_CL does carry the failure (`Reason_s == "ProbeFailed"`, e.g.
-#    "Container ca-api failed readiness probe"), and so does its resource-specific successor
 #    ContainerAppSystemLogs, which the diagnostic setting on the Container Apps environment
-#    (azurerm_monitor_diagnostic_setting.aca_env in main.tf) populates in every install. It caught
-#    exactly this shape on Masterly's own reference install on 2026-09-07. But replaying a
-#    sustained-window rule over 30 days of that workspace fires on roughly a dozen occasions per
-#    app, most of them ordinary deploy churn, and separating a wedged app from a rolling one
-#    there needs a rate threshold tied to the probe interval. The app-emitted line is the better
-#    source precisely because it is the application's own conclusion rather than the platform's
-#    retry count.
+#    (azurerm_monitor_diagnostic_setting.aca_env in main.tf) populates in every install, does
+#    carry the failure (`Reason == "ProbeFailed"`, e.g. "Container ca-api failed readiness
+#    probe"). It caught exactly this shape on Masterly's own reference install on 2026-09-07.
+#    But replaying a sustained-window rule over 30 days of that workspace fires on roughly a
+#    dozen occasions per app, most of them ordinary deploy churn, and separating a wedged app
+#    from a rolling one there needs a rate threshold tied to the probe interval. The app-emitted
+#    line is the better source precisely because it is the application's own conclusion rather
+#    than the platform's retry count.
 #
 # What is still not covered — an app with no readiness probe at all (ca-workers), and a wedge
 # that clears inside the rule's window — is disclosed in the README rather than implied.
@@ -1089,7 +1084,7 @@ resource "azurerm_monitor_metric_alert" "app_unavailable" {
 #
 # Reading the LINE, not the probe. What the query counts is distinct MINUTES in which a failing
 # probe was logged, not lines: `dcount(bin(TimeGenerated, 1m))`. That is what keeps the rule
-# free of the probe-rate dependency that disqualified the ContainerAppSystemLogs_CL alternative
+# free of the probe-rate dependency that disqualified the ContainerAppSystemLogs alternative
 # above. The module fixes both apps' readiness interval at 10 seconds (main.tf), so a failing
 # minute carries about six lines — but the rule would read the same at 30 or 60 seconds, and it
 # degrades gracefully rather than silently if that ever changes: a longer interval makes the
@@ -1152,17 +1147,14 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
   auto_mitigation_enabled = true
 
   criteria {
-    # Two tables, because the console log can land in either. ContainerAppConsoleLogs_CL is the
-    # legacy custom table; ContainerAppConsoleLogs is the resource-specific one, whose columns
-    # carry no type suffix and are renamed here onto the legacy names (ContainerAppName ->
-    # ContainerAppName_s, Log -> Log_s), so everything after the union, the ContainerAppName_s
-    # dimension included, reads one shape. The legacy table stays in the query for one release
-    # cycle, so a wedge is read from whichever table an install's lines are in while it moves
-    # from one to the other.
+    # The console log lives in the resource-specific ContainerAppConsoleLogs table, whose columns
+    # carry no type suffix and are renamed here (ContainerAppName -> ContainerAppName_s,
+    # Log -> Log_s), so everything after the union, the ContainerAppName_s dimension included,
+    # keeps the names it has always had.
     #
     # The empty `datatable` anchor is load-bearing, and `isfuzzy` alone would not do its job.
-    # Neither table exists in a workspace until the first console line lands in it, and a query
-    # against a missing table FAILS rather than returning nothing — which would fail this rule's
+    # The table does not exist in a workspace until the first console line lands in it, and a
+    # query against a missing table FAILS rather than returning nothing — which would fail this rule's
     # creation on a fresh install, or leave it unhealthy and, after a week of failures, disabled
     # by Azure. `union isfuzzy=true` is the usual answer and it is NOT sufficient on its own: a
     # fuzzy union whose only operand is missing still dies with SEM0104 ("Operator source
@@ -1177,7 +1169,6 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
     query = <<-KQL
       union isfuzzy=true
         (datatable(TimeGenerated:datetime, ContainerAppName_s:string, Log_s:string)[]),
-        (ContainerAppConsoleLogs_CL | project TimeGenerated, ContainerAppName_s, Log_s),
         (ContainerAppConsoleLogs | project TimeGenerated, ContainerAppName_s = ContainerAppName, Log_s = Log)
       | where ContainerAppName_s in (${join(", ", [for name in local.readiness_alertable_apps : "\"${name}\""])})
       | where Log_s contains "readiness check failed"
@@ -1203,10 +1194,8 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
       minimum_failing_periods_to_trigger_alert = 1
     }
 
-    # No `resource_id_column`. On the legacy custom-table path `_ResourceId` is present in the
-    # schema but empty on every row — pointing the rule at it would file the alert against
-    # nothing — and the union above keeps only the three columns both tables share. The
-    # dimension identifies the app instead.
+    # No `resource_id_column`: the union above keeps only the three columns the query uses, and
+    # the dimension identifies the app instead.
     dimension {
       name     = "ContainerAppName_s"
       operator = "Include"
