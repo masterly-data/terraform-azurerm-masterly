@@ -567,18 +567,19 @@ which makes it exactly the kind of setting that stops being true without anyone 
 ### Where this module departs from Azure's recommended baseline
 
 This module departs from Azure's recommended configuration for the resources it creates in
-four places. In two of them the module's defaults do not yet follow the recommendation; in
-one a production install departs from it only when you say so; and one is a deliberate design
-choice. Each is listed below with what it is, why it holds or why you might choose it, and
-what you can do to follow Azure's recommendation. Making Azure's recommendation the default is
-tracked work for the first two, and this section changes as each one is closed. The last,
-the network security group on the runtime subnet, is not tracked work: a public environment
-needs it, and you follow Azure's recommendation by choosing a private one.
+four places. In two of them, Service Bus and geo-redundant backup, the module's defaults do
+not yet follow the recommendation; in one, Redis and Postgres authentication, a production
+install departs from it only when you say so; and one, the runtime subnet's network security
+group, is a deliberate design choice. Each is listed below with what it is, why it holds or
+why you might choose it, and what you can do to follow Azure's recommendation. Making Azure's
+recommendation the default is tracked work for Service Bus and geo-redundant backup, and this
+section changes as each one is closed. The network security group is not tracked work: a
+public environment needs it, and you follow Azure's recommendation by choosing a private one.
 
 Azure Policy and Microsoft Defender for Cloud can report these. Each item names the Azure
-Policy built-in definitions that evaluate it, by display name and definition ID; if your
-portal shows a slightly different title, search for the ID. Defender for Cloud's default
-standard is the Microsoft cloud security benchmark v1
+Policy built-in definitions that evaluate it, by display name and definition ID, or says that
+none has been identified; if your portal shows a slightly different title, search for the ID.
+Defender for Cloud's default standard is the Microsoft cloud security benchmark v1
 (`1f3afdf9-d0c9-4c3d-847f-89da613e70a8`), and none of the definitions below is part of it.
 The Microsoft cloud security benchmark v2 (`e3ec7e09-768c-4b64-882c-fcada3772047`) is an
 opt-in preview; each item says whether its definitions are in it. Whether a finding appears
