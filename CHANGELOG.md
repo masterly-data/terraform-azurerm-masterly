@@ -24,6 +24,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- The README documents the runtime subnet's network security group as a departure from Azure's
+  recommended baseline: in a public environment (`aca_internal_load_balancer = false`) its
+  `allow-app-ingress` rule admits the Internet on TCP 80 and 443, and
+  `aca_internal_load_balancer = true` removes it. The `iac-scan` check suppresses Trivy
+  AZU-0047 for `main.tf` through `.trivyignore.yaml`, naming that README entry. No Terraform
+  changes.
+
 - The plan refuses a licence the pinned `api` image cannot run on. A licence's signed header
   states its claims floor, the oldest licence contract an install may verify it with; when
   `license_token`'s floor is above the claims version `MANIFEST.json` records for `api_image`,
