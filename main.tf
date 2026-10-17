@@ -352,8 +352,9 @@ resource "azurerm_subnet" "private_endpoints" {
 # Entra ID, Azure Monitor), the outbound set is long and versioned by Microsoft, and an
 # outbound deny written here would be a second, stale copy of it — the failure would be an
 # environment that provisions and then cannot start a replica. Azure's default
-# AllowInternetOutBound stays; narrowing egress is a firewall or NVA decision, and on an
-# injected spoke it is already the platform team's (docs/networking.md, "Egress").
+# AllowInternetOutBound stays. How egress can be narrowed depends on the Container Apps
+# environment type (a route or NAT Gateway on the subnet is honoured only for workload
+# profiles), and on an injected spoke it is the platform team's (docs/networking.md, "Egress").
 #
 # Created ONLY when the module owns the network. On an injected spoke (topology 3) the
 # subnets belong to the platform team, and attaching an NSG to a subnet somebody else
