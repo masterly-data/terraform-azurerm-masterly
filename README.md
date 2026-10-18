@@ -836,9 +836,11 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   Further server parameters go in `postgres_server_parameters`, a map of name to value (for
   example `{ max_connections = "400" }`), applied to the starter server beside those three. The
   map refuses `log_error_verbosity`, `log_parameter_max_length_on_error` and
-  `log_parameter_max_length` (in any letter case; keys must be lowercase), so it cannot weaken the log redaction above (ADR 0080); it refuses
+  `log_parameter_max_length` (in any letter case), so it cannot weaken the log redaction above (ADR 0080); it refuses
   any entry when `external_database_url` is set, because the module sets no parameter on a server
-  it does not own; and it refuses a `max_connections` that is not a whole number of at least 1.
+  it does not own; it accepts only lowercase keys (Postgres parameter names are case-insensitive,
+  so write `TimeZone` as `timezone`), so the checks here and the connections alert's lookup cannot
+  be bypassed by a different letter case; and it refuses a `max_connections` that is not a whole number of at least 1.
   Static parameters, `max_connections` among them, take effect only after a server restart. The
   azurerm provider's `restart_server_on_configuration_value_change` feature (default `true`,
   in the `postgresql_flexible_server` block of your root `provider "azurerm"` `features`) restarts

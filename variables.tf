@@ -479,7 +479,7 @@ variable "postgres_server_parameters" {
   # max_connections match the lowercase spelling, so only that spelling is accepted.
   validation {
     condition     = alltrue([for k in keys(var.postgres_server_parameters) : k == lower(k)])
-    error_message = "postgres_server_parameters keys must be lowercase, as Postgres spells its parameter names (for example max_connections)."
+    error_message = "postgres_server_parameters keys must be lowercase. Postgres parameter names are case-insensitive, and the module accepts only the lowercase spelling so that its own guards and the connections alert lookup cannot be bypassed by a different letter case (write TimeZone as timezone)."
   }
 
   validation {
