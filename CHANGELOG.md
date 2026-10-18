@@ -35,6 +35,12 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   anything with `external_database_url` set. The lookup that finds the existing server runs on
   every starter-server install, so the identity that applies the module needs read access to the
   subscription's resources, as it already does for Entra authentication.
+- The README documents the runtime subnet's network security group as a departure from Azure's
+  recommended baseline: in a public environment (`aca_internal_load_balancer = false`) its
+  `allow-app-ingress` rule admits the Internet on TCP 80 and 443, and with
+  `aca_internal_load_balancer = true` it admits only the virtual network. The `iac-scan` check
+  suppresses Trivy AZU-0047 for `main.tf` through `.trivyignore.yaml`, naming that README entry.
+  No Terraform changes.
 - `postgres_server_parameters`, a map of Postgres server parameters to set on the starter
   Flexible Server beside the module's three log parameters. It refuses those three keys (ADR 0080),
   any entry when `external_database_url` is set, and a `max_connections` that is not a whole
