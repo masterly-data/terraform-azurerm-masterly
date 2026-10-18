@@ -828,6 +828,17 @@ resource "azurerm_postgresql_flexible_server_configuration" "log" {
   value     = each.value
 }
 
+# The operator's own parameters (postgres_server_parameters), in a resource of their own so the
+# log parameters above keep their state addresses. The variable refuses the keys of
+# local.postgres_log_parameters and any entry on BYO-DB; the gate below is the second line.
+resource "azurerm_postgresql_flexible_server_configuration" "operator" {
+  for_each = nonsensitive(local.provision_postgres) ? var.postgres_server_parameters : {}
+
+  name      = each.key
+  server_id = azurerm_postgresql_flexible_server.this[0].id
+  value     = each.value
+}
+
 # The server's only network presence: a private endpoint in the install's VNet. The
 # private DNS zone maps the server's FQDN to this endpoint, so the application DSN is
 # identical to the public-path one.

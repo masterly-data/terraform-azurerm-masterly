@@ -35,6 +35,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   anything with `external_database_url` set. The lookup that finds the existing server runs on
   every starter-server install, so the identity that applies the module needs read access to the
   subscription's resources, as it already does for Entra authentication.
+- `postgres_server_parameters`, a map of Postgres server parameters to set on the starter
+  Flexible Server beside the module's three log parameters. It refuses those three keys (ADR 0080),
+  any entry when `external_database_url` is set, and a `max_connections` that is not a whole
+  number of at least 1. The Postgres connections alert takes its limit from `max_connections`
+  here when `alert_postgres_max_connections` is not set, ahead of the SKU default. Static
+  parameters apply after a restart, which the azurerm provider performs on apply unless
+  `restart_server_on_configuration_value_change` is turned off.
 - The plan refuses a licence the pinned `api` image cannot run on. A licence's signed header
   states its claims floor, the oldest licence contract an install may verify it with; when
   `license_token`'s floor is above the claims version `MANIFEST.json` records for `api_image`,

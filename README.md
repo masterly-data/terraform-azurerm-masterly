@@ -309,7 +309,8 @@ private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its
 `postgres_backup_retention_days`, `postgres_geo_redundant_backup` (on by default in
 production where the module knows the region supports it; mind data residency — backups go to
 the paired region; see [the departures section](#geo-redundant-backup-is-on-only-in-the-regions-the-module-lists)),
-`postgres_zone_redundant_ha` (needs a non-burstable SKU),
+`postgres_zone_redundant_ha` (needs a non-burstable SKU), `postgres_server_parameters` (extra
+server parameters; see "Diagnostics + alerts" below),
 `postgres_auto_grow` (on by default in production: Azure grows the disk before it fills, so a
 full disk does not make the server read-only; **grown storage cannot be shrunk**, and the
 module never plans `postgres_storage_mb` below the server's real size) and
@@ -836,6 +837,22 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   line that carries a constraint violation's values, and without bound parameter values;
   `log_min_error_statement` stays at its default, so the failing statement's text is still
   logged (ADR 0080, amendment of 2026-09-10). A BYO-DB server is yours to configure.
+
+  Further server parameters go in `postgres_server_parameters`, a map of name to value (for
+  example `{ max_connections = "400" }`), applied to the starter server beside those three. The
+  map refuses `log_error_verbosity`, `log_parameter_max_length_on_error` and
+  `log_parameter_max_length` (in any letter case), so it cannot weaken the log redaction above (ADR 0080); it refuses
+  any entry when `external_database_url` is set, because the module sets no parameter on a server
+  it does not own; it accepts only lowercase keys (Postgres parameter names are case-insensitive,
+  so write `TimeZone` as `timezone`), so the checks here and the connections alert's lookup cannot
+  be bypassed by a different letter case; and it refuses a `max_connections` that is not a whole number of at least 1.
+  Static parameters, `max_connections` among them, take effect only after a server restart. The
+  azurerm provider's `restart_server_on_configuration_value_change` feature (default `true`,
+  in the `postgresql_flexible_server` block of your root `provider "azurerm"` `features`) restarts
+  the server on `apply` when such a value changes; turn it off and restart it yourself. See the
+  [`azurerm_postgresql_flexible_server_configuration`](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server_configuration)
+  and [provider features](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/guides/features-block)
+  documentation.
 - **App availability diagnostics** — an `AllMetrics` diagnostic setting on `ca-api`,
   `ca-frontend` and `ca-workers`, and one absence alert per app, `<app>-silent`. See
   "App availability diagnostics" below: it is on by default in production only, it has its own
@@ -964,9 +981,11 @@ The connections alert needs the server's `max_connections`, which Azure publishe
 server parameter. By default the module takes it from Azure's documented default for
 `postgres_sku_name`, derived from the SKU's memory. For a SKU it does not recognise — the
 confidential-compute `DC`/`EC` families today — it creates no connections alert and **every
-plan warns** that it did not, rather than measuring against a guess. Set
-`alert_postgres_max_connections` to the server's value then, and also whenever you have changed
-the parameter on the server.
+plan warns** that it did not, rather than measuring against a guess. When you set
+`max_connections` in `postgres_server_parameters`, the alert reads it from there, ahead of the
+SKU default, so a raised limit needs stating once and an unrecognised SKU gets its alert.
+`alert_postgres_max_connections` still wins over both: set it to the server's value when you
+have changed the parameter outside Terraform.
 
 None of these needs anything beyond `enable_diagnostics`: the metric alerts read the platform
 metrics every Postgres server, Container App and Service Bus namespace publishes, and the latency
