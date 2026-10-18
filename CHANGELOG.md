@@ -32,6 +32,12 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `external_database_url`, and when `postgres_server_parameters` sets a `pgbouncer.*` key the module
   owns. Needs an api image that carries MAS-1615 (masterly-application-backend PR #488).
   See "Connection budget" in the README. Off changes nothing.
+- The README documents the runtime subnet's network security group as a departure from Azure's
+  recommended baseline: in a public environment (`aca_internal_load_balancer = false`) its
+  `allow-app-ingress` rule admits the Internet on TCP 80 and 443, and with
+  `aca_internal_load_balancer = true` it admits only the virtual network. The `iac-scan` check
+  suppresses Trivy AZU-0047 for `main.tf` through `.trivyignore.yaml`, naming that README entry.
+  No Terraform changes.
 - `postgres_server_parameters`, a map of Postgres server parameters to set on the starter
   Flexible Server beside the module's three log parameters. It refuses those three keys (ADR 0080),
   any entry when `external_database_url` is set, and a `max_connections` that is not a whole

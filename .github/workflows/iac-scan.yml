@@ -56,8 +56,9 @@ jobs:
       # Accepted departures live in .trivyignore.yaml, by rule ID, each naming its README
       # section; this step fails an entry that lacks either. The scan then runs twice over the
       # same tree: first to write SARIF (never fails, so the findings reach code scanning even
-      # when the gate below fails), then to gate. Suppressions at the time of writing: none, so
-      # the check's self-test runs first: it must reject each kind of bad entry.
+      # when the gate below fails), then to gate. The suppressions are few (see
+      # .trivyignore.yaml), so the check's self-test runs first: it must reject each kind of bad
+      # entry.
       - name: Self-test (the suppression check rejects bad entries)
         run: bash scripts/iac_scan.sh --check-selftest
 
