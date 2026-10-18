@@ -18,6 +18,21 @@ mock_provider "azurerm" {
       resources = []
     }
   }
+
+  # The apps depend on the private-endpoints NSG (the 6432 rule must land before a pooler URL
+  # does), so the apply puts the NSG in state. Teardown's pre-destroy refresh then plans the
+  # untargeted subnet associations, which parse these IDs: they must be ARM-shaped.
+  mock_resource "azurerm_network_security_group" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/networkSecurityGroups/nsg-test"
+    }
+  }
+
+  mock_resource "azurerm_subnet" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet-test/subnets/snet-test"
+    }
+  }
 }
 mock_provider "random" {}
 
