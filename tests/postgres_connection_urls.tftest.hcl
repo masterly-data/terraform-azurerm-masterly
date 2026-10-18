@@ -116,3 +116,20 @@ run "password_requires_a_password" {
 
   expect_failures = [var.password]
 }
+
+# With no password the password validation holds, so only auth_mode's can fail here.
+run "auth_mode_must_be_password_or_entra" {
+  command = plan
+
+  module {
+    source = "./modules/postgres-connection-urls"
+  }
+
+  variables {
+    auth_mode   = "managed-identity"
+    role        = "masterly_admin"
+    pooler_port = "6432"
+  }
+
+  expect_failures = [var.auth_mode]
+}

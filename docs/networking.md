@@ -166,6 +166,11 @@ A private Service Bus namespace (`enable_service_bus = true` with `servicebus_sk
 in `mode = "production"`) adds TCP 5671, AMQP over TLS, which is how the apps' Service Bus
 client connects. Its AMQP-over-WebSockets fallback uses 443, which the rule already admits.
 
+`postgres_pgbouncer = true` adds TCP 6432, the starter server's built-in PgBouncer, which
+listens on the same private endpoint as Postgres; the apps' `MASTERLY_DATABASE_URL` goes there.
+With injected subnets the rule is the operator's: admit 6432 before turning the input on, or
+the apps cannot reach the pooler, and remove it only after the apps have rolled back to 5432.
+
 **Outbound is untouched.** Azure's default `AllowInternetOutBound` stays. Container Apps needs
 a long, Microsoft-versioned egress set — image pull, Microsoft Container Registry, Entra ID,
 Azure Monitor — and a copy of it written into this module would go stale into an environment
