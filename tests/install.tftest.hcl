@@ -877,6 +877,28 @@ run "postgres_server_parameters_refuse_log_parameter_max_length" {
   expect_failures = [var.postgres_server_parameters]
 }
 
+run "postgres_server_parameters_refuse_mixed_case_log_key" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { Log_Error_Verbosity = "VERBOSE" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refuse_mixed_case_max_connections" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { MAX_CONNECTIONS = "400" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
 run "postgres_server_parameters_refused_with_byo_db" {
   command = plan
 

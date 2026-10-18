@@ -310,7 +310,7 @@ private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its
 production where the module knows the region supports it; mind data residency — backups go to
 the paired region; see [the departures section](#geo-redundant-backup-is-on-only-in-the-regions-the-module-lists)),
 `postgres_zone_redundant_ha` (needs a non-burstable SKU), `postgres_server_parameters` (extra
-server parameters; see "Container logs" below). Flipping an install from starter to BYO-DB **plans the destruction of the starter
+server parameters; see "Diagnostics + alerts" below). Flipping an install from starter to BYO-DB **plans the destruction of the starter
 server** — migrate your data first; the plan makes it visible.
 
 A BYO-DB database on a **private** address — reached over peering or a private endpoint — is
@@ -836,7 +836,7 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   Further server parameters go in `postgres_server_parameters`, a map of name to value (for
   example `{ max_connections = "400" }`), applied to the starter server beside those three. The
   map refuses `log_error_verbosity`, `log_parameter_max_length_on_error` and
-  `log_parameter_max_length`, so it cannot weaken the log redaction above (ADR 0080); it refuses
+  `log_parameter_max_length` (in any letter case; keys must be lowercase), so it cannot weaken the log redaction above (ADR 0080); it refuses
   any entry when `external_database_url` is set, because the module sets no parameter on a server
   it does not own; and it refuses a `max_connections` that is not a whole number of at least 1.
   Static parameters, `max_connections` among them, take effect only after a server restart. The

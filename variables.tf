@@ -471,8 +471,15 @@ variable "postgres_server_parameters" {
   # in main.tf (a variable validation cannot read locals). The ADR 0080 log redaction must not be
   # weakened from here.
   validation {
-    condition     = length(setintersection(keys(var.postgres_server_parameters), ["log_error_verbosity", "log_parameter_max_length_on_error", "log_parameter_max_length"])) == 0
-    error_message = "postgres_server_parameters may not set ${join(", ", sort(tolist(setintersection(keys(var.postgres_server_parameters), ["log_error_verbosity", "log_parameter_max_length_on_error", "log_parameter_max_length"]))))}: the module sets these itself so the server's error log carries no values (ADR 0080)."
+    condition     = length(setintersection([for k in keys(var.postgres_server_parameters) : lower(k)], ["log_error_verbosity", "log_parameter_max_length_on_error", "log_parameter_max_length"])) == 0
+    error_message = "postgres_server_parameters may not set ${join(", ", sort(tolist(setintersection([for k in keys(var.postgres_server_parameters) : lower(k)], ["log_error_verbosity", "log_parameter_max_length_on_error", "log_parameter_max_length"]))))} (in any letter case): the module sets these itself so the server's error log carries no values (ADR 0080)."
+  }
+
+  # Postgres parameter names are case-insensitive; the guards above and the alert's lookup of
+  # max_connections match the lowercase spelling, so only that spelling is accepted.
+  validation {
+    condition     = alltrue([for k in keys(var.postgres_server_parameters) : k == lower(k)])
+    error_message = "postgres_server_parameters keys must be lowercase, as Postgres spells its parameter names (for example max_connections)."
   }
 
   validation {
