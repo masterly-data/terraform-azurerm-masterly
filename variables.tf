@@ -445,7 +445,7 @@ variable "external_database_url" {
   type        = string
   default     = null
   sensitive   = true
-  description = "BYO-DB: the install-level SQLAlchemy async DSN (postgresql+asyncpg://…) of the customer's own Postgres (role needs CREATEDB — the api creates one database per Masterly Environment, ADR 0003). When set, the module provisions NO database: no Flexible Server, no private endpoint, no Postgres private DNS zone — network reachability is the customer's responsibility. Null (default) provisions the starter Postgres Flexible Server. The postgres_* inputs are ignored when set."
+  description = "BYO-DB: the install-level SQLAlchemy async DSN (postgresql+asyncpg://…) of the customer's own Postgres (role needs CREATEDB — the api creates one database per Masterly Environment, ADR 0003). When set, the module provisions NO database: no Flexible Server, no private endpoint, no Postgres private DNS zone — network reachability is the customer's responsibility. Null (default) provisions the starter Postgres Flexible Server. The postgres_* inputs are ignored when set, except postgres_server_parameters, which is refused when non-empty."
 }
 
 variable "postgres_sku_name" {
@@ -459,6 +459,30 @@ variable "postgres_sku_name" {
   validation {
     condition     = var.mode != "production" || var.external_database_url != null || !can(regex("^B_", var.postgres_sku_name))
     error_message = "mode=production refuses a burstable Postgres SKU (B_*) on the provisioned starter server — set postgres_sku_name to a General Purpose (GP_*) or Memory Optimized (MO_*) SKU, e.g. \"GP_Standard_D2ds_v5\", or bring your own database via external_database_url."
+  }
+}
+
+variable "postgres_server_parameters" {
+  type        = map(string)
+  default     = {}
+  description = "Postgres server parameters to set on the starter Flexible Server, as name => value (for example { max_connections = \"400\" }). Applied beside the three log parameters the module sets itself. Refused: log_error_verbosity, log_parameter_max_length_on_error and log_parameter_max_length (they keep values out of the server's error log), and any entry at all when external_database_url is set (the server is then not the module's). A static parameter, max_connections among them, takes effect only after a server restart; the azurerm provider restarts the server on apply unless the root configuration turns restart_server_on_configuration_value_change off. When max_connections is set here, the connections alert measures against it (alert_postgres_max_connections still wins)."
+
+  # The keys the module owns: keep this list equal to the keys of local.postgres_log_parameters
+  # in main.tf (a variable validation cannot read locals). The ADR 0080 log redaction must not be
+  # weakened from here.
+  validation {
+    condition     = length(setintersection(keys(var.postgres_server_parameters), ["log_error_verbosity", "log_parameter_max_length_on_error", "log_parameter_max_length"])) == 0
+    error_message = "postgres_server_parameters may not set ${join(", ", sort(tolist(setintersection(keys(var.postgres_server_parameters), ["log_error_verbosity", "log_parameter_max_length_on_error", "log_parameter_max_length"]))))}: the module sets these itself so the server's error log carries no values (ADR 0080)."
+  }
+
+  validation {
+    condition     = var.external_database_url == null || length(var.postgres_server_parameters) == 0
+    error_message = "postgres_server_parameters must be empty when external_database_url is set: the module provisions no Postgres server then, and sets no parameter on one it does not own."
+  }
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", lookup(var.postgres_server_parameters, "max_connections", "1")))
+    error_message = "postgres_server_parameters[\"max_connections\"] must be a whole number of at least 1, for example \"400\"."
   }
 }
 
