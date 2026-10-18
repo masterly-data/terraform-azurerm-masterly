@@ -496,7 +496,24 @@ variable "postgres_server_parameters" {
 variable "postgres_storage_mb" {
   type        = number
   default     = 32768
-  description = "Postgres storage in MB."
+  description = "Postgres storage in MB. Storage can only grow: Azure cannot shrink a disk. Once autogrow (postgres_auto_grow) or an earlier increase has made the server's disk larger than this value, the module plans the server's real size, never this smaller number; raise it above the real size to grow the disk."
+}
+
+variable "postgres_auto_grow" {
+  type        = bool
+  default     = null
+  description = "Storage autogrow for the provisioned Postgres server: Azure grows the disk before it fills, so a full disk does not make the server read-only. Unset (null), mode=production turns it on and evaluation installs leave it off; unset therefore turns autogrow on, in place, for an existing production install on upgrade. Set true or false to decide yourself. Grown storage cannot be shrunk, and it raises cost for good."
+}
+
+variable "postgres_storage_tier" {
+  type        = string
+  default     = null
+  description = "Storage performance tier of the provisioned Postgres server (P4 to P80), which sets its IOPS and throughput. Null (default) keeps Azure's default tier for the storage size. Azure accepts only tiers at or above that default, so the tier must suit postgres_storage_mb; the module checks the name, not the fit. With autogrow on, Azure can grow the disk past postgres_storage_mb and the minimum tier for the larger size can rise above a pinned tier, so raise the tier when that happens."
+
+  validation {
+    condition     = var.postgres_storage_tier == null || contains(["P4", "P6", "P10", "P15", "P20", "P30", "P40", "P50", "P60", "P70", "P80"], coalesce(var.postgres_storage_tier, "none"))
+    error_message = "postgres_storage_tier must be one of P4, P6, P10, P15, P20, P30, P40, P50, P60, P70, P80, or null for Azure's default."
+  }
 }
 
 variable "postgres_version" {

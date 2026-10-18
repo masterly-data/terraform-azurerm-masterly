@@ -24,6 +24,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `postgres_auto_grow` and `postgres_storage_tier` for the starter Postgres server. Unset,
+  `postgres_auto_grow` is on in `mode = "production"` and off otherwise, so **existing
+  production installs get storage autogrow turned on, in place, on upgrade** unless they set
+  `postgres_auto_grow = false`. Grown storage cannot be reduced. The module now never plans
+  `postgres_storage_mb` below the size the existing server holds, so a disk Azure has grown is
+  not planned as a shrink (which would replace the server and its databases); raise
+  `postgres_storage_mb` above the real size to grow it yourself. `postgres_storage_tier`
+  (P4 to P80) sets the storage performance tier; unset keeps Azure's default. Neither changes
+  anything with `external_database_url` set. The lookup that finds the existing server runs on
+  every starter-server install, so the identity that applies the module needs read access to the
+  subscription's resources, as it already does for Entra authentication.
 - The README documents the runtime subnet's network security group as a departure from Azure's
   recommended baseline: in a public environment (`aca_internal_load_balancer = false`) its
   `allow-app-ingress` rule admits the Internet on TCP 80 and 443, and with
