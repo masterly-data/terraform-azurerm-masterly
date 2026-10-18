@@ -71,6 +71,12 @@ run "eval_defaults_provision_starter_postgres" {
     error_message = "The starter server must set log_error_verbosity = TERSE, log_parameter_max_length_on_error = 0 and log_parameter_max_length = 0, and leave log_min_error_statement at its default."
   }
 
+  # postgres_server_parameters defaults to empty: the operator resource plans nothing.
+  assert {
+    condition     = length(azurerm_postgresql_flexible_server_configuration.operator) == 0
+    error_message = "With the default postgres_server_parameters there must be no operator configuration resources."
+  }
+
   # The derived layout of the default /16 must never drift — it is what live installs
   # (the demo) hold in state; a change here REPLACES their subnets.
   assert {
@@ -114,6 +120,11 @@ run "byo_db_provisions_no_database" {
   assert {
     condition     = length(azurerm_postgresql_flexible_server_configuration.log) == 0
     error_message = "external_database_url must set no Postgres server parameters — the server is not the module's."
+  }
+
+  assert {
+    condition     = length(azurerm_postgresql_flexible_server_configuration.operator) == 0
+    error_message = "external_database_url must create no operator Postgres server parameters either."
   }
 
   assert {
@@ -810,6 +821,184 @@ run "load_alert_thresholds_are_tunable" {
       strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency[0].criteria[0].query, "P95Ms > 750")
     )
     error_message = "Each load threshold must follow its input; an explicit alert_postgres_max_connections must override the SKU-derived limit."
+  }
+}
+
+# postgres_server_parameters: the operator's own server parameters, beside the module's log ones.
+run "postgres_server_parameters_plan_one_configuration_each" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { max_connections = "400" }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_postgresql_flexible_server_configuration.operator) == 1 &&
+      azurerm_postgresql_flexible_server_configuration.operator["max_connections"].name == "max_connections" &&
+      azurerm_postgresql_flexible_server_configuration.operator["max_connections"].value == "400" &&
+      length(azurerm_postgresql_flexible_server_configuration.log) == 3
+    )
+    error_message = "An entry in postgres_server_parameters must plan one operator configuration, beside the three log ones."
+  }
+}
+
+run "postgres_server_parameters_refuse_log_error_verbosity" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { log_error_verbosity = "VERBOSE" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refuse_log_parameter_max_length_on_error" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { log_parameter_max_length_on_error = "-1" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refuse_log_parameter_max_length" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { log_parameter_max_length = "-1" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refuse_mixed_case_log_key" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { Log_Error_Verbosity = "VERBOSE" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refuse_mixed_case_max_connections" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { MAX_CONNECTIONS = "400" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refused_with_byo_db" {
+  command = plan
+
+  variables {
+    identity_binding           = "oidc"
+    oidc_allowed_issuers       = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience              = "api-client-id"
+    oidc_jwks_uri              = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id             = "bff-client-id"
+    oidc_client_secret         = "s3cret"
+    oidc_authority             = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri          = "https://app.example.com/api/auth/callback"
+    external_database_url      = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    postgres_server_parameters = { work_mem = "8192" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refuse_a_non_numeric_max_connections" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { max_connections = "lots" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refuse_a_zero_max_connections" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { max_connections = "0" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+run "postgres_server_parameters_refuse_a_fractional_max_connections" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_server_parameters = { max_connections = "10.5" }
+  }
+
+  expect_failures = [var.postgres_server_parameters]
+}
+
+# The connections alert follows max_connections from the map; an explicit
+# alert_postgres_max_connections beats it; the map beats the SKU default.
+run "connections_alert_follows_max_connections_from_server_parameters" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    enable_diagnostics         = true
+    postgres_sku_name          = "GP_Standard_D4ds_v5"
+    postgres_server_parameters = { max_connections = "400" }
+  }
+
+  assert {
+    condition     = azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].threshold == 280
+    error_message = "With max_connections = 400 in postgres_server_parameters, the connections alert must fire at 70% of 400."
+  }
+}
+
+run "explicit_alert_max_connections_beats_server_parameters" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    enable_diagnostics             = true
+    postgres_sku_name              = "GP_Standard_D4ds_v5"
+    postgres_server_parameters     = { max_connections = "400" }
+    alert_postgres_max_connections = 1000
+  }
+
+  assert {
+    condition     = azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].threshold == 700
+    error_message = "An explicit alert_postgres_max_connections must beat max_connections in postgres_server_parameters."
+  }
+}
+
+run "server_parameters_max_connections_sizes_the_alert_on_an_unknown_sku" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    enable_diagnostics         = true
+    postgres_sku_name          = "GP_Standard_DC2ads_v5"
+    postgres_server_parameters = { max_connections = "400" }
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_metric_alert.postgres_connections) == 1 && azurerm_monitor_metric_alert.postgres_connections[0].criteria[0].threshold == 280
+    error_message = "max_connections in postgres_server_parameters must be enough to create the connections alert on a SKU the module cannot size."
   }
 }
 

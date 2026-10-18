@@ -74,7 +74,7 @@ variable "alert_postgres_connections_percent" {
 variable "alert_postgres_max_connections" {
   type        = number
   default     = null
-  description = "The max_connections the connections alert takes its percentage of. Null (default) = Azure's documented default for postgres_sku_name. Set it when you have changed the server's max_connections parameter, or when your SKU is not one the module recognises (a plan then warns that no connections alert was created)."
+  description = "The max_connections the connections alert takes its percentage of. Null (default) = max_connections from postgres_server_parameters when set there, else Azure's documented default for postgres_sku_name. Set it when you have changed the server's max_connections parameter outside Terraform, or when your SKU is not one the module recognises (a plan then warns that no connections alert was created)."
 
   validation {
     condition     = var.alert_postgres_max_connections == null || try(var.alert_postgres_max_connections >= 1 && floor(var.alert_postgres_max_connections) == var.alert_postgres_max_connections, false)
@@ -205,8 +205,10 @@ locals {
   # Purpose D-series carry 4 GiB per vCore, Memory Optimized E-series 8 GiB per vCore, and the
   # burstable B-series is irregular, so it is listed. Any other SKU yields null, and then no
   # connections alert is created and the check below says so on every plan, rather than an alert
-  # quietly measuring against a guessed limit. alert_postgres_max_connections overrides all of
-  # this, and is also the input to set when the server's max_connections has been changed.
+  # quietly measuring against a guessed limit. The limit is, in order: alert_postgres_max_connections,
+  # the max_connections the operator sets in postgres_server_parameters, then the SKU default.
+  # So a max_connections raised through the module is followed without stating it twice; one
+  # changed outside Terraform needs alert_postgres_max_connections.
   postgres_sku_memory_gib_burstable = {
     B1ms = 2, B2s = 4, B2ms = 8, B4ms = 16, B8ms = 32, B12ms = 48, B16ms = 64, B20ms = 80
   }
@@ -224,7 +226,12 @@ locals {
     : local.postgres_sku_memory_gib >= 48 ? 5000
     : lookup({ 2 = 50, 4 = 429, 8 = 859, 16 = 1718, 32 = 3437 }, tostring(local.postgres_sku_memory_gib), null)
   )
-  postgres_max_connections  = coalesce(var.alert_postgres_max_connections, local.postgres_default_max_connections, -1)
+  postgres_max_connections = coalesce(
+    var.alert_postgres_max_connections,
+    try(tonumber(var.postgres_server_parameters["max_connections"]), null),
+    local.postgres_default_max_connections,
+    -1,
+  )
   diag_postgres_connections = local.diag_postgres && local.postgres_max_connections > 0
 
   # --- The workers memory alert's threshold ---
@@ -250,7 +257,7 @@ locals {
 check "postgres_connections_alert_has_a_limit" {
   assert {
     condition     = !local.diag_postgres || local.postgres_max_connections > 0
-    error_message = "No Postgres connections alert was created: the module does not know the default max_connections of postgres_sku_name \"${var.postgres_sku_name}\". Set alert_postgres_max_connections to the server's max_connections to create it."
+    error_message = "No Postgres connections alert was created: the module does not know the default max_connections of postgres_sku_name \"${var.postgres_sku_name}\". Set max_connections in postgres_server_parameters, or alert_postgres_max_connections, to the server's max_connections to create it."
   }
 }
 
