@@ -32,6 +32,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `external_database_url`, and when `postgres_server_parameters` sets a `pgbouncer.*` key the module
   owns. Needs an api image that carries MAS-1615 (masterly-application-backend PR #488).
   See "Connection budget" in the README. Off changes nothing.
+- `alerts_routed_externally` (default `false`): the escape hatch for the production
+  notification-target check. Set it when alerts are routed outside Terraform, for example by an
+  Azure Policy or subscription-level alert processing rules. It creates and changes no resource.
+
 - `postgres_auto_grow` and `postgres_storage_tier` for the starter Postgres server. Unset,
   `postgres_auto_grow` is on in `mode = "production"` and off otherwise, so **existing
   production installs get storage autogrow turned on, in place, on upgrade** unless they set
@@ -156,6 +160,20 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- **Upgrade action for production installs with no notification target: set `alert_email` or
+  `alert_action_group_id`, or `alerts_routed_externally = true`, before the next plan.** The
+  availability alerts and the action group no longer need `enable_diagnostics`, and a
+  production plan with no notification target is refused. `postgres-unavailable`,
+  `<app>-unavailable` (api, frontend and, with `enable_workers`, workers), `app-not-ready` and
+  the module's `ag-<prefix>-alerts` action group are now created in every mode (ADR 0080,
+  amendment of 2026-10-18). **An existing install's next apply creates them with no variable
+  changed** wherever `enable_diagnostics` was off, which adds Azure Monitor cost: metric alert
+  rules, and the `app-not-ready` log search rule billed per evaluation. `postgres-silent`, the
+  saturation and load alerts and the diagnostic settings stay behind `enable_diagnostics`. A
+  `mode = "production"` plan with neither `alert_email` nor `alert_action_group_id` now fails at
+  plan, whatever `enable_diagnostics` says, because its severity-0 alerts would notify nobody:
+  set one of them, or set `alerts_routed_externally = true` if alert routing is done outside
+  Terraform (Azure Policy or subscription-level alert processing rules).
 - **The install's Log Analytics workspace accepts Microsoft Entra ID only and takes no ingestion
   over the public network.** The module turns off the workspace's local (shared-key)
   authentication and sets its public ingestion access to `Disabled`; both stay off whatever the
