@@ -567,16 +567,21 @@ which makes it exactly the kind of setting that stops being true without anyone 
 
 ### Where this module departs from Azure's recommended baseline
 
-In two places this module's defaults do not yet follow Azure's recommended configuration for
-the resources it creates, and in one more a production install departs from it only when you
-say so. Each is listed below with what it is, why it holds today or why you might choose it,
-and what you can do to follow Azure's recommendation. Making Azure's recommendation the
-module's default in each place is tracked work, and this section changes as each one is closed.
+This module departs from Azure's recommended configuration for the resources it creates in
+four places. In two of them, Service Bus and geo-redundant backup, the module's defaults do
+not yet follow the recommendation; in one, Redis and Postgres authentication, a production
+install departs from it only when you say so; and one, the runtime subnet's network security
+group, is a deliberate design choice. Each is listed below with what it is, why it holds or
+why you might choose it, and what you can do to follow Azure's recommendation. Making Azure's
+recommendation the default is tracked work for Service Bus and geo-redundant backup, and this
+section changes as each one is closed. The network security group's Internet rule is not
+tracked work: a public environment needs it, and you follow Azure's recommendation by choosing
+an internal environment (`aca_internal_load_balancer = true`).
 
 Azure Policy and Microsoft Defender for Cloud can report these. Each item names the Azure
-Policy built-in definitions that evaluate it, by display name and definition ID; if your
-portal shows a slightly different title, search for the ID. Defender for Cloud's default
-standard is the Microsoft cloud security benchmark v1
+Policy built-in definitions that evaluate it, by display name and definition ID, or says that
+none has been identified; if your portal shows a slightly different title, search for the ID.
+Defender for Cloud's default standard is the Microsoft cloud security benchmark v1
 (`1f3afdf9-d0c9-4c3d-847f-89da613e70a8`), and none of the definitions below is part of it.
 The Microsoft cloud security benchmark v2 (`e3ec7e09-768c-4b64-882c-fcada3772047`) is an
 opt-in preview; each item says whether its definitions are in it. Whether a finding appears
@@ -714,6 +719,34 @@ Definitions that flag this:
 
 - *Geo-redundant backup should be enabled for Azure Database for PostgreSQL flexible
   servers* (`cee2f9fd-3968-44be-a863-bd62c9884423`). It is in neither benchmark initiative.
+
+#### The runtime subnet's network security group admits the Internet on ports 80 and 443 in a public environment
+
+This applies when the module creates the runtime subnet and its network security group (it
+does not on an injected spoke, where the module creates no such group) and
+`aca_internal_load_balancer = false`, which is the default. The group's `allow-app-ingress`
+rule then admits the `Internet` service tag to TCP ports 80 and 443 on the Container Apps
+subnet. With `aca_internal_load_balancer = true` the source is `VirtualNetwork` instead, so
+only your virtual network and the networks connected to it can reach the apps. Azure
+recommends that a rule not allow unrestricted ingress from any IP address.
+
+Why the module does this: in a public environment the frontend (and the api, when
+`api_ingress_external = true`) must be reachable from the Internet, so the rule has to admit
+it. Port 80 is admitted beside 443 because Azure's edge answers it with a 301 redirect to
+https, and dropping it would turn that redirect into a timeout. The rule is not where access
+is narrowed: `ingress_allowed_cidrs` narrows who may reach the apps at the Container Apps
+edge, not at the network security group. It is not used as the rule's source because an empty
+list is a valid setting that means unrestricted, and a security group rule cannot express an
+empty source.
+
+To follow Azure's recommendation, set `aca_internal_load_balancer = true`. The environment
+then has no public endpoint, and the rule admits only `VirtualNetwork`. Setting
+`ingress_allowed_cidrs` alone does not change the rule, though it does restrict who the apps
+accept requests from.
+
+The IaC scan reports this as Trivy AZU-0047, and `.trivyignore.yaml` records it as an
+accepted departure for `main.tf`. No Azure Policy built-in definition has been identified
+that evaluates this rule.
 
 ## Scaling
 
