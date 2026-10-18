@@ -802,6 +802,52 @@ app_resources = {
 Changing an app's size rolls that app to a new revision on the next apply. The `workers-memory`
 alert follows the workers' size: its threshold is a share of whatever memory the replica has.
 
+### Connection budget
+
+The api creates one database per Masterly Environment (ADR 0003), and each backend process
+(`ca-api` replica, `ca-workers` replica) holds connection pools per Environment in use. Count them
+against the server's `max_connections`, which the connections alert also measures.
+
+`postgres_pgbouncer = true` turns on the Flexible Server's built-in PgBouncer in transaction mode
+(`pgbouncer.enabled = true`, `pgbouncer.pool_mode = TRANSACTION`,
+`pgbouncer.max_prepared_statements = 100`). `MASTERLY_DATABASE_URL` then points at the pooler on
+port 6432 and `MASTERLY_DATABASE_POOLER` is `transaction`. `MASTERLY_DATABASE_DIRECT_URL`
+(secret `database-direct-url`, same server, role and `postgres` database) stays on 5432 for what a
+transaction pooler cannot carry, such as creating an Environment's database. Under
+`database_auth = "entra"` neither URL carries a password. Built-in PgBouncer is not offered on
+burstable (`B_*`) SKUs, and the input is refused with `external_database_url`.
+
+**Needs an api image that carries MAS-1615** (masterly-application-backend PR #488). An older image
+ignores `MASTERLY_DATABASE_POOLER` and fails through the pooler. All three settings change in
+one apply, so roll the api image first.
+
+Per process and Environment:
+
+- Through the pooler (6432): the session pool, 5 + 10 (pool size plus overflow) = up to 15
+  client connections. They share the pooler's server-side connections.
+- Direct (5432): the direct pool, 1 + 4 = up to 5 connections, held on the server itself.
+
+Multiply by `api` replicas (`api_max_replicas`), `ca-workers` replicas (`workers_max_replicas`) and
+the Environments in use (`engine_max`):
+
+    processes          = api replicas + workers replicas
+    pooler clients     = processes x Environments x 15
+    direct on 5432     = processes x Environments x 5
+
+*Worked example, `GP_Standard_D2ds_v5`* (8 GiB, default `max_connections` 859): 3 api and 2
+workers replicas make 5 processes; with 4 Environments that is 5 x 4 x 15 = 300 pooler client
+connections and 5 x 4 x 5 = 100 direct connections. The 100 direct connections count against 859
+in full; the 300 pooler clients do not, since PgBouncer multiplexes them onto far fewer server
+connections. Without the pooler the same install would open 5 x 4 x (15 + 5) = 400.
+
+*Worked example, `B_Standard_B1ms`* (`max_connections` 50): there is no built-in PgBouncer, so
+every connection is a server connection. 1 api and 1 workers replica make 2 processes; with 2
+Environments that is 2 x 2 x (15 + 5) = 80, above 50. Use fewer Environments or replicas, or a
+`GP_*` SKU with `postgres_pgbouncer = true`.
+
+The connections alert keeps measuring the server's `max_connections`; it does not count pooler
+clients.
+
 ## Diagnostics + alerts
 
 In `mode=production` the module wires the data-plane resources' diagnostic settings and a

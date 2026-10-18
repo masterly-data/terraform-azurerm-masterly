@@ -951,6 +951,240 @@ run "postgres_server_parameters_refuse_a_fractional_max_connections" {
   expect_failures = [var.postgres_server_parameters]
 }
 
+# postgres_pgbouncer: the built-in PgBouncer in transaction mode (ADR 0003, MAS-1615).
+# Off (the default) changes nothing.
+run "postgres_pgbouncer_off_changes_nothing" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  override_resource {
+    target          = azurerm_postgresql_flexible_server.this
+    override_during = plan
+    values = {
+      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+      fqdn = "psql-test.postgres.database.azure.com"
+    }
+  }
+
+  override_resource {
+    target          = random_password.postgres_admin
+    override_during = plan
+    values = {
+      result = "test-admin-password"
+    }
+  }
+
+  assert {
+    condition     = endswith(split("?", local.secret_values["database-url"])[0], ":5432/postgres") && endswith(split("?", local.database_url)[0], ":5432/postgres")
+    error_message = "With postgres_pgbouncer off the database-url secret must stay on :5432."
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_DATABASE_POOLER") && !contains(keys(local.api_env_secret_refs), "MASTERLY_DATABASE_DIRECT_URL") && !contains(keys(local.backend_env_secret_refs), "MASTERLY_DATABASE_DIRECT_URL")
+    error_message = "With postgres_pgbouncer off there must be no MASTERLY_DATABASE_POOLER env and no MASTERLY_DATABASE_DIRECT_URL secret ref."
+  }
+
+  assert {
+    condition     = !contains(local.backend_secret_names, "database-direct-url") && length(azurerm_postgresql_flexible_server_configuration.pgbouncer) == 0
+    error_message = "With postgres_pgbouncer off there must be no direct-url secret and no pgbouncer.* server configuration."
+  }
+
+  assert {
+    condition     = !contains(local.private_endpoint_ports, "6432") && contains(local.private_endpoint_ports, "5432")
+    error_message = "With postgres_pgbouncer off the endpoints subnet must not admit 6432."
+  }
+}
+
+run "postgres_pgbouncer_sets_the_server_parameters" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_sku_name     = "GP_Standard_D2ds_v5"
+    postgres_pgbouncer    = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_postgresql_flexible_server_configuration.pgbouncer) == 3 &&
+      azurerm_postgresql_flexible_server_configuration.pgbouncer["pgbouncer.enabled"].value == "true" &&
+      azurerm_postgresql_flexible_server_configuration.pgbouncer["pgbouncer.pool_mode"].value == "TRANSACTION" &&
+      tonumber(azurerm_postgresql_flexible_server_configuration.pgbouncer["pgbouncer.max_prepared_statements"].value) > 0 &&
+      azurerm_postgresql_flexible_server_configuration.pgbouncer["pgbouncer.max_prepared_statements"].value == "100" &&
+      length(azurerm_postgresql_flexible_server_configuration.log) == 3 &&
+      length(azurerm_postgresql_flexible_server_configuration.operator) == 0
+    )
+    error_message = "postgres_pgbouncer must set pgbouncer.enabled = true, pgbouncer.pool_mode = TRANSACTION and pgbouncer.max_prepared_statements = 100, beside the unchanged log parameters."
+  }
+
+  assert {
+    condition     = contains(local.private_endpoint_ports, "6432") && contains(local.private_endpoint_ports, "5432")
+    error_message = "postgres_pgbouncer must admit 6432 on the endpoints subnet, beside 5432."
+  }
+}
+
+run "postgres_pgbouncer_password_urls" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_sku_name     = "GP_Standard_D2ds_v5"
+    postgres_pgbouncer    = true
+    enable_workers        = true
+  }
+
+  override_resource {
+    target          = azurerm_postgresql_flexible_server.this
+    override_during = plan
+    values = {
+      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+      fqdn = "psql-test.postgres.database.azure.com"
+    }
+  }
+
+  override_resource {
+    target          = random_password.postgres_admin
+    override_during = plan
+    values = {
+      result = "test-admin-password"
+    }
+  }
+
+  assert {
+    condition = (
+      local.secret_values["database-url"] == "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@psql-test.postgres.database.azure.com:6432/postgres?ssl=require" &&
+      local.secret_values["database-direct-url"] == "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@psql-test.postgres.database.azure.com:5432/postgres?ssl=require"
+    )
+    error_message = "With the pooler on and database_auth = password, database-url must be on :6432 and database-direct-url on :5432, same role and database."
+  }
+
+  assert {
+    condition = (
+      local.api_env["MASTERLY_DATABASE_POOLER"] == "transaction" &&
+      local.api_env_secret_refs["MASTERLY_DATABASE_URL"] == "database-url" &&
+      local.api_env_secret_refs["MASTERLY_DATABASE_DIRECT_URL"] == "database-direct-url" &&
+      local.backend_env_secret_refs["MASTERLY_DATABASE_DIRECT_URL"] == "database-direct-url" &&
+      contains(local.api_secret_names, "database-direct-url") &&
+      contains(local.backend_secret_names, "database-direct-url")
+    )
+    error_message = "ca-api and ca-workers must get MASTERLY_DATABASE_POOLER = transaction and MASTERLY_DATABASE_DIRECT_URL from the database-direct-url secret."
+  }
+
+  # The workers app is built from local.api_env and local.backend_env_secret_refs (workers.tf).
+  assert {
+    condition     = contains(module.workers[0].env_names, "MASTERLY_DATABASE_POOLER") && !contains(module.workers[0].env_names, "MASTERLY_DATABASE_DIRECT_URL") && !contains(module.api.env_names, "MASTERLY_DATABASE_DIRECT_URL")
+    error_message = "The pooler setting is plain env on both backend apps; the direct URL is never plain env."
+  }
+}
+
+run "postgres_pgbouncer_entra_urls_carry_no_password" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_sku_name     = "GP_Standard_D2ds_v5"
+    postgres_pgbouncer    = true
+    database_auth         = "entra"
+  }
+
+  override_resource {
+    target          = azurerm_postgresql_flexible_server.this
+    override_during = plan
+    values = {
+      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+      fqdn = "psql-test.postgres.database.azure.com"
+    }
+  }
+
+  override_resource {
+    target          = random_password.postgres_admin
+    override_during = plan
+    values = {
+      result = "test-admin-password"
+    }
+  }
+
+  assert {
+    condition = (
+      endswith(split("?", local.secret_values["database-url"])[0], "@psql-test.postgres.database.azure.com:6432/postgres") &&
+      endswith(split("?", local.secret_values["database-direct-url"])[0], "@psql-test.postgres.database.azure.com:5432/postgres") &&
+      split("@", local.secret_values["database-url"])[0] == split("@", local.secret_values["database-direct-url"])[0]
+    )
+    error_message = "On entra the URL must be on :6432 and the direct URL on :5432, same role."
+  }
+
+  assert {
+    condition     = !can(regex("://[^@/]*:[^@/]*@", local.secret_values["database-url"])) && !can(regex("://[^@/]*:[^@/]*@", local.secret_values["database-direct-url"]))
+    error_message = "On database_auth = entra neither URL may carry a password."
+  }
+}
+
+# The direct URL is a credential: a Key Vault secret when the vault is on, never plain env.
+run "postgres_pgbouncer_direct_url_is_vault_backed" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_sku_name     = "GP_Standard_D2ds_v5"
+    postgres_pgbouncer    = true
+    enable_key_vault      = true
+    enable_workers        = true
+  }
+
+  assert {
+    condition = (
+      contains(module.api.vault_backed_secret_names, "database-direct-url") &&
+      contains(module.workers[0].vault_backed_secret_names, "database-direct-url") &&
+      !contains(module.api.value_secret_names, "database-direct-url") &&
+      !contains(module.api.env_names, "MASTERLY_DATABASE_DIRECT_URL") &&
+      !contains(module.workers[0].env_names, "MASTERLY_DATABASE_DIRECT_URL") &&
+      contains(keys(azurerm_key_vault_secret.install), "database-direct-url")
+    )
+    error_message = "With the Key Vault on, database-direct-url must reach both backend apps as a vault reference, and never as plain env."
+  }
+}
+
+run "postgres_pgbouncer_refused_on_a_burstable_sku" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_sku_name     = "B_Standard_B1ms"
+    postgres_pgbouncer    = true
+  }
+
+  expect_failures = [var.postgres_pgbouncer]
+}
+
+run "postgres_pgbouncer_refused_with_byo_db" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    postgres_sku_name     = "GP_Standard_D2ds_v5"
+    postgres_pgbouncer    = true
+  }
+
+  expect_failures = [var.postgres_pgbouncer]
+}
+
+run "postgres_pgbouncer_refused_with_an_operator_pgbouncer_key" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_sku_name          = "GP_Standard_D2ds_v5"
+    postgres_pgbouncer         = true
+    postgres_server_parameters = { "pgbouncer.pool_mode" = "SESSION" }
+  }
+
+  expect_failures = [var.postgres_pgbouncer]
+}
+
 # The connections alert follows max_connections from the map; an explicit
 # alert_postgres_max_connections beats it; the map beats the SKU default.
 run "connections_alert_follows_max_connections_from_server_parameters" {

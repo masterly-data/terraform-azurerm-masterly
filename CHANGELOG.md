@@ -24,6 +24,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- `postgres_pgbouncer` (default `false`), which turns on the starter Flexible Server's built-in
+  PgBouncer in transaction mode. `MASTERLY_DATABASE_URL` moves to port 6432 and
+  `MASTERLY_DATABASE_POOLER = transaction` is set; `MASTERLY_DATABASE_DIRECT_URL` (new secret
+  `database-direct-url`, Key Vault-backed when `enable_key_vault`) carries the same server on 5432;
+  the endpoints subnet admits 6432. Refused on a burstable (`B_*`) SKU, with
+  `external_database_url`, and when `postgres_server_parameters` sets a `pgbouncer.*` key the module
+  owns. Needs an api image that carries MAS-1615 (masterly-application-backend PR #488).
+  See "Connection budget" in the README. Off changes nothing.
 - `postgres_server_parameters`, a map of Postgres server parameters to set on the starter
   Flexible Server beside the module's three log parameters. It refuses those three keys (ADR 0080),
   any entry when `external_database_url` is set, and a `max_connections` that is not a whole

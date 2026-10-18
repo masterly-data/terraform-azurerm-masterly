@@ -143,6 +143,8 @@ locals {
     ["443", "5432", "6380", "10000"],
     local.use_managed_redis ? [tostring(azurerm_managed_redis.this[0].default_database[0].port)] : [],
     local.servicebus_private ? ["5671"] : [],
+    # The server's built-in PgBouncer listens on 6432 of the same private endpoint.
+    var.postgres_pgbouncer ? ["6432"] : [],
   ))
 
   # Data plane seam (ADR 0065): BYO-DB when the customer supplies a DSN, otherwise the
@@ -774,6 +776,15 @@ locals {
     log_parameter_max_length_on_error = "0"
     log_parameter_max_length          = "0"
   }
+
+  # The parameters the module owns when postgres_pgbouncer is on. max_prepared_statements must
+  # be above 0 for asyncpg's prepared statements to survive transaction pooling; the value is
+  # documented on the variable.
+  postgres_pgbouncer_parameters = {
+    "pgbouncer.enabled"                 = "true"
+    "pgbouncer.pool_mode"               = "TRANSACTION"
+    "pgbouncer.max_prepared_statements" = "100"
+  }
 }
 
 resource "azurerm_postgresql_flexible_server_configuration" "log" {
@@ -791,6 +802,17 @@ resource "azurerm_postgresql_flexible_server_configuration" "log" {
 # local.postgres_log_parameters and any entry on BYO-DB; the gate below is the second line.
 resource "azurerm_postgresql_flexible_server_configuration" "operator" {
   for_each = nonsensitive(local.provision_postgres) ? var.postgres_server_parameters : {}
+
+  name      = each.key
+  server_id = azurerm_postgresql_flexible_server.this[0].id
+  value     = each.value
+}
+
+# Azure's built-in PgBouncer in transaction mode (postgres_pgbouncer), in a resource of its own
+# so the "log" and "operator" state addresses stay unchanged. The variable refuses a burstable
+# SKU, BYO-DB and operator-set pgbouncer.* keys; the gate below is the second line.
+resource "azurerm_postgresql_flexible_server_configuration" "pgbouncer" {
+  for_each = nonsensitive(local.provision_postgres) && var.postgres_pgbouncer ? local.postgres_pgbouncer_parameters : {}
 
   name      = each.key
   server_id = azurerm_postgresql_flexible_server.this[0].id
@@ -995,7 +1017,20 @@ locals {
   # otherwise the provisioned starter server's admin connection: the masterly_admin login and
   # its password, or — on database_auth = "entra" — the apps' identity's Entra role with no
   # password at all, since the api presents a token instead (entra-auth.tf).
+  #
+  # With postgres_pgbouncer the URL points at the built-in PgBouncer on 6432 (transaction pool);
+  # database_direct_url is the same server, role and database on 5432 for what a transaction
+  # pooler cannot carry (CREATE DATABASE, migrations).
+  database_pooler_port = var.postgres_pgbouncer ? "6432" : "5432"
+
   database_url = var.external_database_url != null ? var.external_database_url : (
+    local.database_entra
+    ? "postgresql+asyncpg://${local.database_entra_role}@${azurerm_postgresql_flexible_server.this[0].fqdn}:${local.database_pooler_port}/postgres?ssl=require"
+    : "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:${local.database_pooler_port}/postgres?ssl=require"
+  )
+
+  # Null on BYO-DB, where postgres_pgbouncer is refused and the secret is never named.
+  database_direct_url = var.external_database_url != null ? null : (
     local.database_entra
     ? "postgresql+asyncpg://${local.database_entra_role}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require"
     : "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require"
@@ -1132,6 +1167,8 @@ locals {
     local.provision_postgres ? {
       MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = tostring(var.postgres_backup_retention_days)
     } : {},
+    # Transaction pooling (MAS-1615): the backend needs to be told, or it fails through the pooler.
+    var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
   )
 
   # --- The install's secret material -----------------------------------------------
@@ -1147,6 +1184,7 @@ locals {
   # plan-time error, which is the guard).
   secret_values = {
     "database-url"            = local.database_url
+    "database-direct-url"     = local.database_direct_url
     "session-secret"          = random_password.session_secret.result
     "session-secret-previous" = var.session_secret_previous
     "bff-shared-secret"       = random_password.bff_shared_secret.result
@@ -1175,6 +1213,8 @@ locals {
   # the secret — the same narrow unmarking, for the same reason, as redis_url_wired.
   backend_secret_names = concat(
     ["database-url", "session-secret"],
+    # The direct (non-pooled) DSN, named only with the pooler: var.postgres_pgbouncer is a plain bool.
+    var.postgres_pgbouncer ? ["database-direct-url"] : [],
     # Only while a rotation is in flight; unset is the steady state (see the variable).
     nonsensitive(var.session_secret_previous != null) ? ["session-secret-previous"] : [],
     local.registry_secret_names,
@@ -1213,6 +1253,7 @@ locals {
     nonsensitive(var.session_secret_previous != null) ? {
       MASTERLY_SESSION_SECRET_PREVIOUS = "session-secret-previous"
     } : {},
+    var.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = "database-direct-url" } : {},
     local.redis_secret_refs,
     var.license_token != null ? { MASTERLY_LICENSE_TOKEN = "license-token" } : {},
     var.breakglass_secret_hash != null ? { MASTERLY_BREAKGLASS_SECRET_HASH = "breakglass-secret-hash" } : {},

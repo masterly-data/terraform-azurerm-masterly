@@ -493,6 +493,28 @@ variable "postgres_server_parameters" {
   }
 }
 
+variable "postgres_pgbouncer" {
+  type        = bool
+  default     = false
+  description = "Turn on the Flexible Server's built-in PgBouncer in transaction mode (ADR 0003). The module sets pgbouncer.enabled = true, pgbouncer.pool_mode = TRANSACTION and pgbouncer.max_prepared_statements = 100 (above 0, so prepared statements survive transaction pooling), opens port 6432 on the endpoints subnet, points MASTERLY_DATABASE_URL at the pooler on 6432, sets MASTERLY_DATABASE_POOLER = transaction, and gives ca-api and ca-workers MASTERLY_DATABASE_DIRECT_URL (the same server, role and database on 5432, as a secret) for work a transaction pooler cannot carry. Needs an api image that carries MAS-1615 (masterly-application-backend PR #488): without one the api cannot use the pooler. Refused on a burstable (B_*) postgres_sku_name, where Azure does not offer built-in PgBouncer, with external_database_url (the database is not the module's), and when postgres_server_parameters sets a pgbouncer.* key (the module owns them). Default false changes nothing."
+
+  validation {
+    condition     = !var.postgres_pgbouncer || !can(regex("^B_", var.postgres_sku_name))
+    error_message = "postgres_pgbouncer = true is refused on a burstable (B_*) postgres_sku_name: Azure does not offer the built-in PgBouncer on burstable SKUs. Set postgres_sku_name to a General Purpose (GP_*) or Memory Optimized (MO_*) SKU, or leave postgres_pgbouncer false."
+  }
+
+  validation {
+    condition     = !var.postgres_pgbouncer || var.external_database_url == null
+    error_message = "postgres_pgbouncer = true is refused with external_database_url: the module provisions no Postgres server then, so there is no built-in PgBouncer to turn on. Run your own pooler in front of your database."
+  }
+
+  # Keep this list equal to the keys of local.postgres_pgbouncer_parameters in main.tf.
+  validation {
+    condition     = !var.postgres_pgbouncer || length(setintersection([for k in keys(var.postgres_server_parameters) : lower(k)], ["pgbouncer.enabled", "pgbouncer.pool_mode", "pgbouncer.max_prepared_statements"])) == 0
+    error_message = "postgres_pgbouncer = true is refused when postgres_server_parameters sets pgbouncer.enabled, pgbouncer.pool_mode or pgbouncer.max_prepared_statements: the module owns these keys when the pooler is on. Remove them from postgres_server_parameters."
+  }
+}
+
 variable "postgres_storage_mb" {
   type        = number
   default     = 32768
