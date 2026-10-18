@@ -115,6 +115,11 @@ variable "key_vault_deployer_in_vnet" {
   description = "True when the apply runs inside the install's VNet (self-hosted runner, jumpbox, VPN), so the vault needs no firewall exception at all. Exactly one of this and key_vault_deployer_ip_rules must be set in production."
 }
 
+variable "alert_email" {
+  type        = string
+  description = "Email address that receives the install's alerts (postgres-unavailable, <app>-unavailable, app-not-ready and the rest). A production plan with no notification target is refused; see main.tf for the alternatives."
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}

@@ -842,9 +842,10 @@ alert follows the workers' size: its threshold is a share of whatever memory the
 
 ## Diagnostics + alerts
 
-In `mode=production` the module wires the data-plane resources' diagnostic settings and a
-minimal metric-alert set to the install's Log Analytics workspace (on by default; set
-`enable_diagnostics = false` to opt out, or `true` to enable outside production):
+In `mode=production` the module wires the data-plane resources' diagnostic settings and the
+saturation and load alerts to the install's Log Analytics workspace (on by default; set
+`enable_diagnostics = false` to opt out, or `true` to enable outside production). The
+availability alerts and the action group are not part of that switch; see below:
 
 - **Diagnostic settings** (resource logs + `AllMetrics` → the workspace) for the provisioned
   Postgres, Redis, Key Vault, and Service Bus (each only when that resource exists). On
@@ -905,9 +906,19 @@ minimal metric-alert set to the install's Log Analytics workspace (on by default
   says what stopped, because a dead `ca-workers` leaves the install answering every request
   perfectly while no job in it makes progress.
 
-Alerts fire and record with no notification target; to be paged, set `alert_email` (the
-module creates an action group) or point `alert_action_group_id` at an existing group
-(a shared ops group, a PagerDuty webhook group).
+The availability alerts and the module's action group do not need `enable_diagnostics`: they
+are created in every mode. `enable_diagnostics` governs the diagnostic settings, the saturation
+and load alerts and `postgres-silent`.
+
+To be paged, set `alert_email` (the module creates an action group) or point
+`alert_action_group_id` at an existing group (a shared ops group, a PagerDuty webhook group).
+`mode = "production"` refuses a plan with neither, whatever `enable_diagnostics` says, because
+its severity-0 alerts would fire and notify nobody. If this install's alerts are routed outside
+Terraform (an Azure Policy that attaches an action group to alert rules, or subscription-level
+alert processing rules), set `alerts_routed_externally = true` to let the plan through; it
+creates nothing. Outside production a missing target is allowed: the alerts fire and record.
+The availability alerts add Azure Monitor charges to installs that did not have them (metric
+alert rules, and the `app-not-ready` log search rule, billed per evaluation).
 
 ### Container logs
 
@@ -1020,7 +1031,9 @@ SKU default, so a raised limit needs stating once and an unrecognised SKU gets i
 `alert_postgres_max_connections` still wins over both: set it to the server's value when you
 have changed the parameter outside Terraform.
 
-None of these needs anything beyond `enable_diagnostics`: the metric alerts read the platform
+The load alerts need `enable_diagnostics` and nothing beyond it. The availability alerts
+(`postgres-unavailable`, `<app>-unavailable`, `app-not-ready`) and the action group need not even
+that: they are created in every mode. The metric alerts read the platform
 metrics every Postgres server, Container App and Service Bus namespace publishes, and the latency
 rule reads the console log that the diagnostic setting on the Container Apps environment sends
 to the install's workspace in every mode (see "Container logs" above). It reads the
@@ -1044,11 +1057,11 @@ precise about how far they reach.
 
 | Failure mode | Detected by | Notes |
 |---|---|---|
-| Database reports itself down | `postgres-unavailable` | Reads the platform's own `is_db_alive`. Fastest signal here: 5-minute window. |
-| Database stopped, deleted, or its telemetry broke | `postgres-silent` | Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. It pages after 45 minutes of silence, within one 10-minute evaluation, deliberately. On a brand-new install it can fire once before the first metrics land; it clears itself when they do. |
-| An app has no running replica | `<app>-unavailable` | One per Container App the install runs — `api`, `frontend` and, with `enable_workers`, `workers`. Only created for an app whose `min_replicas` is 1 or more. Counts replicas, not readiness — the alert below is what reads readiness. |
+| Database reports itself down | `postgres-unavailable` | Reads the platform's own `is_db_alive`. Fastest signal here: 5-minute window. Created in every mode for the starter server; it does not need `enable_diagnostics`. |
+| Database stopped, deleted, or its telemetry broke | `postgres-silent` | Needs `enable_diagnostics` (it reads the metrics the Postgres diagnostic setting sends). Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. It pages after 45 minutes of silence, within one 10-minute evaluation, deliberately. On a brand-new install it can fire once before the first metrics land; it clears itself when they do. |
+| An app has no running replica | `<app>-unavailable` | One per Container App the install runs — `api`, `frontend` and, with `enable_workers`, `workers`. Only created for an app whose `min_replicas` is 1 or more, and in every mode, whatever `enable_diagnostics` says. Counts replicas, not readiness — the alert below is what reads readiness. |
 | An app is gone: deleted, its environment torn down, or its revision deprovisioned | `<app>-silent` | Fires on the **absence** of the app's metrics in the workspace, the case `<app>-unavailable` cannot see, because a gone app publishes no `Replicas` value. One per Container App with a replica floor of 1 or more, when app availability diagnostics are on (the production default; see "App availability diagnostics"). It pages after 45 minutes of silence, within one 10-minute evaluation. Like `postgres-silent`, it can fire once on a brand-new install before the first metrics land, and clears itself when they do. |
-| An app is running but never becomes ready | `app-not-ready` | One rule for both serving apps, split by app name. `ca-api` and `ca-frontend` each log one line per **failing** readiness probe (and nothing on a passing one); the rule fires when an app has failed readiness in at least 30 of the last 60 minutes, so ~30–40 minutes to page. That is the case `<app>-unavailable` structurally cannot see — an unready replica is never routed to, but it still counts as a replica. A cold start legitimately fails readiness for minutes at a time, which is why the bar is half an hour rather than a single failure. Needs no input beyond diagnostics being on. |
+| An app is running but never becomes ready | `app-not-ready` | One rule for both serving apps, split by app name. `ca-api` and `ca-frontend` each log one line per **failing** readiness probe (and nothing on a passing one); the rule fires when an app has failed readiness in at least 30 of the last 60 minutes, so ~30–40 minutes to page. That is the case `<app>-unavailable` structurally cannot see — an unready replica is never routed to, but it still counts as a replica. A cold start legitimately fails readiness for minutes at a time, which is why the bar is half an hour rather than a single failure. Created in every mode; it does not need `enable_diagnostics`. |
 | The async pipeline has no worker running | `workers-unavailable` | The same alert, and the one nothing else in the set can stand in for: `ca-workers` has no ingress, so it emits no requests and `<app>-5xx` is blind to it by construction. Without this, a dead workers app is silent — the install keeps answering, the queue keeps growing, and the first signal is somebody asking why yesterday's ingest never landed. |
 | Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. |
 | Headroom running out: database CPU, connections, IOPS; api latency; worker memory; dead-lettered job messages | the load alerts | Need the resource up and publishing; the latency rule also needs traffic (at least 50 requests in 15 minutes). |
@@ -1090,10 +1103,15 @@ Not detected, and no alert here should be read as covering it:
 - **An app on a scale-to-zero install.** With `min_replicas = 0`, zero replicas is the intended
   state, so no replica alert is created for that app. This is an evaluation cost posture;
   `mode = "production"` requires a floor of at least one replica on both apps.
-- **Anything, on an install with no notification target.** Alerts still fire and record, but
-  nobody is told. Set `alert_email` or `alert_action_group_id`.
-- **Anything, on an install with `enable_diagnostics = false`** — the default outside
-  `mode = "production"`.
+- **Database silence, saturation and load, on an install with `enable_diagnostics = false`** —
+  the default outside `mode = "production"`. With diagnostics off there is no `postgres-silent`
+  and no saturation or load alert; the availability alerts (`postgres-unavailable`,
+  `<app>-unavailable`, `app-not-ready`) and the action group do not depend on it and remain.
+- **Anything, on an install that set `alerts_routed_externally = true` and whose external routing
+  does not reach these alerts.** `mode = "production"` refuses a plan with neither `alert_email`
+  nor `alert_action_group_id` unless that escape hatch is set, so a production install without a
+  target is one that chose it: its alerts fire and record, and notify only through the routing you
+  run outside this module. Outside production, an install with no target has the same gap.
 
 ## Diagnostic bundle
 

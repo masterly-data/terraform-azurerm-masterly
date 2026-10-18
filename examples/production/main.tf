@@ -144,6 +144,12 @@ module "masterly" {
     api = { cpu = 1, memory = "2Gi" }
   }
 
+  # The notification target for the install's alerts. A production plan with none is refused.
+  # To route to an existing action group instead, set alert_action_group_id (it wins over
+  # alert_email); if alert routing is done outside Terraform (an Azure Policy or
+  # subscription-level alert processing rules), set alerts_routed_externally = true.
+  alert_email = var.alert_email
+
   tags = var.tags
 }
 
