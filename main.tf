@@ -1063,21 +1063,31 @@ locals {
   # With postgres_pgbouncer the URL points at the built-in PgBouncer on 6432 (transaction pool);
   # database_direct_url is the same server, role and database on 5432 for what a transaction
   # pooler cannot carry (CREATE DATABASE, migrations).
+  # The starter server's URLs are composed in modules/postgres-connection-urls from these.
   database_pooler_port = var.postgres_pgbouncer ? "6432" : "5432"
+  database_direct_port = "5432"
+  database_auth_mode   = local.database_entra ? "entra" : "password"
+  database_role        = local.database_entra ? local.database_entra_role : "masterly_admin"
 
-  database_url = var.external_database_url != null ? var.external_database_url : (
-    local.database_entra
-    ? "postgresql+asyncpg://${local.database_entra_role}@${azurerm_postgresql_flexible_server.this[0].fqdn}:${local.database_pooler_port}/postgres?ssl=require"
-    : "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:${local.database_pooler_port}/postgres?ssl=require"
-  )
+  database_url = var.external_database_url != null ? var.external_database_url : module.postgres_connection_urls[0].pooler_url
 
   # Null on BYO-DB, where postgres_pgbouncer is refused and the secret is never named.
-  database_direct_url = var.external_database_url != null ? null : (
-    local.database_entra
-    ? "postgresql+asyncpg://${local.database_entra_role}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require"
-    : "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require"
-  )
+  database_direct_url = var.external_database_url != null ? null : module.postgres_connection_urls[0].direct_url
+}
 
+module "postgres_connection_urls" {
+  source = "./modules/postgres-connection-urls"
+  count  = local.provision_postgres ? 1 : 0
+
+  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
+  auth_mode   = local.database_auth_mode
+  role        = local.database_role
+  password    = local.database_entra ? null : random_password.postgres_admin[0].result
+  pooler_port = local.database_pooler_port
+  direct_port = local.database_direct_port
+}
+
+locals {
   # Identity (ADR 0024): the binding plus, on oidc, the backend's token-verification
   # config. The BFF client half lives on the frontend below; the client secret and the
   # break-glass hash travel as Container App secrets, never plain env.

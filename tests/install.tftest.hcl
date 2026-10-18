@@ -1043,6 +1043,18 @@ run "postgres_pgbouncer_password_urls" {
     condition     = local.database_pooler_port == "6432" && !local.database_entra
     error_message = "With the pooler on and database_auth = password, database-url must be on :6432 (database-direct-url stays on :5432)."
   }
+
+  # The exact strings are proved in tests/postgres_connection_urls.tftest.hcl; these are the inputs
+  # the root gives that module (the server's fqdn and the password are known only after apply).
+  assert {
+    condition = (
+      local.database_direct_port == "5432" &&
+      local.database_auth_mode == "password" &&
+      local.database_role == "masterly_admin" &&
+      length(module.postgres_connection_urls) == 1
+    )
+    error_message = "On password, both URLs must be built as masterly_admin with its password, the pooler URL on :6432 and the direct URL on :5432."
+  }
 }
 
 run "postgres_pgbouncer_wires_pooler_env_and_direct_secret" {
@@ -1092,6 +1104,16 @@ run "postgres_pgbouncer_entra_urls_carry_no_password" {
   assert {
     condition     = !can(regex(":", local.database_entra_role))
     error_message = "On database_auth = entra the role in both URLs must carry no password."
+  }
+
+  # The module puts no password in either URL on entra (tests/postgres_connection_urls.tftest.hcl).
+  assert {
+    condition = (
+      local.database_direct_port == "5432" &&
+      local.database_auth_mode == "entra" &&
+      local.database_role == module.apps_identity.name
+    )
+    error_message = "On entra, both URLs must be built as the apps' identity's role with no password, the direct URL on :5432."
   }
 }
 
