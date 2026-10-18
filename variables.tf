@@ -477,7 +477,7 @@ variable "postgres_auto_grow" {
 variable "postgres_storage_tier" {
   type        = string
   default     = null
-  description = "Storage performance tier of the provisioned Postgres server (P4 to P80), which sets its IOPS and throughput. Null (default) keeps Azure's default tier for the storage size. Azure accepts only tiers at or above that default, so the tier must suit postgres_storage_mb; the module checks the name, not the fit."
+  description = "Storage performance tier of the provisioned Postgres server (P4 to P80), which sets its IOPS and throughput. Null (default) keeps Azure's default tier for the storage size. Azure accepts only tiers at or above that default, so the tier must suit postgres_storage_mb; the module checks the name, not the fit. With autogrow on, Azure can grow the disk past postgres_storage_mb and the minimum tier for the larger size can rise above a pinned tier, so raise the tier when that happens."
 
   validation {
     condition     = var.postgres_storage_tier == null || contains(["P4", "P6", "P10", "P15", "P20", "P30", "P40", "P50", "P60", "P70", "P80"], coalesce(var.postgres_storage_tier, "none"))

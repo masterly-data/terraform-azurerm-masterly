@@ -50,6 +50,11 @@ run "eval_defaults_provision_starter_postgres" {
   }
 
   assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].auto_grow_enabled == false
+    error_message = "The evaluation default must leave storage autogrow off."
+  }
+
+  assert {
     condition     = length(azurerm_private_dns_zone.postgres) == 1 && length(azurerm_private_endpoint.postgres) == 1
     error_message = "The provisioned server must come with its private DNS zone and private endpoint."
   }
@@ -6601,8 +6606,9 @@ run "service_bus_without_workers_plans_no_scaler_grant" {
   }
 }
 
-# Postgres storage autogrow and storage performance tier. Both update the server in place (they
-# are not ForceNew in azurerm), and neither applies to BYO-DB.
+# Postgres storage autogrow and storage performance tier. Neither applies to BYO-DB. A mock
+# provider plan cannot show whether azurerm updates them in place; that rests on the provider
+# schema (see the pull request description).
 run "postgres_auto_grow_off_by_default_in_evaluation" {
   command = plan
 

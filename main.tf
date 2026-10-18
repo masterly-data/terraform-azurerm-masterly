@@ -704,7 +704,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   # Never below the real size (local.postgres_storage_mb). Grown storage cannot be shrunk.
   storage_mb = local.postgres_storage_mb
 
-  # In-place updates, not ForceNew. Unset tier sends null, which keeps the provider's computed value.
+  # Unset tier sends null, which keeps the provider's computed value.
   auto_grow_enabled = local.postgres_auto_grow
   storage_tier      = var.postgres_storage_tier
 
