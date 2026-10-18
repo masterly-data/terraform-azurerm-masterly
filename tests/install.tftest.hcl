@@ -33,6 +33,11 @@ variables {
   # as a real production install (see key_vault_deployer_ip_rules). Set file-wide so the
   # runs that assert something else are not all about this; the guard has its own run below.
   key_vault_deployer_ip_rules = ["203.0.113.7"]
+
+  # A production plan with no notification target is refused (alert_email's validation), so
+  # every production run states one. Runs about the target override it; the refusal
+  # has its own runs below.
+  alert_email = "ops@example.com"
 }
 
 # Evaluation defaults: dev identity behind an allowlist provisions the starter Postgres,
@@ -1637,15 +1642,16 @@ run "key_vault_enabled_provisions_vault_and_grant" {
     error_message = "Demo-mode vault: soft-delete on, purge protection off, public access on, no private endpoint."
   }
 
-  # Diagnostics default off outside production: no settings, no alerts.
+  # Diagnostics default off outside production: no settings, no saturation or load alerts. The
+  # availability alerts do not depend on diagnostics and exist in every mode.
   assert {
     condition = (
       length(azurerm_monitor_diagnostic_setting.key_vault) == 0 &&
       length(azurerm_monitor_metric_alert.app_5xx) == 0 &&
-      length(azurerm_monitor_metric_alert.app_unavailable) == 0 &&
-      length(azurerm_monitor_metric_alert.postgres_unavailable) == 0 &&
+      length(azurerm_monitor_metric_alert.app_unavailable) == 2 &&
+      length(azurerm_monitor_metric_alert.postgres_unavailable) == 1 &&
       length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0 &&
-      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1 &&
       length(azurerm_monitor_metric_alert.postgres_cpu) == 0 &&
       length(azurerm_monitor_metric_alert.postgres_connections) == 0 &&
       length(azurerm_monitor_metric_alert.postgres_iops) == 0 &&
@@ -1653,7 +1659,7 @@ run "key_vault_enabled_provisions_vault_and_grant" {
       length(azurerm_monitor_diagnostic_setting.app) == 0 &&
       length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 0
     )
-    error_message = "Diagnostics must be off by default outside production."
+    error_message = "Diagnostics must be off by default outside production, while the availability alerts exist."
   }
 }
 
@@ -5050,9 +5056,9 @@ run "scale_to_zero_apps_get_no_replica_alert" {
     error_message = "Only the app that declares a replica floor may carry a no-replica alert; a scale-to-zero app must not, and an install with no workers app must not claim workers coverage."
   }
 
-  # The database alerts do not depend on replica counts at all, so enabling diagnostics on an
-  # evaluation install still buys the availability coverage that matters most: this install
-  # provisions the starter server, so both database alerts are present.
+  # The database alerts do not depend on replica counts at all: this install provisions the
+  # starter server, so postgres-unavailable is present (in every mode), and enabling
+  # diagnostics adds postgres-silent beside it.
   assert {
     condition = (
       length(azurerm_monitor_metric_alert.postgres_unavailable) == 1 &&
@@ -5219,6 +5225,359 @@ run "workers_at_zero_floor_gets_no_replica_alert" {
   # Floor 0 below the default ceiling of 1, on the polling binding: the workers have no scale
   # rule, so they stay at 0, and the module says so.
   expect_failures = [check.workers_scale_on_the_polling_binding]
+}
+
+# --- Availability alerts and the action group do not depend on enable_diagnostics ----------
+# ADR 0080, amendment of 2026-10-18 (MAS-292): postgres-unavailable, <app>-unavailable and
+# app-not-ready, and the module's action group, exist in every mode. Everything else in
+# diagnostics.tf stays behind the flag. A production plan with no notification target is
+# refused unless alerts_routed_externally is set.
+
+# Demo, diagnostics unset, no notification target (which demo does not require): the
+# availability alerts exist; the saturation and load alerts, postgres-silent, the absence
+# rules and every diagnostic setting do not.
+run "availability_alerts_exist_with_diagnostics_off" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    alert_email           = null
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.postgres_unavailable) == 1 &&
+      length(azurerm_monitor_metric_alert.app_unavailable) == 2 &&
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "api") &&
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "frontend") &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1
+    )
+    error_message = "With diagnostics off, the database, api and frontend availability alerts and app-not-ready must still be created."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.app_5xx) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.api_latency) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_cpu) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_connections) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_iops) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_storage) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_cpu_credits) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.postgres) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.app) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.redis) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.redis_database) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.key_vault) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.service_bus) == 0 &&
+      length(azurerm_monitor_metric_alert.redis_evictions) == 0 &&
+      length(azurerm_monitor_metric_alert.redis_memory) == 0 &&
+      length(azurerm_monitor_metric_alert.servicebus_dead_letters) == 0 &&
+      length(azurerm_monitor_metric_alert.workers_memory) == 0 &&
+      length(azurerm_monitor_action_group.alerts) == 0
+    )
+    error_message = "With diagnostics off, the saturation and load alerts, postgres-silent, the absence rules, the diagnostic settings and (with no alert_email) the action group must not be created."
+  }
+}
+
+# A scale-to-zero api and frontend lose their unavailable alert, but app-not-ready stays and
+# its query names both serving apps.
+run "scale_to_zero_serving_apps_keep_app_not_ready_with_diagnostics_off" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_min_replicas      = 0
+    frontend_min_replicas = 0
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.app_unavailable) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].criteria[0].query, "\"ca-api\", \"ca-frontend\"")
+    )
+    error_message = "With both serving apps at a zero floor there is no <app>-unavailable alert, but app-not-ready must remain and name both apps."
+  }
+}
+
+run "workers_get_a_no_replica_alert_with_diagnostics_off" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    workers_min_replicas  = 1
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_metric_alert.app_unavailable) == 3 &&
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "workers")
+    )
+    error_message = "A workers app with a floor of at least one must carry a no-replica alert whether or not diagnostics are on."
+  }
+}
+
+# alert_email with diagnostics explicitly off still creates the module's action group, and the
+# availability alerts exist beside it. availability_routing.tftest.hcl checks that each alert's
+# action references the group's id, through an apply that makes the computed id known.
+run "action_group_exists_with_diagnostics_off" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = false
+    alert_email           = "ops@example.com"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_action_group.alerts) == 1 &&
+      azurerm_monitor_action_group.alerts[0].name == "ag-masterly-alerts" &&
+      length(azurerm_monitor_metric_alert.postgres_unavailable) == 1 &&
+      length(azurerm_monitor_metric_alert.app_unavailable) == 2 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1
+    )
+    error_message = "alert_email must create ag-<prefix>-alerts with diagnostics off, and the availability alerts must exist beside it."
+  }
+}
+
+# An injected group wins and the module creates none; the availability alerts reference it.
+run "injected_action_group_is_used_with_diagnostics_off" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = false
+    alert_email           = null
+    alert_action_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ops/providers/microsoft.insights/actionGroups/ag-ops"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_action_group.alerts) == 0 &&
+      contains([for a in azurerm_monitor_metric_alert.postgres_unavailable[0].action : a.action_group_id], var.alert_action_group_id) &&
+      contains([for a in azurerm_monitor_metric_alert.app_unavailable["api"].action : a.action_group_id], var.alert_action_group_id) &&
+      contains([for a in azurerm_monitor_metric_alert.app_unavailable["frontend"].action : a.action_group_id], var.alert_action_group_id) &&
+      contains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].action[0].action_groups, var.alert_action_group_id)
+    )
+    error_message = "With alert_action_group_id set and no alert_email, no module action group is created and the availability alerts must route to the given id."
+  }
+}
+
+# --- The production notification-target refusal -------------------------------------------
+
+run "production_without_a_notification_target_is_refused" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+    alert_email          = null
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  expect_failures = [var.alert_email]
+}
+
+# The refusal does not depend on enable_diagnostics.
+run "production_without_a_notification_target_is_refused_with_diagnostics_off" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+    enable_diagnostics   = false
+    alert_email          = null
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  expect_failures = [var.alert_email]
+}
+
+# The escape hatch lets the same plans through (diagnostics unset here, off in the next run).
+run "production_without_a_target_plans_with_the_escape_hatch" {
+  command = plan
+
+  variables {
+    mode                     = "production"
+    identity_binding         = "oidc"
+    oidc_allowed_issuers     = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience            = "api-client-id"
+    oidc_jwks_uri            = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id           = "bff-client-id"
+    oidc_client_secret       = "s3cret"
+    oidc_authority           = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri        = "https://app.example.com/api/auth/callback"
+    license_token            = "eyJ.fake.jwt"
+    license_public_jwk       = "{\"kty\":\"EC\"}"
+    initial_owner_email      = "owner@example.com"
+    enable_key_vault         = true
+    enable_redis             = true
+    redis_offering           = "cache"
+    enable_workers           = true
+    api_max_replicas         = 3
+    alert_email              = null
+    alerts_routed_externally = true
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_action_group.alerts) == 0
+    error_message = "The escape hatch creates no action group; it only satisfies the check."
+  }
+}
+
+run "production_without_a_target_plans_with_the_escape_hatch_and_diagnostics_off" {
+  command = plan
+
+  variables {
+    mode                     = "production"
+    identity_binding         = "oidc"
+    oidc_allowed_issuers     = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience            = "api-client-id"
+    oidc_jwks_uri            = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id           = "bff-client-id"
+    oidc_client_secret       = "s3cret"
+    oidc_authority           = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri        = "https://app.example.com/api/auth/callback"
+    license_token            = "eyJ.fake.jwt"
+    license_public_jwk       = "{\"kty\":\"EC\"}"
+    initial_owner_email      = "owner@example.com"
+    enable_key_vault         = true
+    enable_redis             = true
+    redis_offering           = "cache"
+    enable_workers           = true
+    api_max_replicas         = 3
+    enable_diagnostics       = false
+    alert_email              = null
+    alerts_routed_externally = true
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_metric_alert.app_unavailable) == 3
+    error_message = "The availability alerts exist with diagnostics off and the escape hatch set."
+  }
+}
+
+# Either target alone satisfies the check: alert_email (the file-wide value) in the first,
+# alert_action_group_id in the second.
+run "production_with_only_alert_email_plans" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+    alert_email          = "ops@example.com"
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_action_group.alerts) == 1
+    error_message = "alert_email alone must satisfy the production check and create the action group."
+  }
+}
+
+run "production_with_only_alert_action_group_id_plans" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    alert_email           = null
+    alert_action_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ops/providers/microsoft.insights/actionGroups/ag-ops"
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_action_group.alerts) == 0
+    error_message = "alert_action_group_id alone must satisfy the production check and create no module action group."
+  }
+}
+
+# The refusal is production's: a demo install with no target and the hatch unset plans.
+run "demo_without_a_notification_target_plans" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    alert_email           = null
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_action_group.alerts) == 0
+    error_message = "A demo install needs no notification target."
+  }
 }
 
 # --- Geo-redundant backup on the starter Postgres server (MAS-1087) ----------------------

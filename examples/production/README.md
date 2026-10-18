@@ -22,6 +22,10 @@ runs the Key Vault private-endpoint-only, and Terraform has to write the install
 into it. Set `key_vault_deployer_ip_rules` to the egress address of whatever runs the apply,
 or `key_vault_deployer_in_vnet = true` if that already runs inside the VNet.
 
+Production also refuses a plan with no alert notification target. Set `alert_email` (required
+by this example), or pass `alert_action_group_id` to the module instead; `alerts_routed_externally`
+is the escape hatch for alerts routed outside Terraform.
+
 ## Two applies, not one
 
 Without a custom domain the frontend hostname is an **output** of the first apply, so it

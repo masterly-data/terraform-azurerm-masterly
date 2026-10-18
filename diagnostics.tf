@@ -2,22 +2,25 @@
 # and metrics to the install's existing Log Analytics workspace (module.logs), and stand up a
 # minimal alert set for the failure modes that page an operator — saturation ("this install is
 # under strain") and availability ("this install is not serving"), which are different questions
-# and are answered by different alerts. Lightweight and on-by-default in production;
-# opt-in-able elsewhere.
+# and are answered by different alerts. The diagnostic settings, saturation and load alerts and
+# postgres-silent are on-by-default in production and opt-in-able elsewhere (enable_diagnostics).
+# The availability alerts (postgres-unavailable, <app>-unavailable, app-not-ready) and the
+# module's action group do not depend on enable_diagnostics: they exist in every mode.
 #
 # Each diagnostic setting names its log categories rather than asking for a category group
 # such as "allLogs": a group grows whenever Azure adds a category to the resource type, and a
 # new category can carry content (query text, caller identities) this install never chose to
-# send to its workspace. Metrics stay "AllMetrics". Alerts route to an optional action group; with
-# no alert_email set the alerts still fire and record, they just do not notify (wire the
-# action group by setting alert_email, or point alert_action_group_id at an existing group).
+# send to its workspace. Metrics stay "AllMetrics". Alerts route to an action group: set
+# alert_email, or point alert_action_group_id at an existing group. mode = "production" refuses
+# a plan with neither (alerts that notify nobody) unless alerts_routed_externally = true; outside
+# production, with no target the alerts still fire and record, they just do not notify.
 #
 # Kept in its own file (the email.tf/keyvault.tf composition pattern) — Terraform merges every *.tf.
 
 variable "enable_diagnostics" {
   type        = bool
   default     = null
-  description = "Wire the data-plane resources' diagnostic settings + metric alerts to the install's Log Analytics workspace. Null (default) = on in mode=production, off otherwise. Set true/false to override."
+  description = "Wire the data-plane resources' diagnostic settings, the saturation and load alerts and the postgres-silent alert to the install's Log Analytics workspace. Null (default) = on in mode=production, off otherwise. Set true/false to override. It does not govern the availability alerts (postgres-unavailable, <app>-unavailable, app-not-ready) or the module's action group: those are created in every mode."
 }
 
 variable "enable_app_availability_diagnostics" {
@@ -34,13 +37,26 @@ variable "enable_app_availability_diagnostics" {
 variable "alert_email" {
   type        = string
   default     = null
-  description = "Email address that receives the install's metric alerts (creates an action group). Null = no notification target (alerts still fire and are recorded; wire this or alert_action_group_id to be paged)."
+  description = "Email address that receives the install's alerts (creates an action group, in every mode and whatever enable_diagnostics says). Null = no notification target: alerts still fire and are recorded, but nobody is paged. A mode = \"production\" plan with neither this nor alert_action_group_id is refused unless alerts_routed_externally = true."
+
+  # Cross-variable guard (the keyvault.tf pattern): the availability alerts exist in every mode,
+  # so a production install with no target would have severity-0 alerts that notify nobody.
+  validation {
+    condition     = var.mode != "production" || var.alert_email != null || var.alert_action_group_id != null || var.alerts_routed_externally
+    error_message = "mode = \"production\" needs a notification target for its alerts: set alert_email, set alert_action_group_id, or set alerts_routed_externally = true if alert routing is done outside this module (Azure Policy or subscription-level alert processing rules). Without one the availability alerts fire and notify nobody."
+  }
 }
 
 variable "alert_action_group_id" {
   type        = string
   default     = null
-  description = "Resource ID of an existing Azure Monitor action group to route alerts to (e.g. a shared ops group / a PagerDuty webhook group). Takes precedence over alert_email. Null = use alert_email (if set) or no target."
+  description = "Resource ID of an existing Azure Monitor action group to route alerts to (e.g. a shared ops group / a PagerDuty webhook group). Takes precedence over alert_email. Null = use alert_email (if set) or no target. A mode = \"production\" plan with neither this nor alert_email is refused unless alerts_routed_externally = true."
+}
+
+variable "alerts_routed_externally" {
+  type        = bool
+  default     = false
+  description = "Escape hatch for the production notification-target check. Set true when this install's alerts are routed outside Terraform, for example by an Azure Policy that attaches an action group to every alert rule, or by subscription-level alert processing rules, so a mode = \"production\" plan with neither alert_email nor alert_action_group_id is intended. It only satisfies that check and creates or changes no resource; with it set and no target, the alerts fire and are recorded, and notification depends on your external routing."
 }
 
 # --- Load alert thresholds ----------------------------------------------------------
@@ -169,18 +185,18 @@ locals {
 
   # Which apps get a replica-availability alert. See the alert itself for why an app that is
   # allowed to sit at zero replicas is deliberately left out rather than alerted on.
-  availability_alertable_apps = local.diagnostics_enabled ? merge(
+  availability_alertable_apps = merge(
     var.api_min_replicas >= 1 ? { api = module.api.id } : {},
     var.frontend_min_replicas >= 1 ? { frontend = module.frontend.id } : {},
     var.enable_workers && var.workers_min_replicas >= 1 ? { workers = module.workers[0].id } : {},
-  ) : {}
+  )
 
   # Which apps emit the readiness signal the wedged-replica alert reads. Both serving apps do
   # and only they: ca-workers has no ingress, no /readyz and no probes (workers.tf), so there is
   # no failing probe for it to write a line about. Named from the module outputs rather than
   # retyped, so a rename of either app cannot leave the query filtering on a name that no longer
   # exists — the failure mode where an alert stays green because it matches nothing.
-  readiness_alertable_apps = local.diagnostics_enabled ? [module.api.name, module.frontend.name] : []
+  readiness_alertable_apps = [module.api.name, module.frontend.name]
 
   # What a missing replica MEANS, per app. The severity is the same for all three — this
   # module's severity band marks ABSENCE, not "HTTP is down" — but the sentence an operator
@@ -387,7 +403,7 @@ resource "azurerm_monitor_diagnostic_setting" "app" {
 # --- Action group (optional notification target) ------------------------------------
 
 resource "azurerm_monitor_action_group" "alerts" {
-  count = local.diagnostics_enabled && var.alert_email != null ? 1 : 0
+  count = var.alert_email != null ? 1 : 0
 
   name                = "ag-${var.name_prefix}-alerts"
   resource_group_name = azurerm_resource_group.aca.name
@@ -916,7 +932,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
 # of a database answering 0 is an outage and the operator wants it now, not after a quarter hour
 # of confirmation.
 resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
-  count = local.diag_postgres ? 1 : 0
+  count = local.provision_postgres ? 1 : 0
 
   name                = "alert-${var.name_prefix}-postgres-unavailable"
   resource_group_name = azurerm_resource_group.data.name
@@ -960,7 +976,7 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 # posture the variable exists for — and an alert that pages every idle night is one an operator
 # learns to ignore, which leaves them worse off than not shipping it. mode=production requires
 # api_min_replicas >= 1 and frontend_min_replicas >= 1 (validations on those variables), so on
-# every install where diagnostics is on by default those two alerts exist.
+# every production install those two alerts exist; they do not depend on enable_diagnostics.
 #
 # ca-workers is here for the reason the serving apps are, and it is the sharpest case of it
 # (MAS-305). It does not serve, so no request-path alert can ever notice it is gone: the 5xx
@@ -1131,7 +1147,7 @@ resource "azurerm_monitor_metric_alert" "app_unavailable" {
 # replica alert above, and what does not cover it — a workers replica that is up but whose
 # consume loop is stuck — is disclosed in the README.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
-  count = local.diagnostics_enabled ? 1 : 0
+  count = 1
 
   name = "alert-${var.name_prefix}-app-not-ready"
 
