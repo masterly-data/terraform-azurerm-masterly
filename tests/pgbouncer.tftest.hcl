@@ -97,6 +97,16 @@ run "pgbouncer_entra_urls_carry_no_password" {
     }
   }
 
+  # The mock would generate a random string for the identity's ids, which the Entra administrator
+  # resource rejects as not a UUID. Fixed UUIDs; everything else of the identity stays as is.
+  override_resource {
+    target = module.apps_identity.azurerm_user_assigned_identity.this
+    values = {
+      principal_id = "11111111-1111-1111-1111-111111111111"
+      client_id    = "22222222-2222-2222-2222-222222222222"
+    }
+  }
+
   variables {
     database_auth = "entra"
   }
