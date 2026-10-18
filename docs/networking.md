@@ -88,9 +88,46 @@ servicebus_private_dns_zone_id = "/subscriptions/.../privateDnsZones/privatelink
 
 Each is independent: inject the ones your hub owns and let the module create the rest.
 
-**Egress.** If the spoke routes outbound through a firewall or NVA, that is a UDR on the ACA
-subnet — yours to write, since the subnet is yours. The install needs to reach your identity
-provider and the container registry it pulls images from.
+**Egress.** What you can do to outbound traffic on the ACA subnet depends on the type of
+Container Apps environment, and Azure honours a route or a NAT Gateway on that subnet for only
+one of the two types. A route Azure ignores filters nothing, so check your environment first:
+
+```sh
+az containerapp env show \
+  --ids "$(terraform output -raw aca_environment_id)" \
+  --query properties.workloadProfiles
+```
+
+The `terraform output` form needs your root configuration to re-export the module's
+`aca_environment_id` output (`output "aca_environment_id" { value = module.<name>.aca_environment_id }`).
+Without that, use `-n aca-<name_prefix> -g rg-<name_prefix>-aca` instead of `--ids`.
+
+| Result | Environment type | Egress options on the ACA subnet |
+|---|---|---|
+| `null` or an empty list | Consumption-only | **No UDR and no NAT Gateway** — Azure does not support either. Narrow egress with your own outbound NSG on the ACA subnet, built from service tags, that admits the Container Apps required outbound set (see [firewall-integration](https://learn.microsoft.com/azure/container-apps/firewall-integration)) |
+| A list with a profile of type `Consumption` | Workload profiles | A UDR to a hub firewall or NVA, or a NAT Gateway, is supported. The firewall must admit the Container Apps required outbound set |
+
+**Do not write a UDR for a Consumption-only environment.** Azure ignores it, and egress stays
+open while you believe it is filtered.
+
+**A firewall that drops the required set breaks the install.** On a workload-profiles
+environment, force egress through a firewall that does not admit the required outbound set
+and the environment still provisions, but it cannot start a replica. The set is long and
+Microsoft versions it, so it is not copied here; take the FQDNs, service tags and NSG rules
+from [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration).
+The install also needs to reach your identity provider and the container registry it pulls
+images from.
+
+On a network the module builds (topologies 1 and 2) the module's NSG adds no outbound rule, so
+Azure's default `AllowInternetOutBound` applies.
+
+The support claims above come from Microsoft Learn:
+[Networking in Azure Container Apps environment](https://learn.microsoft.com/azure/container-apps/networking)
+(the environment types),
+[Control outbound traffic with user defined routes](https://learn.microsoft.com/azure/container-apps/user-defined-routes)
+(UDR and NAT Gateway), and
+[Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration)
+(the required outbound set and the outbound NSG for a Consumption-only environment).
 
 ## Network security baseline
 
@@ -132,8 +169,8 @@ client connects. Its AMQP-over-WebSockets fallback uses 443, which the rule alre
 **Outbound is untouched.** Azure's default `AllowInternetOutBound` stays. Container Apps needs
 a long, Microsoft-versioned egress set — image pull, Microsoft Container Registry, Entra ID,
 Azure Monitor — and a copy of it written into this module would go stale into an environment
-that provisions and then cannot start a replica. Narrowing egress is a firewall or NVA
-decision; see **Egress** above.
+that provisions and then cannot start a replica. Whether and how egress can be narrowed
+depends on the environment type; see **Egress** above.
 
 **The allowlist still does the narrowing.** `ingress_allowed_cidrs` is enforced by Container
 Apps ingress, and it is deliberately not what the NSG's source says: an empty list is a legal

@@ -352,8 +352,9 @@ resource "azurerm_subnet" "private_endpoints" {
 # Entra ID, Azure Monitor), the outbound set is long and versioned by Microsoft, and an
 # outbound deny written here would be a second, stale copy of it — the failure would be an
 # environment that provisions and then cannot start a replica. Azure's default
-# AllowInternetOutBound stays; narrowing egress is a firewall or NVA decision, and on an
-# injected spoke it is already the platform team's (docs/networking.md, "Egress").
+# AllowInternetOutBound stays. How egress can be narrowed depends on the Container Apps
+# environment type (a route or NAT Gateway on the subnet is honoured only for workload
+# profiles), and on an injected spoke it is the platform team's (docs/networking.md, "Egress").
 #
 # Created ONLY when the module owns the network. On an injected spoke (topology 3) the
 # subnets belong to the platform team, and attaching an NSG to a subnet somebody else
@@ -779,6 +780,17 @@ resource "azurerm_postgresql_flexible_server_configuration" "log" {
   # nonsensitive() on the presence test alone: whether external_database_url was supplied is
   # not the secret, and a marked value cannot drive for_each.
   for_each = nonsensitive(local.provision_postgres) ? local.postgres_log_parameters : {}
+
+  name      = each.key
+  server_id = azurerm_postgresql_flexible_server.this[0].id
+  value     = each.value
+}
+
+# The operator's own parameters (postgres_server_parameters), in a resource of their own so the
+# log parameters above keep their state addresses. The variable refuses the keys of
+# local.postgres_log_parameters and any entry on BYO-DB; the gate below is the second line.
+resource "azurerm_postgresql_flexible_server_configuration" "operator" {
+  for_each = nonsensitive(local.provision_postgres) ? var.postgres_server_parameters : {}
 
   name      = each.key
   server_id = azurerm_postgresql_flexible_server.this[0].id
