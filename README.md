@@ -310,7 +310,12 @@ private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its
 production where the module knows the region supports it; mind data residency — backups go to
 the paired region; see [the departures section](#geo-redundant-backup-is-on-only-in-the-regions-the-module-lists)),
 `postgres_zone_redundant_ha` (needs a non-burstable SKU), `postgres_server_parameters` (extra
-server parameters; see "Diagnostics + alerts" below). Flipping an install from starter to BYO-DB **plans the destruction of the starter
+server parameters; see "Diagnostics + alerts" below),
+`postgres_auto_grow` (on by default in production: Azure grows the disk before it fills, so a
+full disk does not make the server read-only; **grown storage cannot be shrunk**, and the
+module never plans `postgres_storage_mb` below the server's real size) and
+`postgres_storage_tier` (the storage performance tier, P4 to P80; unset keeps Azure's default
+for the size, and the tier must suit `postgres_storage_mb`). Flipping an install from starter to BYO-DB **plans the destruction of the starter
 server** — migrate your data first; the plan makes it visible.
 
 A BYO-DB database on a **private** address — reached over peering or a private endpoint — is
@@ -861,17 +866,25 @@ Per process and Environment:
 - Direct (5432): the direct pool, 1 + 4 = up to 5 connections, held on the server itself.
 
 Multiply by `api` replicas (`api_max_replicas`), `ca-workers` replicas (`workers_max_replicas`) and
-the Environments in use (`engine_max`):
+the Environments in use (at most the Environment limit your license grants, `engine_max`; it is a
+license claim, not a module input):
 
     processes          = api replicas + workers replicas
     pooler clients     = processes x Environments x 15
     direct on 5432     = processes x Environments x 5
+    pooler server side = Environments x pgbouncer.default_pool_size (Azure's default: 50)
+
+The pooler clients do not count against `max_connections`, but the pooler's own server-side
+connections do. Each Environment is a separate database, so PgBouncer opens a separate server pool
+for it, up to `pgbouncer.default_pool_size` connections (the module does not set it; the default
+is 50, and you can change it through `postgres_server_parameters`).
 
 *Worked example, `GP_Standard_D2ds_v5`* (8 GiB, default `max_connections` 859): 3 api and 2
 workers replicas make 5 processes; with 4 Environments that is 5 x 4 x 15 = 300 pooler client
 connections and 5 x 4 x 5 = 100 direct connections. The 100 direct connections count against 859
-in full; the 300 pooler clients do not, since PgBouncer multiplexes them onto far fewer server
-connections. Without the pooler the same install would open 5 x 4 x (15 + 5) = 400.
+in full, and so do the pooler's server-side connections: up to 4 x 50 = 200. Together up to 300 of
+859. The 300 pooler clients themselves do not count, since PgBouncer multiplexes them. Without the
+pooler the same install would open 5 x 4 x (15 + 5) = 400.
 
 *Worked example, `B_Standard_B1ms`* (`max_connections` 50): there is no built-in PgBouncer, so
 every connection is a server connection. 1 api and 1 workers replica make 2 processes; with 2
@@ -1046,7 +1059,7 @@ pages on a normal working day is one you will learn to ignore.
 |---|---|---|---|---|
 | `postgres-cpu` | Postgres `cpu_percent` averages above the threshold for 15 minutes | `alert_postgres_cpu_percent` (80) | The database server has little CPU left for the install's load. Queries slow first, then time out. | Find what is driving it — a large ingest, identity resolution over a big model, heavy consumption — in the api and workers logs. If it is sustained rather than one run, size `postgres_sku_name` up. |
 | `postgres-connections` | Postgres `active_connections` averages above the threshold's share of `max_connections` for 15 minutes | `alert_postgres_connections_percent` (70), `alert_postgres_max_connections` (null) | The server is nearing its connection limit, past which it refuses new connections and requests fail. Each Masterly Environment keeps its own pool, so the count grows with Environments and replicas as well as with load. | Check how many api and workers replicas are running and how many Environments the install hosts. Size the server up (a larger SKU has a higher default limit) or raise its `max_connections` parameter. |
-| `postgres-iops` | Postgres `disk_iops_consumed_percentage` averages above the threshold for 15 minutes | `alert_postgres_iops_percent` (80) | The disk is near the IOPS its storage tier provides. At the limit, I/O queues and every query slows at once. | Raise `postgres_storage_mb` (IOPS grow with the storage size) or the server's storage performance tier. |
+| `postgres-iops` | Postgres `disk_iops_consumed_percentage` averages above the threshold for 15 minutes | `alert_postgres_iops_percent` (80) | The disk is near the IOPS its storage tier provides. At the limit, I/O queues and every query slows at once. | Raise `postgres_storage_mb` (IOPS grow with the storage size) or set `postgres_storage_tier` for a higher storage performance tier. |
 | `servicebus-dead-letters` | The `masterly-jobs` queue's dead-letter sub-queue holds more messages than the threshold (`enable_service_bus` only) | `alert_servicebus_dead_letter_threshold` (0) | A worker failed to process a job notification ten times and Service Bus set it aside. The jobs themselves are still in the Environment's database, but the message that should have woken a worker for them is gone, so work can wait with nothing else reporting it. | Read the dead-letter reason on the messages and the `ca-workers` logs around that time. Resubmit the messages once the cause is fixed, or remove them. The alert stays active while dead-lettered messages remain, and clears when they are gone. |
 | `api-latency` | The 95th percentile of the api's own request durations exceeds the threshold over 15 minutes, with at least 50 requests in that window | `alert_api_p95_ms` (2000) | Requests are slowing under load. The duration is measured inside the api, so clients see at least this much. Bulk exports, the assistant's streaming chat and the MCP channel are left out, because their duration is the size of the answer. | Look at the Postgres load alerts first — a slow database is the usual cause. Then find the slow routes in the workspace: the console log for `ca-api` carries one `<METHOD> <route> -> <status> in <ms>ms` line per request, in `ContainerAppConsoleLogs` (column `Log`). The default is a placeholder: set it from a load test of your install. |
 | `workers-memory` | A `ca-workers` replica's memory working set rises above the threshold's share of its memory, at any point in 15 minutes (`enable_workers` only) | `alert_workers_memory_percent` (85) | A worker is close to its memory limit. A replica that reaches it is stopped mid-job, and the job is retried against the same data. | Find the job kind running at the time in the `ca-workers` logs. Split the work (smaller ingest batches) or give the workers more memory. |

@@ -147,6 +147,9 @@ module "workers" {
   tags = local.tags
 
   depends_on = [
+    # The :6432 URL must not reach a revision before PgBouncer listens and the NSG admits it.
+    azurerm_postgresql_flexible_server_configuration.pgbouncer,
+    azurerm_network_security_group.private_endpoints,
     azurerm_private_endpoint.postgres,
     azurerm_private_dns_zone_virtual_network_link.postgres,
     azurerm_private_endpoint.redis,
