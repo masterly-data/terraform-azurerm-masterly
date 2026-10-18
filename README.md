@@ -574,8 +574,9 @@ install departs from it only when you say so; and one, the runtime subnet's netw
 group, is a deliberate design choice. Each is listed below with what it is, why it holds or
 why you might choose it, and what you can do to follow Azure's recommendation. Making Azure's
 recommendation the default is tracked work for Service Bus and geo-redundant backup, and this
-section changes as each one is closed. The network security group is not tracked work: a
-public environment needs it, and you follow Azure's recommendation by choosing a private one.
+section changes as each one is closed. The network security group's Internet rule is not
+tracked work: a public environment needs it, and you follow Azure's recommendation by choosing
+an internal environment (`aca_internal_load_balancer = true`).
 
 Azure Policy and Microsoft Defender for Cloud can report these. Each item names the Azure
 Policy built-in definitions that evaluate it, by display name and definition ID, or says that
