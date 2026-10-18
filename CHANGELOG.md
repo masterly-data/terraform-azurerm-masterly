@@ -31,7 +31,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   the endpoints subnet admits 6432. Refused on a burstable (`B_*`) SKU, with
   `external_database_url`, and when `postgres_server_parameters` sets a `pgbouncer.*` key the module
   owns. Needs an api image that carries MAS-1615 (masterly-application-backend PR #488).
-  See "Connection budget" in the README. Off changes nothing.
+  Turning it back off interrupts the database connection during the rollout. See "Connection
+  budget" in the README. Off changes nothing.
 - `alerts_routed_externally` (default `false`): the escape hatch for the production
   notification-target check. Set it when alerts are routed outside Terraform, for example by an
   Azure Policy or subscription-level alert processing rules. It creates and changes no resource.

@@ -313,9 +313,11 @@ the paired region; see [the departures section](#geo-redundant-backup-is-on-only
 server parameters; see "Diagnostics + alerts" below),
 `postgres_auto_grow` (on by default in production: Azure grows the disk before it fills, so a
 full disk does not make the server read-only; **grown storage cannot be shrunk**, and the
-module never plans `postgres_storage_mb` below the server's real size) and
+module never plans `postgres_storage_mb` below the server's real size),
 `postgres_storage_tier` (the storage performance tier, P4 to P80; unset keeps Azure's default
-for the size, and the tier must suit `postgres_storage_mb`). Flipping an install from starter to BYO-DB **plans the destruction of the starter
+for the size, and the tier must suit `postgres_storage_mb`) and `postgres_pgbouncer` (the
+built-in PgBouncer in transaction mode; needs a non-burstable SKU; see
+[Connection budget](#connection-budget)). Flipping an install from starter to BYO-DB **plans the destruction of the starter
 server** — migrate your data first; the plan makes it visible.
 
 A BYO-DB database on a **private** address — reached over peering or a private endpoint — is
@@ -859,6 +861,16 @@ burstable (`B_*`) SKUs, and the input is refused with `external_database_url`.
 ignores `MASTERLY_DATABASE_POOLER` and fails through the pooler. All three settings change in
 one apply, so roll the api image first.
 
+**Turning it off interrupts the database connection during the rollout.** When the module builds
+the network, the apply on turn-on updates the endpoints' network security group to admit 6432 and
+turns PgBouncer on before the apps roll to the :6432 URL. Setting `postgres_pgbouncer` back to
+`false` keeps that order: the network security group drops 6432 first, and only then do `ca-api`
+and `ca-workers` roll to a revision on 5432. Until the new revisions are healthy, the running ones
+cannot open new connections to the pooler. PgBouncer itself is switched off only after the apps
+have moved. Turn it off in a maintenance window. With injected subnets the 6432 rule is yours
+(see [docs/networking.md](docs/networking.md#network-security-baseline)): add it before turning
+the input on, and remove it only after the apps have rolled to 5432.
+
 Per process and Environment:
 
 - Through the pooler (6432): the session pool, 5 + 10 (pool size plus overflow) = up to 15
@@ -872,19 +884,20 @@ license claim, not a module input):
     processes          = api replicas + workers replicas
     pooler clients     = processes x Environments x 15
     direct on 5432     = processes x Environments x 5
-    pooler server side = Environments x pgbouncer.default_pool_size (Azure's default: 50)
+    pooler server side = (Environments + 1) x pgbouncer.default_pool_size (Azure's default: 50)
 
 The pooler clients do not count against `max_connections`, but the pooler's own server-side
 connections do. Each Environment is a separate database, so PgBouncer opens a separate server pool
-for it, up to `pgbouncer.default_pool_size` connections (the module does not set it; the default
-is 50, and you can change it through `postgres_server_parameters`).
+for it, plus one for the install-level `postgres` database that `MASTERLY_DATABASE_URL` names.
+Each pool holds up to `pgbouncer.default_pool_size` connections (the module does not set it; the
+default is 50, and you can change it through `postgres_server_parameters`).
 
 *Worked example, `GP_Standard_D2ds_v5`* (8 GiB, default `max_connections` 859): 3 api and 2
 workers replicas make 5 processes; with 4 Environments that is 5 x 4 x 15 = 300 pooler client
 connections and 5 x 4 x 5 = 100 direct connections. The 100 direct connections count against 859
-in full, and so do the pooler's server-side connections: up to 4 x 50 = 200. Together up to 300 of
-859. The 300 pooler clients themselves do not count, since PgBouncer multiplexes them. Without the
-pooler the same install would open 5 x 4 x (15 + 5) = 400.
+in full, and so do the pooler's server-side connections: up to (4 + 1) x 50 = 250. Together up to
+350 of 859. The 300 pooler clients themselves do not count, since PgBouncer multiplexes them.
+Without the pooler the same install would open 5 x 4 x (15 + 5) = 400.
 
 *Worked example, `B_Standard_B1ms`* (`max_connections` 50): there is no built-in PgBouncer, so
 every connection is a server connection. 1 api and 1 workers replica make 2 processes; with 2
