@@ -124,6 +124,27 @@ locals {
     : var.mode == "production" && lookup(local.postgres_geo_backup_supported, local.location_key, false)
   )
 
+  # The customer's explicit choice wins. Unset, production turns storage autogrow on, because a
+  # full disk makes the server read-only and stops every write; evaluation installs leave it off.
+  postgres_auto_grow = var.postgres_auto_grow != null ? var.postgres_auto_grow : var.mode == "production"
+
+  # The servers of this install's data resource group, found by name. Empty on a new install.
+  # Separate from entra-auth.tf's existing_postgres lookup, which is skipped when database_auth
+  # is "password" and which the authentication preconditions read.
+  existing_postgres_storage_lookup = [
+    for r in flatten(data.azurerm_resources.postgres_storage[*].resources) : r
+    if lower(r.resource_group_name) == lower(local.rg_data_name) && startswith(r.name, "psql-${var.name_prefix}-")
+  ]
+
+  # Never plan less storage than the server holds. With autogrow on, Azure grows the disk past
+  # postgres_storage_mb, and a configured value below the real size would plan a shrink, which
+  # Azure refuses and the provider answers by replacing the server and its databases. Raising
+  # postgres_storage_mb above the real size still grows the disk.
+  postgres_storage_mb = max(
+    var.postgres_storage_mb,
+    try(data.azurerm_postgresql_flexible_server.existing[0].storage_mb, 0),
+  )
+
   # One install is one data plane in one location, so the only geo whose data it can hold is
   # its own. Defaulting to that makes the safe configuration the automatic one.
   allowed_regions = var.allowed_regions != null ? var.allowed_regions : [var.masterly_region]
@@ -655,6 +676,21 @@ resource "random_password" "postgres_admin" {
   special = false # keeps the DSN URL-safe
 }
 
+# The install's existing server, if any, read for its real storage size (local.postgres_storage_mb).
+# The listing runs first because reading a server that does not exist is an error.
+data "azurerm_resources" "postgres_storage" {
+  count = local.provision_postgres ? 1 : 0
+
+  type = "Microsoft.DBforPostgreSQL/flexibleServers"
+}
+
+data "azurerm_postgresql_flexible_server" "existing" {
+  count = length(local.existing_postgres_storage_lookup) > 0 ? 1 : 0
+
+  name                = local.existing_postgres_storage_lookup[0].name
+  resource_group_name = local.rg_data_name
+}
+
 resource "azurerm_postgresql_flexible_server" "this" {
   count = local.provision_postgres ? 1 : 0
 
@@ -662,9 +698,15 @@ resource "azurerm_postgresql_flexible_server" "this" {
   resource_group_name = azurerm_resource_group.data.name
   location            = var.location
 
-  version    = var.postgres_version
-  sku_name   = var.postgres_sku_name
-  storage_mb = var.postgres_storage_mb
+  version  = var.postgres_version
+  sku_name = var.postgres_sku_name
+
+  # Never below the real size (local.postgres_storage_mb). Grown storage cannot be shrunk.
+  storage_mb = local.postgres_storage_mb
+
+  # In-place updates, not ForceNew. Unset tier sends null, which keeps the provider's computed value.
+  auto_grow_enabled = local.postgres_auto_grow
+  storage_tier      = var.postgres_storage_tier
 
   # Password or Microsoft Entra ID (entra-auth.tf). Both are changed in place on an existing
   # server; neither replaces it.

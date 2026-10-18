@@ -6600,3 +6600,239 @@ run "service_bus_without_workers_plans_no_scaler_grant" {
     error_message = "Without enable_workers there is no queue scale rule and no Data Owner grant."
   }
 }
+
+# Postgres storage autogrow and storage performance tier. Both update the server in place (they
+# are not ForceNew in azurerm), and neither applies to BYO-DB.
+run "postgres_auto_grow_off_by_default_in_evaluation" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].auto_grow_enabled == false
+    error_message = "Unset, an evaluation install must leave storage autogrow off."
+  }
+
+  assert {
+    condition     = var.postgres_storage_tier == null
+    error_message = "Unset, postgres_storage_tier must stay null so Azure's default tier is kept."
+  }
+}
+
+run "postgres_auto_grow_on_by_default_in_production" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 2
+
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].auto_grow_enabled == true
+    error_message = "Unset, a production install with the starter server must turn storage autogrow on."
+  }
+}
+
+run "postgres_auto_grow_false_wins_in_production" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 2
+
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+    postgres_auto_grow             = false
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].auto_grow_enabled == false
+    error_message = "postgres_auto_grow = false must win over the production default."
+  }
+}
+
+run "postgres_auto_grow_true_wins_in_evaluation" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_auto_grow    = true
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].auto_grow_enabled == true
+    error_message = "postgres_auto_grow = true must win over the evaluation default."
+  }
+}
+
+run "postgres_storage_tier_is_passed_through" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_storage_tier = "P30"
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].storage_tier == "P30"
+    error_message = "postgres_storage_tier must reach the server's storage_tier."
+  }
+}
+
+run "postgres_storage_tier_below_p4_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_storage_tier = "P5"
+  }
+
+  expect_failures = [var.postgres_storage_tier]
+}
+
+run "postgres_storage_tier_above_p80_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_storage_tier = "P90"
+  }
+
+  expect_failures = [var.postgres_storage_tier]
+}
+
+run "byo_db_ignores_postgres_storage_inputs" {
+  command = plan
+
+  variables {
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    postgres_auto_grow    = true
+    postgres_storage_tier = "P30"
+  }
+
+  assert {
+    condition     = length(azurerm_postgresql_flexible_server.this) == 0
+    error_message = "external_database_url must still suppress the starter server when the storage inputs are set."
+  }
+}
+
+# Azure has grown an existing server's disk past postgres_storage_mb. The plan must carry the
+# real size, never the smaller configured one: a shrink would replace the server and destroy
+# its databases.
+run "postgres_storage_never_planned_below_grown_size" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_storage_mb   = 32768
+  }
+
+  override_data {
+    target = data.azurerm_resources.postgres_storage
+    values = {
+      resources = [{
+        id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+        name                = "psql-masterly-abc123"
+        resource_group_name = "rg-masterly-data"
+        type                = "Microsoft.DBforPostgreSQL/flexibleServers"
+        location            = "swedencentral"
+        tags                = {}
+      }]
+    }
+  }
+
+  override_data {
+    target = data.azurerm_postgresql_flexible_server.existing
+    values = {
+      storage_mb = 131072
+    }
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].storage_mb == 131072
+    error_message = "A server Azure has grown to 131072 MB must not be planned at the configured 32768 MB."
+  }
+}
+
+# ...and raising postgres_storage_mb above the real size still grows the disk.
+run "postgres_storage_mb_above_grown_size_still_grows" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_storage_mb   = 262144
+  }
+
+  override_data {
+    target = data.azurerm_resources.postgres_storage
+    values = {
+      resources = [{
+        id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
+        name                = "psql-masterly-abc123"
+        resource_group_name = "rg-masterly-data"
+        type                = "Microsoft.DBforPostgreSQL/flexibleServers"
+        location            = "swedencentral"
+        tags                = {}
+      }]
+    }
+  }
+
+  override_data {
+    target = data.azurerm_postgresql_flexible_server.existing
+    values = {
+      storage_mb = 131072
+    }
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].storage_mb == 262144
+    error_message = "postgres_storage_mb above the server's real size must still grow the disk."
+  }
+}
