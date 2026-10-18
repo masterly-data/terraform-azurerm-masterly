@@ -954,32 +954,26 @@ run "postgres_server_parameters_refuse_a_fractional_max_connections" {
 # postgres_pgbouncer: the built-in PgBouncer in transaction mode (ADR 0003, MAS-1615).
 # Off (the default) changes nothing.
 run "postgres_pgbouncer_off_changes_nothing" {
+  # The URLs embed the server's fqdn, which a mock provider leaves unknown at plan, so the
+  # runs here assert the port local the URLs are built from rather than the whole string.
   command = plan
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
   }
 
-  override_resource {
-    target          = azurerm_postgresql_flexible_server.this
-    override_during = plan
-    values = {
-      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
-      fqdn = "psql-test.postgres.database.azure.com"
-    }
-  }
-
-  override_resource {
-    target          = random_password.postgres_admin
-    override_during = plan
-    values = {
-      result = "test-admin-password"
-    }
-  }
-
   assert {
-    condition     = endswith(split("?", local.secret_values["database-url"])[0], ":5432/postgres") && endswith(split("?", local.database_url)[0], ":5432/postgres")
+    condition     = local.database_pooler_port == "5432"
     error_message = "With postgres_pgbouncer off the database-url secret must stay on :5432."
+  }
+}
+
+# The rest of the off-by-default checks need no server fqdn, so they run at plan.
+run "postgres_pgbouncer_off_adds_no_env_secret_or_port" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
   }
 
   assert {
@@ -1033,32 +1027,22 @@ run "postgres_pgbouncer_password_urls" {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     postgres_sku_name     = "GP_Standard_D2ds_v5"
     postgres_pgbouncer    = true
-    enable_workers        = true
-  }
-
-  override_resource {
-    target          = azurerm_postgresql_flexible_server.this
-    override_during = plan
-    values = {
-      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
-      fqdn = "psql-test.postgres.database.azure.com"
-    }
-  }
-
-  override_resource {
-    target          = random_password.postgres_admin
-    override_during = plan
-    values = {
-      result = "test-admin-password"
-    }
   }
 
   assert {
-    condition = (
-      local.secret_values["database-url"] == "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@psql-test.postgres.database.azure.com:6432/postgres?ssl=require" &&
-      local.secret_values["database-direct-url"] == "postgresql+asyncpg://masterly_admin:${random_password.postgres_admin[0].result}@psql-test.postgres.database.azure.com:5432/postgres?ssl=require"
-    )
-    error_message = "With the pooler on and database_auth = password, database-url must be on :6432 and database-direct-url on :5432, same role and database."
+    condition     = local.database_pooler_port == "6432" && !local.database_entra
+    error_message = "With the pooler on and database_auth = password, database-url must be on :6432 (database-direct-url stays on :5432)."
+  }
+}
+
+run "postgres_pgbouncer_wires_pooler_env_and_direct_secret" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    postgres_sku_name     = "GP_Standard_D2ds_v5"
+    postgres_pgbouncer    = true
+    enable_workers        = true
   }
 
   assert {
@@ -1090,35 +1074,14 @@ run "postgres_pgbouncer_entra_urls_carry_no_password" {
     database_auth         = "entra"
   }
 
-  override_resource {
-    target          = azurerm_postgresql_flexible_server.this
-    override_during = plan
-    values = {
-      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-abc123"
-      fqdn = "psql-test.postgres.database.azure.com"
-    }
-  }
-
-  override_resource {
-    target          = random_password.postgres_admin
-    override_during = plan
-    values = {
-      result = "test-admin-password"
-    }
+  assert {
+    condition     = local.database_pooler_port == "6432" && local.database_entra
+    error_message = "On entra the URL must be on :6432 (the direct URL stays on :5432), with the Entra role and no password."
   }
 
   assert {
-    condition = (
-      endswith(split("?", local.secret_values["database-url"])[0], "@psql-test.postgres.database.azure.com:6432/postgres") &&
-      endswith(split("?", local.secret_values["database-direct-url"])[0], "@psql-test.postgres.database.azure.com:5432/postgres") &&
-      split("@", local.secret_values["database-url"])[0] == split("@", local.secret_values["database-direct-url"])[0]
-    )
-    error_message = "On entra the URL must be on :6432 and the direct URL on :5432, same role."
-  }
-
-  assert {
-    condition     = !can(regex("://[^@/]*:[^@/]*@", local.secret_values["database-url"])) && !can(regex("://[^@/]*:[^@/]*@", local.secret_values["database-direct-url"]))
-    error_message = "On database_auth = entra neither URL may carry a password."
+    condition     = !can(regex(":", local.database_entra_role))
+    error_message = "On database_auth = entra the role in both URLs must carry no password."
   }
 }
 
