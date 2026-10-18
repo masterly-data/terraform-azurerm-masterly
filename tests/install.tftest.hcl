@@ -5262,10 +5262,20 @@ run "availability_alerts_exist_with_diagnostics_off" {
       length(azurerm_monitor_metric_alert.postgres_cpu) == 0 &&
       length(azurerm_monitor_metric_alert.postgres_connections) == 0 &&
       length(azurerm_monitor_metric_alert.postgres_iops) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_storage) == 0 &&
+      length(azurerm_monitor_metric_alert.postgres_cpu_credits) == 0 &&
       length(azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent) == 0 &&
       length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 0 &&
       length(azurerm_monitor_diagnostic_setting.postgres) == 0 &&
       length(azurerm_monitor_diagnostic_setting.app) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.redis) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.redis_database) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.key_vault) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.service_bus) == 0 &&
+      length(azurerm_monitor_metric_alert.redis_evictions) == 0 &&
+      length(azurerm_monitor_metric_alert.redis_memory) == 0 &&
+      length(azurerm_monitor_metric_alert.servicebus_dead_letters) == 0 &&
+      length(azurerm_monitor_metric_alert.workers_memory) == 0 &&
       length(azurerm_monitor_action_group.alerts) == 0
     )
     error_message = "With diagnostics off, the saturation and load alerts, postgres-silent, the absence rules, the diagnostic settings and (with no alert_email) the action group must not be created."
@@ -5312,8 +5322,9 @@ run "workers_get_a_no_replica_alert_with_diagnostics_off" {
 }
 
 # alert_email with diagnostics explicitly off still creates the module's action group, and the
-# availability alerts are created (their action blocks reference its id, which is unknown at
-# plan under mock providers, so the id itself is asserted in the next run with a given one).
+# availability alerts reference it. The group's id is computed, so `override_resource` pins it
+# to a known value; with it pinned, each alert's action is compared to the group's own id
+# rather than trusted by its presence.
 run "action_group_exists_with_diagnostics_off" {
   command = plan
 
@@ -5321,6 +5332,14 @@ run "action_group_exists_with_diagnostics_off" {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_diagnostics    = false
     alert_email           = "ops@example.com"
+  }
+
+  override_resource {
+    target          = azurerm_monitor_action_group.alerts
+    override_during = plan
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-monitor/providers/microsoft.insights/actionGroups/ag-masterly-alerts"
+    }
   }
 
   assert {
@@ -5332,6 +5351,16 @@ run "action_group_exists_with_diagnostics_off" {
       length(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready) == 1
     )
     error_message = "alert_email must create ag-<prefix>-alerts with diagnostics off, and the availability alerts must exist beside it."
+  }
+
+  assert {
+    condition = (
+      contains([for a in azurerm_monitor_metric_alert.postgres_unavailable[0].action : a.action_group_id], azurerm_monitor_action_group.alerts[0].id) &&
+      contains([for a in azurerm_monitor_metric_alert.app_unavailable["api"].action : a.action_group_id], azurerm_monitor_action_group.alerts[0].id) &&
+      contains([for a in azurerm_monitor_metric_alert.app_unavailable["frontend"].action : a.action_group_id], azurerm_monitor_action_group.alerts[0].id) &&
+      contains(azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready[0].action[0].action_groups, azurerm_monitor_action_group.alerts[0].id)
+    )
+    error_message = "With alert_email set, postgres-unavailable, each <app>-unavailable and app-not-ready must route to the module's action group."
   }
 }
 

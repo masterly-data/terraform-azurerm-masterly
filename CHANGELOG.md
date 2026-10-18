@@ -152,8 +152,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
-- **The availability alerts and the action group no longer need `enable_diagnostics`, and a
-  production plan with no notification target is refused.** `postgres-unavailable`,
+- **Upgrade action for production installs with no notification target: set `alert_email` or
+  `alert_action_group_id`, or `alerts_routed_externally = true`, before the next plan.** The
+  availability alerts and the action group no longer need `enable_diagnostics`, and a
+  production plan with no notification target is refused. `postgres-unavailable`,
   `<app>-unavailable` (api, frontend and, with `enable_workers`, workers), `app-not-ready` and
   the module's `ag-<prefix>-alerts` action group are now created in every mode (ADR 0080,
   amendment of 2026-10-18). **An existing install's next apply creates them with no variable
