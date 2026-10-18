@@ -35,7 +35,7 @@ variables {
   key_vault_deployer_ip_rules = ["203.0.113.7"]
 
   # A production plan with no notification target is refused (alert_email's validation), so
-  # every production run states one. Runs that assert on the target override it; the refusal
+  # every production run states one. Runs about the target override it; the refusal
   # has its own runs below.
   alert_email = "ops@example.com"
 }
@@ -5322,8 +5322,8 @@ run "workers_get_a_no_replica_alert_with_diagnostics_off" {
 }
 
 # alert_email with diagnostics explicitly off still creates the module's action group, and the
-# availability alerts exist beside it. That each alert's action references the group's id is
-# asserted in availability_routing.tftest.hcl, where an apply makes the computed id known.
+# availability alerts exist beside it. availability_routing.tftest.hcl checks that each alert's
+# action references the group's id, through an apply that makes the computed id known.
 run "action_group_exists_with_diagnostics_off" {
   command = plan
 
