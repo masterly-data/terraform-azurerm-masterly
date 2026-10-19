@@ -48,7 +48,9 @@ every newer release must, so a release cut without it fails here; and it never d
 The manifest's `image_floors` states, per app, the oldest image an install can run and the image
 tags that have no published image (MAS-1793). The README's prose about them is rendered from it
 like the release table, and no release may name an image below its app's floor or a tag listed
-as having no image: a release recorded against either contradicts the floor.
+as having no image: a release recorded against either contradicts the floor. The exception is a
+release older than the newest whose entry records a `known_issue`: it was cut against an image
+that later proved never to have been published, and says so. The newest release has no exception.
 
 The shape the manifest guarantees to whoever parses it — field by field, and what may change
 without warning — is `docs/release-manifest.md`. That document and this script move together.
@@ -205,6 +207,14 @@ def load_manifest() -> dict:
                     f"CLAIMS_VERSION in that image's licence verify half, or 0 for a build that "
                     f"predates it."
                 )
+        if "known_issue" in entry:
+            value = entry["known_issue"]
+            if not isinstance(value, str) or not value.strip():
+                raise CheckFailed(
+                    f"{where}: 'known_issue' is {value!r}, which is not a non-empty string. It "
+                    f"says, in plain text for people, what is wrong with the release and which "
+                    f"release to move to."
+                )
 
     latest = manifest["latest"]
     if latest not in releases:
@@ -340,7 +350,8 @@ def check_bump(manifest: dict) -> None:
     module patch moves its images by patches at most, and a customer who takes module patches
     only (`~> X.Y.0`) never receives an image minor through one. The comparison is between
     `latest` and the release just below it; released entries are never rewritten, so the
-    newest pair is the one a release commit can still change.
+    newest pair is the one a release commit can still change (a `known_issue` may be added to an
+    older entry, and nothing else).
     """
     releases = manifest["releases"]
     if len(releases) < 2:
@@ -435,7 +446,10 @@ def check_image_floors(manifest: dict) -> None:
     registry, so a pin naming one fails at pull. Both are stated once, in the manifest, and the
     README's prose about them is rendered from it (MAS-1793). A release recorded as tested against
     an image below its app's floor, or against a tag with no image, contradicts the floor, so one
-    of the two is wrong and the check refuses both.
+    of the two is wrong and the check refuses both. The one exception: a release older than the
+    newest may name a tag with no image when its entry records a `known_issue`, because such a
+    release was cut against an image that later proved never to have been published. The newest
+    release may not, with or without one.
     """
     where = f"{MANIFEST_PATH.name}: 'image_floors'"
     floors = manifest.get("image_floors")
@@ -477,11 +491,21 @@ def check_image_floors(manifest: dict) -> None:
             here = f"{MANIFEST_PATH.name}: release {version} names {image}"
             tag = IMAGE_RE.match(image).group("tag")  # load_manifest has already proved the shape
             if tag in unpublished:
-                raise CheckFailed(
-                    f"{here}, but 'image_floors' lists {name} {tag} as having no published "
-                    f"image. A release cannot have been tested against an image nobody can pull, "
-                    f"so one of the two is wrong."
-                )
+                entry = manifest["releases"][version]
+                if version == manifest["latest"]:
+                    raise CheckFailed(
+                        f"{here}, but 'image_floors' lists {name} {tag} as having no published "
+                        f"image. The newest release is what an install is told to pin, and a "
+                        f"release cannot have been tested against an image nobody can pull, so "
+                        f"one of the two is wrong (a 'known_issue' does not excuse the newest)."
+                    )
+                if "known_issue" not in entry:
+                    raise CheckFailed(
+                        f"{here}, but 'image_floors' lists {name} {tag} as having no published "
+                        f"image. An older release may name such a tag only when its entry "
+                        f"records a 'known_issue' saying so; add one, or fix the floor, as "
+                        f"one of the two is wrong."
+                    )
             match = SEMVER_RE.match(tag.removeprefix("v"))
             if not match:
                 raise CheckFailed(
@@ -1065,7 +1089,46 @@ def _floor_scenarios(canonical_readme: str) -> list[tuple]:
         },
     }
     assert semver("1.9.0") < semver(oldest)
+
+    def older_on_unpublished(**entry_changes) -> dict:
+        """The oldest release re-recorded against the unpublished tag, with `entry_changes`."""
+        manifest = copy.deepcopy(FIXTURE_MANIFEST)
+        released = manifest["releases"][oldest]
+        released["images"]["api"] = f"registry.example.invalid/api:{unpublished}"
+        released.update(entry_changes)
+        return manifest
+
+    with_issue = older_on_unpublished(known_issue="its api image was never published")
+    newest_with_issue = _with_image(
+        newest, "api", f"registry.example.invalid/api:{unpublished}"
+    )
+    newest_with_issue["releases"][newest]["known_issue"] = "its api image was never published"
     return [
+        (
+            "an older release names an unpublished tag and records a known issue",
+            with_issue, log, render_readme(with_issue, FIXTURE_README_SKELETON), [], 0,
+            FIXTURE_MANIFEST["module"],
+        ),
+        (
+            "an older release names an unpublished tag without recording a known issue",
+            older_on_unpublished(), log,
+            render_readme(older_on_unpublished(), FIXTURE_README_SKELETON), [], 1,
+            "records a 'known_issue'",
+        ),
+        (
+            "the newest release names an unpublished tag even with a known issue",
+            newest_with_issue, log, render_readme(newest_with_issue, FIXTURE_README_SKELETON),
+            [], 1, "does not excuse the newest",
+        ),
+        (
+            "a known issue that is empty is refused",
+            older_on_unpublished(known_issue=" "), log, ok, [], 1,
+            "'known_issue' is ' '",
+        ),
+        (
+            "a known issue that is not a string is refused",
+            older_on_unpublished(known_issue=3), log, ok, [], 1, "'known_issue' is 3",
+        ),
         (
             "the manifest states no image floors",
             {k: v for k, v in FIXTURE_MANIFEST.items() if k != "image_floors"}, log, ok, [], 1,

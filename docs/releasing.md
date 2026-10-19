@@ -44,7 +44,7 @@ reads this list, so whoever runs `cut-release` reads it first.
 
 ### Open
 
-**The `ca-workers` sizing and scaling inputs** (MAS-1296; in `Unreleased` in the
+**The `ca-workers` sizing and scaling inputs** (MAS-1296; in 0.18.0 in the
 [changelog](../CHANGELOG.md)). On a live install with `enable_service_bus` and `enable_workers`
 on, planned and applied from the candidate:
 

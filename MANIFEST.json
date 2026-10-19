@@ -1,13 +1,13 @@
 {
-  "$comment": "The release manifest for terraform-azurerm-masterly. One entry per released module version, keyed by that version - the module version is the one customer-facing version (ADR 0062). A release is cut in a commit that merges to main before its vX.Y.Z tag exists, so on main the newest entries may not be published yet; a version is published once its tag exists, and the file at a tag lists only published versions. Each entry names the api and frontend images that module version was released against: the pair Masterly's own reference install had applied when the release was cut, optionally the digests of those builds, and the licence claims version the api image verifies (api_claims_version; it may be absent from a release cut before the field, and then reads as 0). image_floors states, per app, the oldest image an install can run and the image tags that have no published image. Machine-readable on purpose - the README, the public docs and any pinned install are meant to READ this, never to retype it. The shape is a published contract: docs/release-manifest.md documents every field, what is stable and what may be added. Checked by scripts/check_release_manifest.py; see 'Cutting a release' in the README.",
+  "$comment": "The release manifest for terraform-azurerm-masterly. One entry per released module version, keyed by that version - the module version is the one customer-facing version (ADR 0062). A release is cut in a commit that merges to main before its vX.Y.Z tag exists, so on main the newest entries may not be published yet; a version is published once its tag exists, and the file at a tag lists only published versions. Each entry names the api and frontend images that module version was released against: the pair Masterly's own reference install had applied when the release was cut, optionally the digests of those builds, optionally a known_issue on a release later found faulty, and the licence claims version the api image verifies (api_claims_version; it may be absent from a release cut before the field, and then reads as 0). image_floors states, per app, the oldest image an install can run and the image tags that have no published image. Machine-readable on purpose - the README, the public docs and any pinned install are meant to READ this, never to retype it. The shape is a published contract: docs/release-manifest.md documents every field, what is stable and what may be added. Checked by scripts/check_release_manifest.py; see 'Cutting a release' in the README.",
   "schema_version": 1,
   "module": "masterly-data/masterly/azurerm",
-  "latest": "0.17.0",
+  "latest": "0.18.0",
   "image_floors": {
     "api": {
       "minimum": "v0.132.2",
       "below_minimum": "registers no job handlers on ca-workers, so the pipeline is silently inert",
-      "unpublished": ["v0.133.1"]
+      "unpublished": ["v0.133.9", "v0.133.10", "v0.133.11", "v0.133.12"]
     },
     "frontend": {
       "minimum": "v0.138.2",
@@ -15,8 +15,21 @@
     }
   },
   "releases": {
+    "0.18.0": {
+      "date": "2026-10-19",
+      "images": {
+        "api": "masterly.azurecr.io/api:v0.133.13",
+        "frontend": "masterly.azurecr.io/frontend:v0.141.0"
+      },
+      "digests": {
+        "api": "sha256:55618dedac57e3e4eb70ecc0f9f3f49510e1ddf1c8f0679a517d04440013ba86",
+        "frontend": "sha256:6764d56b54895927aee5ae0911bbf095bcf843ef329b3b884ee33997c17789e9"
+      },
+      "api_claims_version": 0
+    },
     "0.17.0": {
       "date": "2026-10-05",
+      "known_issue": "Its api image masterly.azurecr.io/api:v0.133.11 was never published, so an install pinned to 0.17.0 cannot pull it. Move to 0.18.0.",
       "images": {
         "api": "masterly.azurecr.io/api:v0.133.11",
         "frontend": "masterly.azurecr.io/frontend:v0.139.5"
