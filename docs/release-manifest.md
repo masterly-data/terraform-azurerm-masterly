@@ -96,6 +96,7 @@ your own source is the defect this manifest exists to kill.
 | `releases["X.Y.Z"].digests.api` | string | with `digests` | `sha256:` and 64 lowercase hex characters: the `api` build the release candidate was tested with. |
 | `releases["X.Y.Z"].digests.frontend` | string | with `digests` | Same form, for the `frontend` image. |
 | `releases["X.Y.Z"].api_claims_version` | integer | see "The api claims version" | The licence claims version the release's `api` image verifies, `0` or more. May be absent from releases cut before the field existed; read an absent value as `0`. |
+| `releases["X.Y.Z"].known_issue` | string | no | Present when the release was later found faulty, as plain text for people: what is wrong and which release to move to. Do not parse it. See "The known issue". |
 | `image_floors` | object | no | The oldest image of each app an install can run, and the image tags with no published image, keyed by image name (`api`, `frontend`). Added within `schema_version` 1; absent from the file at tags cut before it existed. See "The image floors". |
 | `image_floors.<image>.minimum` | string | with the image | The floor: the oldest image tag, `vX.Y.Z`, an install can run for that app. |
 | `image_floors.<image>.below_minimum` | string | with the image | What an image older than `minimum` does wrong, as plain text completing "an image older than the floor …". For people; do not parse it. |
@@ -137,7 +138,7 @@ is how an entry says which builds those were. The image values stay `registry/re
 the tag is still what an install pins, and the digest is the build that tag was recorded against.
 
 When an entry has `digests`, it has one for every image it names, and no other. Older releases
-have none, and none will be added to them after the fact.
+have none, and no `digests` will be added to them after the fact.
 
 What the release check proves about digests on every pull request is their shape: both present,
 each a `sha256:` digest, and not the same digest for two images. It makes no network call, so it
@@ -183,9 +184,22 @@ Use it to refuse, before an apply, an `api_image` or `frontend_image` older than
 app with no entry has no stated floor; do not read that as permission to pin any image.
 
 The release check holds every release entry to the floors: no release names an image below its
-app's `minimum`, or a tag in its `unpublished` list, because a release recorded as tested against
-either would contradict the floor. A floor therefore never rises above an image a recorded
-release names. The README's statement of the floors is generated from this key.
+app's `minimum`, and the newest release names no tag in `unpublished`, because a release recorded
+as tested against either would contradict the floor. A floor therefore never rises above an image
+a recorded release names. An older release may name an `unpublished` tag, but only when its entry
+records a `known_issue`: it was cut against an image that turned out never to have been published.
+The README's statement of the floors is generated from this key.
+
+## The known issue
+
+`known_issue` was added within `schema_version` 1, as the compatibility rules below allow: a new
+key inside a release entry. A consumer that ignores keys it does not recognise needs no change.
+
+An entry carries it when its release was later found faulty, for example when an image it names
+turned out never to have been published. It is plain text for people, saying what is wrong and
+which release to move to; do not parse it. Do not pin the image pair of an entry that has one
+without reading it. It is the one field that may be added to an entry after that release is
+published, on `main` only: the file at the release's own tag does not carry it.
 
 ## Compatibility
 

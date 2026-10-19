@@ -11,15 +11,15 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.17"
+  version = "~> 0.18"
 }
 ```
 
 <!-- release-manifest:pins:begin -->
-Pin a version. `version = "~> 0.17.0"` takes patches of 0.17 only: releases that
+Pin a version. `version = "~> 0.18.0"` takes patches of 0.18 only: releases that
 add no capability, no new input or required setting and no database migration, so you
 can take them without reading the changelog. Use it if that is all you want to receive.
-`version = "~> 0.17"`, as in the examples on this page, also takes every later
+`version = "~> 0.18"`, as in the examples on this page, also takes every later
 0.x minor. Before 1.0.0 a minor may carry a breaking change, listed under its own heading in
 the changelog, so read it before you take one.
 `=` pins one release exactly. [Versioning](#versioning) says what each kind of
@@ -60,7 +60,7 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.17"
+  version = "~> 0.18"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -76,8 +76,8 @@ module "masterly" {
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
   # The pair this module version was released against, from MANIFEST.json. Versioning names
   # the oldest image each app can run on, and the tags that have no published image.
-  api_image           = "masterly.azurecr.io/api:v0.133.11"
-  frontend_image      = "masterly.azurecr.io/frontend:v0.139.5"
+  api_image           = "masterly.azurecr.io/api:v0.133.13"
+  frontend_image      = "masterly.azurecr.io/frontend:v0.141.0"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -1612,6 +1612,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.18.0` | `masterly.azurecr.io/api:v0.133.13` | `masterly.azurecr.io/frontend:v0.141.0` | 2026-10-19 |
 | `0.17.0` | `masterly.azurecr.io/api:v0.133.11` | `masterly.azurecr.io/frontend:v0.139.5` | 2026-10-05 |
 | `0.16.0` | `masterly.azurecr.io/api:v0.133.5` | `masterly.azurecr.io/frontend:v0.139.0` | 2026-09-24 |
 | `0.15.0` | `masterly.azurecr.io/api:v0.133.2` | `masterly.azurecr.io/frontend:v0.138.2` | 2026-09-07 |
@@ -1630,7 +1631,7 @@ you start from. The floors, and the image tags that have no published image, are
 manifest's `image_floors`:
 
 - An `api` image older than `v0.132.2` registers no job handlers on ca-workers, so the pipeline is silently inert.
-- The `api` tag `v0.133.1` has no published image.
+- The `api` tags `v0.133.9`, `v0.133.10`, `v0.133.11`, `v0.133.12` have no published image.
 - A `frontend` image older than `v0.138.2` leaves a fresh install unable to create its first Environment.
 <!-- release-manifest:floors:end -->
 

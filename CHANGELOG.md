@@ -22,6 +22,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-19
+
 ### Added
 
 - `postgres_pgbouncer` (default `false`), which turns on the starter Flexible Server's built-in
@@ -400,6 +402,16 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `enable_diagnostics = true` with a provisioned Postgres server could not apply on 0.16.0 and
   0.17.0. The rule now uses one evaluation period over a 45-minute window, and pages after 45
   minutes of silence where it previously intended about 40 (MAS-1531).
+
+- **0.17.0 pinned an `api` image that was never published.** Its manifest entry names
+  `masterly.azurecr.io/api:v0.133.11`, which has no image in the registry, so an install that
+  pins `api_image` to 0.17.0's pair cannot pull it. **Installs on 0.17.0 should move to 0.18.0**,
+  whose pair (`api:v0.133.13`, `frontend:v0.141.0`) is published. `MANIFEST.json` now lists the
+  `api` tags `v0.133.9` to `v0.133.12` as having no published image (and no longer lists
+  `v0.133.1`, which is published), and the 0.17.0 entry carries a `known_issue` saying so.
+  `scripts/check_release_manifest.py` lets a release older than the newest name an unpublished
+  tag only when its entry records a `known_issue`; the newest release still may not
+  ([docs/release-manifest.md](docs/release-manifest.md)).
 
 ## [0.17.0] - 2026-10-05
 
@@ -934,7 +946,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - The first public tag. The Terraform content was unchanged from the internal repository it was
   extracted from, api readiness-probe tolerances included, and `examples/production` was added.
 
-[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.18.0
 [0.17.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.17.0
 [0.16.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.16.0
 [0.15.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.15.0
