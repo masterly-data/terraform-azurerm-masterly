@@ -7633,9 +7633,11 @@ run "postgres_storage_mb_above_grown_size_still_grows" {
 #
 # An apply, and last in the file, because the scopes are computed: at plan they are unknown and
 # `override_during = plan` needs Terraform 1.11 while CI runs 1.10. It targets the frontend's
-# grants and so applies only what they depend on (the vault, its secrets and their inputs); the
-# vault gets a well-formed ID because the secrets and the deployer's grant parse it. Keep it
-# last: every run after it would plan against the state it leaves.
+# grants and so applies only what they depend on (the vault, its secrets and their inputs, the
+# Redis cache among them). Each of those gets a well-formed ID: the teardown at the end of the
+# file evaluates the whole configuration against this state, and mock IDs fail the provider's
+# own checks of the IDs one resource hands another. Keep it last: every run after it would
+# plan against the state it leaves.
 run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
   command = apply
 
@@ -7710,10 +7712,21 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
     }
   }
 
-  # The grants parse their scope, so each of the frontend's secrets gets its own ARM id.
+  # The Redis URL is one of the secrets, so the cache is applied too; its alerts, its access
+  # policy assignment and its private endpoint parse its ID at the teardown.
+  override_resource {
+    target = azurerm_redis_cache.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redis/redis-masterly-test"
+    }
+  }
+
+  # Every secret gets its own ARM id, which the frontend's grants are scoped to, and its own
+  # data-plane URL, which the apps' Key Vault references parse at the teardown.
   override_resource {
     target = azurerm_key_vault_secret.install["bff-shared-secret"]
     values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-bff-shared-secret"
       resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-bff-shared-secret"
     }
   }
@@ -7721,6 +7734,7 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
   override_resource {
     target = azurerm_key_vault_secret.install["registry-password"]
     values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-registry-password"
       resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-registry-password"
     }
   }
@@ -7728,7 +7742,56 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
   override_resource {
     target = azurerm_key_vault_secret.install["oidc-client-secret"]
     values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-oidc-client-secret"
       resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-oidc-client-secret"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.install["database-url"]
+    values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-database-url"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-database-url"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.install["session-secret"]
+    values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-session-secret"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-session-secret"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.install["license-token"]
+    values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-license-token"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-license-token"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.install["redis-url"]
+    values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-redis-url"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-redis-url"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.install["telemetry-client-secret"]
+    values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-telemetry-client-secret"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-telemetry-client-secret"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.install["breakglass-secret-hash"]
+    values = {
+      versionless_id          = "https://kv-masterly-test.vault.azure.net/secrets/install-breakglass-secret-hash"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-breakglass-secret-hash"
     }
   }
 
