@@ -335,15 +335,22 @@ resource "azurerm_role_assignment" "kv_secrets_officer_deployer" {
 }
 
 # The frontend resolves its own secrets (the BFF shared secret, and the OIDC client secret and
-# the registry password when those are set), so its identity needs data-plane READ on the vault
-# — and only that. Deliberately Secrets User, not the Officer grant the backend apps hold: the
-# frontend never writes sealed material, and it is the app an attacker reaches first. Created
-# whenever the frontend has a secret to resolve, which, since it carries the BFF shared secret
-# on every install, is whenever the vault is on.
+# the registry password when those are set), so its identity needs data-plane READ on exactly
+# those — one Secrets User grant PER SECRET, scoped to that secret, never to the vault. The
+# frontend is the app an attacker reaches first, and the vault also holds the backend's secrets
+# (the admin DSN, the session secret, the licence, the Redis URL, the telemetry secret, the
+# break-glass hash) and everything the api seals at runtime (KeyVaultSecretStore, ADR 0066):
+# a vault-scope read would hand all of it to whoever runs code in that container. Deliberately
+# Secrets User, not the Officer grant the backend apps hold: the frontend never writes sealed
+# material. The keys are known at plan — they follow registry_username and identity_binding,
+# neither of them sensitive.
+#
+# The scope is the secret's ARM id (resource_versionless_id), not versionless_id, which is the
+# data-plane URL the app's reference uses.
 resource "azurerm_role_assignment" "kv_secrets_user_frontend" {
-  count = var.enable_key_vault && length(local.frontend_secret_names) > 0 ? 1 : 0
+  for_each = var.enable_key_vault ? toset(local.frontend_secret_names) : toset([])
 
-  scope                = azurerm_key_vault.this[0].id
+  scope                = azurerm_key_vault_secret.install[each.key].resource_versionless_id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = module.frontend_identity.principal_id
 }
@@ -384,7 +391,8 @@ locals {
 
   # The FRONTEND's own identity, not the backend's. It carries AcrPull and nothing else by
   # design — it is the one internet-facing app — so it gets the narrowest thing that lets it
-  # resolve its own secrets: Key Vault Secrets User (read), never Officer.
+  # resolve its own secrets: Key Vault Secrets User (read) on each of these secrets alone
+  # (kv_secrets_user_frontend), never on the vault and never Officer.
   frontend_vault_secret_refs = var.enable_key_vault ? {
     for name in local.frontend_secret_names : name => {
       kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id

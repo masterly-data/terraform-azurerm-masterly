@@ -227,7 +227,7 @@ check, and a rebuilt app, both go by.
 | VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Later install identity work (ADR 0020) |
-| `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) to resolve its own secrets, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
+| `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
@@ -1354,9 +1354,11 @@ makes the change durable rather than a manual patch the next apply reverts.
 
 1. **A data-plane grant.** The module grants **Key Vault Secrets Officer** on the install
    vault to the identity running the apply. (It also grants the *frontend's* identity **Key
-   Vault Secrets User** — read only — because that app carries secrets of its own, the
+   Vault Secrets User** — read only — on each of the frontend's own secrets, one assignment per
+   secret and none on the vault: that app carries secrets of its own, the
    [BFF shared secret](#the-bff-shared-secret) on every install, resolves its own references and
-   runs as `id-<prefix>-frontend`, not the backend identity.) If **plan and apply run as different service
+   runs as `id-<prefix>-frontend`, not the backend identity. It cannot read the backend's
+   secrets or anything the api seals in the vault.) If **plan and apply run as different service
    principals** — a common CI shape, and the one Masterly runs — pin them instead:
    `key_vault_secret_operator_object_ids` for the apply identity, and
    `key_vault_secret_reader_object_ids` (Secrets User) for the planning one, which needs read

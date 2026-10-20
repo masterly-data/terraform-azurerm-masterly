@@ -22,6 +22,18 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Changed
+
+- The frontend's Key Vault grant is now per secret. With `enable_key_vault`, the frontend's
+  identity (`id-<prefix>-frontend`) held Key Vault Secrets User on the whole install vault, so
+  code running in `ca-frontend`, the internet-facing app, could read the admin database URL, the
+  session secret and everything the api seals at runtime. It now holds Secrets User on each of
+  its own secrets only: `install-bff-shared-secret`, plus `install-registry-password` and
+  `install-oidc-client-secret` when those are set. **On upgrade, the next apply replaces the one
+  vault-scope role assignment (`kv_secrets_user_frontend[0]`) with one assignment per frontend
+  secret.** Role assignments propagate eventually, so if the new `ca-frontend` revision cannot
+  resolve a secret on that apply, run the apply again. No input changes.
+
 ## [0.18.0] - 2026-10-19
 
 ### Added

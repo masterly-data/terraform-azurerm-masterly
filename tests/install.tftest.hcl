@@ -1941,13 +1941,20 @@ run "key_vault_off_plans_no_crypto_grant" {
     condition     = length(azurerm_role_assignment.kv_crypto_officer) == 0
     error_message = "Without the vault there is nothing to grant Crypto Officer on."
   }
+
+  # Nor a frontend read grant: there are no vault secrets to scope one to.
+  assert {
+    condition     = length(azurerm_role_assignment.kv_secrets_user_frontend) == 0
+    error_message = "Without the vault no Key Vault role assignment may be planned for the frontend."
+  }
 }
 
 # When the frontend DOES carry secrets, it resolves them itself — so it needs data-plane read
-# on the vault, and that is the one grant the split admits. It must be the NARROWEST one: the
-# frontend never writes sealed material, and it is the app an attacker reaches first. Pinning
-# the role name is the whole point — Secrets Officer would resolve the secrets just as well and
-# hand the public front door write access to every credential the install holds.
+# on each of them, and that is the one grant the split admits. It must be the NARROWEST one:
+# the frontend never writes sealed material, and it is the app an attacker reaches first.
+# Pinning the role name is the whole point — Secrets Officer would resolve the secrets just as
+# well and hand the public front door write access to every credential it can see. The keys
+# pin the other half: one grant per frontend secret, so nothing the backend holds is granted.
 run "the_frontend_reads_its_own_secrets_and_only_reads" {
   command = plan
 
@@ -1990,11 +1997,14 @@ run "the_frontend_reads_its_own_secrets_and_only_reads" {
 
   assert {
     condition = (
-      length(azurerm_role_assignment.kv_secrets_user_frontend) == 1 &&
-      azurerm_role_assignment.kv_secrets_user_frontend[0].role_definition_name == "Key Vault Secrets User" &&
-      azurerm_role_assignment.kv_secrets_user_frontend[0].principal_id == module.frontend_identity.principal_id
+      toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)) == toset(["bff-shared-secret", "registry-password", "oidc-client-secret"]) &&
+      toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)) == toset(local.frontend_secret_names) &&
+      alltrue([
+        for k, ra in azurerm_role_assignment.kv_secrets_user_frontend :
+        ra.role_definition_name == "Key Vault Secrets User" && ra.principal_id == module.frontend_identity.principal_id
+      ])
     )
-    error_message = "A frontend carrying vault-backed secrets must get Key Vault Secrets User on its own identity — read, and nothing more."
+    error_message = "A frontend carrying vault-backed secrets must get Key Vault Secrets User on its own identity, once per frontend secret — read, and nothing more."
   }
 
   # The Officer grants stay where they were: on the backend apps, never on the public one.
@@ -2985,7 +2995,7 @@ run "no_data_plane_grant_reaches_the_frontend" {
   # The point of the split: none of those reach the public app's identity. Even with the
   # dev binding and no registry credential the frontend carries one secret of its own, the BFF
   # shared secret, which it resolves from the vault itself — so the one vault grant it does get
-  # is read, and nothing more.
+  # is read on that secret, and nothing more.
   assert {
     condition = (
       azurerm_role_assignment.kv_secrets_officer[0].principal_id != module.frontend_identity.principal_id &&
@@ -2993,10 +3003,13 @@ run "no_data_plane_grant_reaches_the_frontend" {
       azurerm_role_assignment.sb_receiver[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_scaler[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.acs_email_sender[0].principal_id != module.frontend_identity.principal_id &&
-      length(azurerm_role_assignment.kv_secrets_user_frontend) == 1 &&
-      azurerm_role_assignment.kv_secrets_user_frontend[0].role_definition_name == "Key Vault Secrets User"
+      toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)) == toset(["bff-shared-secret"]) &&
+      alltrue([
+        for k, ra in azurerm_role_assignment.kv_secrets_user_frontend :
+        ra.role_definition_name == "Key Vault Secrets User" && ra.principal_id == module.frontend_identity.principal_id
+      ])
     )
-    error_message = "The only data-plane grant that may reach the frontend's identity is Key Vault Secrets User, to resolve its own secrets."
+    error_message = "The only data-plane grant that may reach the frontend's identity is Key Vault Secrets User on its own secret (the BFF shared secret here)."
   }
 
   assert {
@@ -4165,7 +4178,7 @@ run "bff_shared_secret_reaches_the_api_and_the_frontend_and_nothing_else" {
 
 # With the vault on it is a Key Vault reference like every other install secret — and it is
 # the frontend's own secret even when nothing else is, so the frontend resolves it with its
-# own identity, which gets read on the vault and nothing more.
+# own identity, which gets read on that secret and nothing more.
 run "bff_shared_secret_is_a_vault_reference_on_both_apps" {
   command = plan
 
@@ -4222,16 +4235,18 @@ run "bff_shared_secret_is_a_vault_reference_on_both_apps" {
   }
 
   # The frontend resolves it with its own identity, which therefore holds Secrets User — read —
-  # on the vault. A reference naming the backend's identity would never resolve on an app that
-  # does not carry it, and the revision would never start.
+  # on that secret. A reference naming the backend's identity would never resolve on an app
+  # that does not carry it, and the revision would never start.
   assert {
     condition = (
       module.frontend.secret_ref_identity_ids == tolist([module.frontend_identity.id]) &&
-      length(azurerm_role_assignment.kv_secrets_user_frontend) == 1 &&
-      azurerm_role_assignment.kv_secrets_user_frontend[0].role_definition_name == "Key Vault Secrets User" &&
-      azurerm_role_assignment.kv_secrets_user_frontend[0].principal_id == module.frontend_identity.principal_id
+      toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)) == toset(["bff-shared-secret"]) &&
+      alltrue([
+        for k, ra in azurerm_role_assignment.kv_secrets_user_frontend :
+        ra.role_definition_name == "Key Vault Secrets User" && ra.principal_id == module.frontend_identity.principal_id
+      ])
     )
-    error_message = "The frontend must resolve the BFF shared secret with its own identity, granted Key Vault Secrets User and nothing more."
+    error_message = "The frontend must resolve the BFF shared secret with its own identity, granted Key Vault Secrets User on that secret and nothing more."
   }
 }
 
@@ -7607,5 +7622,170 @@ run "postgres_storage_mb_above_grown_size_still_grows" {
   assert {
     condition     = azurerm_postgresql_flexible_server.this[0].storage_mb == 262144
     error_message = "postgres_storage_mb above the server's real size must still grow the disk."
+  }
+}
+
+# --- The frontend's vault grant is per secret, never the vault -----------------------------
+# The vault holds every install secret — the admin DSN, the session secret, the licence, the
+# Redis URL, the telemetry secret, the break-glass hash — and everything the api seals at
+# runtime (KeyVaultSecretStore, ADR 0066). The frontend is the internet-facing app, so its
+# identity holds Secrets User on each of ITS secrets and on nothing else in the vault.
+#
+# An apply, and last in the file, because the scopes are computed: at plan they are unknown and
+# `override_during = plan` needs Terraform 1.11 while CI runs 1.10. It targets the frontend's
+# grants and so applies only what they depend on (the vault, its secrets and their inputs); the
+# vault gets a well-formed ID because the secrets and the deployer's grant parse it. Keep it
+# last: every run after it would plan against the state it leaves.
+run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
+  command = apply
+
+  plan_options {
+    target = [azurerm_role_assignment.kv_secrets_user_frontend]
+  }
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+    registry_username    = "install-puller"
+    registry_password    = "pull-secret"
+    telemetry_url        = "https://cp.masterlydata.com"
+    telemetry_client_id  = "sa_01TEST"
+
+    telemetry_client_secret = "telemetry-secret"
+    breakglass_owner_email  = "owner@example.com"
+    breakglass_secret_hash  = "0000000000000000000000000000000000000000000000000000000000000000"
+    external_database_url   = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+
+    key_vault_secret_operator_object_ids = ["11111111-1111-1111-1111-111111111111"]
+  }
+
+  override_module {
+    target = module.apps_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
+      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-apps"
+    }
+  }
+
+  override_module {
+    target = module.frontend_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"
+      principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      client_id    = "ffffffff-ffff-ffff-ffff-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-frontend"
+    }
+  }
+
+  override_resource {
+    target = azurerm_resource_group.data
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test"
+    }
+  }
+
+  # The grants parse their scope, so each of the frontend's secrets gets its own ARM id.
+  override_resource {
+    target = azurerm_key_vault_secret.install["bff-shared-secret"]
+    values = {
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-bff-shared-secret"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.install["registry-password"]
+    values = {
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-registry-password"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.install["oidc-client-secret"]
+    values = {
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test/secrets/install-oidc-client-secret"
+    }
+  }
+
+  # The configuration does write the backend's secrets to the same vault — that is what makes
+  # the scoping below matter.
+  assert {
+    condition = alltrue([
+      for name in ["database-url", "session-secret", "license-token", "redis-url", "telemetry-client-secret", "breakglass-secret-hash"] :
+      contains(keys(azurerm_key_vault_secret.install), name)
+    ])
+    error_message = "This run must write the backend's secrets to the vault, or it proves nothing about the frontend not reaching them."
+  }
+
+  # Exactly one grant per frontend secret: the BFF shared secret, the registry password and the
+  # BFF's OIDC client secret.
+  assert {
+    condition = (
+      toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)) == toset(local.frontend_secret_names) &&
+      toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)) == toset(["bff-shared-secret", "registry-password", "oidc-client-secret"])
+    )
+    error_message = "The frontend's identity must hold exactly one Key Vault grant per frontend secret: bff-shared-secret, registry-password and oidc-client-secret."
+  }
+
+  # Each grant is scoped to its own secret's ARM id — and none to the vault.
+  assert {
+    condition = alltrue([
+      for k, ra in azurerm_role_assignment.kv_secrets_user_frontend :
+      ra.scope == azurerm_key_vault_secret.install[k].resource_versionless_id && ra.scope != azurerm_key_vault.this[0].id
+    ])
+    error_message = "Each frontend grant must be scoped to its own secret (resource_versionless_id), never to the vault."
+  }
+
+  assert {
+    condition     = length(distinct([for ra in values(azurerm_role_assignment.kv_secrets_user_frontend) : ra.scope])) == length(azurerm_role_assignment.kv_secrets_user_frontend)
+    error_message = "No two frontend grants may share a scope: each must name a different secret."
+  }
+
+  # Nothing only the backend carries is reachable by the frontend's identity.
+  assert {
+    condition = (
+      length(setintersection(
+        toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)),
+        toset(["database-url", "session-secret", "license-token", "redis-url", "telemetry-client-secret", "breakglass-secret-hash"]),
+      )) == 0 &&
+      length(setintersection(
+        toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)),
+        setsubtract(toset(local.backend_secret_names), toset(local.frontend_secret_names)),
+      )) == 0
+    )
+    error_message = "No backend-only secret (database-url, session-secret, license-token, redis-url, telemetry-client-secret, breakglass-secret-hash) may be granted to the frontend's identity."
+  }
+
+  assert {
+    condition = alltrue([
+      for k, ra in azurerm_role_assignment.kv_secrets_user_frontend :
+      ra.role_definition_name == "Key Vault Secrets User" && ra.principal_id == module.frontend_identity.principal_id
+    ])
+    error_message = "Every frontend grant must be Key Vault Secrets User on the frontend's own identity, never Officer."
   }
 }
