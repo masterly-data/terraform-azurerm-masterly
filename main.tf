@@ -631,8 +631,9 @@ module "apps_identity" {
   tags                = local.tags
 }
 
-# The frontend's own identity. Image pull is the whole of it — no Key Vault, no Service Bus,
-# no ACS. Nothing here grows without a reason to give the public app that reach.
+# The frontend's own identity. Image pull, plus read on each of its own vault secrets
+# (kv_secrets_user_frontend) — not the vault, no Service Bus, no ACS. Nothing here grows
+# without a reason to give the public app that reach.
 module "frontend_identity" {
   source = "./modules/user-assigned-identity"
 
@@ -1641,8 +1642,9 @@ module "frontend" {
   # The grants must land before the first pull. Nothing else orders them: the app depends on
   # the identity, not on the role assignments on it, so on a first apply terraform is free to
   # create the revision while AcrPull is still in flight — and a revision that cannot pull
-  # fails to provision. With the vault on, the same is true of the secret read: the registry
-  # password is itself a vault reference, so an unresolvable secret is an unpullable image.
+  # fails to provision. With the vault on, the same is true of the secret reads — one grant per
+  # frontend secret, and naming the resource waits for every instance: the registry password is
+  # itself a vault reference, so an unresolvable secret is an unpullable image.
   depends_on = [
     azurerm_role_assignment.acr_pull_frontend,
     azurerm_role_assignment.kv_secrets_user_frontend,
