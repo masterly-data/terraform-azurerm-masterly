@@ -1772,8 +1772,7 @@ and the same shape for `frontend_image`. The references come from the build's ri
 the bundle Masterly sends you. [`MANIFEST.json`](MANIFEST.json) does not carry them. Keep the tag
 as well as the digest: the plan-time check in
 [A renewed licence and the api image it runs on](#a-renewed-licence-and-the-api-image-it-runs-on)
-reads the tag, and a reference with only a digest is skipped. That check also skips an `api` tag
-that no release in the manifest names, which is every Canary and Beta tag.
+reads the tag, and a reference with only a digest is skipped.
 
 Your licence names the rings your install may run. This module version does not check the
 licence's ring at plan, preflight or boot. Run only the rings your licence names.
@@ -1791,7 +1790,9 @@ it. Moving to the Registry changes only where the same commit comes from.
 If the plan shows any change, the commit you run is not the tagged one. Stop and do not apply.
 Ask Masterly which commit `vX.Y.Z` is.
 
-Move the images to the Stable references separately, after that plan is clean. Semver tags are
+Move the images to the Stable references separately, after that plan is clean. Set the new
+`api_image` and `frontend_image` values, then roll the apps as the sections above describe:
+`terraform apply` does not roll a running image. Semver tags are
 what [Versioning](#versioning) describes from here on.
 
 ## Provider versions and the lock file
