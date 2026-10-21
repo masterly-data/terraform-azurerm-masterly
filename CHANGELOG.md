@@ -22,6 +22,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Documentation
+
+- README: a new section, "Installing a Canary or Beta build". It shows how to source the module
+  by commit with the images pinned by digest, says Canary and Beta builds are never tagged or
+  published to the Registry, and gives the move to the Registry source at Stable (same commit,
+  `terraform init -upgrade`, a plan that shows no change). It says this module version does not
+  check the licence's ring. The sourcing paragraph and Versioning now say semver tags are Stable
+  releases.
+
 ### Changed
 
 - The frontend's Key Vault grant is now per secret. With `enable_key_vault`, the frontend's
