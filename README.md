@@ -27,10 +27,12 @@ release promises.
 <!-- release-manifest:pins:end -->
 
 Sourcing straight from GitHub also works
-(`github.com/masterly-data/terraform-azurerm-masterly?ref=v<version>`) and is what air-gapped
-mirrors do, but the registry gives you version constraints and needs no `git` on the runner.
-Which version is current, and which images go with it, is [`MANIFEST.json`](MANIFEST.json) —
-see [Versioning](#versioning).
+(`github.com/masterly-data/terraform-azurerm-masterly?ref=v<version>`, a Stable semver tag) and
+is what air-gapped mirrors do, but the registry gives you version constraints and needs no `git`
+on the runner.
+Which Stable version is current, and which images go with it, is [`MANIFEST.json`](MANIFEST.json) —
+see [Versioning](#versioning). A Canary or Beta build has no tag; see
+[Installing a Canary or Beta build](#installing-a-canary-or-beta-build).
 
 No credential is needed to fetch this module. Running Masterly does need two things it does not
 contain: the **container images**, pulled with the registry credential in your install bundle, and
@@ -1585,9 +1587,11 @@ Custom domains · the per-install Entra identity toward Masterly's control plane
 
 ## Versioning
 
-Semver tags; consumers pin a registry `version` constraint, or `?ref=vX.Y.Z` from GitHub.
-The module version is the one customer-facing version (ADR 0062): the tag, the registry version
-and the pin in the docs are all the same number.
+Semver tags are the Stable releases. A Stable install pins a registry `version` constraint, or
+`?ref=vX.Y.Z` from GitHub. Canary and Beta builds have no tag: see
+[Installing a Canary or Beta build](#installing-a-canary-or-beta-build).
+The module version is the one customer-facing version of a Stable release (ADR 0062): the tag,
+the registry version and the pin in the docs are all the same number.
 
 What each kind of release means — for the module, and for the `api` and `frontend` images it
 names:
@@ -1744,6 +1748,52 @@ publishes without passing through `cut-release`. Closing that takes a tag rulese
 workflow's release identity may bypass, which is a repository setting rather than anything in
 this tree; [docs/releasing.md](docs/releasing.md) records the exact settings and whether they are
 in place. Until they are, `cut-release` is the documented path, not the only possible one.
+
+## Installing a Canary or Beta build
+
+Masterly ships in rings: Canary, Beta and Stable. Only Stable has a semver tag and a Registry
+version. A Canary or Beta build is never tagged and never published to the Terraform Registry, so
+you source the module by commit and pin the images by digest. Before 1.0.0, Canary runs on STG
+only, so a customer install that reads this section is a Beta install.
+
+Source the module from the exact commit Masterly gives you. Use the full commit hash, and do not
+add a `version` argument: Terraform refuses one on a Git source.
+
+```hcl
+module "masterly" {
+  source = "git::https://github.com/masterly-data/terraform-azurerm-masterly.git?ref=<commit>"
+
+  # api_image and frontend_image: see below. Everything else is as for a Stable install.
+}
+```
+
+Pin both images by digest, in the form `<registry>/api:<tag>@sha256:<digest>` for `api_image`
+and the same shape for `frontend_image`. The references come from the build's ring record or from
+the bundle Masterly sends you. [`MANIFEST.json`](MANIFEST.json) does not carry them. Keep the tag
+as well as the digest: the plan-time check in
+[A renewed licence and the api image it runs on](#a-renewed-licence-and-the-api-image-it-runs-on)
+reads the tag, and a reference with only a digest is skipped.
+
+Your licence names the rings your install may run. This module version does not check the
+licence's ring at plan, preflight or boot. Run only the rings your licence names.
+
+### Moving to Stable
+
+When the build you run is released, the same commit is tagged `vX.Y.Z` and the Registry publishes
+it. Moving to the Registry changes only where the same commit comes from.
+
+1. Change `source` to `masterly-data/masterly/azurerm` and add `version = "= X.Y.Z"`, with the
+   release number Masterly names for your commit. Change nothing else in that step.
+2. Run `terraform init -upgrade`.
+3. Run `terraform plan`. Expect no change.
+
+If the plan shows any change, the commit you run is not the tagged one. Stop and do not apply.
+Ask Masterly which commit `vX.Y.Z` is.
+
+Move the images to the Stable references separately, after that plan is clean. Set the new
+`api_image` and `frontend_image` values, then roll the apps as the sections above describe:
+`terraform apply` does not roll a running image. Semver tags are
+what [Versioning](#versioning) describes from here on.
 
 ## Provider versions and the lock file
 
