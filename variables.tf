@@ -280,7 +280,7 @@ variable "builtin_auth" {
     - ca-api is not gated. It is reached internally, by the frontend's server-side calls to
       http://ca-api inside the Container Apps environment; the application authenticates its
       callers as identity_binding sets. With api_ingress_external = true, ca-api is also
-      published to ingress_allowed_cidrs, without this gate.
+      published to ingress_allowed_cidrs, without this gate, and a plan that sets both warns.
 
     tenant_id: the Entra tenant users sign in from (the issuer is
     https://login.microsoftonline.com/<tenant_id>/v2.0). client_id: the app registration the
@@ -808,7 +808,7 @@ variable "private_endpoints_subnet_id" {
 variable "api_ingress_external" {
   type        = bool
   default     = false
-  description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session. Set true only when something outside the environment must call /v1 directly — the Python SDK, a customer's own pipeline, an integration — and narrow it with ingress_allowed_cidrs, which is applied to the api whenever this is true — an empty list is refused at plan, because empty means unrestricted in Azure. On an internal environment (aca_internal_load_balancer) `external` still means \"reachable from the VNet\", not from the internet."
+  description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session. Set true only when something outside the environment must call /v1 directly — the Python SDK, a customer's own pipeline, an integration — and narrow it with ingress_allowed_cidrs, which is applied to the api whenever this is true — an empty list is refused at plan, because empty means unrestricted in Azure. builtin_auth does not gate the api, and a plan that sets both warns. On an internal environment (aca_internal_load_balancer) `external` still means \"reachable from the VNet\", not from the internet."
 }
 
 variable "public_api_url" {

@@ -5,8 +5,8 @@
 # ca-api is not gated. It is reached internally, by the frontend's server-side calls inside the
 # Container Apps environment; the application authenticates its callers as identity_binding
 # sets. With api_ingress_external it is also published to ingress_allowed_cidrs, without this
-# gate. 0.19.0 and 0.19.1 also gated ca-api; taking this version destroys that one
-# configuration and leaves the frontend's unchanged.
+# gate, and the check below warns while both are set. 0.19.0 and 0.19.1 also gated ca-api;
+# taking this version destroys that one configuration and leaves the frontend's unchanged.
 #
 # azurerm has no resource for an app's auth configuration, so it is written with azapi as the
 # child resource Azure defines for it, Microsoft.App/containerApps/authConfigs, whose only valid
@@ -51,12 +51,23 @@ locals {
     var.builtin_auth.api_allowed_applications,
     var.builtin_auth.api_allowed_audiences,
   ) : []
+
+  # ca-api published to ingress_allowed_cidrs while builtin_auth gates the frontend only. The
+  # check below warns while it holds.
+  builtin_auth_leaves_published_api_ungated = local.builtin_auth_enabled && var.api_ingress_external
 }
 
 check "builtin_auth_api_entries_are_ignored" {
   assert {
     condition     = length(local.builtin_auth_ignored_api_entries) == 0
     error_message = "builtin_auth.api_allowed_applications and builtin_auth.api_allowed_audiences are deprecated and ignored: builtin_auth gates ca-frontend only, and ca-api is reached internally, inside the Container Apps environment. Remove both from builtin_auth."
+  }
+}
+
+check "builtin_auth_does_not_gate_the_published_api" {
+  assert {
+    condition     = !local.builtin_auth_leaves_published_api_ungated
+    error_message = "builtin_auth gates ca-frontend only, and api_ingress_external = true publishes ca-api to ingress_allowed_cidrs without that gate: a caller those CIDRs admit reaches the api without passing built-in authentication, and only the application's own authentication (identity_binding) stands in front of it. Narrow ingress_allowed_cidrs to the callers that need the api, or set api_ingress_external = false if nothing outside the Container Apps environment calls it."
   }
 }
 

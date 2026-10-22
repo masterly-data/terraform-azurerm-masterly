@@ -35,8 +35,9 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   import block 0.19.0 documented, narrow it to `"frontend"` or delete it before you plan: an
   import block for `["api"]` names an instance this version does not have, and the plan fails.
   With `api_ingress_external = true` the published api is no longer behind built-in auth; it
-  stays limited to `ingress_allowed_cidrs`. The README section is now "Built-in authentication in
-  front of the frontend".
+  stays limited to `ingress_allowed_cidrs`, and a plan that sets both warns through the check
+  `builtin_auth_does_not_gate_the_published_api`, on every plan while both are set. The README
+  section is now "Built-in authentication in front of the frontend".
 
 ### Deprecated
 

@@ -311,7 +311,8 @@ The module gates the frontend only. The api is reached internally: the frontend'
 calls go to `ca-api` inside the Container Apps environment, and the module puts no platform gate
 on it; the application authenticates its callers as `identity_binding` sets. With
 `api_ingress_external = true` the api is also published to `ingress_allowed_cidrs`, and this gate
-does not cover it there either.
+does not cover it there either; a plan that sets both warns through the check
+`builtin_auth_does_not_gate_the_published_api`, on every plan while both are set.
 
 `api_allowed_applications` and `api_allowed_audiences` configured a gate on `ca-api` in 0.19.0
 and 0.19.1. They are deprecated and ignored: a plan that sets either succeeds and warns

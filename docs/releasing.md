@@ -109,7 +109,9 @@ install, planned and applied from that candidate:
    `"frontend"` (or deleted), a refreshing plan from 0.19.1 shows exactly one change: destroy
    `azapi_resource.builtin_auth["api"]`. It shows no change to `builtin_auth["frontend"]`,
    `ca-api` or `ca-frontend`. After the apply, `ca-api` has no built-in auth configured (its
-   **Authentication** page in the portal is empty), and a second plan shows no change.
+   **Authentication** page in the portal is empty), and a second plan shows no change. On an
+   install with `api_ingress_external = true`, both plans also show the warning from
+   `check.builtin_auth_does_not_gate_the_published_api`; it is expected, and it is not a change.
 6. **The frontend still reaches the api.** Items 3 and 4, on the candidate: a signed-in session
    through the BFF succeeds with the api ungated, and the frontend's gate still redirects an
    anonymous browser to Entra sign-in.
