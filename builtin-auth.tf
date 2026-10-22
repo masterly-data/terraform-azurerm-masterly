@@ -1,11 +1,19 @@
 # Container Apps built-in authentication with Microsoft Entra ID (builtin_auth), on ca-frontend
-# and ca-api. It is the platform's gate, in front of the application's own sign-in: a request
+# only. It is the platform's gate, in front of the application's own sign-in: a browser request
 # that does not carry an Entra sign-in for builtin_auth.tenant_id never reaches the container.
+#
+# ca-api is not gated. It is reached internally, by the frontend's server-side calls inside the
+# Container Apps environment; the application authenticates its callers as identity_binding
+# sets. With api_ingress_external it is also published to ingress_allowed_cidrs, without this
+# gate. 0.19.0 and 0.19.1 also gated ca-api; taking this version destroys that one
+# configuration and leaves the frontend's unchanged.
 #
 # azurerm has no resource for an app's auth configuration, so it is written with azapi as the
 # child resource Azure defines for it, Microsoft.App/containerApps/authConfigs, whose only valid
-# name is "current". Its client secret is an ordinary Container App secret on each app (main.tf,
-# secret_values), which the configuration names rather than holds.
+# name is "current". Its client secret is an ordinary Container App secret (main.tf,
+# secret_values), which the configuration names rather than holds. ca-api still carries that
+# secret, as it did when it was gated, so that taking this version changes neither app; nothing
+# on ca-api reads it.
 
 locals {
   builtin_auth_enabled = var.builtin_auth != null
@@ -24,7 +32,8 @@ locals {
 
   # Per app: what an unauthenticated request gets, which paths skip the gate, and who besides
   # the registration itself may present a token. The frontend admits only tokens issued to its
-  # own registration, which is what a browser sign-in yields.
+  # own registration, which is what a browser sign-in yields. The map and its key are the ones
+  # earlier versions used, so the frontend's configuration keeps its address and its body.
   builtin_auth_apps = local.builtin_auth_enabled ? {
     frontend = {
       app_id                      = module.frontend.id
@@ -34,15 +43,21 @@ locals {
       allowed_applications        = [var.builtin_auth.client_id]
       allowed_additional_audience = []
     }
-    api = {
-      app_id                      = module.api.id
-      unauthenticated_action      = "Return401"
-      redirect_to_provider        = null
-      excluded_paths              = []
-      allowed_applications        = distinct(concat([var.builtin_auth.client_id], var.builtin_auth.api_allowed_applications))
-      allowed_additional_audience = var.builtin_auth.api_allowed_audiences
-    }
   } : {}
+
+  # The api entries of builtin_auth, which configured ca-api's gate in 0.19.0 and 0.19.1 and are
+  # now ignored. The check below warns while any is set.
+  builtin_auth_ignored_api_entries = local.builtin_auth_enabled ? concat(
+    var.builtin_auth.api_allowed_applications,
+    var.builtin_auth.api_allowed_audiences,
+  ) : []
+}
+
+check "builtin_auth_api_entries_are_ignored" {
+  assert {
+    condition     = length(local.builtin_auth_ignored_api_entries) == 0
+    error_message = "builtin_auth.api_allowed_applications and builtin_auth.api_allowed_audiences are deprecated and ignored: builtin_auth gates ca-frontend only, and ca-api is reached internally, inside the Container Apps environment. Remove both from builtin_auth."
+  }
 }
 
 resource "azapi_resource" "builtin_auth" {

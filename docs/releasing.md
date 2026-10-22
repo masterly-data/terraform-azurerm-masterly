@@ -100,6 +100,20 @@ sign-in, and `ca-api` answers `401` with no token and with a non-Entra token. St
 service principal's client-credentials token admitted on `ca-api` (item 2), and a signed-in
 session through the BFF (items 3 and 4).
 
+The next candidate gates `ca-frontend` only (Unreleased in the
+[changelog](../CHANGELOG.md)). That withdraws the `ca-api` half of items 1 and 2, including the
+open client-credentials check on `ca-api`: do not run it. Items 5 and 6 replace it. On the same
+install, planned and applied from that candidate:
+
+5. **The upgrade removes the api's gate and nothing else.** With the import block narrowed to
+   `"frontend"` (or deleted), a refreshing plan from 0.19.1 shows exactly one change: destroy
+   `azapi_resource.builtin_auth["api"]`. It shows no change to `builtin_auth["frontend"]`,
+   `ca-api` or `ca-frontend`. After the apply, `ca-api` has no built-in auth configured (its
+   **Authentication** page in the portal is empty), and a second plan shows no change.
+6. **The frontend still reaches the api.** Items 3 and 4, on the candidate: a signed-in session
+   through the BFF succeeds with the api ungated, and the frontend's gate still redirects an
+   anonymous browser to Entra sign-in.
+
 ## What makes the workflow the only path
 
 On its own, the workflow is the documented path, not an enforced one: GitHub still accepts a `v*`
