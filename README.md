@@ -1671,6 +1671,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.19.1` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-22 |
 | `0.19.0` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-22 |
 | `0.18.0` | `masterly.azurecr.io/api:v0.133.13` | `masterly.azurecr.io/frontend:v0.141.0` | 2026-10-19 |
 | `0.17.0` | `masterly.azurecr.io/api:v0.133.11` | `masterly.azurecr.io/frontend:v0.139.5` | 2026-10-05 |
