@@ -330,16 +330,15 @@ fine; the module takes over its configuration):
    `api_allowed_applications` for each service principal that calls `/v1`.
 
 An install that already configured built-in auth by hand imports each app's configuration once
-before the first apply that sets `builtin_auth`, or the apply fails because it already exists:
+in the first apply that sets `builtin_auth`, or the apply fails because it already exists. Use
+one block with `for_each` (Terraform 1.16 was seen planning only the first of two separate
+blocks for this resource and proposing to create the second):
 
 ```hcl
 import {
-  to = module.masterly.azapi_resource.builtin_auth["frontend"]
-  id = "<ca-frontend resource id>/authConfigs/current"
-}
-import {
-  to = module.masterly.azapi_resource.builtin_auth["api"]
-  id = "<ca-api resource id>/authConfigs/current"
+  for_each = toset(["api", "frontend"])
+  to       = module.masterly.azapi_resource.builtin_auth[each.key]
+  id       = "/subscriptions/<subscription id>/resourceGroups/<aca resource group>/providers/Microsoft.App/containerApps/ca-${each.key}/authConfigs/current"
 }
 ```
 
