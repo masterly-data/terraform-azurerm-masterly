@@ -34,3 +34,12 @@ output "table_retention_days" {
   }
   description = "Retention in days of each table the module sets one on, by table name."
 }
+
+# Total retention (interactive plus archive) of the same tables. It must be set, and equal to the
+# retention while the module keeps no archive tier: left unset, every apply after the first fails.
+output "table_total_retention_days" {
+  value = {
+    (azurerm_log_analytics_workspace_table.key_vault_audit.name) = azurerm_log_analytics_workspace_table.key_vault_audit.total_retention_in_days
+  }
+  description = "Total retention in days (interactive plus archive) of each table the module sets a retention on, by table name."
+}
