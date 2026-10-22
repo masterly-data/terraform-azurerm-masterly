@@ -22,6 +22,21 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Added
+
+- `builtin_auth` and `builtin_auth_client_secret`: Container Apps built-in authentication
+  (EasyAuth) with Microsoft Entra ID on `ca-frontend` and `ca-api`, a platform gate in front of
+  the application's own sign-in. The frontend redirects an unauthenticated browser to Entra
+  sign-in; the api answers `401`, and admits only its own registration and the service
+  principals in `api_allowed_applications`. The client secret is the Container App secret
+  `microsoft-provider-authentication-secret` on both apps, a Key Vault reference with
+  `enable_key_vault`. Unset by default, which configures nothing. An install that set built-in
+  auth up by hand imports the two `authConfigs/current` resources first; the README, "Built-in
+  authentication in front of the apps", has the import blocks.
+- The module now requires the `Azure/azapi` provider (`~> 2.9`), whether or not `builtin_auth` is
+  set: azurerm has no resource for a Container App's auth configuration. `terraform init`
+  installs it; an air-gapped install mirrors it alongside azurerm and random.
+
 ### Documentation
 
 - README: a new section, "Installing a Canary or Beta build". It shows how to source the module

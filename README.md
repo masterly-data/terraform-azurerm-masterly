@@ -293,6 +293,60 @@ exactly this. Do not bring a production install up with `identity_binding = "dev
 requires — Key Vault with purge protection, which cannot be turned off, the control-plane store,
 Redis — at once, on a running install.
 
+### Built-in authentication in front of the apps (`builtin_auth`)
+
+`identity_binding` decides how the **application** signs a caller in. `builtin_auth` adds a
+second, independent gate at the **platform**: Container Apps built-in authentication (often
+called EasyAuth) with Microsoft Entra ID, on `ca-frontend` and `ca-api`. A request without an
+Entra sign-in for your tenant is refused before it reaches either container, and a caller who
+passes it still has to sign in to the application, which decides the member and their roles.
+Neither layer relies on the other. Unset (the default), the module configures none.
+
+| App | Unauthenticated request | Who is admitted |
+|---|---|---|
+| `ca-frontend` | Redirected to Entra sign-in | Users of `tenant_id` signing in through `client_id`. `frontend_excluded_paths` (empty by default) are served without sign-in. |
+| `ca-api` | `401` | Tokens issued to `client_id` or to an audience in `api_allowed_audiences`, held by `client_id` itself or by a service principal in `api_allowed_applications`. Anything else valid but unlisted is `403`. |
+
+A machine client, such as the Python SDK or a pipeline, gets a token by OAuth 2.0 client
+credentials as a service principal in your tenant and presents it as `Authorization: Bearer`.
+With `identity_binding = "oidc"` the application reads the same token: register the service
+principal's client id as a service account and the one token passes both layers. For that
+the token's audience must be the application's `oidc_audience`, so list it in
+`api_allowed_audiences` when it is a different registration from `client_id`, and set
+`requestedAccessTokenVersion` to `2` on the registration the token is issued for.
+
+Requests between the apps inside the environment (the frontend's server-side calls to the
+api) and the platform's health probes are not presented to this gate.
+
+To set it up, use an app registration in your tenant (one you already use for built-in auth is
+fine; the module takes over its configuration):
+
+1. Add `https://<frontend host>/.auth/login/aad/callback` as a **Web** redirect URI and enable
+   **ID tokens**.
+2. Add a client secret and pass it as `builtin_auth_client_secret`. The module stores it as the
+   Container App secret `microsoft-provider-authentication-secret` on both apps (a Key Vault
+   reference with `enable_key_vault`), the name Azure gives it.
+3. Set `builtin_auth = { tenant_id = "...", client_id = "..." }`, plus
+   `api_allowed_applications` for each service principal that calls `/v1`.
+
+An install that already configured built-in auth by hand imports each app's configuration once
+before the first apply that sets `builtin_auth`, or the apply fails because it already exists:
+
+```hcl
+import {
+  to = module.masterly.azapi_resource.builtin_auth["frontend"]
+  id = "<ca-frontend resource id>/authConfigs/current"
+}
+import {
+  to = module.masterly.azapi_resource.builtin_auth["api"]
+  id = "<ca-api resource id>/authConfigs/current"
+}
+```
+
+The configuration is written with the `Azure/azapi` provider, because azurerm has no resource
+for it. The module requires that provider whether or not you set `builtin_auth`, so an
+air-gapped install mirrors it alongside azurerm and random.
+
 ## Data plane (ADR 0065)
 
 Self-hosted is the `self-hosted × byo-db` combination: production installs point
@@ -1817,7 +1871,9 @@ terraform providers lock \
 ```
 
 This repo ships no lock file of its own, for the same reason: it is a module, not a root
-configuration. It constrains azurerm to `~> 5.8` and leaves the exact version to you. That
+configuration. It constrains azurerm to `~> 5.8`, random to `~> 3.6` and azapi to `~> 2.9`
+(used only for [built-in authentication](#built-in-authentication-in-front-of-the-apps-builtin_auth)),
+and leaves the exact versions to you. That
 floor is load-bearing rather than housekeeping: with no lock file here, the constraint is the
 only thing governing your `terraform init`. `versions.tf` records why it sits where it does.
 

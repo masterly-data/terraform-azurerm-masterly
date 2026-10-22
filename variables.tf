@@ -259,6 +259,69 @@ variable "oidc_scopes" {
   description = "Space-delimited OIDC scopes for the BFF. Null = the app default (\"openid profile email\")."
 }
 
+variable "builtin_auth" {
+  type = object({
+    tenant_id                = string
+    client_id                = string
+    api_allowed_applications = optional(list(string), [])
+    api_allowed_audiences    = optional(list(string), [])
+    frontend_excluded_paths  = optional(list(string), [])
+  })
+  default     = null
+  description = <<-EOT
+    Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on
+    ca-frontend and ca-api: a gate at the platform, in front of the application's own sign-in.
+    Null (the default) configures none, exactly as before this input existed. It is independent of
+    identity_binding: with identity_binding = "oidc" the install signs a caller in twice, once at
+    the platform (who may reach the apps at all) and once in the application (which member, which
+    roles), and neither layer relies on the other.
+
+    - ca-frontend redirects an unauthenticated browser to Entra sign-in.
+    - ca-api answers 401 to any request without a valid Entra token. A machine client (the Python
+      SDK, a pipeline) obtains one by client credentials as a service principal in tenant_id, and
+      the same token is what a service account presents to the application on the oidc binding.
+    - Requests between the apps inside the Container Apps environment (the frontend's server-side
+      calls to http://ca-api) are not presented to this gate. Health probes are not either.
+
+    tenant_id: the Entra tenant users and service principals sign in from (the issuer is
+    https://login.microsoftonline.com/<tenant_id>/v2.0). client_id: the app registration the
+    platform signs users in with. Register https://<frontend host>/.auth/login/aad/callback as a
+    web redirect URI on it and enable ID token issuance; its client secret is
+    builtin_auth_client_secret. api_allowed_applications: client ids of the service principals
+    allowed through on ca-api, in addition to client_id itself; an id not listed is refused with
+    403 even with a valid token. api_allowed_audiences: token audiences ca-api accepts besides
+    client_id, such as the oidc_client_id of a separate application registration, or an App ID URI
+    (api://...). frontend_excluded_paths: paths on ca-frontend served without sign-in; every path
+    listed is reachable by anyone ingress_allowed_cidrs admits, so leave it empty unless a page
+    must be public.
+  EOT
+
+  validation {
+    condition = var.builtin_auth == null || alltrue([
+      for id in concat([var.builtin_auth.tenant_id, var.builtin_auth.client_id], var.builtin_auth.api_allowed_applications) :
+      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))
+    ])
+    error_message = "builtin_auth.tenant_id, client_id and every api_allowed_applications entry must be a UUID: the tenant's directory id and application (client) ids, not object ids or names."
+  }
+
+  validation {
+    condition     = var.builtin_auth == null || alltrue([for p in var.builtin_auth.frontend_excluded_paths : startswith(p, "/")])
+    error_message = "builtin_auth.frontend_excluded_paths entries must be absolute paths starting with \"/\"."
+  }
+
+  validation {
+    condition     = var.builtin_auth == null || var.builtin_auth_client_secret != null
+    error_message = "builtin_auth requires builtin_auth_client_secret: the platform redeems the sign-in code with it."
+  }
+}
+
+variable "builtin_auth_client_secret" {
+  type        = string
+  default     = null
+  sensitive   = true
+  description = "Client secret of builtin_auth.client_id's app registration. Stored as the Container App secret `microsoft-provider-authentication-secret` on ca-frontend and ca-api (a Key Vault reference with enable_key_vault), the name Azure itself gives it. Rotate by adding a new secret on the registration, applying with it, then deleting the old one."
+}
+
 variable "breakglass_owner_email" {
   type        = string
   default     = null
