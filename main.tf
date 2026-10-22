@@ -1247,6 +1247,8 @@ locals {
     "breakglass-secret-hash"  = var.breakglass_secret_hash
     "telemetry-client-secret" = var.telemetry_client_secret
     "oidc-client-secret"      = var.oidc_client_secret
+    # Built-in auth's client secret (builtin-auth.tf), under the name Azure gives it.
+    "microsoft-provider-authentication-secret" = var.builtin_auth_client_secret
     # Not confidential (see ca_bundle_pem's description) — it travels through the SAME
     # Container App secret plumbing as everything else here only because that plumbing is
     # also how a value reaches the file mount below (secret_file_mounts, MAS-446), not
@@ -1280,7 +1282,11 @@ locals {
 
   # The api adds the BFF shared secret, which belongs to the api and the frontend alone
   # (random_password.bff_shared_secret). ca-workers serves no request, so it does not get it.
-  api_secret_names = concat(local.backend_secret_names, ["bff-shared-secret"])
+  api_secret_names = concat(
+    local.backend_secret_names,
+    ["bff-shared-secret"],
+    local.builtin_auth_secret_names,
+  )
 
   # The BFF shared secret on every install. On oidc the frontend is also the confidential BFF
   # client: its client secret is used only server-side at token exchange.
@@ -1288,6 +1294,7 @@ locals {
     ["bff-shared-secret"],
     local.registry_secret_names,
     var.identity_binding == "oidc" ? ["oidc-client-secret"] : [],
+    local.builtin_auth_secret_names,
   )
 
   backend_secrets  = { for name in local.backend_secret_names : name => local.secret_values[name] }

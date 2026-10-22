@@ -20,6 +20,7 @@ mock_provider "azurerm" {
   }
 }
 mock_provider "random" {}
+mock_provider "azapi" {}
 
 variables {
   location         = "swedencentral"
@@ -7850,5 +7851,215 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
       ra.role_definition_name == "Key Vault Secrets User" && ra.principal_id == module.frontend_identity.principal_id
     ])
     error_message = "Every frontend grant must be Key Vault Secrets User on the frontend's own identity, never Officer."
+  }
+}
+
+# --- Container Apps built-in authentication (builtin_auth) --------------------------------
+
+run "builtin_auth_is_absent_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = length(azapi_resource.builtin_auth) == 0
+    error_message = "With builtin_auth unset, no app may get a built-in auth configuration."
+  }
+
+  assert {
+    condition = (
+      !contains(module.api.value_secret_names, "microsoft-provider-authentication-secret") &&
+      !contains(module.frontend.value_secret_names, "microsoft-provider-authentication-secret")
+    )
+    error_message = "With builtin_auth unset, neither app may carry the built-in auth client secret."
+  }
+}
+
+run "builtin_auth_gates_both_apps" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    builtin_auth = {
+      tenant_id                = "11111111-1111-1111-1111-111111111111"
+      client_id                = "22222222-2222-2222-2222-222222222222"
+      api_allowed_applications = ["33333333-3333-3333-3333-333333333333"]
+      api_allowed_audiences    = ["44444444-4444-4444-4444-444444444444"]
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition     = toset(keys(azapi_resource.builtin_auth)) == toset(["api", "frontend"])
+    error_message = "builtin_auth must configure built-in auth on exactly ca-api and ca-frontend."
+  }
+
+  assert {
+    condition = alltrue([
+      for k, r in azapi_resource.builtin_auth :
+      r.name == "current" &&
+      r.type == "Microsoft.App/containerApps/authConfigs@2025-01-01" &&
+      r.body.properties.platform.enabled == true &&
+      r.body.properties.identityProviders.azureActiveDirectory.registration.openIdIssuer == "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0" &&
+      r.body.properties.identityProviders.azureActiveDirectory.registration.clientId == "22222222-2222-2222-2222-222222222222" &&
+      r.body.properties.identityProviders.azureActiveDirectory.registration.clientSecretSettingName == "microsoft-provider-authentication-secret"
+    ])
+    error_message = "Both auth configurations must be named current, enabled, and point at the tenant's v2.0 issuer, the registration and its secret."
+  }
+
+  assert {
+    condition = (
+      azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.unauthenticatedClientAction == "RedirectToLoginPage" &&
+      azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.redirectToProvider == "azureactivedirectory" &&
+      length(azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.excludedPaths) == 0 &&
+      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications) == jsonencode(["22222222-2222-2222-2222-222222222222"])
+    )
+    error_message = "The frontend must redirect to Entra sign-in, exclude no path by default, and admit only its own registration's tokens."
+  }
+
+  assert {
+    condition = (
+      azapi_resource.builtin_auth["api"].body.properties.globalValidation.unauthenticatedClientAction == "Return401" &&
+      !can(azapi_resource.builtin_auth["api"].body.properties.globalValidation.redirectToProvider) &&
+      length(azapi_resource.builtin_auth["api"].body.properties.globalValidation.excludedPaths) == 0 &&
+      jsonencode(azapi_resource.builtin_auth["api"].body.properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications) == jsonencode(["22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333"]) &&
+      jsonencode(azapi_resource.builtin_auth["api"].body.properties.identityProviders.azureActiveDirectory.validation.allowedAudiences) == jsonencode(["44444444-4444-4444-4444-444444444444"])
+    )
+    error_message = "The api must answer 401 rather than redirect, exclude no path, and admit its own registration plus the listed service principals and audiences."
+  }
+
+  assert {
+    condition = (
+      contains(module.api.value_secret_names, "microsoft-provider-authentication-secret") &&
+      contains(module.frontend.value_secret_names, "microsoft-provider-authentication-secret") &&
+      !contains(module.workers[0].value_secret_names, "microsoft-provider-authentication-secret")
+    )
+    error_message = "The built-in auth client secret must reach ca-api and ca-frontend, the two apps the configuration names it on, and not ca-workers, which has no ingress."
+  }
+}
+
+run "builtin_auth_excluded_paths_reach_the_frontend_only" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id               = "11111111-1111-1111-1111-111111111111"
+      client_id               = "22222222-2222-2222-2222-222222222222"
+      frontend_excluded_paths = ["/", "/login"]
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition = (
+      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.excludedPaths) == jsonencode(["/", "/login"]) &&
+      length(azapi_resource.builtin_auth["api"].body.properties.globalValidation.excludedPaths) == 0
+    )
+    error_message = "frontend_excluded_paths must reach ca-frontend's configuration and never ca-api's."
+  }
+}
+
+run "builtin_auth_refuses_a_non_uuid_client_id" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "masterly-frontend"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  expect_failures = [var.builtin_auth]
+}
+
+run "builtin_auth_refuses_a_relative_excluded_path" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id               = "11111111-1111-1111-1111-111111111111"
+      client_id               = "22222222-2222-2222-2222-222222222222"
+      frontend_excluded_paths = ["login"]
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  expect_failures = [var.builtin_auth]
+}
+
+run "builtin_auth_requires_its_client_secret" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+  }
+
+  expect_failures = [var.builtin_auth]
+}
+
+# With the vault on, the built-in auth client secret is a vault reference like every other
+# install secret, and the frontend reads it with its own identity's per-secret grant.
+run "builtin_auth_secret_is_a_vault_reference_in_production" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+    registry_username    = "install-puller"
+    registry_password    = "pull-secret"
+    telemetry_url        = "https://cp.masterlydata.com"
+    telemetry_client_id  = "sa_01TEST"
+
+    telemetry_client_secret = "telemetry-secret"
+    breakglass_owner_email  = "owner@example.com"
+    breakglass_secret_hash  = "0000000000000000000000000000000000000000000000000000000000000000"
+    external_database_url   = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+
+  assert {
+    condition = (
+      contains(module.api.vault_backed_secret_names, "microsoft-provider-authentication-secret") &&
+      contains(module.frontend.vault_backed_secret_names, "microsoft-provider-authentication-secret") &&
+      length(module.frontend.value_secret_names) == 0
+    )
+    error_message = "With the Key Vault on, the built-in auth client secret must reach both apps as a vault reference, never as a value."
+  }
+
+  assert {
+    condition     = contains(keys(azurerm_role_assignment.kv_secrets_user_frontend), "microsoft-provider-authentication-secret")
+    error_message = "The frontend's identity must be granted read on the built-in auth secret alone, like each of its other secrets."
   }
 }
