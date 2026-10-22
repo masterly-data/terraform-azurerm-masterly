@@ -297,7 +297,9 @@ variable "builtin_auth" {
   EOT
 
   validation {
-    condition = var.builtin_auth == null || alltrue([
+    # A conditional, not `||`: Terraform before 1.12 evaluates both sides of `||`, and the
+    # right side reads attributes of a null object when the input is unset.
+    condition = var.builtin_auth == null ? true : alltrue([
       for id in concat([var.builtin_auth.tenant_id, var.builtin_auth.client_id], var.builtin_auth.api_allowed_applications) :
       can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))
     ])
@@ -305,7 +307,7 @@ variable "builtin_auth" {
   }
 
   validation {
-    condition     = var.builtin_auth == null || alltrue([for p in var.builtin_auth.frontend_excluded_paths : startswith(p, "/")])
+    condition     = var.builtin_auth == null ? true : alltrue([for p in var.builtin_auth.frontend_excluded_paths : startswith(p, "/")])
     error_message = "builtin_auth.frontend_excluded_paths entries must be absolute paths starting with \"/\"."
   }
 
