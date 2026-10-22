@@ -293,30 +293,30 @@ exactly this. Do not bring a production install up with `identity_binding = "dev
 requires — Key Vault with purge protection, which cannot be turned off, the control-plane store,
 Redis — at once, on a running install.
 
-### Built-in authentication in front of the apps (`builtin_auth`)
+### Built-in authentication in front of the frontend (`builtin_auth`)
 
 `identity_binding` decides how the **application** signs a caller in. `builtin_auth` adds a
 second, independent gate at the **platform**: Container Apps built-in authentication (often
-called EasyAuth) with Microsoft Entra ID, on `ca-frontend` and `ca-api`. A request without an
-Entra sign-in for your tenant is refused before it reaches either container, and a caller who
-passes it still has to sign in to the application, which decides the member and their roles.
-Neither layer relies on the other. Unset (the default), the module configures none.
+called EasyAuth) with Microsoft Entra ID, on `ca-frontend` only. A browser without an Entra
+sign-in for your tenant is redirected to Entra sign-in before it reaches the frontend, and a user
+who passes it still has to sign in to the application, which decides the member and their
+roles. Neither layer relies on the other. Unset (the default), the module configures none.
 
 | App | Unauthenticated request | Who is admitted |
 |---|---|---|
 | `ca-frontend` | Redirected to Entra sign-in | Users of `tenant_id` signing in through `client_id`. `frontend_excluded_paths` (empty by default) are served without sign-in. |
-| `ca-api` | `401` | Tokens issued to `client_id` or to an audience in `api_allowed_audiences`, held by `client_id` itself or by a service principal in `api_allowed_applications`. Anything else valid but unlisted is `403`. |
+| `ca-api` | Not gated | The module configures no built-in auth on the api. |
 
-A machine client, such as the Python SDK or a pipeline, gets a token by OAuth 2.0 client
-credentials as a service principal in your tenant and presents it as `Authorization: Bearer`.
-With `identity_binding = "oidc"` the application reads the same token: register the service
-principal's client id as a service account and the one token passes both layers. For that
-the token's audience must be the application's `oidc_audience`, so list it in
-`api_allowed_audiences` when it is a different registration from `client_id`, and set
-`requestedAccessTokenVersion` to `2` on the registration the token is issued for.
+The module gates the frontend only. The api is reached internally: the frontend's server-side
+calls go to `ca-api` inside the Container Apps environment, and the module puts no platform gate
+on it; the application authenticates its callers as `identity_binding` sets. With
+`api_ingress_external = true` the api is also published to `ingress_allowed_cidrs`, and this gate
+does not cover it there either; a plan that sets both warns through the check
+`builtin_auth_does_not_gate_the_published_api`, on every plan while both are set.
 
-Requests between the apps inside the environment (the frontend's server-side calls to the
-api) and the platform's health probes are not presented to this gate.
+`api_allowed_applications` and `api_allowed_audiences` configured a gate on `ca-api` in 0.19.0
+and 0.19.1. They are deprecated and ignored: a plan that sets either succeeds and warns
+(`builtin_auth_api_entries_are_ignored`). Remove them from `builtin_auth`.
 
 To set it up, use an app registration in your tenant (one you already use for built-in auth is
 fine; the module takes over its configuration):
@@ -324,23 +324,32 @@ fine; the module takes over its configuration):
 1. Add `https://<frontend host>/.auth/login/aad/callback` as a **Web** redirect URI and enable
    **ID tokens**.
 2. Add a client secret and pass it as `builtin_auth_client_secret`. The module stores it as the
-   Container App secret `microsoft-provider-authentication-secret` on both apps (a Key Vault
-   reference with `enable_key_vault`), the name Azure gives it.
-3. Set `builtin_auth = { tenant_id = "...", client_id = "..." }`, plus
-   `api_allowed_applications` for each service principal that calls `/v1`.
+   Container App secret `microsoft-provider-authentication-secret` (a Key Vault reference with
+   `enable_key_vault`), the name Azure gives it. It is on `ca-frontend`, which uses it, and also
+   on `ca-api`, which carried it while 0.19.0 and 0.19.1 gated the api and keeps it so that
+   upgrading changes neither app.
+3. Set `builtin_auth = { tenant_id = "...", client_id = "..." }`.
 
-An install that already configured built-in auth by hand imports each app's configuration once
-in the first apply that sets `builtin_auth`, or the apply fails because it already exists. Use
-one block with `for_each` (Terraform 1.16 was seen planning only the first of two separate
-blocks for this resource and proposing to create the second):
+An install that already configured built-in auth on the frontend by hand imports that
+configuration once, in the first apply that sets `builtin_auth`, or the apply fails because it
+already exists:
 
 ```hcl
 import {
-  for_each = toset(["api", "frontend"])
-  to       = module.masterly.azapi_resource.builtin_auth[each.key]
-  id       = "/subscriptions/<subscription id>/resourceGroups/<aca resource group>/providers/Microsoft.App/containerApps/ca-${each.key}/authConfigs/current"
+  to = module.masterly.azapi_resource.builtin_auth["frontend"]
+  id = "/subscriptions/<subscription id>/resourceGroups/<aca resource group>/providers/Microsoft.App/containerApps/ca-frontend/authConfigs/current"
 }
 ```
+
+**Upgrading from 0.19.0 or 0.19.1.** Those versions also configured `ca-api`. The first plan on
+this version destroys that one resource, `module.masterly.azapi_resource.builtin_auth["api"]`
+(the api's `authConfigs/current`), and changes nothing else: the frontend's configuration, both apps
+and their secrets stay as they are. If your configuration still has the `for_each` import block
+those versions documented, with `"api"` in it, narrow it to the frontend as above or delete it
+first: an import block for `["api"]` names an instance this version no longer has, and the plan
+fails. An install that configured built-in auth on `ca-api` by hand and never imported it keeps
+that configuration; remove it in the portal (the app's **Authentication** page) if you want the
+api reached without it.
 
 The configuration is written with the `Azure/azapi` provider, because azurerm has no resource
 for it. The module requires that provider whether or not you set `builtin_auth`, so an
@@ -1873,7 +1882,7 @@ terraform providers lock \
 
 This repo ships no lock file of its own, for the same reason: it is a module, not a root
 configuration. It constrains azurerm to `~> 5.8`, random to `~> 3.6` and azapi to `~> 2.9`
-(used only for [built-in authentication](#built-in-authentication-in-front-of-the-apps-builtin_auth)),
+(used only for [built-in authentication](#built-in-authentication-in-front-of-the-frontend-builtin_auth)),
 and leaves the exact versions to you. That
 floor is load-bearing rather than housekeeping: with no lock file here, the constraint is the
 only thing governing your `terraform init`. `versions.tf` records why it sits where it does.

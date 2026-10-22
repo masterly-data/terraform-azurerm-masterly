@@ -22,6 +22,30 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Fixed
+
+- **`builtin_auth` gates `ca-frontend` only** (since 0.19.0). It also put built-in authentication
+  on `ca-api`. The api is reached internally, by the frontend's server-side calls inside the
+  Container Apps environment, so the module no longer configures a gate there; the application
+  authenticates its callers as `identity_binding` sets. **On upgrade, the first plan destroys
+  one resource, `azapi_resource.builtin_auth["api"]`** (the api's `authConfigs/current`), and
+  changes nothing else: the frontend's configuration keeps its address and its body, and both
+  apps keep their secrets, `microsoft-provider-authentication-secret` included, which stays on
+  `ca-api` unused so that neither app changes. If your configuration still has the `for_each`
+  import block 0.19.0 documented, narrow it to `"frontend"` or delete it before you plan: an
+  import block for `["api"]` names an instance this version does not have, and the plan fails.
+  With `api_ingress_external = true` the published api is no longer behind built-in auth; it
+  stays limited to `ingress_allowed_cidrs`, and a plan that sets both warns through the check
+  `builtin_auth_does_not_gate_the_published_api`, on every plan while both are set. The README
+  section is now "Built-in authentication in front of the frontend".
+
+### Deprecated
+
+- `builtin_auth.api_allowed_applications` and `builtin_auth.api_allowed_audiences`. They are
+  ignored: setting either still plans, configures nothing, and warns through the check
+  `builtin_auth_api_entries_are_ignored`. Remove them from `builtin_auth`.
+  `api_allowed_applications` entries are no longer validated as UUIDs.
+
 ## [0.19.1] - 2026-10-22
 
 ### Fixed

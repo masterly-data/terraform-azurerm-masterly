@@ -5140,6 +5140,11 @@ run "api_ingress_can_be_opted_into_and_is_narrowed" {
     condition     = module.frontend.ingress_allowed_ip_ranges == ["203.0.113.7/32"]
     error_message = "The frontend allowlist must be unaffected by the api opting in."
   }
+
+  assert {
+    condition     = !local.builtin_auth_leaves_published_api_ungated
+    error_message = "With builtin_auth unset, publishing the api must not raise the builtin_auth warning."
+  }
 }
 
 # Guard: exposing /v1 to the whole internet as the price of SDK access would be a worse
@@ -7884,58 +7889,73 @@ run "builtin_auth_is_absent_by_default" {
   }
 }
 
-run "builtin_auth_gates_both_apps" {
+run "builtin_auth_gates_the_frontend_only" {
   command = plan
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_workers        = true
     builtin_auth = {
-      tenant_id                = "11111111-1111-1111-1111-111111111111"
-      client_id                = "22222222-2222-2222-2222-222222222222"
-      api_allowed_applications = ["33333333-3333-3333-3333-333333333333"]
-      api_allowed_audiences    = ["44444444-4444-4444-4444-444444444444"]
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
     }
     builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   assert {
-    condition     = toset(keys(azapi_resource.builtin_auth)) == toset(["api", "frontend"])
-    error_message = "builtin_auth must configure built-in auth on exactly ca-api and ca-frontend."
-  }
-
-  assert {
-    condition = alltrue([
-      for k, r in azapi_resource.builtin_auth :
-      r.name == "current" &&
-      r.type == "Microsoft.App/containerApps/authConfigs@2025-01-01" &&
-      r.body.properties.platform.enabled == true &&
-      r.body.properties.identityProviders.azureActiveDirectory.registration.openIdIssuer == "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0" &&
-      r.body.properties.identityProviders.azureActiveDirectory.registration.clientId == "22222222-2222-2222-2222-222222222222" &&
-      r.body.properties.identityProviders.azureActiveDirectory.registration.clientSecretSettingName == "microsoft-provider-authentication-secret"
-    ])
-    error_message = "Both auth configurations must be named current, enabled, and point at the tenant's v2.0 issuer, the registration and its secret."
+    condition     = toset(keys(azapi_resource.builtin_auth)) == toset(["frontend"])
+    error_message = "builtin_auth must configure built-in auth on ca-frontend only, under the key \"frontend\" that earlier versions used."
   }
 
   assert {
     condition = (
-      azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.unauthenticatedClientAction == "RedirectToLoginPage" &&
-      azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.redirectToProvider == "azureactivedirectory" &&
-      length(azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.excludedPaths) == 0 &&
-      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications) == jsonencode(["22222222-2222-2222-2222-222222222222"])
+      azapi_resource.builtin_auth["frontend"].name == "current" &&
+      azapi_resource.builtin_auth["frontend"].type == "Microsoft.App/containerApps/authConfigs@2025-01-01"
     )
-    error_message = "The frontend must redirect to Entra sign-in, exclude no path by default, and admit only its own registration's tokens."
+    error_message = "The frontend's auth configuration must be authConfigs/current at 2025-01-01, as in earlier versions, or the upgrade replaces it."
+  }
+
+  # The body exactly as 0.19.0 and 0.19.1 planned it for the frontend. Any difference is an
+  # update to ca-frontend's gate on upgrade, which this version must not make.
+  assert {
+    condition = jsonencode(azapi_resource.builtin_auth["frontend"].body) == jsonencode({
+      properties = {
+        platform = {
+          enabled = true
+        }
+        globalValidation = {
+          unauthenticatedClientAction = "RedirectToLoginPage"
+          excludedPaths               = []
+          redirectToProvider          = "azureactivedirectory"
+        }
+        identityProviders = {
+          azureActiveDirectory = {
+            registration = {
+              clientId                = "22222222-2222-2222-2222-222222222222"
+              clientSecretSettingName = "microsoft-provider-authentication-secret"
+              openIdIssuer            = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0"
+            }
+            validation = {
+              allowedAudiences = []
+              defaultAuthorizationPolicy = {
+                allowedApplications = ["22222222-2222-2222-2222-222222222222"]
+              }
+            }
+          }
+        }
+      }
+    })
+    error_message = "The frontend's auth configuration body must be unchanged from 0.19.1: redirect to Entra sign-in, no excluded path by default, and only its own registration's tokens admitted."
   }
 
   assert {
-    condition = (
-      azapi_resource.builtin_auth["api"].body.properties.globalValidation.unauthenticatedClientAction == "Return401" &&
-      !can(azapi_resource.builtin_auth["api"].body.properties.globalValidation.redirectToProvider) &&
-      length(azapi_resource.builtin_auth["api"].body.properties.globalValidation.excludedPaths) == 0 &&
-      jsonencode(azapi_resource.builtin_auth["api"].body.properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications) == jsonencode(["22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333"]) &&
-      jsonencode(azapi_resource.builtin_auth["api"].body.properties.identityProviders.azureActiveDirectory.validation.allowedAudiences) == jsonencode(["44444444-4444-4444-4444-444444444444"])
-    )
-    error_message = "The api must answer 401 rather than redirect, exclude no path, and admit its own registration plus the listed service principals and audiences."
+    condition     = length(local.builtin_auth_ignored_api_entries) == 0
+    error_message = "With no api entries set, the deprecation warning must not fire."
+  }
+
+  assert {
+    condition     = !local.builtin_auth_leaves_published_api_ungated
+    error_message = "With the api internal, the published-api warning must not fire."
   }
 
   assert {
@@ -7944,11 +7964,160 @@ run "builtin_auth_gates_both_apps" {
       contains(module.frontend.value_secret_names, "microsoft-provider-authentication-secret") &&
       !contains(module.workers[0].value_secret_names, "microsoft-provider-authentication-secret")
     )
-    error_message = "The built-in auth client secret must reach ca-api and ca-frontend, the two apps the configuration names it on, and not ca-workers, which has no ingress."
+    error_message = "The built-in auth client secret must stay on ca-api as well as ca-frontend, so that upgrading changes neither app, and never reach ca-workers, which has no ingress."
   }
 }
 
-run "builtin_auth_excluded_paths_reach_the_frontend_only" {
+# With the app ids known, nothing built-in auth configures may name ca-api as its parent.
+# azapi_resource.builtin_auth is the module's only authConfigs resource.
+run "builtin_auth_configures_nothing_on_ca_api" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  override_module {
+    target = module.api
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+      name                      = "ca-api"
+      fqdn                      = "ca-api.internal.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = false
+      ingress_allow_insecure    = true
+      ingress_allowed_ip_ranges = []
+    }
+  }
+
+  override_module {
+    target = module.frontend
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+      name                      = "ca-frontend"
+      fqdn                      = "ca-frontend.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = []
+    }
+  }
+
+  assert {
+    condition = length([
+      for k, r in azapi_resource.builtin_auth : k
+      if r.parent_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+    ]) == 0
+    error_message = "No built-in auth configuration may target ca-api: builtin_auth gates ca-frontend only."
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.builtin_auth) == 1 &&
+      azapi_resource.builtin_auth["frontend"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+    )
+    error_message = "builtin_auth must configure exactly one auth configuration, on ca-frontend."
+  }
+}
+
+# The api entries are deprecated and ignored: setting them still plans, configures nothing on
+# ca-api, leaves the frontend's configuration as it would be without them, and warns.
+run "builtin_auth_ignores_the_api_entries_with_a_warning" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id                = "11111111-1111-1111-1111-111111111111"
+      client_id                = "22222222-2222-2222-2222-222222222222"
+      api_allowed_applications = ["33333333-3333-3333-3333-333333333333"]
+      api_allowed_audiences    = ["api://masterly-api"]
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition     = toset(keys(azapi_resource.builtin_auth)) == toset(["frontend"])
+    error_message = "The deprecated api entries must not bring back a configuration on ca-api."
+  }
+
+  assert {
+    condition = (
+      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.validation.allowedAudiences) == jsonencode([]) &&
+      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications) == jsonencode(["22222222-2222-2222-2222-222222222222"])
+    )
+    error_message = "The deprecated api entries must not reach the frontend's configuration."
+  }
+
+  expect_failures = [check.builtin_auth_api_entries_are_ignored]
+}
+
+# With the api published, builtin_auth still gates ca-frontend only, and the plan warns that
+# the published api has no platform gate.
+run "builtin_auth_warns_when_the_api_is_published" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_ingress_external  = true
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  override_module {
+    target = module.api
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+      name                      = "ca-api"
+      fqdn                      = "ca-api.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
+    }
+  }
+
+  override_module {
+    target = module.frontend
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+      name                      = "ca-frontend"
+      fqdn                      = "ca-frontend.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = []
+    }
+  }
+
+  assert {
+    condition     = local.builtin_auth_leaves_published_api_ungated
+    error_message = "With builtin_auth set and api_ingress_external = true, the published api is ungated and the plan must warn."
+  }
+
+  assert {
+    condition = (
+      toset(keys(azapi_resource.builtin_auth)) == toset(["frontend"]) &&
+      length([
+        for k, r in azapi_resource.builtin_auth : k
+        if r.parent_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+      ]) == 0
+    )
+    error_message = "Publishing the api must not bring back a built-in auth configuration on ca-api."
+  }
+
+  expect_failures = [check.builtin_auth_does_not_gate_the_published_api]
+}
+
+run "builtin_auth_excluded_paths_reach_the_frontend" {
   command = plan
 
   variables {
@@ -7962,11 +8131,8 @@ run "builtin_auth_excluded_paths_reach_the_frontend_only" {
   }
 
   assert {
-    condition = (
-      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.excludedPaths) == jsonencode(["/", "/login"]) &&
-      length(azapi_resource.builtin_auth["api"].body.properties.globalValidation.excludedPaths) == 0
-    )
-    error_message = "frontend_excluded_paths must reach ca-frontend's configuration and never ca-api's."
+    condition     = jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.excludedPaths) == jsonencode(["/", "/login"])
+    error_message = "frontend_excluded_paths must reach ca-frontend's configuration."
   }
 }
 
