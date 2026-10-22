@@ -22,6 +22,16 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every apply after the first failed on the `AZKVAuditLogs` table** (since 0.18.0). The table
+  set `retention_in_days` and left `total_retention_in_days` unset. Azure fills that in on
+  create, the next plan proposed clearing it (`total_retention_in_days = 90 -> null`), and Azure
+  refused the update: `InvalidParameter: The specified total retention value is invalid`. The
+  table now sets its total retention to `security_log_retention_days` as well, which keeps no
+  archive tier, the behaviour it already had. An install that hit the error needs no action
+  beyond taking this version: its plan shows no change to the table.
+
 ## [0.19.0] - 2026-10-22
 
 ### Added

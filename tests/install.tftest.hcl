@@ -644,6 +644,13 @@ run "workspace_query_access_and_retention_follow_the_inputs" {
     )
     error_message = "The workspace's retention must follow log_retention_days, and AZKVAuditLogs's must follow security_log_retention_days."
   }
+
+  # Set, and equal to the retention: Azure fills an unset total retention in on create, and the
+  # next plan's attempt to clear it is refused, which failed every apply after the first.
+  assert {
+    condition     = module.logs.table_total_retention_days["AZKVAuditLogs"] == 730
+    error_message = "AZKVAuditLogs's total retention must be set, to security_log_retention_days (no archive tier)."
+  }
 }
 
 # Guard: both retentions are refused below 30 days, the least the workspace accepts.
