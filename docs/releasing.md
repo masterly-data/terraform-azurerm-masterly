@@ -69,6 +69,23 @@ Afterwards, replace the "Not yet proven on a live install" paragraph in the READ
 "How `ca-workers` scales" and the matching sentence in the changelog entry with what the run
 showed.
 
+**Built-in authentication (`builtin_auth`)** (in 0.19.0 in the [changelog](../CHANGELOG.md)).
+Planned read-only against a live install that had configured built-in auth by hand on both apps:
+both `authConfigs/current` resources imported with one `for_each` import block, no resource was
+destroyed, and the hand-added `microsoft-provider-authentication-secret` on each app was replaced
+by the module-managed secret of the same name. Not yet applied. Applied from the candidate:
+
+1. **Azure accepts the configuration.** Both `azapi_resource.builtin_auth` instances apply at
+   `2025-01-01`, and a second plan shows no change to either.
+2. **The gate behaves as documented.** `ca-frontend` redirects an anonymous browser to Entra
+   sign-in and serves a signed-in user; `ca-api` answers `401` with no token and with a token
+   that is not an Entra token, and admits a client-credentials token from a service principal in
+   `api_allowed_applications`.
+3. **The frontend still reaches the api.** Signed in, the GUI's calls through the BFF succeed
+   with the api gated, which is the in-environment path the README says the gate does not see.
+4. **The replaced secret works.** Sign-in completes after the apply, with the secret supplied as
+   `builtin_auth_client_secret`.
+
 ## What makes the workflow the only path
 
 On its own, the workflow is the documented path, not an enforced one: GitHub still accepts a `v*`
