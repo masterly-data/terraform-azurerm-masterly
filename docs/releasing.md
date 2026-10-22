@@ -65,6 +65,13 @@ on, planned and applied from the candidate:
    scaler starts working once the assignment has propagated, without a second apply. Note how
    long that took.
 
+Progress, 2026-10-22, on Masterly's reference install (`enable_service_bus` and
+`enable_workers` on, standard namespace; applied on 0.19.0): item 1 in part — `ca-workers`
+updated in place and the queue role assignment was added; item 2 in part — Azure accepted
+`Azure Service Bus Data Owner` assigned at the jobs queue's scope (it needed the install's
+role-assignment allow-list extended first). Not yet observed: the scaler scaling on a backlog,
+items 3 and 4.
+
 Afterwards, replace the "Not yet proven on a live install" paragraph in the README's
 "How `ca-workers` scales" and the matching sentence in the changelog entry with what the run
 showed.
@@ -85,6 +92,13 @@ by the module-managed secret of the same name. Not yet applied. Applied from the
    with the api gated, which is the in-environment path the README says the gate does not see.
 4. **The replaced secret works.** Sign-in completes after the apply, with the secret supplied as
    `builtin_auth_client_secret`.
+
+Progress, 2026-10-22, on Masterly's reference install (applied on 0.19.0, run 39765411174):
+item 1 in part — both configurations imported and applied, and a refreshing plan afterwards
+proposed no change to either; item 2 in part — `ca-frontend` redirects a browser to Entra
+sign-in, and `ca-api` answers `401` with no token and with a non-Entra token. Still open: a
+service principal's client-credentials token admitted on `ca-api` (item 2), and a signed-in
+session through the BFF (items 3 and 4).
 
 ## What makes the workflow the only path
 
