@@ -100,7 +100,7 @@ sign-in, and `ca-api` answers `401` with no token and with a non-Entra token. St
 service principal's client-credentials token admitted on `ca-api` (item 2), and a signed-in
 session through the BFF (items 3 and 4).
 
-The next candidate gates `ca-frontend` only (Unreleased in the
+The next candidate gates `ca-frontend` only (in 0.20.0 in the
 [changelog](../CHANGELOG.md)). That withdraws the `ca-api` half of items 1 and 2, including the
 open client-credentials check on `ca-api`: do not run it. Items 5 and 6 replace it. On the same
 install, planned and applied from that candidate:
