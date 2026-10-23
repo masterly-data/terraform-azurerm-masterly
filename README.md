@@ -11,15 +11,15 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.19"
+  version = "~> 0.20"
 }
 ```
 
 <!-- release-manifest:pins:begin -->
-Pin a version. `version = "~> 0.19.0"` takes patches of 0.19 only: releases that
+Pin a version. `version = "~> 0.20.0"` takes patches of 0.20 only: releases that
 add no capability, no new input or required setting and no database migration, so you
 can take them without reading the changelog. Use it if that is all you want to receive.
-`version = "~> 0.19"`, as in the examples on this page, also takes every later
+`version = "~> 0.20"`, as in the examples on this page, also takes every later
 0.x minor. Before 1.0.0 a minor may carry a breaking change, listed under its own heading in
 the changelog, so read it before you take one.
 `=` pins one release exactly. [Versioning](#versioning) says what each kind of
@@ -62,7 +62,7 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.19"
+  version = "~> 0.20"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -1680,6 +1680,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.20.0` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-23 |
 | `0.19.1` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-22 |
 | `0.19.0` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-22 |
 | `0.18.0` | `masterly.azurecr.io/api:v0.133.13` | `masterly.azurecr.io/frontend:v0.141.0` | 2026-10-19 |

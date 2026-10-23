@@ -22,6 +22,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-23
+
 ### Fixed
 
 - **`builtin_auth` gates `ca-frontend` only** (since 0.19.0). It also put built-in authentication
@@ -1020,7 +1022,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - The first public tag. The Terraform content was unchanged from the internal repository it was
   extracted from, api readiness-probe tolerances included, and `examples/production` was added.
 
-[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.19.1...HEAD
+[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.20.0
 [0.19.1]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.19.1
 [0.19.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.19.0
 [0.18.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.18.0
