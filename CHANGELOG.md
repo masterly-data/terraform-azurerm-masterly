@@ -22,6 +22,16 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Fixed
+
+- **`scripts/preflight.sh` no longer states how many role assignments the module creates.** When
+  the deploying identity cannot create role assignments, the check said the module writes "up to
+  five" of them. That number was typed by hand, had drifted from what the module writes, and could
+  mislead you about the size of the grant. The failure now says that the module creates role
+  assignments and names the roles that clear the check: Role Based Access Control Administrator,
+  User Access Administrator or Owner, at subscription scope. Which identities pass the check is
+  unchanged, and so is the module.
+
 ## [0.20.0] - 2026-10-23
 
 ### Fixed
