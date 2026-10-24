@@ -188,7 +188,7 @@ else
       if echo "$roles" | grep -qxE 'Owner|User Access Administrator|Role Based Access Control Administrator'; then
         pass "can create role assignments"
       else
-        fail "cannot create role assignments — the module writes up to five of them"
+        fail "cannot create role assignments, and the module creates them — grant Role Based Access Control Administrator, User Access Administrator or Owner at subscription scope"
       fi
     fi
   fi
