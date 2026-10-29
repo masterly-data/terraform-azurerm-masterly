@@ -22,6 +22,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-29
+
+### Changed
+
+- **Released against `api` image `v0.135.0` and `frontend` image `v0.143.0`** (from `v0.134.0`
+  and `v0.142.0` in 0.21.0): the pair Masterly's reference install runs today. The module itself
+  is unchanged. The `api` image verifies licence claims version 2, which adds the ignorable
+  `release_ring` claim; a licence minted at an earlier claims version verifies as before.
+
 ## [0.21.0] - 2026-10-28
 
 ### Fixed
