@@ -17,8 +17,9 @@
 #   - a token whose header cannot be decoded — the application's own verification at startup
 #     refuses a malformed token, and a plan-time guess about one would only add a second opinion;
 #   - an api image whose tag no release in the manifest records (a hand-built or retagged image,
-#     or an image newer than this module version) — its claims version is not known here, and the
-#     application's startup check remains the backstop.
+#     or an image newer than this module version) and which carries no digest a release records
+#     (a Canary or Beta build, or a release cut before digests were recorded) — its claims version
+#     is not known here, and the application's startup check remains the backstop.
 
 locals {
   # The token's first segment is its JOSE header: base64url, unpadded (RFC 7515). Terraform's
@@ -37,25 +38,39 @@ locals {
   token_claims_version = nonsensitive(try(floor(tonumber(local.header["masterly_claims_version"])), 0))
   token_claims_floor   = nonsensitive(try(floor(tonumber(local.header["masterly_claims_floor"])), 0))
 
-  # An api image reference is registry/.../api:tag, optionally pinned by digest after the tag.
-  api_tag_pattern = "^[^\\s/]+(?:/[^\\s/:]+)*/api:([^\\s/:@]+)(?:@sha256:[0-9a-f]{64})?$"
-  pinned_api_tag  = try(regex(local.api_tag_pattern, var.api_image)[0], null)
+  # An api image reference is registry/.../api:tag, registry/.../api:tag@sha256:<digest> or
+  # registry/.../api@sha256:<digest>. The groups capture the tag and the digest; one that is absent
+  # captures nothing, which coalesce turns into null.
+  api_ref_pattern   = "^[^\\s/]+(?:/[^\\s/:]+)*/api(?::([^\\s/:@]+))?(?:@(sha256:[0-9a-f]{64}))?$"
+  pinned_api_ref    = try(regex(local.api_ref_pattern, var.api_image), [null, null])
+  pinned_api_tag    = try(coalesce(local.pinned_api_ref[0]), null)
+  pinned_api_digest = try(coalesce(local.pinned_api_ref[1]), null)
 
-  # Every api tag the manifest records, with the claims version its build verifies. A release
-  # entry cut before api_claims_version existed records none; every api image released before it
-  # existed verifies claims version 0, so that is what an absent value means (the manifest's own
-  # contract says so). Two module releases on the same api tag record the same build.
+  # Every api tag and api digest the manifest records, with the claims version its build verifies.
+  # A release entry cut before api_claims_version existed records none; every api image released
+  # before it existed verifies claims version 0, so that is what an absent value means (the
+  # manifest's own contract says so). Two module releases on the same api tag record the same
+  # build. A release entry cut before digests were recorded names no digest.
   recorded = [
     for version, release in try(var.manifest.releases, {}) : {
-      tag            = try(regex(local.api_tag_pattern, release.images.api)[0], null)
+      tag            = try(coalesce(regex(local.api_ref_pattern, release.images.api)[0]), null)
+      digest         = try(lower(release.digests.api), null)
       claims_version = try(floor(tonumber(release.api_claims_version)), 0)
     }
   ]
   claims_version_by_tag = {
     for r in local.recorded : r.tag => r.claims_version... if r.tag != null
   }
+  claims_version_by_digest = {
+    for r in local.recorded : r.digest => r.claims_version... if r.digest != null
+  }
 
-  image_claims_version = local.pinned_api_tag == null ? null : try(max(local.claims_version_by_tag[local.pinned_api_tag]...), null)
+  # A tag a release records decides, as it always has, so a mirror that kept the tag is
+  # recognised whatever its digest. A reference with no tag, or with a tag no release records (a
+  # release mirrored under a tag of your own), is resolved by its digest.
+  tag_claims_version    = local.pinned_api_tag == null ? null : try(max(local.claims_version_by_tag[local.pinned_api_tag]...), null)
+  digest_claims_version = local.pinned_api_digest == null ? null : try(max(local.claims_version_by_digest[local.pinned_api_digest]...), null)
+  image_claims_version  = local.tag_claims_version != null ? local.tag_claims_version : local.digest_claims_version
 
   # The oldest recorded api release that verifies the token's floor: the tag to move to. Ordered
   # by semver, so v0.9.0 sorts before v0.10.0; a tag that is not vX.Y.Z cannot be ordered and is
