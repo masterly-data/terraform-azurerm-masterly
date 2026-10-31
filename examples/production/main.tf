@@ -54,7 +54,10 @@ module "masterly" {
   # Mirroring into your own registry instead? Set registry_credential_mode =
   # "customer_registry", registry_location to your login server (+ acr_id if the module
   # should write the AcrPull grant) and remove registry_token: the plan refuses a token
-  # outside the token mode.
+  # outside the token mode. To pull from that registry over the install's VNet, add
+  # registry_private_endpoint = true with acr_id set: a private endpoint and a
+  # privatelink.azurecr.io zone linked to the VNet (a Premium registry; the token mode
+  # refuses it).
   registry_credential_mode = "token"
   registry_token           = var.registry_token
   release_channel          = var.release_channel
