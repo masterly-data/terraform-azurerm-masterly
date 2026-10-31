@@ -18,7 +18,10 @@ The registry credential arrives as `registry_token`, with the module's
 `registry_credential_mode = "token"`: a direct pull of `masterly.azurecr.io/release/api` and
 `release/frontend`, pinned by the digests `MANIFEST.json` records for `release_channel`
 (`"stable"` by default). Mirroring into your own registry is the `"customer_registry"` mode; see
-"Getting the images" in the [module README](../../README.md#getting-the-images-adr-0067).
+"Getting the images" in the [module README](../../README.md#getting-the-images-adr-0067). That
+mode can also pull over the install's VNet with `registry_private_endpoint = true` and `acr_id`
+(see [The registry over a private endpoint](../../README.md#the-registry-over-a-private-endpoint));
+the token mode this example uses takes no private endpoint.
 
 `mode = "production"` is gated at **plan** time. If any of it is missing, Terraform
 refuses before touching Azure and names what is absent.

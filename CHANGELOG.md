@@ -24,6 +24,16 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- **`registry_private_endpoint`: the registry over a private endpoint.** A new optional input, off
+  by default. On, it creates a private endpoint to the registry `acr_id` names (subresource
+  `registry`) on the install's private-endpoint subnet, a `privatelink.azurecr.io` private DNS
+  zone with a virtual network link to the install's VNet, and the endpoint's DNS zone group in
+  that zone, so the apps pull over the VNet; a new output, `registry_private_endpoint_id`, names
+  the endpoint. It is used only with `registry_credential_mode = "managed_identity"` or
+  `"customer_registry"`: the plan refuses it with the `token` mode (set or derived from a
+  credential) and without `acr_id` set to a registry's resource ID. The registry must be Premium,
+  and the module does not change its public network access. Nothing changes for an install that
+  leaves it off.
 - **`api_image` and `frontend_image` accept a digest.** Each takes `registry/repository:tag`,
   `registry/repository:tag@sha256:<digest>` or `registry/repository@sha256:<digest>`, for example
   `masterly.azurecr.io/release/api@sha256:<digest>`.

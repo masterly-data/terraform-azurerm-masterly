@@ -3282,6 +3282,127 @@ run "registry_customer_mode_pulls_release_repositories_from_the_customer_registr
   }
 }
 
+# --- The registry's private endpoint (registry.tf) ---------------------------------------
+# On with the managed-identity mode: one endpoint to acr_id's "registry" subresource in the data
+# resource group, one privatelink.azurecr.io zone with its VNet link, and the endpoint's zone
+# group in that zone. The created VNet's and zone's IDs are unknown at plan; the injected-network
+# run below compares the VNet and subnet the endpoint lands on.
+run "registry_private_endpoint_managed_identity_plans_the_endpoint_zone_and_link" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs     = ["203.0.113.7/32"]
+    acr_login_server          = null
+    registry_credential_mode  = "managed_identity"
+    acr_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    registry_private_endpoint = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.registry) == 1 &&
+      azurerm_private_endpoint.registry[0].name == "pe-masterly-registry" &&
+      azurerm_private_endpoint.registry[0].resource_group_name == azurerm_resource_group.data.name &&
+      azurerm_private_endpoint.registry[0].private_service_connection[0].private_connection_resource_id == var.acr_id &&
+      azurerm_private_endpoint.registry[0].private_service_connection[0].subresource_names == tolist(["registry"]) &&
+      azurerm_private_endpoint.registry[0].private_service_connection[0].is_manual_connection == false
+    )
+    error_message = "registry_private_endpoint must create one private endpoint to acr_id's \"registry\" subresource, in the data resource group."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_dns_zone.registry) == 1 &&
+      azurerm_private_dns_zone.registry[0].name == "privatelink.azurecr.io" &&
+      azurerm_private_dns_zone.registry[0].resource_group_name == azurerm_resource_group.aca.name
+    )
+    error_message = "registry_private_endpoint must create the privatelink.azurecr.io private DNS zone."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_dns_zone_virtual_network_link.registry) == 1 &&
+      azurerm_private_dns_zone_virtual_network_link.registry[0].name == "pdzl-masterly-registry"
+    )
+    error_message = "registry_private_endpoint must link the privatelink.azurecr.io zone to the install's VNet."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.registry[0].private_dns_zone_group) == 1 &&
+      azurerm_private_endpoint.registry[0].private_dns_zone_group[0].name == "registry" &&
+      length(azurerm_private_endpoint.registry[0].private_dns_zone_group[0].private_dns_zone_ids) == 1
+    )
+    error_message = "The registry's private endpoint must carry one DNS zone group, in the privatelink.azurecr.io zone."
+  }
+
+  # The endpoint changes the network path only: the apps still pull from the same login server
+  # as their identities, with AcrPull on acr_id.
+  assert {
+    condition = (
+      module.api.registry.server == "masterly.azurecr.io" &&
+      module.frontend.registry.server == "masterly.azurecr.io" &&
+      module.api.registry.password_secret_name == null &&
+      azurerm_role_assignment.acr_pull[0].scope == var.acr_id &&
+      azurerm_role_assignment.acr_pull_frontend[0].scope == var.acr_id
+    )
+    error_message = "registry_private_endpoint must leave the registry block and the AcrPull grants as the managed-identity mode sets them."
+  }
+}
+
+# Topology 3 with a customer-owned registry: the endpoint lands on the injected
+# private-endpoint subnet and the zone is linked to the VNet that subnet belongs to.
+run "registry_private_endpoint_customer_registry_lands_on_the_injected_network" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    acr_login_server            = null
+    registry_location           = "acme.azurecr.io"
+    registry_credential_mode    = "customer_registry"
+    acr_id                      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-acme/providers/Microsoft.ContainerRegistry/registries/acme"
+    registry_private_endpoint   = true
+  }
+
+  assert {
+    condition = (
+      azurerm_private_endpoint.registry[0].subnet_id == var.private_endpoints_subnet_id &&
+      azurerm_private_endpoint.registry[0].private_service_connection[0].private_connection_resource_id == var.acr_id &&
+      azurerm_private_endpoint.registry[0].private_service_connection[0].subresource_names == tolist(["registry"])
+    )
+    error_message = "The registry's private endpoint must connect to the customer's acr_id from the injected private-endpoint subnet."
+  }
+
+  assert {
+    condition     = azurerm_private_dns_zone_virtual_network_link.registry[0].virtual_network_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke"
+    error_message = "The privatelink.azurecr.io zone must be linked to the VNet of the injected subnets."
+  }
+}
+
+# Off by default, even in an identity mode with acr_id set: no endpoint, no zone, no link.
+run "registry_private_endpoint_off_by_default_creates_nothing" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    acr_login_server         = null
+    registry_credential_mode = "managed_identity"
+    acr_id                   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.registry) == 0 &&
+      length(azurerm_private_dns_zone.registry) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.registry) == 0 &&
+      output.registry_private_endpoint_id == null
+    )
+    error_message = "With registry_private_endpoint off (the default), no registry private endpoint, DNS zone or VNet link may be created."
+  }
+}
+
 # The release channel picks the manifest release; the repository never moves. One run per
 # allowed value; the second compares itself with the first.
 run "release_channel_stable_resolves_the_latest_release" {
@@ -3533,6 +3654,69 @@ run "registry_customer_mode_without_a_customer_registry_is_rejected" {
   }
 
   expect_failures = [var.registry_credential_mode]
+}
+
+run "registry_private_endpoint_with_the_token_mode_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    acr_login_server         = null
+    registry_credential_mode = "token"
+    registry_token = {
+      username = "00000000-0000-0000-0000-000000000000"
+      password = "sp-client-secret"
+    }
+    acr_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    registry_private_endpoint = true
+  }
+
+  expect_failures = [var.registry_private_endpoint]
+}
+
+# The token mode derived from a credential, with registry_credential_mode left null.
+run "registry_private_endpoint_with_a_derived_token_mode_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = null
+    registry_token = {
+      username = "00000000-0000-0000-0000-000000000000"
+      password = "sp-client-secret"
+    }
+    acr_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    registry_private_endpoint = true
+  }
+
+  expect_failures = [var.registry_private_endpoint]
+}
+
+run "registry_private_endpoint_without_acr_id_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs     = ["203.0.113.7/32"]
+    acr_login_server          = null
+    registry_credential_mode  = "managed_identity"
+    registry_private_endpoint = true
+  }
+
+  expect_failures = [var.registry_private_endpoint]
+}
+
+run "registry_private_endpoint_with_an_acr_id_that_is_not_a_registry_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs     = ["203.0.113.7/32"]
+    acr_login_server          = null
+    registry_credential_mode  = "managed_identity"
+    acr_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared"
+    registry_private_endpoint = true
+  }
+
+  expect_failures = [var.registry_private_endpoint]
 }
 
 run "registry_location_with_acr_login_server_is_rejected" {
