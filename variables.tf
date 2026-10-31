@@ -128,34 +128,112 @@ variable "location_geo" {
 
 variable "api_image" {
   type        = string
-  description = "Fully-qualified api image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing \".\" or \":\", or localhost, and the repository's last segment is api (e.g. masterly.azurecr.io/release/api). The licence claims-floor check reads the tag, or the digest when there is no tag or no release in MANIFEST.json records the tag; a reference whose tag and digest no release records passes unchecked. Seeds the app; CD owns the running tag thereafter."
+  default     = null
+  description = "Fully-qualified api image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing \".\" or \":\", or localhost, and the repository's last segment is api (e.g. masterly.azurecr.io/release/api). Null (the default) takes the api image MANIFEST.json records for release_channel, as <registry>/release/api@sha256:<digest> on the registry registry_location names. The licence claims-floor check reads the tag, or the digest when there is no tag or no release in MANIFEST.json records the tag; a reference whose tag and digest no release records passes unchecked. Seeds the app; CD owns the running tag thereafter."
 
   validation {
-    condition     = can(regex("^(?:[^\\s/@]*[.:][^\\s/@]*|localhost)(?:/[^\\s/:@]+)*/api(?::\\w[\\w.-]{0,127}(?:@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$", var.api_image))
+    condition     = var.api_image == null ? true : can(regex("^(?:[^\\s/@]*[.:][^\\s/@]*|localhost)(?:/[^\\s/:@]+)*/api(?::\\w[\\w.-]{0,127}(?:@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$", var.api_image))
     error_message = "api_image must be registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest>, with the registry a host containing \".\" or \":\" (or \"localhost\"), the digest as 64 lowercase hex characters after \"sha256:\", and \"api\" as the repository's last segment (e.g. masterly.azurecr.io/release/api@sha256:<digest>)."
   }
 }
 
 variable "frontend_image" {
   type        = string
-  description = "Fully-qualified frontend image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing \".\" or \":\", or localhost, and the repository's last segment is frontend (e.g. masterly.azurecr.io/release/frontend). Seeds the app; CD owns the running tag thereafter."
+  default     = null
+  description = "Fully-qualified frontend image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing \".\" or \":\", or localhost, and the repository's last segment is frontend (e.g. masterly.azurecr.io/release/frontend). Null (the default) takes the frontend image MANIFEST.json records for release_channel, as <registry>/release/frontend@sha256:<digest> on the registry registry_location names. Seeds the app; CD owns the running tag thereafter."
 
   validation {
-    condition     = can(regex("^(?:[^\\s/@]*[.:][^\\s/@]*|localhost)(?:/[^\\s/:@]+)*/frontend(?::\\w[\\w.-]{0,127}(?:@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$", var.frontend_image))
+    condition     = var.frontend_image == null ? true : can(regex("^(?:[^\\s/@]*[.:][^\\s/@]*|localhost)(?:/[^\\s/:@]+)*/frontend(?::\\w[\\w.-]{0,127}(?:@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$", var.frontend_image))
     error_message = "frontend_image must be registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest>, with the registry a host containing \".\" or \":\" (or \"localhost\"), the digest as 64 lowercase hex characters after \"sha256:\", and \"frontend\" as the repository's last segment (e.g. masterly.azurecr.io/release/frontend@sha256:<digest>)."
+  }
+}
+
+variable "release_channel" {
+  type        = string
+  default     = "stable"
+  description = "Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. \"stable\" (the default) is the newest release, the image pair this module version was released against. \"previous\" is the newest older release with no known issue, for rolling the images back without changing the module version. The channel changes only the digest (or tag) of each image: the repository stays release/api and release/frontend on the registry that registry_location names. An image you set explicitly is used as given."
+
+  validation {
+    condition     = contains(["stable", "previous"], var.release_channel)
+    error_message = "release_channel must be \"stable\" or \"previous\". A Canary or Beta build is not in MANIFEST.json: set api_image and frontend_image to the references Masterly gives you instead."
+  }
+}
+
+variable "registry_location" {
+  type        = string
+  default     = null
+  description = "Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). Null (the default) is Masterly's registry, masterly.azurecr.io. Replaces acr_login_server; set one of the two, not both."
+
+  validation {
+    condition     = var.registry_location == null ? true : can(regex("^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+|localhost)(?::[0-9]{1,5})?$", var.registry_location))
+    error_message = "registry_location must be a lowercase registry host such as masterly.azurecr.io (a port is allowed), with no scheme, path or trailing slash."
+  }
+
+  validation {
+    condition     = var.registry_location == null || var.acr_login_server == null
+    error_message = "Set registry_location or the deprecated acr_login_server, not both. Move the value to registry_location and remove acr_login_server."
+  }
+}
+
+variable "registry_credential_mode" {
+  type        = string
+  default     = null
+  description = "How the apps authenticate to the registry. \"token\": direct pull from registry_location (Masterly's registry unless you set it) with the pull credential from your install bundle (registry_token), stored as the Container App secret registry-password on every app; no AcrPull grant is created. \"managed_identity\": each app pulls as its own user-assigned identity, and acr_id (when set) grants AcrPull to both identities. \"customer_registry\": you mirror the images into your own registry, named by registry_location, under the same release/api and release/frontend repositories, and the apps pull from it as their identities, with AcrPull through acr_id as for managed_identity. Null (the default) derives the mode: \"token\" when a pull credential is set, \"customer_registry\" when the registry is not Masterly's, and \"managed_identity\" otherwise."
+
+  validation {
+    condition     = var.registry_credential_mode == null ? true : contains(["token", "managed_identity", "customer_registry"], var.registry_credential_mode)
+    error_message = "registry_credential_mode must be \"token\", \"managed_identity\" or \"customer_registry\"."
+  }
+
+  validation {
+    condition     = var.registry_credential_mode != "token" || nonsensitive(var.registry_token != null) || var.registry_username != null
+    error_message = "registry_credential_mode = \"token\" needs the pull credential from your install bundle: set registry_token."
+  }
+
+  validation {
+    condition     = var.registry_credential_mode == null || var.registry_credential_mode == "token" || (nonsensitive(var.registry_token == null) && var.registry_username == null)
+    error_message = "registry_token (or registry_username and registry_password) is used only with registry_credential_mode = \"token\". Remove it, or set the mode to \"token\"."
+  }
+
+  validation {
+    condition = var.registry_credential_mode != "customer_registry" || !contains(
+      ["", "masterly.azurecr.io"],
+      var.registry_location != null ? var.registry_location : (var.acr_login_server != null ? lower(var.acr_login_server) : "")
+    )
+    error_message = "registry_credential_mode = \"customer_registry\" needs registry_location set to your own registry's login server (e.g. acme.azurecr.io), not Masterly's."
+  }
+}
+
+variable "registry_token" {
+  type = object({
+    username = string
+    password = string
+  })
+  default     = null
+  sensitive   = true
+  description = "The registry pull credential from your install bundle (ADR 0067, option 1): username is the per-customer pull principal's appId and password its client secret. Used with registry_credential_mode = \"token\", which is also the mode derived when it is set. The password is stored as the Container App secret registry-password on every app (a Key Vault reference when enable_key_vault is on); rotate by setting the principal's second active secret. Replaces registry_username and registry_password."
+
+  validation {
+    condition     = nonsensitive(var.registry_token == null) || (var.registry_username == null && nonsensitive(var.registry_password == null))
+    error_message = "Set registry_token or the deprecated registry_username and registry_password, not both. Move the pair into registry_token = { username = ..., password = ... }."
+  }
+
+  validation {
+    condition     = nonsensitive(var.registry_token == null ? true : length(trimspace(var.registry_token.username)) > 0 && length(var.registry_token.password) > 0)
+    error_message = "registry_token needs both a username and a password, from your install bundle."
   }
 }
 
 variable "acr_login_server" {
   type        = string
-  default     = "masterly.azurecr.io"
-  description = "Registry the install pulls images from (managed identity)."
+  default     = null
+  description = "Deprecated: use registry_location. The registry the install pulls images from. Null (the default) is masterly.azurecr.io; an empty string renders no registry block on the apps (public images only)."
 }
 
 variable "registry_username" {
   type        = string
   default     = null
-  description = "Credential-based image pull (ADR 0067, option 1 — direct pull from Masterly's registry): the per-customer service principal's appId, from the install bundle. Null = managed-identity pull (option 2 — your own ACR via acr_login_server/acr_id, or a Masterly-operated install)."
+  description = "Deprecated: use registry_token. The pull principal's appId from the install bundle (ADR 0067, option 1). Set together with registry_password, it is the token credential, and registry_credential_mode, when not set, derives to \"token\"."
 
   validation {
     condition     = (var.registry_username == null) == (var.registry_password == null)
@@ -167,13 +245,13 @@ variable "registry_password" {
   type        = string
   default     = null
   sensitive   = true
-  description = "The pull service principal's client secret (ADR 0067). Stored as a Container App secret on every app; rotate by flipping to the customer's second active secret."
+  description = "Deprecated: use registry_token. The pull principal's client secret (ADR 0067), stored as the Container App secret registry-password on every app."
 }
 
 variable "acr_id" {
   type        = string
   default     = null
-  description = "Resource ID of the registry, for the AcrPull role assignments on the install's two app identities (backend apps + frontend). Null skips them (grant pull access to BOTH principals out of band). The deploying principal needs roleAssignments/write on the registry's scope."
+  description = "Resource ID of the registry, for the AcrPull role assignments on the install's two app identities (backend apps + frontend) in the managed_identity and customer_registry modes; the token mode pulls with its credential and creates none. Null skips them (grant pull access to BOTH principals out of band). The deploying principal needs roleAssignments/write on the registry's scope."
 }
 
 variable "ingress_allowed_cidrs" {

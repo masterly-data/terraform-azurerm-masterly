@@ -3041,6 +3041,465 @@ run "registry_password_without_username_is_rejected" {
   expect_failures = [var.registry_username]
 }
 
+# --- Registry location, credential mode and release channel -----------------------
+# These runs leave api_image, frontend_image and acr_login_server null (the file-wide values
+# pin them), so the images resolve from the release channel and the registry from
+# registry_location. Digests are read from MANIFEST.json through the module's own local,
+# never typed here: a release changes them.
+
+# The token mode: direct pull from Masterly's registry with the bundle's credential. Every app
+# carries the username and the registry-password secret, and AcrPull is not granted even with
+# acr_id set, because nothing pulls as an identity.
+run "registry_token_mode_pulls_release_digests_with_the_pull_secret" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    api_image                = null
+    frontend_image           = null
+    acr_login_server         = null
+    enable_workers           = true
+    registry_credential_mode = "token"
+    registry_token = {
+      username = "00000000-0000-0000-0000-000000000000"
+      password = "sp-client-secret"
+    }
+    acr_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+  }
+
+  assert {
+    condition = (
+      module.api.image == "masterly.azurecr.io/release/api@${local.release_manifest.releases[local.release_manifest.latest].digests.api}" &&
+      module.frontend.image == "masterly.azurecr.io/release/frontend@${local.release_manifest.releases[local.release_manifest.latest].digests.frontend}" &&
+      module.workers[0].image == module.api.image &&
+      can(regex("^masterly\\.azurecr\\.io/release/api@sha256:[0-9a-f]{64}$", module.api.image)) &&
+      can(regex("^masterly\\.azurecr\\.io/release/frontend@sha256:[0-9a-f]{64}$", module.frontend.image))
+    )
+    error_message = "The token mode must pull masterly.azurecr.io/release/<role>@<digest of the latest release>."
+  }
+
+  assert {
+    condition = alltrue([
+      for r in [module.api.registry, module.frontend.registry, module.workers[0].registry] :
+      r.server == "masterly.azurecr.io" &&
+      r.username == "00000000-0000-0000-0000-000000000000" &&
+      r.password_secret_name == "registry-password" &&
+      r.identity == null
+    ])
+    error_message = "Every app's registry block must name masterly.azurecr.io, the token's username and the registry-password secret, and no identity."
+  }
+
+  assert {
+    condition = (
+      contains(module.api.value_secret_names, "registry-password") &&
+      contains(module.frontend.value_secret_names, "registry-password") &&
+      contains(module.workers[0].value_secret_names, "registry-password")
+    )
+    error_message = "The token mode must carry the pull credential as the registry-password secret on every app."
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.acr_pull) == 0 && length(azurerm_role_assignment.acr_pull_frontend) == 0
+    error_message = "The token mode must create no AcrPull assignment."
+  }
+
+  assert {
+    condition     = output.image_references.registry_credential_mode == "token" && output.image_references.release_version == local.release_manifest.latest
+    error_message = "image_references must report the token mode and the latest release."
+  }
+}
+
+# The managed-identity mode: each app pulls as its own identity, carries no registry secret,
+# and acr_id grants AcrPull to both. Identity ids are pinned with override_module, as in
+# no_data_plane_grant_reaches_the_frontend, so the wiring is comparable at plan.
+run "registry_managed_identity_mode_pulls_with_the_app_identities" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    api_image                = null
+    frontend_image           = null
+    acr_login_server         = null
+    enable_key_vault         = true
+    registry_credential_mode = "managed_identity"
+    acr_id                   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+  }
+
+  override_module {
+    target = module.apps_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
+      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-apps"
+    }
+  }
+
+  override_module {
+    target = module.frontend_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"
+      principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      client_id    = "ffffffff-ffff-ffff-ffff-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-frontend"
+    }
+  }
+
+  assert {
+    condition = (
+      module.api.registry.server == "masterly.azurecr.io" &&
+      module.api.registry.identity == module.apps_identity.id &&
+      module.frontend.registry.server == "masterly.azurecr.io" &&
+      module.frontend.registry.identity == module.frontend_identity.id &&
+      module.api.registry.username == null && module.api.registry.password_secret_name == null &&
+      module.frontend.registry.username == null && module.frontend.registry.password_secret_name == null
+    )
+    error_message = "The managed-identity mode must pull each app as its own identity, with no username or password secret."
+  }
+
+  assert {
+    condition = alltrue([
+      for names in [
+        module.api.value_secret_names, module.api.vault_backed_secret_names,
+        module.frontend.value_secret_names, module.frontend.vault_backed_secret_names,
+      ] : !contains(names, "registry-password")
+      ]) && (
+      !contains(keys(azurerm_key_vault_secret.install), "registry-password") &&
+      !contains(keys(azurerm_role_assignment.kv_secrets_user_frontend), "registry-password")
+    )
+    error_message = "The managed-identity mode must carry no registry-password secret, by value or from the vault, and write none to the vault."
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.acr_pull[0].scope == var.acr_id &&
+      azurerm_role_assignment.acr_pull[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.acr_pull_frontend[0].scope == var.acr_id &&
+      azurerm_role_assignment.acr_pull_frontend[0].principal_id == module.frontend_identity.principal_id
+    )
+    error_message = "With acr_id set, the managed-identity mode must grant AcrPull on it to both app identities."
+  }
+
+  assert {
+    condition = (
+      module.api.image == "masterly.azurecr.io/release/api@${local.release_manifest.releases[local.release_manifest.latest].digests.api}" &&
+      module.frontend.image == "masterly.azurecr.io/release/frontend@${local.release_manifest.releases[local.release_manifest.latest].digests.frontend}"
+    )
+    error_message = "The managed-identity mode must pull the same release/<role> digests from Masterly's registry."
+  }
+}
+
+# With the vault on, the token's password is written to the vault and every app reads it as a
+# reference: no app holds it as a value, and the frontend may read that one secret.
+run "registry_token_mode_with_the_vault_reads_the_password_from_the_vault" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    acr_login_server         = null
+    enable_key_vault         = true
+    enable_workers           = true
+    registry_credential_mode = "token"
+    registry_token = {
+      username = "00000000-0000-0000-0000-000000000000"
+      password = "sp-client-secret"
+    }
+  }
+
+  assert {
+    condition = (
+      contains(keys(azurerm_key_vault_secret.install), "registry-password") &&
+      contains(keys(azurerm_role_assignment.kv_secrets_user_frontend), "registry-password") &&
+      alltrue([
+        for app in [module.api, module.frontend, module.workers[0]] :
+        contains(app.vault_backed_secret_names, "registry-password") &&
+        !contains(app.value_secret_names, "registry-password") &&
+        app.registry.password_secret_name == "registry-password"
+      ])
+    )
+    error_message = "With the vault on, the token mode must write registry-password to the vault and every app must read it as a reference."
+  }
+}
+
+# Without acr_id the grants are the customer's to make out of band (see the principal id outputs).
+run "registry_managed_identity_mode_without_acr_id_grants_nothing" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    acr_login_server         = null
+    registry_credential_mode = "managed_identity"
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.acr_pull) == 0 && length(azurerm_role_assignment.acr_pull_frontend) == 0
+    error_message = "With acr_id null, no AcrPull assignment may be created."
+  }
+}
+
+# The customer-owned registry: the images and the registry block name the customer's login
+# server, the repositories stay release/<role>, and the apps pull as their identities with
+# AcrPull on the customer's registry.
+run "registry_customer_mode_pulls_release_repositories_from_the_customer_registry" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    api_image                = null
+    frontend_image           = null
+    acr_login_server         = null
+    registry_location        = "acme.azurecr.io"
+    registry_credential_mode = "customer_registry"
+    acr_id                   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-acme/providers/Microsoft.ContainerRegistry/registries/acme"
+  }
+
+  assert {
+    condition = (
+      module.api.image == "acme.azurecr.io/release/api@${local.release_manifest.releases[local.release_manifest.latest].digests.api}" &&
+      module.frontend.image == "acme.azurecr.io/release/frontend@${local.release_manifest.releases[local.release_manifest.latest].digests.frontend}"
+    )
+    error_message = "The customer_registry mode must pull release/<role> from the customer's login server."
+  }
+
+  assert {
+    condition = alltrue([
+      for r in [module.api.registry, module.frontend.registry] :
+      r.server == "acme.azurecr.io" && r.username == null && r.password_secret_name == null
+    ])
+    error_message = "The customer_registry mode must point each registry block at the customer's login server and pull with no username or password secret, as the app identity."
+  }
+
+  assert {
+    condition = (
+      !contains(module.api.value_secret_names, "registry-password") &&
+      !contains(module.frontend.value_secret_names, "registry-password") &&
+      azurerm_role_assignment.acr_pull[0].scope == var.acr_id &&
+      azurerm_role_assignment.acr_pull_frontend[0].scope == var.acr_id
+    )
+    error_message = "The customer_registry mode must carry no registry secret and grant AcrPull on the customer's acr_id to both identities."
+  }
+}
+
+# The release channel picks the manifest release; the repository never moves. One run per
+# allowed value; the second compares itself with the first.
+run "release_channel_stable_resolves_the_latest_release" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = null
+    frontend_image        = null
+    acr_login_server      = null
+    release_channel       = "stable"
+  }
+
+  assert {
+    condition = (
+      output.image_references.release_version == local.release_manifest.latest &&
+      output.image_references.api == "masterly.azurecr.io/release/api@${local.release_manifest.releases[local.release_manifest.latest].digests.api}" &&
+      output.image_references.frontend == "masterly.azurecr.io/release/frontend@${local.release_manifest.releases[local.release_manifest.latest].digests.frontend}"
+    )
+    error_message = "release_channel = \"stable\" must resolve to the latest release's release/<role> digests."
+  }
+}
+
+run "release_channel_previous_resolves_an_older_release_in_the_same_repositories" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = null
+    frontend_image        = null
+    acr_login_server      = null
+    release_channel       = "previous"
+  }
+
+  assert {
+    condition = (
+      output.image_references.release_version != local.release_manifest.latest &&
+      try(local.release_manifest.releases[output.image_references.release_version].known_issue, null) == null &&
+      output.image_references.api == "masterly.azurecr.io/release/api@${local.release_manifest.releases[output.image_references.release_version].digests.api}" &&
+      output.image_references.frontend == "masterly.azurecr.io/release/frontend@${local.release_manifest.releases[output.image_references.release_version].digests.frontend}"
+    )
+    error_message = "release_channel = \"previous\" must resolve to an older release with no known issue, by its release/<role> digests."
+  }
+
+  # Only the version differs from the stable channel: the registry and the repositories match.
+  assert {
+    condition = (
+      output.image_references.release_version != run.release_channel_stable_resolves_the_latest_release.image_references.release_version &&
+      split("@", output.image_references.api)[0] == split("@", run.release_channel_stable_resolves_the_latest_release.image_references.api)[0] &&
+      split("@", output.image_references.frontend)[0] == split("@", run.release_channel_stable_resolves_the_latest_release.image_references.frontend)[0] &&
+      split("@", output.image_references.api)[0] == "masterly.azurecr.io/release/api" &&
+      split("@", output.image_references.frontend)[0] == "masterly.azurecr.io/release/frontend"
+    )
+    error_message = "Changing release_channel must change only the version; the repositories stay release/api and release/frontend."
+  }
+}
+
+# An image set explicitly is used as given, whatever the channel.
+run "release_channel_leaves_an_explicit_image_alone" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    release_channel       = "previous"
+  }
+
+  assert {
+    condition     = module.api.image == "masterly.azurecr.io/api:v0.0.0" && module.frontend.image == "masterly.azurecr.io/frontend:v0.0.0"
+    error_message = "An explicit api_image or frontend_image must not be replaced by the channel's reference."
+  }
+}
+
+# The deprecated inputs map onto the modes: the credential pair is the token mode, and a
+# registry other than Masterly's with no credential is the customer_registry mode.
+run "legacy_registry_credential_maps_onto_the_token_mode" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = null
+    registry_username     = "00000000-0000-0000-0000-000000000000"
+    registry_password     = "sp-client-secret"
+  }
+
+  assert {
+    condition = (
+      output.image_references.registry_credential_mode == "token" &&
+      module.api.registry.server == "masterly.azurecr.io" &&
+      module.api.registry.username == "00000000-0000-0000-0000-000000000000" &&
+      module.frontend.registry.password_secret_name == "registry-password" &&
+      contains(module.frontend.value_secret_names, "registry-password")
+    )
+    error_message = "registry_username and registry_password must map onto the token mode."
+  }
+}
+
+run "legacy_acr_login_server_maps_onto_the_customer_registry_mode" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = "acme.azurecr.io"
+    api_image             = null
+    frontend_image        = null
+  }
+
+  assert {
+    condition = (
+      output.image_references.registry_credential_mode == "customer_registry" &&
+      module.api.registry.server == "acme.azurecr.io" &&
+      startswith(module.api.image, "acme.azurecr.io/release/api@sha256:") &&
+      startswith(module.frontend.image, "acme.azurecr.io/release/frontend@sha256:")
+    )
+    error_message = "acr_login_server naming the customer's registry must map onto the customer_registry mode."
+  }
+}
+
+# Guards.
+run "release_channel_unknown_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    release_channel       = "beta"
+  }
+
+  expect_failures = [var.release_channel]
+}
+
+run "registry_token_mode_without_a_credential_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    registry_credential_mode = "token"
+  }
+
+  expect_failures = [var.registry_credential_mode]
+}
+
+run "registry_credential_mode_unknown_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    registry_credential_mode = "anonymous"
+  }
+
+  expect_failures = [var.registry_credential_mode]
+}
+
+run "registry_identity_mode_with_a_token_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    registry_credential_mode = "managed_identity"
+    registry_token = {
+      username = "00000000-0000-0000-0000-000000000000"
+      password = "sp-client-secret"
+    }
+  }
+
+  expect_failures = [var.registry_credential_mode]
+}
+
+run "registry_customer_mode_without_a_customer_registry_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    acr_login_server         = null
+    registry_credential_mode = "customer_registry"
+  }
+
+  expect_failures = [var.registry_credential_mode]
+}
+
+run "registry_location_with_acr_login_server_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = "acme.azurecr.io"
+    registry_location     = "acme.azurecr.io"
+  }
+
+  expect_failures = [var.registry_location]
+}
+
+run "registry_location_with_a_scheme_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = null
+    registry_location     = "https://acme.azurecr.io/"
+  }
+
+  expect_failures = [var.registry_location]
+}
+
+run "registry_token_with_the_deprecated_pair_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    registry_username     = "00000000-0000-0000-0000-000000000000"
+    registry_password     = "sp-client-secret"
+    registry_token = {
+      username = "00000000-0000-0000-0000-000000000000"
+      password = "sp-client-secret"
+    }
+  }
+
+  expect_failures = [var.registry_token]
+}
+
 # Guard: ACS email data location must match the install's geo.
 run "acs_email_geo_mismatch_is_rejected" {
   command = plan

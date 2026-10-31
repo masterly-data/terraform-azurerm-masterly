@@ -47,15 +47,17 @@ module "masterly" {
   # --- Images ---------------------------------------------------------------------
   # Direct pull with the credential from your install bundle. This is the right choice
   # for a first apply: it needs no permissions in your subscription and no mirroring.
+  # api_image and frontend_image are left unset, so both resolve to
+  # masterly.azurecr.io/release/<role>@<digest>, the pair MANIFEST.json records for the
+  # release channel.
   #
-  # Mirroring into your own registry instead? Set acr_login_server (+ acr_id if the
-  # module should write the AcrPull grant) and OMIT these two — leaving them set points
-  # Masterly's credential at your registry and every pull fails. Nothing catches that
-  # combination at plan time.
-  api_image         = "masterly.azurecr.io/api:${var.api_image_tag}"
-  frontend_image    = "masterly.azurecr.io/frontend:${var.frontend_image_tag}"
-  registry_username = var.registry_username
-  registry_password = var.registry_password
+  # Mirroring into your own registry instead? Set registry_credential_mode =
+  # "customer_registry", registry_location to your login server (+ acr_id if the module
+  # should write the AcrPull grant) and remove registry_token: the plan refuses a token
+  # outside the token mode.
+  registry_credential_mode = "token"
+  registry_token           = var.registry_token
+  release_channel          = var.release_channel
 
   # --- Licence --------------------------------------------------------------------
   # Verified locally against the bundled public key. The `sub` claim must equal org_id,

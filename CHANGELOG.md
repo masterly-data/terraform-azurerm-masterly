@@ -33,8 +33,56 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   a digest, falls back to the digest, so a release mirrored under a tag of your own is checked. A
   reference whose tag and digest no release records passes unchecked, as an unrecorded tag does,
   and the application's startup check still applies.
+- **Registry location, credential mode and release channel inputs.** Four new inputs:
+  - `registry_location` is the registry's login server;
+  - `registry_credential_mode` is `"token"`, `"managed_identity"` or `"customer_registry"`;
+  - `registry_token` is the bundle's pull credential, `{ username, password }`, and is sensitive;
+  - `release_channel` is `"stable"` or `"previous"`.
+
+  The apps' registry blocks follow the mode:
+  - `token` pulls with the username and the `registry-password` secret, and creates no `AcrPull`
+    grant;
+  - `managed_identity` pulls as each app's identity, and `acr_id` grants `AcrPull` to both;
+  - `customer_registry` does the same against your own `registry_location`.
+
+  The plan refuses an unknown mode or channel, a `token` mode with no credential, a credential
+  outside the `token` mode, and a `customer_registry` mode that names no registry of your own.
+- **`api_image` and `frontend_image` are optional.** Left unset, each resolves to
+  `<registry_location>/release/<role>@<digest>`, the digest that the `release_channel` release
+  in `MANIFEST.json` records, or `<registry_location>/release/<role>:<tag>` for a release that
+  records no digest. The channel changes only the digest or tag; the repository is always
+  `release/api` and `release/frontend`. An image you set is used as given.
+- **`image_references` output.** It reports the resolved api and frontend references, the
+  registry server, the credential mode, the channel and its release.
+
+### Deprecated
+
+- **`acr_login_server`, `registry_username` and `registry_password`** are replaced by
+  `registry_location` and `registry_token`. They still plan as before, apart from the `AcrPull`
+  change under Changed:
+  - `acr_login_server` is read as `registry_location`, and its default is now `null`, meaning
+    `masterly.azurecr.io`. `""` still renders no registry block.
+  - The credential pair is read as `registry_token`.
+  - With `registry_credential_mode` unset, the mode is `token` when a credential is set,
+    `customer_registry` when the registry is not Masterly's, and `managed_identity` otherwise.
+
+  *Migration:* move `acr_login_server = "<host>"` to `registry_location = "<host>"`. Move
+  `registry_username` and `registry_password` into
+  `registry_token = { username = ..., password = ... }`, for example as
+  `TF_VAR_registry_token='{"username":"<appId>","password":"..."}'`. Then set
+  `registry_credential_mode` to the mode you run. Setting a new input together with the
+  deprecated one it replaces is refused at plan. Migrating changes nothing in the plan beyond
+  what the deprecated inputs already plan. A mirror that uses the default images must hold them under `release/api` and
+  `release/frontend`; an explicit `api_image` or `frontend_image` keeps its own repository.
 
 ### Changed
+
+- **Breaking: the `token` mode creates no `AcrPull` grant.** An install that pulls with a
+  registry credential (`registry_username` and `registry_password`) and also sets `acr_id` plans
+  to destroy its two `AcrPull` role assignments. Nothing pulls with them: in that mode every app
+  pulls with the credential. *Migration:* none is needed to keep pulling. To keep the grants for
+  a later move to identity pull, set `registry_credential_mode = "managed_identity"` or
+  `"customer_registry"` and remove the credential. Leave `acr_id` set only in an identity mode.
 
 - **Breaking: `api_image` and `frontend_image` are validated at plan.** The plan now refuses any
   reference that does not take one of the three forms above. A digest must be `sha256:` followed

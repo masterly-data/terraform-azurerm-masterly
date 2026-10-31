@@ -209,8 +209,8 @@ module "license_claims_floor" {
   source = "./modules/license-claims-floor"
 
   license_token = var.license_token
-  api_image     = var.api_image
-  manifest      = jsondecode(file("${path.module}/MANIFEST.json"))
+  api_image     = local.api_image
+  manifest      = local.release_manifest
 }
 
 # --- Resource groups (customer naming: rg-masterly-<purpose>) -----------------
@@ -231,6 +231,12 @@ resource "azurerm_resource_group" "aca" {
     precondition {
       condition     = local.install_geo == null || local.install_geo == var.masterly_region
       error_message = "Data-residency mismatch: this install declares masterly_region = \"${var.masterly_region}\", but every resource is created in Azure location \"${var.location}\", which is geo \"${local.install_geo == null ? "unknown" : local.install_geo}\". The declared geo is what customers are told and what the app stamps on usage records; the location is where the data actually sits. Change one to match the other — or, if this location genuinely satisfies that residency commitment, say so explicitly with location_geo."
+    }
+
+    # A default image needs a release for its channel (see "Registry and images" below).
+    precondition {
+      condition     = local.api_image != null && local.frontend_image != null
+      error_message = "release_channel = \"${var.release_channel}\" resolves to no release in this module version's MANIFEST.json, so api_image and frontend_image have no default. Set release_channel = \"stable\", or set api_image and frontend_image."
     }
 
     precondition {
@@ -643,15 +649,88 @@ module "frontend_identity" {
   tags                = local.tags
 }
 
+# --- Registry and images -----------------------------------------------------------
+# Where the apps pull from, how they authenticate, and which images they run when api_image and
+# frontend_image are left null. The deprecated inputs (acr_login_server, registry_username,
+# registry_password) map onto the new ones here, so every app below reads only these locals.
+locals {
+  release_manifest = jsondecode(file("${path.module}/MANIFEST.json"))
+
+  # registry_location, else the deprecated acr_login_server (where "" still renders no registry
+  # block), else Masterly's registry.
+  registry_server = var.registry_location != null ? var.registry_location : (
+    var.acr_login_server != null ? var.acr_login_server : "masterly.azurecr.io"
+  )
+
+  # Whether a credential was supplied is not the secret: the same narrow unmarking as the
+  # licence's presence in backend_secret_names.
+  registry_token_set = nonsensitive(var.registry_token != null)
+
+  registry_credential_mode = var.registry_credential_mode != null ? var.registry_credential_mode : (
+    local.registry_token_set || var.registry_username != null ? "token" : (
+      contains(["", "masterly.azurecr.io"], lower(local.registry_server)) ? "managed_identity" : "customer_registry"
+    )
+  )
+  registry_token_mode = local.registry_credential_mode == "token"
+
+  # The appId is not the secret either and is shown in the registry block; the password stays marked.
+  registry_username = !local.registry_token_mode ? null : (
+    local.registry_token_set ? nonsensitive(var.registry_token.username) : var.registry_username
+  )
+  registry_password = !local.registry_token_mode ? null : (
+    local.registry_token_set ? var.registry_token.password : var.registry_password
+  )
+  registry_password_secret_name = local.registry_token_mode ? "registry-password" : null
+
+  # The release each channel resolves to. Versions are bare semver, zero-padded here so that
+  # sort() orders them as versions ("0.10.0" after "0.9.0"). "previous" is the newest release
+  # older than `latest` that carries no known_issue.
+  release_by_sort_key = {
+    for v in keys(local.release_manifest.releases) : format("%05d.%05d.%05d", split(".", v)...) => v
+  }
+  release_versions_newest_first = [
+    for k in reverse(sort(keys(local.release_by_sort_key))) : local.release_by_sort_key[k]
+  ]
+  release_channel_versions = {
+    stable = local.release_manifest.latest
+    previous = try([
+      for v in slice(
+        local.release_versions_newest_first,
+        index(local.release_versions_newest_first, local.release_manifest.latest) + 1,
+        length(local.release_versions_newest_first)
+      ) : v if try(local.release_manifest.releases[v].known_issue, null) == null
+    ][0], null)
+  }
+  release_channel_version = local.release_channel_versions[var.release_channel]
+  # Null when the channel has no release; the first resource group's precondition then refuses
+  # the plan, unless both images are set explicitly.
+  release_channel_release = try(local.release_manifest.releases[local.release_channel_version], null)
+
+  # The default references: always release/<role> on the selected registry, pinned by the digest
+  # the release records, or by its tag for a release that records none. Only that last part
+  # differs between channels.
+  registry_image_host = local.registry_server != "" ? local.registry_server : "masterly.azurecr.io"
+  release_channel_images = {
+    for role in ["api", "frontend"] : role => try(
+      "${local.registry_image_host}/release/${role}@${local.release_channel_release.digests[role]}",
+      "${local.registry_image_host}/release/${role}:${regex(":([^:@/]+)$", local.release_channel_release.images[role])[0]}",
+      null
+    )
+  }
+  api_image      = var.api_image != null ? var.api_image : local.release_channel_images.api
+  frontend_image = var.frontend_image != null ? var.frontend_image : local.release_channel_images.frontend
+}
+
 # Optional: grant pull on the registry (the deploying principal needs
 # roleAssignments/write on the registry's scope — true for the demo install, where
 # platform-iac's principal manages the shared registry; customers typically grant
-# pull out of band and leave acr_id null).
+# pull out of band and leave acr_id null). The token mode pulls with its credential, so
+# it creates no grant.
 #
 # BOTH identities need the grant when acr_id is null and you grant out of band — see the
 # `apps_identity_principal_id` / `frontend_identity_principal_id` outputs.
 resource "azurerm_role_assignment" "acr_pull" {
-  count = var.acr_id != null ? 1 : 0
+  count = !local.registry_token_mode && var.acr_id != null ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -659,7 +738,7 @@ resource "azurerm_role_assignment" "acr_pull" {
 }
 
 resource "azurerm_role_assignment" "acr_pull_frontend" {
-  count = var.acr_id != null ? 1 : 0
+  count = !local.registry_token_mode && var.acr_id != null ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -1241,7 +1320,7 @@ locals {
     "session-secret"          = random_password.session_secret.result
     "session-secret-previous" = var.session_secret_previous
     "bff-shared-secret"       = random_password.bff_shared_secret.result
-    "registry-password"       = var.registry_password
+    "registry-password"       = local.registry_password
     "redis-url"               = local.redis_url # embeds the access key on redis_auth = "key" (ADR 0066)
     "license-token"           = var.license_token
     "breakglass-secret-hash"  = var.breakglass_secret_hash
@@ -1256,8 +1335,9 @@ locals {
     "ca-bundle-pem" = var.ca_bundle_pem
   }
 
-  # Credential-based image pull (ADR 0067): the SP secret rides on every app that pulls.
-  registry_secret_names = var.registry_username != null ? ["registry-password"] : []
+  # Credential-based image pull (ADR 0067): in the token mode the SP secret rides on every app
+  # that pulls; the identity modes carry none.
+  registry_secret_names = local.registry_token_mode ? ["registry-password"] : []
 
   # The secrets both backend processes carry: ca-api, and ca-workers, which builds the same
   # services from the same settings (workers.tf).
@@ -1392,13 +1472,13 @@ module "api" {
   name                = "ca-api"
   resource_group_name = azurerm_resource_group.aca.name
   environment_id      = module.aca_env.id
-  image               = var.api_image
+  image               = local.api_image
 
-  acr_login_server           = var.acr_login_server
+  acr_login_server           = local.registry_server
   user_assigned_identity_ids = [module.apps_identity.id]
 
-  registry_username             = var.registry_username
-  registry_password_secret_name = var.registry_username != null ? "registry-password" : null
+  registry_username             = local.registry_username
+  registry_password_secret_name = local.registry_password_secret_name
 
   # Internal by default: the api sits behind the frontend's BFF and nothing outside the
   # environment needs it. Opt out when something must call /v1 directly — the published
@@ -1533,13 +1613,13 @@ module "frontend" {
   name                = "ca-frontend"
   resource_group_name = azurerm_resource_group.aca.name
   environment_id      = module.aca_env.id
-  image               = var.frontend_image
+  image               = local.frontend_image
 
-  acr_login_server           = var.acr_login_server
+  acr_login_server           = local.registry_server
   user_assigned_identity_ids = [module.frontend_identity.id]
 
-  registry_username             = var.registry_username
-  registry_password_secret_name = var.registry_username != null ? "registry-password" : null
+  registry_username             = local.registry_username
+  registry_password_secret_name = local.registry_password_secret_name
 
   ingress_external    = var.frontend_ingress_external
   ingress_target_port = 3000

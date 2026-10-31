@@ -7,6 +7,16 @@ locals {
   # they are unmarked here once and reused.
   value_secret_names = nonsensitive(keys(var.secrets))
   secret_names       = concat(local.value_secret_names, keys(var.secret_refs))
+
+  # The registry block, built once so the `registry` output reports exactly what is applied.
+  # try(): an app with neither an identity nor a username is refused by the precondition
+  # below, with a message that says why.
+  registry = var.acr_login_server == "" ? null : {
+    server               = var.acr_login_server
+    identity             = var.registry_username == null ? try(var.user_assigned_identity_ids[0], null) : null
+    username             = var.registry_username
+    password_secret_name = var.registry_username != null ? var.registry_password_secret_name : null
+  }
 }
 
 resource "azurerm_container_app" "this" {
@@ -27,12 +37,12 @@ resource "azurerm_container_app" "this" {
   # service principal pulling cross-tenant from Masterly's registry. Managed identity
   # remains the same-tenant default (own-ACR mirror / Masterly-operated installs).
   dynamic "registry" {
-    for_each = var.acr_login_server != "" ? [1] : []
+    for_each = local.registry == null ? [] : [local.registry]
     content {
-      server               = var.acr_login_server
-      identity             = var.registry_username == null ? var.user_assigned_identity_ids[0] : null
-      username             = var.registry_username
-      password_secret_name = var.registry_username != null ? var.registry_password_secret_name : null
+      server               = registry.value.server
+      identity             = registry.value.identity
+      username             = registry.value.username
+      password_secret_name = registry.value.password_secret_name
     }
   }
 

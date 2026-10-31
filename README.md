@@ -137,16 +137,20 @@ module "masterly" {
   # BYO-DB (ADR 0065): your own Postgres. Omit to provision the starter server instead.
   external_database_url = var.masterly_database_url # from your secret store
 
-  # Images (ADR 0067) — pick ONE:
-  # Option 1, direct pull from Masterly's registry with the service principal from
-  # your install bundle:
-  registry_username = var.masterly_pull_appid  # from the bundle
-  registry_password = var.masterly_pull_secret # from your secret store
-  # Option 2, your own ACR: `az acr import` the pinned tags with the same credential,
-  # then point acr_login_server at your registry and set acr_id so the module grants
-  # AcrPull to both install identities (managed-identity pull, no credential in the app):
-  # acr_login_server = "acme.azurecr.io"
-  # acr_id           = "/subscriptions/.../registries/acme"
+  # Images (ADR 0067) — pick ONE registry_credential_mode. See "Getting the images".
+  # "token": direct pull from Masterly's registry with the pull credential from your
+  # install bundle:
+  registry_credential_mode = "token"
+  registry_token = {
+    username = var.masterly_pull_appid  # from the bundle
+    password = var.masterly_pull_secret # from your secret store
+  }
+  # "customer_registry": `az acr import` the release/api and release/frontend images into
+  # your own ACR, point registry_location at it and set acr_id so the module grants AcrPull
+  # to both install identities (managed-identity pull, no credential in the app):
+  # registry_credential_mode = "customer_registry"
+  # registry_location        = "acme.azurecr.io"
+  # acr_id                   = "/subscriptions/.../registries/acme"
 
   tags = {
     cost-center      = "…"
@@ -247,22 +251,57 @@ check, and a rebuilt app, both go by.
 ## Getting the images (ADR 0067)
 
 Masterly issues each customer a **pull service principal** (appId + client secret, in the
-install bundle, `AcrPull` only). Two ways to consume it:
+install bundle, `AcrPull` only). Four inputs say where the images come from and how the apps
+pull them:
 
-1. **Direct pull** — set `registry_username`/`registry_password`; every app pulls straight
-   from `masterly.azurecr.io` (the secret rides as a Container App secret). Lowest
-   friction; note that NEW revisions and scale-out pulls depend on Masterly's registry
-   being reachable (running replicas are unaffected).
-2. **Mirror into your own ACR** — `az acr import --name <yours> --source
-   masterly.azurecr.io/api:vX.Y.Z --username <appId> --password <secret>` per image, then
-   `acr_login_server`/`acr_id` at your registry: managed-identity pull, no Masterly
-   credential in the install. Recommended for regulated environments; required for air gap
-   (with an offline image bundle instead of the import). `acr_id` grants `AcrPull` to both
-   app identities; if you leave it null and grant out of band, grant both
-   `apps_identity_principal_id` and `frontend_identity_principal_id` — miss the second and
-   the frontend cannot pull.
+| Input | Type | Default | What it does |
+|---|---|---|---|
+| `registry_location` | `string` | `null` (`masterly.azurecr.io`) | The registry's login server, a bare host (an optional port, no scheme or path). Replaces `acr_login_server`. |
+| `registry_credential_mode` | `string` | `null` (derived, see below) | `"token"`, `"managed_identity"` or `"customer_registry"`. |
+| `registry_token` | `object({ username = string, password = string })`, sensitive | `null` | The pull credential from the bundle: the appId and its client secret. Replaces `registry_username` and `registry_password`. |
+| `release_channel` | `string` | `"stable"` | Which [`MANIFEST.json`](MANIFEST.json) release the default images resolve to: `"stable"` (the newest release) or `"previous"` (the newest older release with no known issue). |
 
-Rotation: the SP carries up to two active secrets — switch `registry_password` to the new
+The three modes:
+
+1. **`token`: direct pull.** Set `registry_token`; every app pulls straight from
+   `registry_location` (`masterly.azurecr.io` unless you set it) with the token's username, and the password rides as the Container App
+   secret `registry-password` (a Key Vault reference when `enable_key_vault` is on). No `AcrPull`
+   grant is created, even with `acr_id` set. Lowest friction; note that NEW revisions and
+   scale-out pulls depend on Masterly's registry being reachable (running replicas are
+   unaffected). The plan refuses this mode with no credential.
+2. **`managed_identity`: pull as the app identities.** Each app pulls as its own identity,
+   with no credential in the install. `acr_id` grants `AcrPull` to both identities.
+3. **`customer_registry`: mirror into your own ACR.** Import each image into the same
+   repository on your registry, for example `az acr import --name <yours> --source
+   masterly.azurecr.io/release/api@sha256:<digest> --image release/api --username <appId>
+   --password <secret>`, then set `registry_location` to your login server and `acr_id` to
+   your registry. The apps pull as their identities, with no Masterly credential in the
+   install. Recommended for regulated environments; required for air gap (with an offline
+   image bundle instead of the import). The plan refuses this mode without a
+   `registry_location` other than Masterly's.
+
+In both identity modes, `acr_id` grants `AcrPull` to both app identities. If you leave it null
+and grant out of band, grant both `apps_identity_principal_id` and
+`frontend_identity_principal_id`; miss the second and the frontend cannot pull.
+
+**The default images.** Leave `api_image` and `frontend_image` unset and each resolves to
+`<registry_location>/release/<role>@<digest>`: the digest the `release_channel` release
+records in `MANIFEST.json`, or its tag for a release that records no digest. The channel changes
+only that digest or tag. The repository is always `release/api` and `release/frontend`, so a
+mirror keeps those repository names. An image you set explicitly is used as given. The
+`image_references` output shows what the plan resolved: both references, the registry, the
+mode and the release.
+
+**The deprecated inputs** still plan as before, with one exception: an install that pulls with
+a credential and also sets `acr_id` loses its two unused `AcrPull` grants, because the `token`
+mode creates none. `acr_login_server` is read as
+`registry_location`, and `""` still renders no registry block. `registry_username` and
+`registry_password` are read as `registry_token`. With `registry_credential_mode` unset, the
+mode is `token` when a credential is set, `customer_registry` when the registry is not
+`masterly.azurecr.io`, and `managed_identity` otherwise. Setting a new input together with
+the deprecated one it replaces is refused. The CHANGELOG has the migration.
+
+Rotation: the SP carries up to two active secrets. Switch `registry_token.password` to the new
 one and apply.
 
 ## Identity (ADR 0024)
