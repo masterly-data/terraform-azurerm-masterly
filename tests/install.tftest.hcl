@@ -26,8 +26,8 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/api:v0.0.0"
-  frontend_image   = "masterly.azurecr.io/frontend:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
   # Every production run needs one of the two deployer paths to the vault stated, the same
@@ -3349,7 +3349,7 @@ run "release_channel_leaves_an_explicit_image_alone" {
   }
 
   assert {
-    condition     = module.api.image == "masterly.azurecr.io/api:v0.0.0" && module.frontend.image == "masterly.azurecr.io/frontend:v0.0.0"
+    condition     = module.api.image == "masterly.azurecr.io/release/api:v0.0.0" && module.frontend.image == "masterly.azurecr.io/release/frontend:v0.0.0"
     error_message = "An explicit api_image or frontend_image must not be replaced by the channel's reference."
   }
 }
@@ -7499,7 +7499,7 @@ run "a_licence_floor_above_the_pinned_api_image_fails_the_plan" {
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
-    api_image             = "masterly.azurecr.io/api:v0.133.2"
+    api_image             = "masterly.azurecr.io/release/api:v0.133.2"
     license_token         = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImZpeHR1cmUiLCJtYXN0ZXJseV9jbGFpbXNfdmVyc2lvbiI6MSwibWFzdGVybHlfY2xhaW1zX2Zsb29yIjoxfQ.e30.unsigned"
     license_public_jwk    = "{\"kty\":\"EC\"}"
   }
@@ -7512,7 +7512,7 @@ run "a_headerless_licence_on_the_same_image_plans_clean" {
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
-    api_image             = "masterly.azurecr.io/api:v0.133.2"
+    api_image             = "masterly.azurecr.io/release/api:v0.133.2"
     license_token         = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImZpeHR1cmUifQ.e30.unsigned"
     license_public_jwk    = "{\"kty\":\"EC\"}"
   }
@@ -7646,8 +7646,8 @@ run "an_image_with_the_role_above_another_segment_is_refused" {
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
-    api_image             = "masterly.azurecr.io/api/release:v0.0.0"
-    frontend_image        = "masterly.azurecr.io/frontend/release:v0.0.0"
+    api_image             = "masterly.azurecr.io/release/api/release:v0.0.0"
+    frontend_image        = "masterly.azurecr.io/release/frontend/release:v0.0.0"
   }
 
   expect_failures = [var.api_image, var.frontend_image]

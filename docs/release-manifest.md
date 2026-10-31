@@ -65,8 +65,8 @@ tagged, so it would have to contain its own hash. The tag is the commit pointer 
     "1.2.3": {
       "date": "2026-01-31",
       "images": {
-        "api": "masterly.azurecr.io/api:vA.B.C",
-        "frontend": "masterly.azurecr.io/frontend:vD.E.F"
+        "api": "masterly.azurecr.io/release/api:vA.B.C",
+        "frontend": "masterly.azurecr.io/release/frontend:vD.E.F"
       },
       "digests": {
         "api": "sha256:<64 hex characters>",
@@ -90,8 +90,8 @@ your own source is the defect this manifest exists to kill.
 | `releases["X.Y.Z"]` | object | yes | One release. The key is a bare semver — `1.2.3`, **not** `v1.2.3`. |
 | `releases["X.Y.Z"].date` | string | yes | The release date, `YYYY-MM-DD`: the day the release was cut. The tag follows the merged release commit, so it may be dated later. |
 | `releases["X.Y.Z"].images` | object | yes | The image pair the release was tested against. |
-| `releases["X.Y.Z"].images.api` | string | yes | `registry/repository:tag`. The repository's last path segment is `api`. |
-| `releases["X.Y.Z"].images.frontend` | string | yes | Same form; last path segment is `frontend`. |
+| `releases["X.Y.Z"].images.api` | string | yes | `registry/repository:tag`, with the repository `release/api`: `masterly.azurecr.io/release/api:vX.Y.Z`. See "The image path". |
+| `releases["X.Y.Z"].images.frontend` | string | yes | Same form, with the repository `release/frontend`. |
 | `releases["X.Y.Z"].digests` | object | no | The image digests of the release candidate. Absent from releases cut before the field existed. See "The digests". |
 | `releases["X.Y.Z"].digests.api` | string | with `digests` | `sha256:` and 64 lowercase hex characters: the `api` build the release candidate was tested with. |
 | `releases["X.Y.Z"].digests.frontend` | string | with `digests` | Same form, for the `frontend` image. |
@@ -126,6 +126,27 @@ move on from the manifest's pair as its own delivery pipeline rolls forward. A c
 a live install's tags against the manifest is measuring drift, which may be entirely expected;
 it is not measuring a fault.
 
+
+## The image path
+
+Every image a release names is published under the `release/` path of its registry, as
+`<registry>/release/<image>:<tag>`: `masterly.azurecr.io/release/api:vX.Y.Z` and
+`masterly.azurecr.io/release/frontend:vX.Y.Z`. That is also the repository the module's own
+default image references pull, so the pair an entry names and the pair an install that sets no
+`api_image` or `frontend_image` pulls are the same repositories. A mirror holds the images under
+the same `release/api` and `release/frontend` repositories; only the registry host differs.
+
+The release check refuses an entry that names an image under any other repository. The one
+exception is an entry whose image names a tag `image_floors` lists as `unpublished`: that image
+was never pushed under any path, so no `release/` copy of it can exist, and the entry keeps the
+references it was cut with. Today that is `0.17.0`, which also records a `known_issue`.
+
+Until 2026-10-31 the entries named each image at the registry's root, as
+`masterly.azurecr.io/<image>:<tag>`. The same builds were then published under `release/`, and
+every entry on `main` moved to the `release/` path with its tag and `digests` unchanged: the
+image an entry names is the same build, read from another repository. The file at a tag cut
+before the move still names the path that was current when that tag was cut. See
+"Compatibility".
 
 ## The digests
 
@@ -206,7 +227,15 @@ published, on `main` only: the file at the release's own tag does not carry it.
 **Stable while `schema_version` is `1`.** Every field in the table above keeps its name, its type
 and its meaning. `latest` stays a key of `releases` and stays the highest version present.
 `releases` stays an object keyed by bare semver. Image values stay parseable as
-`registry/repository:tag`.
+`registry/repository:tag`, and the repository of each is `release/<image>` (`release/api`,
+`release/frontend`), bar the never-published exception in "The image path".
+
+**One value change, 2026-10-31.** The image values of every entry on `main` moved from
+`masterly.azurecr.io/<image>:<tag>` to `masterly.azurecr.io/release/<image>:<tag>`, with the
+same tags and the same `digests`. No field was renamed, removed or retyped, and no field changed
+meaning: `images` still names the builds the release was tested against. A consumer that reads
+the reference from the file needs no change. A consumer that builds a reference from a tag, or
+that matches or mirrors images by repository path, now uses `release/api` and `release/frontend`.
 
 **One deliberate change of meaning, 2026-10-06 (ADR 0106).** Releases are now cut in a commit
 that merges to `main` before the version is tagged, so the meanings of `latest`, `releases` and

@@ -52,6 +52,14 @@ as having no image: a release recorded against either contradicts the floor. The
 release older than the newest whose entry records a `known_issue`: it was cut against an image
 that later proved never to have been published, and says so. The newest release has no exception.
 
+Every image a release names lives under `release/<image>`, for example
+`masterly.azurecr.io/release/api:<tag>`: the repository the release images are published to, and
+the one the module's own default image references name. An image under any other repository,
+such as the `masterly.azurecr.io/api:<tag>` path images were pushed to before, is refused. The
+one exception is the release whose image names a tag `image_floors` lists as unpublished: that
+image was never pushed anywhere, so no `release/` copy of it can exist, and its entry is left as
+it was cut.
+
 The shape the manifest guarantees to whoever parses it — field by field, and what may change
 without warning — is `docs/release-manifest.md`. That document and this script move together.
 
@@ -68,9 +76,10 @@ Run:
     python3 scripts/check_release_manifest.py --selftest  # the check still rejects bad releases
 
 `observed.json` maps each image reference of the newest release to the digest the registry
-resolves it to, for example `{"<registry>/api:<tag>": "sha256:<64 hex>", ...}` with one key per
-image the entry names. `az acr repository show --name <registry> --image api:<tag> --query digest
--o tsv` or `docker buildx imagetools inspect <registry>/api:<tag>` reads one.
+resolves it to, for example `{"<registry>/release/api:<tag>": "sha256:<64 hex>", ...}` with one
+key per image the entry names. `az acr repository show --name <registry> --image
+release/api:<tag> --query digest -o tsv` or `docker buildx imagetools inspect
+<registry>/release/api:<tag>` reads one.
 
 Paths are overridable through the environment (`RELEASE_MANIFEST_PATH`, `RELEASE_CHANGELOG_PATH`,
 `RELEASE_README_PATH`), which is how the check is exercised against a mutated copy of the tree
@@ -129,6 +138,9 @@ FLOORS_END_MARKER = "<!-- release-manifest:floors:end -->"
 
 # Which manifest image a README `<name>_image` line takes its value from.
 IMAGE_INPUTS = {"api_image": "api", "frontend_image": "frontend"}
+
+# The path every release image is published under: `<registry>/release/<image>:<tag>`.
+RELEASE_PATH = "release"
 
 
 class CheckFailed(Exception):
@@ -521,6 +533,41 @@ def check_image_floors(manifest: dict) -> None:
                 )
 
 
+def check_release_paths(manifest: dict) -> None:
+    """Every image a release names is a `release/<image>` reference.
+
+    The release images are published under `<registry>/release/<image>`, and that is the path the
+    module's default image references name, so a release entry naming any other repository points
+    an install that copies its pair at a path the release was never published to. The exception is
+    a release that names a tag `image_floors` lists as unpublished: that image was never pushed
+    under any path, so no `release/` copy of it can exist and its entry stays as it was cut.
+    `check_image_floors` has already confined such a release to an older one with a `known_issue`.
+    """
+    floors = manifest["image_floors"]
+    for version in sorted(manifest["releases"], key=semver):
+        images = manifest["releases"][version]["images"]
+        never_published = [
+            name for name, image in images.items()
+            if isinstance(image, str) and IMAGE_RE.match(image)
+            and IMAGE_RE.match(image).group("tag") in floors.get(name, {}).get("unpublished", [])
+        ]
+        if never_published:
+            continue
+        for name, image in images.items():
+            parsed = IMAGE_RE.match(image) if isinstance(image, str) else None
+            expected = f"{RELEASE_PATH}/{name}"
+            if parsed and parsed.group("repo") == expected:
+                continue
+            raise CheckFailed(
+                f"{MANIFEST_PATH.name}: release {version} names {image!r} as its {name!r} image, "
+                f"which is not a {RELEASE_PATH}/<image> reference: its repository should be "
+                f"{expected!r}, as in <registry>/{expected}:<tag>. Release images are published "
+                f"under {RELEASE_PATH}/, and the module's default image references name that "
+                f"path, so an entry naming another one tells an install to pull from a path the "
+                f"release was not published to."
+            )
+
+
 def check_changelog(manifest: dict) -> None:
     """Every released version in the manifest has a changelog section, dated the same day."""
     try:
@@ -852,15 +899,15 @@ FIXTURE_MANIFEST: dict = {
         "2.0.0": {
             "date": "2026-01-05",
             "images": {
-                "api": "registry.example.invalid/api:v1.0.0",
-                "frontend": "registry.example.invalid/frontend:v1.0.0",
+                "api": "registry.example.invalid/release/api:v1.0.0",
+                "frontend": "registry.example.invalid/release/frontend:v1.0.0",
             },
         },
         "2.1.0": {
             "date": "2026-02-06",
             "images": {
-                "api": "registry.example.invalid/api:v1.1.0",
-                "frontend": "registry.example.invalid/frontend:v1.1.0",
+                "api": "registry.example.invalid/release/api:v1.1.0",
+                "frontend": "registry.example.invalid/release/frontend:v1.1.0",
             },
             "api_claims_version": 1,
         },
@@ -1033,8 +1080,8 @@ def _release_tree(newest: str, api: str, frontend: str) -> tuple[dict, str, str]
         newest: {
             "date": "2026-02-06",
             "images": {
-                "api": f"registry.example.invalid/api:{api}",
-                "frontend": f"registry.example.invalid/frontend:{frontend}",
+                "api": f"registry.example.invalid/release/api:{api}",
+                "frontend": f"registry.example.invalid/release/frontend:{frontend}",
             },
             # 0, as the base release reads: a bump scenario may keep the base's api tag, and one
             # build has one claims version.
@@ -1085,7 +1132,7 @@ def _floor_scenarios(canonical_readme: str) -> list[tuple]:
         "date": FIXTURE_MANIFEST["releases"][oldest]["date"],
         "images": {
             **FIXTURE_MANIFEST["releases"][oldest]["images"],
-            "api": f"registry.example.invalid/api:{below}",
+            "api": f"registry.example.invalid/release/api:{below}",
         },
     }
     assert semver("1.9.0") < semver(oldest)
@@ -1094,13 +1141,13 @@ def _floor_scenarios(canonical_readme: str) -> list[tuple]:
         """The oldest release re-recorded against the unpublished tag, with `entry_changes`."""
         manifest = copy.deepcopy(FIXTURE_MANIFEST)
         released = manifest["releases"][oldest]
-        released["images"]["api"] = f"registry.example.invalid/api:{unpublished}"
+        released["images"]["api"] = f"registry.example.invalid/release/api:{unpublished}"
         released.update(entry_changes)
         return manifest
 
     with_issue = older_on_unpublished(known_issue="its api image was never published")
     newest_with_issue = _with_image(
-        newest, "api", f"registry.example.invalid/api:{unpublished}"
+        newest, "api", f"registry.example.invalid/release/api:{unpublished}"
     )
     newest_with_issue["releases"][newest]["known_issue"] = "its api image was never published"
     return [
@@ -1153,7 +1200,7 @@ def _floor_scenarios(canonical_readme: str) -> list[tuple]:
         ),
         (
             "a release names a tag that has no published image",
-            _with_image(newest, "api", f"registry.example.invalid/api:{unpublished}"), log, ok,
+            _with_image(newest, "api", f"registry.example.invalid/release/api:{unpublished}"), log, ok,
             [], 1, "as having no published image",
         ),
         (
@@ -1171,6 +1218,77 @@ def _floor_scenarios(canonical_readme: str) -> list[tuple]:
             "region for the generated image floors",
         ),
     ]
+
+
+# The registry and path the release images were pushed to before `release/` existed. It is a host,
+# not a release value, so naming it here transcribes nothing from this repo's manifest: it is the
+# exact shape of reference the release-path rule exists to refuse.
+LEGACY_REGISTRY = "masterly.azurecr.io"
+
+
+def _release_path_scenarios() -> list[tuple]:
+    """Every release image is a `release/<image>` reference, bar a never-published one."""
+    log = FIXTURE_CHANGELOG
+    newest = FIXTURE_MANIFEST["latest"]
+    oldest = min(FIXTURE_MANIFEST["releases"], key=semver)
+    images = FIXTURE_MANIFEST["releases"][newest]["images"]
+    api_tag = IMAGE_RE.match(images["api"]).group("tag")
+    frontend_tag = IMAGE_RE.match(images["frontend"]).group("tag")
+    oldest_images = FIXTURE_MANIFEST["releases"][oldest]["images"]
+    oldest_api_tag = IMAGE_RE.match(oldest_images["api"]).group("tag")
+    oldest_frontend_tag = IMAGE_RE.match(oldest_images["frontend"]).group("tag")
+    unpublished = FIXTURE_MANIFEST["image_floors"]["api"]["unpublished"][0]
+    legacy_api = f"{LEGACY_REGISTRY}/api:{api_tag}"
+
+    def rendered(manifest: dict) -> tuple[dict, str, str]:
+        # The README is rendered from the scenario's own manifest, so a scenario fails on the
+        # path alone and never on a README that restates another pair.
+        return manifest, log, render_readme(manifest, FIXTURE_README_SKELETON)
+
+    def older(**images_changes) -> dict:
+        manifest = copy.deepcopy(FIXTURE_MANIFEST)
+        manifest["releases"][oldest]["images"].update(images_changes)
+        return manifest
+
+    # Both of its images keep the legacy path: the exemption covers the release, not one image.
+    never_published = older(
+        api=f"{LEGACY_REGISTRY}/api:{unpublished}",
+        frontend=f"{LEGACY_REGISTRY}/frontend:{oldest_frontend_tag}",
+    )
+    never_published["releases"][oldest]["known_issue"] = "its api image was never published"
+    cases = [
+        (
+            f"the newest api image on the legacy path ({legacy_api}) is refused",
+            _with_image(newest, "api", legacy_api), 1,
+            f"names {legacy_api!r} as its 'api' image, which is not a release/<image> reference",
+        ),
+        (
+            "the newest frontend image outside release/ is refused",
+            _with_image(newest, "frontend", f"registry.example.invalid/frontend:{frontend_tag}"),
+            1, "its repository should be 'release/frontend'",
+        ),
+        (
+            "an image under release/ but nested deeper is refused",
+            _with_image(
+                newest, "api", f"registry.example.invalid/release/mirror/api:{api_tag}"
+            ),
+            1, "its repository should be 'release/api'",
+        ),
+        (
+            "an older release on the legacy path is refused",
+            older(api=f"{LEGACY_REGISTRY}/api:{oldest_api_tag}"), 1,
+            f"release {oldest} names",
+        ),
+        (
+            "an older release naming a never-published tag may stay on the legacy path",
+            never_published, 0, FIXTURE_MANIFEST["module"],
+        ),
+    ]
+    scenarios = []
+    for name, manifest, expected_exit, fragment in cases:
+        manifest, changelog, readme = rendered(manifest)
+        scenarios.append((name, manifest, changelog, readme, [], expected_exit, fragment))
+    return scenarios
 
 
 def _with_digests(digests):
@@ -1270,7 +1388,7 @@ def _digest_scenarios() -> list[tuple]:
         ),
         (
             "an entry naming a third image needs a digest for it too",
-            _with_extra_image(good, "worker", "registry.example.invalid/worker:v1.1.0"),
+            _with_extra_image(good, "worker", "registry.example.invalid/release/worker:v1.1.0"),
             log, ok, [], 1, "has no 'worker' digest",
         ),
         (
@@ -1307,7 +1425,7 @@ def _with_release(manifest: dict, version: str, api: str, claims_version) -> dic
     manifest = copy.deepcopy(manifest)
     newest = manifest["releases"][manifest["latest"]]
     entry = {"date": newest["date"], "images": dict(newest["images"])}
-    entry["images"]["api"] = f"registry.example.invalid/api:{api}"
+    entry["images"]["api"] = f"registry.example.invalid/release/api:{api}"
     if claims_version is not None:
         entry["api_claims_version"] = claims_version
     manifest["releases"][version] = entry
@@ -1555,6 +1673,8 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
         *_claims_version_scenarios(),
         # Each image's floor and the tags with no published image, and the README prose of them.
         *_floor_scenarios(canonical_readme),
+        # Every release image is a release/<image> reference.
+        *_release_path_scenarios(),
         # The header rule (MAS-479). The third case is the one that keeps the rule from being
         # answered with an exception list: a version BELOW the header is not the defect.
         (
@@ -1625,7 +1745,8 @@ def selftest() -> int:
         f"\nrelease-manifest selftest — {total} scenarios: a well-formed release passes, and "
         f"every way a release can be missing, malformed, mis-tagged, bumped less than its "
         f"images, recorded with digests its tags' builds disagree with or without the api "
-        f"image's claims version, or against an image below its floor — or a shipped "
+        f"image's claims version, against an image below its floor or outside release/ — or "
+        f"a shipped "
         f"script's header can hand-type a module version — is rejected by name."
     )
     return 0
@@ -1670,6 +1791,7 @@ def main() -> int:
         check_bump(manifest)
         check_claims_versions(manifest)
         check_image_floors(manifest)
+        check_release_paths(manifest)
         check_changelog(manifest)
         check_readme(manifest, args.write)
         check_script_banners()

@@ -40,8 +40,8 @@ variables {
   location              = "swedencentral"
   org_id                = "org_test"
   install_id            = "test"
-  api_image             = "masterly.azurecr.io/api:v0.0.0"
-  frontend_image        = "masterly.azurecr.io/frontend:v0.0.0"
+  api_image             = "masterly.azurecr.io/release/api:v0.0.0"
+  frontend_image        = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server      = ""
   ingress_allowed_cidrs = ["203.0.113.7/32"]
   enable_diagnostics    = false
