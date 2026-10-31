@@ -210,14 +210,15 @@ an air-gapped install plans exactly as a connected one does. It compares `api_im
 so an image mirrored into your own registry under the same tag is checked like the original. An
 `api_image` pinned by digest alone (`<registry>/.../api@sha256:<digest>`) has no tag to read, so
 the check compares its digest with the api digests the manifest records (`digests.api`) instead.
-A reference with both a tag and a digest is compared by its tag.
+A reference with both a tag and a digest is compared by its tag when a release records the tag,
+and by its digest when none does, so a release mirrored under a tag of your own is still checked.
 
 What passes unchecked, as it always has:
 
 - **no licence**, or a licence whose header carries no claims version: version 0, floor 0;
 - **a header that does not decode** — the application refuses a malformed licence at startup;
-- **an `api_image` whose tag no release in this module version's manifest records**, or, pinned
-  by digest alone, whose digest none records — a build newer than the module, a Canary or Beta
+- **an `api_image` whose tag no release in this module version's manifest records**, and whose
+  digest, if it has one, none records either — a build newer than the module, a Canary or Beta
   build, or a hand-built image. Its claims version is not known here, and the application's own
   check at startup is what stands.
 
@@ -1847,7 +1848,9 @@ Pin both images by digest: a tag pinned by digest, or a digest alone. `api_image
 
 `frontend_image` takes the same forms with `frontend` as the repository's last segment. The
 digest is `sha256:` followed by 64 lowercase hex characters, and the repository's last segment
-must be the role: `api` for `api_image`, `frontend` for `frontend_image`.
+must be the role: `api` for `api_image`, `frontend` for `frontend_image`. `<registry>` is a host
+that contains a `.` or a `:` (a port), or `localhost`; a reference without one would be read as
+Docker Hub, so the plan refuses it.
 
 The references come from the build's ring record or from the bundle Masterly sends you.
 [`MANIFEST.json`](MANIFEST.json) does not record a Canary or Beta build. So the plan-time check in

@@ -17,10 +17,9 @@
 #   - a token whose header cannot be decoded — the application's own verification at startup
 #     refuses a malformed token, and a plan-time guess about one would only add a second opinion;
 #   - an api image whose tag no release in the manifest records (a hand-built or retagged image,
-#     or an image newer than this module version), or, for a reference pinned by digest alone,
-#     whose digest no release records (a Canary or Beta build, or a release cut before digests
-#     were recorded) — its claims version is not known here, and the application's startup check
-#     remains the backstop.
+#     or an image newer than this module version) and which carries no digest a release records
+#     (a Canary or Beta build, or a release cut before digests were recorded) — its claims version
+#     is not known here, and the application's startup check remains the backstop.
 
 locals {
   # The token's first segment is its JOSE header: base64url, unpadded (RFC 7515). Terraform's
@@ -66,13 +65,12 @@ locals {
     for r in local.recorded : r.digest => r.claims_version... if r.digest != null
   }
 
-  # A reference with a tag is resolved by its tag, as it always has been, so a mirror that kept
-  # the tag is recognised whatever its digest. A digest-only reference is resolved by its digest.
-  image_claims_version = (
-    local.pinned_api_tag != null ? try(max(local.claims_version_by_tag[local.pinned_api_tag]...), null) :
-    local.pinned_api_digest != null ? try(max(local.claims_version_by_digest[local.pinned_api_digest]...), null) :
-    null
-  )
+  # A tag a release records decides, as it always has, so a mirror that kept the tag is
+  # recognised whatever its digest. A reference with no tag, or with a tag no release records (a
+  # release mirrored under a tag of your own), is resolved by its digest.
+  tag_claims_version    = local.pinned_api_tag == null ? null : try(max(local.claims_version_by_tag[local.pinned_api_tag]...), null)
+  digest_claims_version = local.pinned_api_digest == null ? null : try(max(local.claims_version_by_digest[local.pinned_api_digest]...), null)
+  image_claims_version  = local.tag_claims_version != null ? local.tag_claims_version : local.digest_claims_version
 
   # The oldest recorded api release that verifies the token's floor: the tag to move to. Ordered
   # by semver, so v0.9.0 sorts before v0.10.0; a tag that is not vX.Y.Z cannot be ordered and is

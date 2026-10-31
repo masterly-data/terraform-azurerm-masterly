@@ -7077,6 +7077,36 @@ run "an_image_with_the_role_above_another_segment_is_refused" {
   expect_failures = [var.api_image, var.frontend_image]
 }
 
+# The first segment is the registry: a host with a "." or a ":" (a port), or localhost. A
+# reference whose first segment is neither would be read by an image runtime as Docker Hub's
+# default registry, which the customer never named, so it is refused.
+run "an_image_with_no_registry_host_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "release/api:v1.0.0"
+    frontend_image        = "release/frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  expect_failures = [var.api_image, var.frontend_image]
+}
+
+run "an_image_on_localhost_or_a_registry_port_plans" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "localhost/api:v0.0.0"
+    frontend_image        = "registry:5000/release/frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  assert {
+    condition     = !module.license_claims_floor.refused && module.license_claims_floor.image_claims_version == null
+    error_message = "An image on localhost, or on a registry named by host and port, must plan."
+  }
+}
+
 # --- Sizing and scaling: app_resources, frontend_max_replicas, the workers' scale rule and
 # --- termination grace period (MAS-1296) ---------------------------------------------------
 

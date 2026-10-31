@@ -272,8 +272,8 @@ run "a_digest_only_image_the_manifest_does_not_record_is_not_checked" {
   }
 }
 
-# A reference with both a tag and a digest is resolved by its tag, as before digests were read: the
-# digest here is 1.2.0's, the tag is 1.1.0's, and the tag decides.
+# A reference with both a tag and a digest is resolved by its tag when a release records the tag,
+# as before digests were read: the digest here is 1.2.0's, the tag is 1.1.0's, and the tag decides.
 run "a_tag_and_digest_image_is_checked_by_its_tag" {
   command = plan
 
@@ -289,6 +289,62 @@ run "a_tag_and_digest_image_is_checked_by_its_tag" {
   assert {
     condition     = output.refused && output.image_claims_version == 1
     error_message = "An api image pinned by tag and digest must be checked by its tag."
+  }
+}
+
+# A release mirrored under a tag of the customer's own keeps its digest: the tag "prod" is one no
+# release records, so the digest, 1.1.0's, decides.
+run "a_tag_and_digest_image_whose_tag_no_release_records_is_checked_by_its_digest" {
+  command = plan
+
+  module {
+    source = "./modules/license-claims-floor"
+  }
+
+  variables {
+    license_token = var.floor_2_token
+    api_image     = "myacr.example.invalid/api:prod@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  }
+
+  assert {
+    condition     = output.refused && output.image_claims_version == 1 && output.move_to_tag == "v1.9.0"
+    error_message = "An api image whose tag no release records must be checked by its digest when a release records that."
+  }
+}
+
+run "a_tag_and_digest_image_whose_tag_no_release_records_passes_at_the_floor" {
+  command = plan
+
+  module {
+    source = "./modules/license-claims-floor"
+  }
+
+  variables {
+    license_token = var.floor_2_token
+    api_image     = "myacr.example.invalid/api:prod@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  }
+
+  assert {
+    condition     = !output.refused && output.image_claims_version == 2
+    error_message = "An api image whose tag no release records, on a digest whose release verifies claims version 2, must pass a floor of 2."
+  }
+}
+
+run "a_tag_and_digest_image_neither_of_which_a_release_records_is_not_checked" {
+  command = plan
+
+  module {
+    source = "./modules/license-claims-floor"
+  }
+
+  variables {
+    license_token = var.floor_2_token
+    api_image     = "myacr.example.invalid/api:prod@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+  }
+
+  assert {
+    condition     = !output.refused && output.image_claims_version == null
+    error_message = "An api image whose tag and digest no release records must pass unchecked."
   }
 }
 
