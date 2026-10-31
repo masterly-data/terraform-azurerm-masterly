@@ -37,7 +37,7 @@ variable "masterly_region" {
 
 variable "release_channel" {
   type        = string
-  description = "Which MANIFEST.json release the images resolve to: \"stable\" (the release this module version shipped with) or \"previous\" (the newest older release with no known issue, to roll the images back)."
+  description = "Which MANIFEST.json release the images resolve to: \"stable\" (the release this module version shipped with) or \"previous\" (the newest older release with no known issue). The references seed the apps when they are created; changing the channel does not roll a running install (terraform apply does not roll a running image). Roll a running install back with az containerapp update --image."
   default     = "stable"
 }
 

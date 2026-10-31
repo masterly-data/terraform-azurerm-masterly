@@ -151,7 +151,7 @@ variable "frontend_image" {
 variable "release_channel" {
   type        = string
   default     = "stable"
-  description = "Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. \"stable\" (the default) is the newest release, the image pair this module version was released against. \"previous\" is the newest older release with no known issue, for rolling the images back without changing the module version. The channel changes only the digest (or tag) of each image: the repository stays release/api and release/frontend on the registry that registry_location names. An image you set explicitly is used as given."
+  description = "Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. \"stable\" (the default) is the newest release, the image pair this module version was released against. \"previous\" is the newest older release with no known issue. The channel changes only the digest (or tag) of each image: the repository stays release/api and release/frontend on the registry that registry_location names. An image you set explicitly is used as given. Like api_image and frontend_image, the channel's references seed each app when it is created; CD owns the running image thereafter, so changing the channel on an existing install rolls nothing (terraform apply does not roll a running image). To roll a running install back, redeploy the previous image with az containerapp update --image, as the Upgrades section of the install documentation describes."
 
   validation {
     condition     = contains(["stable", "previous"], var.release_channel)

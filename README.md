@@ -292,7 +292,11 @@ records in `MANIFEST.json`, or its tag for a release that records no digest. The
 only that digest or tag. The repository is always `release/api` and `release/frontend`, so a
 mirror keeps those repository names. An image you set explicitly is used as given. The
 `image_references` output shows what the plan resolved: both references, the registry, the
-mode and the release.
+mode and the release. Like an explicit image, the channel's reference seeds an app when it is
+created, and CD owns the running image thereafter: changing `release_channel` on an existing
+install rolls nothing (`terraform apply` does not roll a running image, see "Moving to Stable"
+below). To roll a running install back, redeploy the previous image with
+`az containerapp update --image`.
 
 **The deprecated inputs** still plan as before, with two exceptions. An install that pulls with
 a credential and also sets `acr_id` loses its two unused `AcrPull` grants, because the `token`

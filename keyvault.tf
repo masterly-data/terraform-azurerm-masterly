@@ -342,8 +342,9 @@ resource "azurerm_role_assignment" "kv_secrets_officer_deployer" {
 # break-glass hash) and everything the api seals at runtime (KeyVaultSecretStore, ADR 0066):
 # a vault-scope read would hand all of it to whoever runs code in that container. Deliberately
 # Secrets User, not the Officer grant the backend apps hold: the frontend never writes sealed
-# material. The keys are known at plan — they follow registry_username and identity_binding,
-# neither of them sensitive.
+# material. The keys are known at plan — they follow the resolved registry_credential_mode (the
+# registry password rides only in the token mode), identity_binding and builtin_auth, none of
+# them sensitive.
 #
 # The scope is the secret's ARM id (resource_versionless_id), not versionless_id, which is the
 # data-plane URL the app's reference uses.

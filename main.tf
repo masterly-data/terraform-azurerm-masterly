@@ -233,12 +233,6 @@ resource "azurerm_resource_group" "aca" {
       error_message = "Data-residency mismatch: this install declares masterly_region = \"${var.masterly_region}\", but every resource is created in Azure location \"${var.location}\", which is geo \"${local.install_geo == null ? "unknown" : local.install_geo}\". The declared geo is what customers are told and what the app stamps on usage records; the location is where the data actually sits. Change one to match the other — or, if this location genuinely satisfies that residency commitment, say so explicitly with location_geo."
     }
 
-    # A default image needs a release for its channel (see "Registry and images" below).
-    precondition {
-      condition     = local.api_image != null && local.frontend_image != null
-      error_message = "release_channel = \"${var.release_channel}\" resolves to no release in this module version's MANIFEST.json, so api_image and frontend_image have no default. Set release_channel = \"stable\", or set api_image and frontend_image."
-    }
-
     precondition {
       condition     = !var.api_ingress_external || length(var.ingress_allowed_cidrs) > 0
       error_message = "api_ingress_external = true with an empty ingress_allowed_cidrs would publish /v1 to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. The api holds no session of its own — it trusts a bearer token — so it is the surface least able to survive being open. Name the CIDRs that may reach it."
@@ -686,43 +680,27 @@ locals {
   )
   registry_password_secret_name = local.registry_token_mode ? "registry-password" : null
 
-  # The release each channel resolves to. Versions are bare semver, zero-padded here so that
-  # sort() orders them as versions ("0.10.0" after "0.9.0"). "previous" is the newest release
-  # older than `latest` that carries no known_issue.
-  release_by_sort_key = {
-    for v in keys(local.release_manifest.releases) : format("%05d.%05d.%05d", split(".", v)...) => v
-  }
-  release_versions_newest_first = [
-    for k in reverse(sort(keys(local.release_by_sort_key))) : local.release_by_sort_key[k]
-  ]
-  release_channel_versions = {
-    stable = local.release_manifest.latest
-    previous = try([
-      for v in slice(
-        local.release_versions_newest_first,
-        index(local.release_versions_newest_first, local.release_manifest.latest) + 1,
-        length(local.release_versions_newest_first)
-      ) : v if try(local.release_manifest.releases[v].known_issue, null) == null
-    ][0], null)
-  }
-  release_channel_version = local.release_channel_versions[var.release_channel]
-  # Null when the channel has no release; the first resource group's precondition then refuses
-  # the plan, unless both images are set explicitly.
-  release_channel_release = try(local.release_manifest.releases[local.release_channel_version], null)
+  # The images the apps are created with, after the channel and the explicit inputs are resolved
+  # (module.release_channel below). Every app reads these, as does the licence claims-floor check.
+  release_channel_version = module.release_channel.version
+  api_image               = module.release_channel.images.api
+  frontend_image          = module.release_channel.images.frontend
+}
 
-  # The default references: always release/<role> on the selected registry, pinned by the digest
-  # the release records, or by its tag for a release that records none. Only that last part
-  # differs between channels.
-  registry_image_host = local.registry_server != "" ? local.registry_server : "masterly.azurecr.io"
-  release_channel_images = {
-    for role in ["api", "frontend"] : role => try(
-      "${local.registry_image_host}/release/${role}@${local.release_channel_release.digests[role]}",
-      "${local.registry_image_host}/release/${role}:${regex(":([^:@/]+)$", local.release_channel_release.images[role])[0]}",
-      null
-    )
-  }
-  api_image      = var.api_image != null ? var.api_image : local.release_channel_images.api
-  frontend_image = var.frontend_image != null ? var.frontend_image : local.release_channel_images.frontend
+# The release each channel resolves to in MANIFEST.json, and the default references it gives:
+# always release/<role> on the selected registry (Masterly's when the apps have no registry
+# block), pinned by the digest the release records or by its tag for a release that records none.
+# Only that last part differs between channels. A channel that resolves to no release refuses
+# the plan (the module's `images` output), unless both images are set explicitly. A submodule,
+# so the resolution is proven against a synthetic manifest (tests/release_channel.tftest.hcl).
+module "release_channel" {
+  source = "./modules/release-channel"
+
+  manifest       = local.release_manifest
+  channel        = var.release_channel
+  registry       = local.registry_server != "" ? local.registry_server : "masterly.azurecr.io"
+  api_image      = var.api_image
+  frontend_image = var.frontend_image
 }
 
 # Optional: grant pull on the registry (the deploying principal needs

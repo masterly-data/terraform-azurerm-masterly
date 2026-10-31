@@ -51,7 +51,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `<registry_location>/release/<role>@<digest>`, the digest that the `release_channel` release
   in `MANIFEST.json` records, or `<registry_location>/release/<role>:<tag>` for a release that
   records no digest. The channel changes only the digest or tag; the repository is always
-  `release/api` and `release/frontend`. An image you set is used as given.
+  `release/api` and `release/frontend`. An image you set is used as given. As with an explicit
+  image, the reference seeds an app when it is created and CD owns the running image thereafter:
+  changing `release_channel` on an existing install rolls nothing. Roll a running install back
+  with `az containerapp update --image`.
 - **`image_references` output.** It reports the resolved api and frontend references, the
   registry server, the credential mode, the channel and its release.
 
