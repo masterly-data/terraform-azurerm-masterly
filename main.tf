@@ -12,9 +12,10 @@
 # per-install is baked into images.
 #
 # Opt-in subsystems, off by default: Key Vault (keyvault.tf), Redis (redis.tf), the
-# dedicated workers app (workers.tf), customer-owned email (email.tf) and the Service Bus
-# transport (below). mode=production requires the first three. The observability surface
-# (diagnostics.tf) is on by default in mode=production and off otherwise.
+# dedicated workers app (workers.tf), customer-owned email (email.tf), the registry's private
+# endpoint (registry.tf) and the Service Bus transport (below). mode=production requires the
+# first three. The observability surface (diagnostics.tf) is on by default in mode=production
+# and off otherwise.
 #
 # Deliberately deferred: custom domains, and the per-install Entra identity of ADR 0020.
 # The calls the install can make to Masterly's control plane (licence refresh, usage
@@ -1574,6 +1575,9 @@ module "api" {
     azurerm_private_dns_zone_virtual_network_link.redis,
     azurerm_private_endpoint.key_vault,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
+    # With registry_private_endpoint, the first image pull already takes the private path.
+    azurerm_private_endpoint.registry,
+    azurerm_private_dns_zone_virtual_network_link.registry,
     azurerm_role_assignment.kv_secrets_officer,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
@@ -1717,5 +1721,7 @@ module "frontend" {
   depends_on = [
     azurerm_role_assignment.acr_pull_frontend,
     azurerm_role_assignment.kv_secrets_user_frontend,
+    azurerm_private_endpoint.registry,
+    azurerm_private_dns_zone_virtual_network_link.registry,
   ]
 }

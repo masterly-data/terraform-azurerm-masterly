@@ -251,7 +251,7 @@ variable "registry_password" {
 variable "acr_id" {
   type        = string
   default     = null
-  description = "Resource ID of the registry, for the AcrPull role assignments on the install's two app identities (backend apps + frontend) in the managed_identity and customer_registry modes; the token mode pulls with its credential and creates none. Null skips them (grant pull access to BOTH principals out of band). The deploying principal needs roleAssignments/write on the registry's scope."
+  description = "Resource ID of the registry, for the AcrPull role assignments on the install's two app identities (backend apps + frontend) in the managed_identity and customer_registry modes; the token mode pulls with its credential and creates none. Null skips them (grant pull access to BOTH principals out of band). The deploying principal needs roleAssignments/write on the registry's scope. Also the registry the private endpoint connects to when registry_private_endpoint is on, which needs it set."
 }
 
 variable "ingress_allowed_cidrs" {
@@ -890,7 +890,7 @@ variable "aca_subnet_id" {
 variable "private_endpoints_subnet_id" {
   type        = string
   default     = null
-  description = "Subnet for the Postgres, Key Vault, and Redis private endpoints when joining an existing network. Required with aca_subnet_id, and must have private endpoint network policies disabled. Must not be the ACA subnet: a delegated subnet cannot hold private endpoints."
+  description = "Subnet for the Postgres, Key Vault, Redis and registry (registry_private_endpoint) private endpoints when joining an existing network. Required with aca_subnet_id, and must have private endpoint network policies disabled. Must not be the ACA subnet: a delegated subnet cannot hold private endpoints."
 }
 
 variable "api_ingress_external" {

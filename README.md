@@ -246,12 +246,13 @@ check, and a rebuilt app, both go by.
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
 | Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer and Crypto Officer grants to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
 | Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the URL rides as a Container App secret, keyless on `redis_auth = "entra"` — [authentication](#authentication-to-the-starter-server-and-redis)). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
+| Registry private endpoint (opt-in) | `registry_private_endpoint`: a private endpoint to your registry (`acr_id`, `registry` subresource) on the private-endpoints subnet, with a `privatelink.azurecr.io` private DNS zone linked to the VNet, so the identity modes pull over the VNet. See [The registry over a private endpoint](#the-registry-over-a-private-endpoint). |
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
 
 ## Getting the images (ADR 0067)
 
 Masterly issues each customer a **pull service principal** (appId + client secret, in the
-install bundle, `AcrPull` only). Four inputs say where the images come from and how the apps
+install bundle, `AcrPull` only). Five inputs say where the images come from and how the apps
 pull them:
 
 | Input | Type | Default | What it does |
@@ -260,6 +261,7 @@ pull them:
 | `registry_credential_mode` | `string` | `null` (derived, see below) | `"token"`, `"managed_identity"` or `"customer_registry"`. |
 | `registry_token` | `object({ username = string, password = string })`, sensitive | `null` | The pull credential from the bundle: the appId and its client secret. Replaces `registry_username` and `registry_password`. |
 | `release_channel` | `string` | `"stable"` | Which [`MANIFEST.json`](MANIFEST.json) release the default images resolve to: `"stable"` (the newest release) or `"previous"` (the newest older release with no known issue). |
+| `registry_private_endpoint` | `bool` | `false` | A private endpoint to the registry `acr_id` names, in the install's VNet, with a `privatelink.azurecr.io` zone. Identity modes only; see [The registry over a private endpoint](#the-registry-over-a-private-endpoint). |
 
 The three modes:
 
@@ -311,6 +313,35 @@ the deprecated one it replaces is refused. The CHANGELOG has the migration.
 
 Rotation: the SP carries up to two active secrets. Switch `registry_token.password` to the new
 one and apply.
+
+### The registry over a private endpoint
+
+`registry_private_endpoint = true` (off by default) moves the image pulls off the registry's
+public endpoint and onto the install's VNet. It creates, in `registry.tf`:
+
+- `pe-masterly-registry`, a private endpoint to `acr_id`'s `registry` subresource, on the
+  install's private-endpoint subnet (`snet-private-endpoints`, or `private_endpoints_subnet_id`
+  when you inject the network), in `rg-masterly-data`;
+- a `privatelink.azurecr.io` private DNS zone in `rg-masterly-aca`, linked to the install's VNet
+  (`pdzl-masterly-registry`), with the endpoint's DNS zone group in it, so the registry's login
+  server and its data endpoint resolve to the endpoint's private addresses inside the VNet.
+
+The login server, the image references and the `AcrPull` grants do not change; the output
+`registry_private_endpoint_id` names the endpoint. The plan refuses the input with the `token`
+mode (set or derived from `registry_token`) and without `acr_id` set to a registry's resource ID.
+Before you turn it on:
+
+- **`acr_id` must be the registry the apps pull from**, the one `registry_location` names: the
+  endpoint connects to `acr_id`, and the module does not compare the two.
+- **The registry must be Premium**, the ACR SKU that takes private endpoints.
+- **The connection is requested as automatically approved**, so the identity running the apply
+  needs the right to approve private endpoint connections on that registry. For a registry you
+  do not own, ask its owner before you apply.
+- **The registry's public network access is not changed.** Closing it is the registry owner's
+  choice, and closes it for every other client too.
+- **The zone is always created.** A VNet links to one `privatelink.azurecr.io` zone only, so in a
+  hub-and-spoke landing zone whose hub already links one, leave the input off and let the
+  platform team add the endpoint ([docs/networking.md](docs/networking.md)).
 
 ## Identity (ADR 0024)
 
@@ -626,6 +657,10 @@ Landing-zone accommodations:
   (linking the central zone to this VNet is the platform team's side). The same holds for
   `key_vault_private_dns_zone_id`, `redis_private_dns_zone_id` and
   `servicebus_private_dns_zone_id`.
+- The registry's private endpoint (`registry_private_endpoint`) always creates its own
+  `privatelink.azurecr.io` zone and VNet link; there is no zone-ID input for it. Where the hub
+  already links that zone to the VNet, leave it off and add the registry endpoint on the
+  platform side ([The registry over a private endpoint](#the-registry-over-a-private-endpoint)).
 
 > Upgrading from v0.1: `infrastructure_subnet_id` is create-time-only, so the apply
 > REPLACES the Container App Environment and the apps — their FQDNs change. The Postgres

@@ -18,7 +18,11 @@ landing-zone shape.
 ## 1. Public ingress behind an allowlist
 
 The default. The module creates a VNet from `vnet_address_space`, two subnets, private
-endpoints for Postgres, Key Vault, and Redis, and the private DNS zones those need.
+endpoints for Postgres, Key Vault, and Redis, and the private DNS zones those need. With
+`registry_private_endpoint = true` (the `managed_identity` and `customer_registry` registry
+modes, with `acr_id` set) it adds one more: a private endpoint to your registry's `registry`
+subresource, and a `privatelink.azurecr.io` zone linked to the VNet, so image pulls stay on the
+VNet.
 
 `ingress_allowed_cidrs` narrows who can reach the frontend. **An empty list means
 unrestricted, not deny-all** — that is Azure's semantics, not ours, and it is the one default
@@ -88,6 +92,12 @@ servicebus_private_dns_zone_id = "/subscriptions/.../privateDnsZones/privatelink
 
 Each is independent: inject the ones your hub owns and let the module create the rest.
 
+The registry's endpoint has no zone input: `registry_private_endpoint` always creates its own
+`privatelink.azurecr.io` zone and links it to the spoke. A virtual network links to only one
+zone of a name, so if your hub already links `privatelink.azurecr.io` to this spoke, leave
+`registry_private_endpoint` off and have your platform team add the registry's private endpoint
+(subresource `registry`) on their side, in the hub zone.
+
 **Egress.** What you can do to outbound traffic on the ACA subnet depends on the type of
 Container Apps environment, and Azure honours a route or a NAT Gateway on that subnet for only
 one of the two types. A route Azure ignores filters nothing, so check your environment first:
@@ -116,7 +126,8 @@ and the environment still provisions, but it cannot start a replica. The set is 
 Microsoft versions it, so it is not copied here; take the FQDNs, service tags and NSG rules
 from [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration).
 The install also needs to reach your identity provider and the container registry it pulls
-images from.
+images from; with `registry_private_endpoint = true` the registry is reached over its private
+endpoint in the VNet instead.
 
 On a network the module builds (topologies 1 and 2) the module's NSG adds no outbound rule, so
 Azure's default `AllowInternetOutBound` applies.
@@ -151,7 +162,7 @@ that opens by itself.
 
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
-| 100 | Allow | `snet-aca` | TCP 443, 5432, 6380, 10000 | Key Vault, Postgres, Azure Cache for Redis, Azure Managed Redis |
+| 100 | Allow | `snet-aca` | TCP 443, 5432, 6380, 10000 | Key Vault and the registry's private endpoint (443), Postgres, Azure Cache for Redis, Azure Managed Redis |
 | 4000 | Deny | any | any | Everything not admitted above |
 
 The module sets `private_endpoint_network_policies = "Enabled"` on that subnet, without which
