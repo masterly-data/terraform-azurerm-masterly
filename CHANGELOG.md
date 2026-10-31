@@ -84,6 +84,20 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- **The release images are published under `release/`.** `MANIFEST.json` and the README's pins and
+  release table now name `masterly.azurecr.io/release/api:<tag>` and
+  `masterly.azurecr.io/release/frontend:<tag>` in place of `masterly.azurecr.io/api:<tag>` and
+  `masterly.azurecr.io/frontend:<tag>`. Tags and digests are unchanged: each reference names
+  the same build under the new path. The release check now refuses a manifest image outside
+  `release/<image>`, except `0.17.0`, whose api image was never published under any path and
+  whose entry is unchanged. *Migration:* if you pin `api_image` or `frontend_image` by path,
+  change `masterly.azurecr.io/api` to `masterly.azurecr.io/release/api` and
+  `masterly.azurecr.io/frontend` to `masterly.azurecr.io/release/frontend`, keeping the tag or
+  digest. If you mirror the images, copy them from `release/api` and `release/frontend`, and
+  hold them under those repositories if you rely on the default image references. If you
+  match or allow-list images by repository path (an admission policy, a scanner rule, a
+  registry token's scope), add the `release/` repositories. A tool that reads the reference
+  from `MANIFEST.json` needs no change.
 - **Breaking: the `token` mode creates no `AcrPull` grant.** An install that pulls with a
   registry credential (`registry_username` and `registry_password`) and also sets `acr_id` plans
   to destroy its two `AcrPull` role assignments. Nothing pulls with them: in that mode every app
@@ -103,8 +117,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `frontend` for `frontend_image`. The plan also refuses a reference with no registry and one
   with neither a tag nor a digest. The registry is the first segment, and must be a host that
   contains a `.` or a `:` (a port), or `localhost`: `release/api:<tag>` is refused rather than
-  read as Docker Hub. *Migration:* a `masterly.azurecr.io/api:<tag>` or
-  `masterly.azurecr.io/frontend:<tag>` reference, as this README shows, already passes. If you mirror the
+  read as Docker Hub. *Migration:* a `masterly.azurecr.io/release/api:<tag>` or
+  `masterly.azurecr.io/release/frontend:<tag>` reference, as this README shows, already passes. If you mirror the
   images into your own registry under a different repository name, push them to a repository
   whose last segment is `api` or `frontend`. Name the registry host in full. Write a digest in
   lowercase, with its `sha256:` prefix.

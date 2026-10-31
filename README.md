@@ -78,8 +78,8 @@ module "masterly" {
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
   # The pair this module version was released against, from MANIFEST.json. Versioning names
   # the oldest image each app can run on, and the tags that have no published image.
-  api_image           = "masterly.azurecr.io/api:v0.135.0"
-  frontend_image      = "masterly.azurecr.io/frontend:v0.143.0"
+  api_image           = "masterly.azurecr.io/release/api:v0.135.0"
+  frontend_image      = "masterly.azurecr.io/release/frontend:v0.143.0"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -1732,15 +1732,15 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
-| `0.22.0` | `masterly.azurecr.io/api:v0.135.0` | `masterly.azurecr.io/frontend:v0.143.0` | 2026-10-29 |
-| `0.21.0` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-28 |
-| `0.20.0` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-23 |
-| `0.19.1` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-22 |
-| `0.19.0` | `masterly.azurecr.io/api:v0.134.0` | `masterly.azurecr.io/frontend:v0.142.0` | 2026-10-22 |
-| `0.18.0` | `masterly.azurecr.io/api:v0.133.13` | `masterly.azurecr.io/frontend:v0.141.0` | 2026-10-19 |
+| `0.22.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-10-29 |
+| `0.21.0` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-28 |
+| `0.20.0` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-23 |
+| `0.19.1` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-22 |
+| `0.19.0` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-22 |
+| `0.18.0` | `masterly.azurecr.io/release/api:v0.133.13` | `masterly.azurecr.io/release/frontend:v0.141.0` | 2026-10-19 |
 | `0.17.0` | `masterly.azurecr.io/api:v0.133.11` | `masterly.azurecr.io/frontend:v0.139.5` | 2026-10-05 |
-| `0.16.0` | `masterly.azurecr.io/api:v0.133.5` | `masterly.azurecr.io/frontend:v0.139.0` | 2026-09-24 |
-| `0.15.0` | `masterly.azurecr.io/api:v0.133.2` | `masterly.azurecr.io/frontend:v0.138.2` | 2026-09-07 |
+| `0.16.0` | `masterly.azurecr.io/release/api:v0.133.5` | `masterly.azurecr.io/release/frontend:v0.139.0` | 2026-09-24 |
+| `0.15.0` | `masterly.azurecr.io/release/api:v0.133.2` | `masterly.azurecr.io/release/frontend:v0.138.2` | 2026-09-07 |
 <!-- release-manifest:end -->
 
 The image pair is what the module version was released against — the pair Masterly's own

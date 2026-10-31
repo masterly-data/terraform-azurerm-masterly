@@ -22,7 +22,7 @@
       "containers": [
         {
           "name": "workers",
-          "image": "masterly.azurecr.io/api:v0.133.2",
+          "image": "masterly.azurecr.io/release/api:v0.133.2",
           "resources": { "cpu": 0.5, "memory": "1Gi" },
           "probes": [],
           "env": [
