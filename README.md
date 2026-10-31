@@ -207,15 +207,19 @@ licence. An install older than the floor upgrades before it renews.
 
 The check runs offline: it reads the manifest that ships inside this module, never a registry, so
 an air-gapped install plans exactly as a connected one does. It compares `api_image` by its tag,
-so an image mirrored into your own registry under the same tag is checked like the original.
+so an image mirrored into your own registry under the same tag is checked like the original. An
+`api_image` pinned by digest alone (`<registry>/.../api@sha256:<digest>`) has no tag to read, so
+the check compares its digest with the api digests the manifest records (`digests.api`) instead.
+A reference with both a tag and a digest is compared by its tag.
 
 What passes unchecked, as it always has:
 
 - **no licence**, or a licence whose header carries no claims version: version 0, floor 0;
 - **a header that does not decode** — the application refuses a malformed licence at startup;
-- **an `api_image` whose tag no release in this module version's manifest records** — a build
-  newer than the module, or a hand-built image. Its claims version is not known here, and the
-  application's own check at startup is what stands.
+- **an `api_image` whose tag no release in this module version's manifest records**, or, pinned
+  by digest alone, whose digest none records — a build newer than the module, a Canary or Beta
+  build, or a hand-built image. Its claims version is not known here, and the application's own
+  check at startup is what stands.
 
 The check reads `api_image`, not the image the app is running. Terraform seeds the image and then
 leaves it to you to roll, so keep `api_image` at the tag your install runs: that is what this
@@ -1834,12 +1838,22 @@ module "masterly" {
 }
 ```
 
-Pin both images by digest, in the form `<registry>/api:<tag>@sha256:<digest>` for `api_image`
-and the same shape for `frontend_image`. The references come from the build's ring record or from
-the bundle Masterly sends you. [`MANIFEST.json`](MANIFEST.json) does not carry them. Keep the tag
-as well as the digest: the plan-time check in
+Pin both images by digest: a tag pinned by digest, or a digest alone. `api_image` and
+`frontend_image` each take one of three forms, and the plan refuses any other:
+
+- `<registry>/<path>/api:<tag>` — a tag alone;
+- `<registry>/<path>/api:<tag>@sha256:<digest>` — a tag pinned by digest;
+- `<registry>/<path>/api@sha256:<digest>` — a digest alone, e.g. `masterly.azurecr.io/release/api@sha256:<digest>`.
+
+`frontend_image` takes the same forms with `frontend` as the repository's last segment. The
+digest is `sha256:` followed by 64 lowercase hex characters, and the repository's last segment
+must be the role: `api` for `api_image`, `frontend` for `frontend_image`.
+
+The references come from the build's ring record or from the bundle Masterly sends you.
+[`MANIFEST.json`](MANIFEST.json) does not record a Canary or Beta build. So the plan-time check in
 [A renewed licence and the api image it runs on](#a-renewed-licence-and-the-api-image-it-runs-on)
-reads the tag, and a reference with only a digest is skipped.
+passes such a build unchecked, whether you pin it by tag, by tag and digest, or by digest alone.
+The application's own check at startup still applies.
 
 Your licence names the rings your install may run. This module version does not check the
 licence's ring at plan, preflight or boot. Run only the rings your licence names.

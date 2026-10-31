@@ -22,6 +22,28 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Added
+
+- **`api_image` and `frontend_image` accept a digest.** Each takes `registry/repository:tag`,
+  `registry/repository:tag@sha256:<digest>` or `registry/repository@sha256:<digest>`, for example
+  `masterly.azurecr.io/release/api@sha256:<digest>`.
+- **The licence claims-floor check now reads a digest-only `api_image`.** The plan-time check
+  compares the digest with the api digests `MANIFEST.json` records (`digests.api`). A reference
+  with a tag is still compared by its tag. A digest that no release records passes unchecked, as
+  an unrecorded tag does, and the application's startup check still applies.
+
+### Changed
+
+- **Breaking: `api_image` and `frontend_image` are validated at plan.** The plan now refuses any
+  reference that does not take one of the three forms above. A digest must be `sha256:` followed
+  by 64 lowercase hex characters. The repository's last segment must be `api` for `api_image` and
+  `frontend` for `frontend_image`. The plan also refuses a reference with no registry and one
+  with neither a tag nor a digest. *Migration:* a `masterly.azurecr.io/api:<tag>` or
+  `masterly.azurecr.io/frontend:<tag>` reference, as this README shows, already passes. If you mirror the
+  images into your own registry under a different repository name, push them to a repository
+  whose last segment is `api` or `frontend`. Write a digest in lowercase, with its `sha256:`
+  prefix.
+
 ## [0.22.0] - 2026-10-29
 
 ### Changed

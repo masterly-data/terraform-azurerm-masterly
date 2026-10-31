@@ -128,12 +128,22 @@ variable "location_geo" {
 
 variable "api_image" {
   type        = string
-  description = "Fully-qualified api image (registry/repo:tag). Seeds the app; CD owns the running tag thereafter."
+  description = "Fully-qualified api image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the repository's last segment is api (e.g. masterly.azurecr.io/release/api). The licence claims-floor check reads the tag, or the digest when there is no tag; a digest no release in MANIFEST.json records passes unchecked. Seeds the app; CD owns the running tag thereafter."
+
+  validation {
+    condition     = can(regex("^[^\\s/@]+(?:/[^\\s/:@]+)*/api(?::\\w[\\w.-]{0,127}(?:@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$", var.api_image))
+    error_message = "api_image must be registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest>, with the digest as 64 lowercase hex characters after \"sha256:\", and the repository's last segment must be \"api\" (e.g. masterly.azurecr.io/release/api@sha256:<digest>)."
+  }
 }
 
 variable "frontend_image" {
   type        = string
-  description = "Fully-qualified frontend image (registry/repo:tag). Seeds the app; CD owns the running tag thereafter."
+  description = "Fully-qualified frontend image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the repository's last segment is frontend (e.g. masterly.azurecr.io/release/frontend). Seeds the app; CD owns the running tag thereafter."
+
+  validation {
+    condition     = can(regex("^[^\\s/@]+(?:/[^\\s/:@]+)*/frontend(?::\\w[\\w.-]{0,127}(?:@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$", var.frontend_image))
+    error_message = "frontend_image must be registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest>, with the digest as 64 lowercase hex characters after \"sha256:\", and the repository's last segment must be \"frontend\" (e.g. masterly.azurecr.io/release/frontend@sha256:<digest>)."
+  }
 }
 
 variable "acr_login_server" {

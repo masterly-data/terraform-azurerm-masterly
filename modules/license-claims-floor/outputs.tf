@@ -10,7 +10,7 @@ output "token_claims_floor" {
 
 output "image_claims_version" {
   value       = local.image_claims_version
-  description = "The claims version the pinned api image verifies, as the release manifest records it. Null when the manifest records no release on the image's tag, and then nothing is checked."
+  description = "The claims version the pinned api image verifies, as the release manifest records it. Null when the manifest records no release on the image's tag (or, for a digest-only reference, on its digest), and then nothing is checked."
 }
 
 output "move_to_tag" {

@@ -7,10 +7,10 @@ variable "license_token" {
 
 variable "api_image" {
   type        = string
-  description = "The pinned api image (registry/repository:tag), compared by its tag with the api images the manifest records, so an image mirrored into your own registry under the same tag is recognised."
+  description = "The pinned api image (registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest>). A reference with a tag is compared by its tag with the api images the manifest records, so an image mirrored into your own registry under the same tag is recognised; a digest-only reference is compared by its digest with the api digests the manifest records."
 }
 
 variable "manifest" {
   type        = any
-  description = "The decoded release manifest (MANIFEST.json, docs/release-manifest.md): the api image and api_claims_version of every recorded module release."
+  description = "The decoded release manifest (MANIFEST.json, docs/release-manifest.md): the api image, api digest and api_claims_version of every recorded module release."
 }

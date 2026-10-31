@@ -21,11 +21,12 @@ variables {
     schema_version = 1
     releases = {
       # Cut before api_claims_version existed: reads as 0.
-      "1.0.0"  = { images = { api = "registry.example.invalid/api:v1.0.0" } }
-      "1.1.0"  = { images = { api = "registry.example.invalid/api:v1.1.0" }, api_claims_version = 1 }
+      "1.0.0" = { images = { api = "registry.example.invalid/api:v1.0.0" } }
+      # 1.1.0 and 1.2.0 record their api digests; the others were cut before digests were.
+      "1.1.0"  = { images = { api = "registry.example.invalid/api:v1.1.0" }, digests = { api = "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, api_claims_version = 1 }
       "1.1.1"  = { images = { api = "registry.example.invalid/api:v1.1.0" }, api_claims_version = 1 }
       "1.10.0" = { images = { api = "registry.example.invalid/api:v1.10.0" }, api_claims_version = 2 }
-      "1.2.0"  = { images = { api = "registry.example.invalid/api:v1.9.0" }, api_claims_version = 2 }
+      "1.2.0"  = { images = { api = "registry.example.invalid/api:v1.9.0" }, digests = { api = "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, api_claims_version = 2 }
     }
   }
 
@@ -202,6 +203,92 @@ run "an_image_the_manifest_does_not_record_is_not_checked" {
   assert {
     condition     = !output.refused && output.image_claims_version == null
     error_message = "An api image whose tag no release records must pass unchecked."
+  }
+}
+
+# A reference pinned by digest alone has no tag to read, so the build is found by its digest among
+# the digests the manifest records: 1.1.0's api verifies claims version 1, below a floor of 2.
+run "a_digest_only_image_the_manifest_records_is_checked_by_its_digest" {
+  command = plan
+
+  module {
+    source = "./modules/license-claims-floor"
+  }
+
+  variables {
+    license_token = var.floor_2_token
+    api_image     = "registry.example.invalid/release/api@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  }
+
+  assert {
+    condition     = output.refused && output.image_claims_version == 1 && output.move_to_tag == "v1.9.0"
+    error_message = "A digest-only api image whose digest a release records must be checked against that release's api_claims_version."
+  }
+
+  assert {
+    condition = alltrue([
+      strcontains(output.message, "registry.example.invalid/release/api@sha256:1111111111111111111111111111111111111111111111111111111111111111 verifies claims version 1"),
+      strcontains(output.message, "The oldest api release that verifies it is v1.9.0."),
+    ])
+    error_message = "The refusal of a digest-only image must name the reference as pinned and the api tag to move to."
+  }
+}
+
+run "a_digest_only_image_at_the_floor_passes" {
+  command = plan
+
+  module {
+    source = "./modules/license-claims-floor"
+  }
+
+  variables {
+    license_token = var.floor_2_token
+    api_image     = "registry.example.invalid/release/api@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  }
+
+  assert {
+    condition     = !output.refused && output.message == null && output.image_claims_version == 2
+    error_message = "A digest-only api image whose recorded release verifies claims version 2 must pass a floor of 2."
+  }
+}
+
+# A digest no release records — a Canary or Beta build, or one cut before digests were recorded —
+# has no known claims version, exactly like an unrecorded tag.
+run "a_digest_only_image_the_manifest_does_not_record_is_not_checked" {
+  command = plan
+
+  module {
+    source = "./modules/license-claims-floor"
+  }
+
+  variables {
+    license_token = var.floor_2_token
+    api_image     = "registry.example.invalid/release/api@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+  }
+
+  assert {
+    condition     = !output.refused && output.image_claims_version == null
+    error_message = "A digest-only api image whose digest no release records must pass unchecked."
+  }
+}
+
+# A reference with both a tag and a digest is resolved by its tag, as before digests were read: the
+# digest here is 1.2.0's, the tag is 1.1.0's, and the tag decides.
+run "a_tag_and_digest_image_is_checked_by_its_tag" {
+  command = plan
+
+  module {
+    source = "./modules/license-claims-floor"
+  }
+
+  variables {
+    license_token = var.floor_2_token
+    api_image     = "registry.example.invalid/release/api:v1.1.0@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  }
+
+  assert {
+    condition     = output.refused && output.image_claims_version == 1
+    error_message = "An api image pinned by tag and digest must be checked by its tag."
   }
 }
 

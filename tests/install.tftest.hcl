@@ -6963,6 +6963,120 @@ run "a_licence_floor_on_an_unrecorded_api_image_is_not_checked" {
   }
 }
 
+# --- Image references: a tag, a tag and a digest, or a digest alone -------------------------
+# api_image and frontend_image take registry/repository:tag, registry/repository:tag@sha256:<digest>
+# or registry/repository@sha256:<digest>, and the repository's last segment names the role. The
+# digests here are synthetic: no release records them.
+run "image_references_pinned_by_digest_alone_plan" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/release/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    frontend_image        = "masterly.azurecr.io/release/frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  assert {
+    condition     = !module.license_claims_floor.refused && module.license_claims_floor.image_claims_version == null
+    error_message = "A digest-only api image whose digest the manifest does not record must plan, unchecked."
+  }
+}
+
+# A tag and a digest together are resolved by the tag: v0.133.2 is a release the manifest
+# recorded before api_claims_version existed, so it reads as 0.
+run "image_references_pinned_by_tag_and_digest_plan" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/release/api:v0.133.2@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    frontend_image        = "masterly.azurecr.io/release/frontend:v0.0.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  assert {
+    condition     = !module.license_claims_floor.refused && module.license_claims_floor.image_claims_version == 0
+    error_message = "An api image pinned by tag and digest must plan and be resolved by its tag."
+  }
+}
+
+run "image_references_pinned_by_tag_alone_plan" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/release/api:v0.133.2"
+    frontend_image        = "masterly.azurecr.io/release/frontend:v0.0.0"
+  }
+
+  assert {
+    condition     = !module.license_claims_floor.refused && module.license_claims_floor.image_claims_version == 0
+    error_message = "An image pinned by tag alone must plan and be resolved by its tag."
+  }
+}
+
+# A digest must be "sha256:" and exactly 64 lowercase hex characters.
+run "an_image_digest_of_the_wrong_length_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/release/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    frontend_image        = "masterly.azurecr.io/release/frontend:v0.0.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  expect_failures = [var.api_image, var.frontend_image]
+}
+
+run "an_image_digest_in_uppercase_hex_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/release/api@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    frontend_image        = "masterly.azurecr.io/release/frontend:v0.0.0@sha256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+  }
+
+  expect_failures = [var.api_image, var.frontend_image]
+}
+
+run "an_image_digest_without_sha256_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/release/api@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    frontend_image        = "masterly.azurecr.io/release/frontend:v0.0.0@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  expect_failures = [var.api_image, var.frontend_image]
+}
+
+# The repository's last segment names the role: an api image is .../api, a frontend image
+# .../frontend, and swapping them, or a longer name, is refused.
+run "an_image_whose_repository_is_not_the_role_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/release/apiserver:v0.0.0"
+    frontend_image        = "masterly.azurecr.io/release/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+
+  expect_failures = [var.api_image, var.frontend_image]
+}
+
+run "an_image_with_the_role_above_another_segment_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/api/release:v0.0.0"
+    frontend_image        = "masterly.azurecr.io/frontend/release:v0.0.0"
+  }
+
+  expect_failures = [var.api_image, var.frontend_image]
+}
+
 # --- Sizing and scaling: app_resources, frontend_max_replicas, the workers' scale rule and
 # --- termination grace period (MAS-1296) ---------------------------------------------------
 
