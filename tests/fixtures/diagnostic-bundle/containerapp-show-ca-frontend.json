@@ -22,7 +22,7 @@
       "containers": [
         {
           "name": "frontend",
-          "image": "masterly.azurecr.io/frontend:v0.138.2",
+          "image": "masterly.azurecr.io/release/frontend:v0.138.2",
           "resources": { "cpu": 0.5, "memory": "1Gi" },
           "probes": [
             { "type": "Readiness", "httpGet": { "path": "/api/readyz", "port": 3000 }, "periodSeconds": 10, "failureThreshold": 6 }

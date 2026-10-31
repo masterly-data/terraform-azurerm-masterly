@@ -265,7 +265,7 @@ scenario_clean() { # scenario_clean <script>
   jq -e '.configuration.secrets == ["database-url", "session-secret", "license-token", "registry-password"]' \
     "$bundle/apps/ca-api.json" >/dev/null && pass "secrets listed by name" \
     || fail "configuration.secrets should be the four names and nothing else"
-  jq -e '.tables[0].rows[0][3] == "masterly.azurecr.io/api:v0.133.2"' "$bundle/logs/q1-running-images.json" >/dev/null \
+  jq -e '.tables[0].rows[0][3] == "masterly.azurecr.io/release/api:v0.133.2"' "$bundle/logs/q1-running-images.json" >/dev/null \
     && pass "running image tags carried" || fail "q1 rows not carried as returned"
   # The vault's audit log is read from the resource-specific table the module's diagnostic
   # setting writes to, scoped to this install's vault, and projects no caller identity, caller

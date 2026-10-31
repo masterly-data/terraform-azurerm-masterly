@@ -40,7 +40,7 @@
       "containers": [
         {
           "name": "api",
-          "image": "masterly.azurecr.io/api:v0.133.2",
+          "image": "masterly.azurecr.io/release/api:v0.133.2",
           "resources": { "cpu": 1.0, "memory": "2Gi" },
           "probes": [
             { "type": "Liveness", "httpGet": { "path": "/healthz", "port": 8001 }, "periodSeconds": 10, "failureThreshold": 3 },
