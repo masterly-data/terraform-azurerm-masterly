@@ -656,10 +656,14 @@ module "frontend_identity" {
 locals {
   release_manifest = jsondecode(file("${path.module}/MANIFEST.json"))
 
-  # registry_location, else the deprecated acr_login_server (where "" still renders no registry
-  # block), else Masterly's registry.
+  # registry_location, else the deprecated acr_login_server (where "" renders no registry block).
+  # With neither, Masterly's registry when something pulls from it (a credential mode, a pull
+  # credential or an AcrPull grant through acr_id); otherwise "", no registry block and public
+  # images, which is what acr_login_server = "" migrates to.
   registry_server = var.registry_location != null ? var.registry_location : (
-    var.acr_login_server != null ? var.acr_login_server : "masterly.azurecr.io"
+    var.acr_login_server != null ? var.acr_login_server : (
+      var.registry_credential_mode != null || local.registry_token_set || var.registry_username != null || var.acr_id != null ? "masterly.azurecr.io" : ""
+    )
   )
 
   # Whether a credential was supplied is not the secret: the same narrow unmarking as the

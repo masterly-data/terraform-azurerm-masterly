@@ -3399,6 +3399,81 @@ run "legacy_acr_login_server_maps_onto_the_customer_registry_mode" {
   }
 }
 
+# Omitting registry_location, with no mode, credential or acr_id, is public images: no
+# registry block and no pull secret. acr_login_server = "" migrates to exactly that.
+run "registry_location_omitted_renders_no_registry_block" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = null
+    api_image             = null
+    frontend_image        = null
+  }
+
+  assert {
+    condition = (
+      module.api.registry == null &&
+      module.frontend.registry == null &&
+      output.image_references.registry_server == "" &&
+      !contains(module.api.value_secret_names, "registry-password") &&
+      !contains(module.frontend.value_secret_names, "registry-password")
+    )
+    error_message = "registry_location omitted with no mode, credential or acr_id must render no registry block and no registry-password secret."
+  }
+
+  assert {
+    condition = (
+      module.api.image == "masterly.azurecr.io/release/api@${local.release_manifest.releases[local.release_manifest.latest].digests.api}" &&
+      module.frontend.image == "masterly.azurecr.io/release/frontend@${local.release_manifest.releases[local.release_manifest.latest].digests.frontend}"
+    )
+    error_message = "With no registry block, the default images must still be the latest release's release/<role> digests."
+  }
+}
+
+run "legacy_acr_login_server_empty_matches_registry_location_omitted" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = ""
+    api_image             = null
+    frontend_image        = null
+  }
+
+  assert {
+    condition = (
+      module.api.registry == null &&
+      module.frontend.registry == null &&
+      output.image_references == run.registry_location_omitted_renders_no_registry_block.image_references
+    )
+    error_message = "acr_login_server = \"\" must plan the same images and the same absent registry block as omitting registry_location."
+  }
+}
+
+# acr_id alone still pulls from Masterly's registry as the app identities, as the old
+# acr_login_server default did: a grant with no registry block would pull nothing.
+run "registry_location_omitted_with_acr_id_pulls_from_masterly_as_the_identities" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = null
+    acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+  }
+
+  assert {
+    condition = (
+      output.image_references.registry_credential_mode == "managed_identity" &&
+      module.api.registry.server == "masterly.azurecr.io" &&
+      module.frontend.registry.server == "masterly.azurecr.io" &&
+      module.api.registry.password_secret_name == null &&
+      length(azurerm_role_assignment.acr_pull) == 1 && length(azurerm_role_assignment.acr_pull_frontend) == 1
+    )
+    error_message = "acr_id with registry_location omitted must pull from masterly.azurecr.io as the app identities, with AcrPull for both."
+  }
+}
+
 # Guards.
 run "release_channel_unknown_is_rejected" {
   command = plan
@@ -3484,6 +3559,19 @@ run "registry_location_with_a_scheme_is_rejected" {
   expect_failures = [var.registry_location]
 }
 
+# "" is not a registry: public images are registry_location omitted.
+run "registry_location_empty_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = null
+    registry_location     = ""
+  }
+
+  expect_failures = [var.registry_location]
+}
+
 run "registry_token_with_the_deprecated_pair_is_rejected" {
   command = plan
 
@@ -3494,6 +3582,35 @@ run "registry_token_with_the_deprecated_pair_is_rejected" {
     registry_token = {
       username = "00000000-0000-0000-0000-000000000000"
       password = "sp-client-secret"
+    }
+  }
+
+  expect_failures = [var.registry_token]
+}
+
+# The token must arrive whole: a blank username or an empty password is refused.
+run "registry_token_without_a_username_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    registry_token = {
+      username = ""
+      password = "sp-client-secret"
+    }
+  }
+
+  expect_failures = [var.registry_token]
+}
+
+run "registry_token_without_a_password_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    registry_token = {
+      username = "00000000-0000-0000-0000-000000000000"
+      password = ""
     }
   }
 

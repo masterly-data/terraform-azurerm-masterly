@@ -58,19 +58,23 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 ### Deprecated
 
 - **`acr_login_server`, `registry_username` and `registry_password`** are replaced by
-  `registry_location` and `registry_token`. They still plan as before, apart from the `AcrPull`
-  change under Changed:
-  - `acr_login_server` is read as `registry_location`, and its default is now `null`, meaning
-    `masterly.azurecr.io`. `""` still renders no registry block.
+  `registry_location` and `registry_token`. They still plan as before, apart from the two
+  registry changes under Changed:
+  - `acr_login_server` is read as `registry_location`, and its default is now `null`, which
+    defers to `registry_location`. `""` still renders no registry block.
   - The credential pair is read as `registry_token`.
   - With `registry_credential_mode` unset, the mode is `token` when a credential is set,
-    `customer_registry` when the registry is not Masterly's, and `managed_identity` otherwise.
+    `customer_registry` when the registry is not Masterly's, and `managed_identity` otherwise
+    (which pulls nothing when there is no registry block).
 
-  *Migration:* move `acr_login_server = "<host>"` to `registry_location = "<host>"`. Move
-  `registry_username` and `registry_password` into
+  *Migration:* move `acr_login_server = "<host>"` to `registry_location = "<host>"`.
+  `acr_login_server = ""` (public images, no registry block) becomes omitting
+  `registry_location`, with no `registry_credential_mode`, credential or `acr_id` set: any of
+  those makes an omitted `registry_location` mean `masterly.azurecr.io`. `registry_location = ""`
+  is refused. Move `registry_username` and `registry_password` into
   `registry_token = { username = ..., password = ... }`, for example as
-  `TF_VAR_registry_token='{"username":"<appId>","password":"..."}'`. Then set
-  `registry_credential_mode` to the mode you run. Setting a new input together with the
+  `TF_VAR_registry_token='{"username":"<appId>","password":"..."}'`. Then, unless you pull
+  public images, set `registry_credential_mode` to the mode you run. Setting a new input together with the
   deprecated one it replaces is refused at plan. Migrating changes nothing in the plan beyond
   what the deprecated inputs already plan. A mirror that uses the default images must hold them under `release/api` and
   `release/frontend`; an explicit `api_image` or `frontend_image` keeps its own repository.
@@ -83,7 +87,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   pulls with the credential. *Migration:* none is needed to keep pulling. To keep the grants for
   a later move to identity pull, set `registry_credential_mode = "managed_identity"` or
   `"customer_registry"` and remove the credential. Leave `acr_id` set only in an identity mode.
-
+- **Breaking: with no registry input set, the apps have no registry block.** Omitting
+  `registry_location` means public images unless `registry_credential_mode`, a credential or
+  `acr_id` is set, in which case it is `masterly.azurecr.io`. An install that set none of
+  `acr_login_server`, a credential and `acr_id`, and pulled from `masterly.azurecr.io` as its
+  identities with `AcrPull` granted out of band, now plans its apps without a registry block.
+  *Migration:* set `registry_credential_mode = "managed_identity"` to keep pulling from
+  `masterly.azurecr.io` as the app identities.
 - **Breaking: `api_image` and `frontend_image` are validated at plan.** The plan now refuses any
   reference that does not take one of the three forms above. A digest must be `sha256:` followed
   by 64 lowercase hex characters. The repository's last segment must be `api` for `api_image` and

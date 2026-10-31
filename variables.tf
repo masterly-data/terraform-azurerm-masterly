@@ -162,11 +162,11 @@ variable "release_channel" {
 variable "registry_location" {
   type        = string
   default     = null
-  description = "Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). Null (the default) is Masterly's registry, masterly.azurecr.io. Replaces acr_login_server; set one of the two, not both."
+  description = "Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). Null (the default) is Masterly's registry, masterly.azurecr.io, when registry_credential_mode, a pull credential or acr_id is set; with none of them it renders no registry block on the apps, which then pull public images (the default image references still name masterly.azurecr.io/release/<role>). Replaces acr_login_server; set one of the two, not both."
 
   validation {
     condition     = var.registry_location == null ? true : can(regex("^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+|localhost)(?::[0-9]{1,5})?$", var.registry_location))
-    error_message = "registry_location must be a lowercase registry host such as masterly.azurecr.io (a port is allowed), with no scheme, path or trailing slash."
+    error_message = "registry_location must be a lowercase registry host such as masterly.azurecr.io (a port is allowed), with no scheme, path or trailing slash. To pull public images with no registry block, omit it instead of setting \"\"."
   }
 
   validation {
@@ -178,7 +178,7 @@ variable "registry_location" {
 variable "registry_credential_mode" {
   type        = string
   default     = null
-  description = "How the apps authenticate to the registry. \"token\": direct pull from registry_location (Masterly's registry unless you set it) with the pull credential from your install bundle (registry_token), stored as the Container App secret registry-password on every app; no AcrPull grant is created. \"managed_identity\": each app pulls as its own user-assigned identity, and acr_id (when set) grants AcrPull to both identities. \"customer_registry\": you mirror the images into your own registry, named by registry_location, under the same release/api and release/frontend repositories, and the apps pull from it as their identities, with AcrPull through acr_id as for managed_identity. Null (the default) derives the mode: \"token\" when a pull credential is set, \"customer_registry\" when the registry is not Masterly's, and \"managed_identity\" otherwise."
+  description = "How the apps authenticate to the registry. \"token\": direct pull from registry_location (Masterly's registry unless you set it) with the pull credential from your install bundle (registry_token), stored as the Container App secret registry-password on every app; no AcrPull grant is created. \"managed_identity\": each app pulls as its own user-assigned identity, and acr_id (when set) grants AcrPull to both identities. \"customer_registry\": you mirror the images into your own registry, named by registry_location, under the same release/api and release/frontend repositories, and the apps pull from it as their identities, with AcrPull through acr_id as for managed_identity. Setting a mode makes an omitted registry_location mean Masterly's registry. Null (the default) derives the mode: \"token\" when a pull credential is set, \"customer_registry\" when the registry is not Masterly's, and \"managed_identity\" otherwise; with no registry block (registry_location, the mode, a credential and acr_id all omitted) nothing pulls with it."
 
   validation {
     condition     = var.registry_credential_mode == null ? true : contains(["token", "managed_identity", "customer_registry"], var.registry_credential_mode)
@@ -227,7 +227,7 @@ variable "registry_token" {
 variable "acr_login_server" {
   type        = string
   default     = null
-  description = "Deprecated: use registry_location. The registry the install pulls images from. Null (the default) is masterly.azurecr.io; an empty string renders no registry block on the apps (public images only)."
+  description = "Deprecated: use registry_location. The registry the install pulls images from. Null (the default) defers to registry_location; an empty string renders no registry block on the apps (public images only), which registry_location expresses by being omitted."
 }
 
 variable "registry_username" {

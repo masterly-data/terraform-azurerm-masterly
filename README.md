@@ -256,7 +256,7 @@ pull them:
 
 | Input | Type | Default | What it does |
 |---|---|---|---|
-| `registry_location` | `string` | `null` (`masterly.azurecr.io`) | The registry's login server, a bare host (an optional port, no scheme or path). Replaces `acr_login_server`. |
+| `registry_location` | `string` | `null` (see below) | The registry's login server, a bare host (an optional port, no scheme or path). Omitted, it is `masterly.azurecr.io` when `registry_credential_mode`, a credential or `acr_id` is set, and otherwise no registry block (public images). `""` is refused: omit it instead. Replaces `acr_login_server`. |
 | `registry_credential_mode` | `string` | `null` (derived, see below) | `"token"`, `"managed_identity"` or `"customer_registry"`. |
 | `registry_token` | `object({ username = string, password = string })`, sensitive | `null` | The pull credential from the bundle: the appId and its client secret. Replaces `registry_username` and `registry_password`. |
 | `release_channel` | `string` | `"stable"` | Which [`MANIFEST.json`](MANIFEST.json) release the default images resolve to: `"stable"` (the newest release) or `"previous"` (the newest older release with no known issue). |
@@ -270,7 +270,9 @@ The three modes:
    scale-out pulls depend on Masterly's registry being reachable (running replicas are
    unaffected). The plan refuses this mode with no credential.
 2. **`managed_identity`: pull as the app identities.** Each app pulls as its own identity,
-   with no credential in the install. `acr_id` grants `AcrPull` to both identities.
+   with no credential in the install. `acr_id` grants `AcrPull` to both identities. With
+   `registry_location` omitted, set the mode or `acr_id` to pull from `masterly.azurecr.io`;
+   with neither, the apps have no registry block.
 3. **`customer_registry`: mirror into your own ACR.** Import each image into the same
    repository on your registry, for example `az acr import --name <yours> --source
    masterly.azurecr.io/release/api@sha256:<digest> --image release/api --username <appId>
@@ -292,10 +294,12 @@ mirror keeps those repository names. An image you set explicitly is used as give
 `image_references` output shows what the plan resolved: both references, the registry, the
 mode and the release.
 
-**The deprecated inputs** still plan as before, with one exception: an install that pulls with
+**The deprecated inputs** still plan as before, with two exceptions. An install that pulls with
 a credential and also sets `acr_id` loses its two unused `AcrPull` grants, because the `token`
-mode creates none. `acr_login_server` is read as
-`registry_location`, and `""` still renders no registry block. `registry_username` and
+mode creates none. An install that set none of `acr_login_server`, a credential and `acr_id`
+now has no registry block, as omitting `registry_location` means. `acr_login_server` is read as
+`registry_location`, and `""` still renders no registry block: with no mode or credential set,
+that is the same as omitting `registry_location`. `registry_username` and
 `registry_password` are read as `registry_token`. With `registry_credential_mode` unset, the
 mode is `token` when a credential is set, `customer_registry` when the registry is not
 `masterly.azurecr.io`, and `managed_identity` otherwise. Setting a new input together with

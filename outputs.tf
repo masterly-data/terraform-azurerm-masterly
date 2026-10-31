@@ -39,7 +39,7 @@ output "image_references" {
     release_channel          = var.release_channel
     release_version          = local.release_channel_version
   }
-  description = "The api and frontend image references the apps are created with, the registry server they pull from (empty when the apps have no registry block), the resolved registry_credential_mode, and the release channel with the MANIFEST.json release it resolved to. The release names where the default references came from; an image set explicitly is reported as given."
+  description = "The api and frontend image references the apps are created with, the registry server they pull from (empty when the apps have no registry block, as when registry_location, registry_credential_mode, a pull credential and acr_id are all omitted), the resolved registry_credential_mode, and the release channel with the MANIFEST.json release it resolved to. The release names where the default references came from; an image set explicitly is reported as given."
 }
 
 output "apps_identity_principal_id" {
