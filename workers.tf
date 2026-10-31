@@ -99,13 +99,13 @@ module "workers" {
   name                = "ca-workers"
   resource_group_name = azurerm_resource_group.aca.name
   environment_id      = module.aca_env.id
-  image               = var.api_image # the same image as the api; only the command differs
+  image               = local.api_image # the same image as the api; only the command differs
 
-  acr_login_server           = var.acr_login_server
+  acr_login_server           = local.registry_server
   user_assigned_identity_ids = [module.apps_identity.id]
 
-  registry_username             = var.registry_username
-  registry_password_secret_name = var.registry_username != null ? "registry-password" : null
+  registry_username             = local.registry_username
+  registry_password_secret_name = local.registry_password_secret_name
 
   ingress_enabled = false
   command         = ["python", "-m", "masterly_app.workers"]

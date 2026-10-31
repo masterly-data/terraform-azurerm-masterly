@@ -27,9 +27,24 @@ output "postgres_fqdn" {
   description = "FQDN of the provisioned starter Postgres server (null on BYO-DB installs, ADR 0065)."
 }
 
+# What the install pulls and how, after the deprecated inputs and the release channel are
+# resolved: the answer to "which images will this plan seed, from where, with what credential",
+# without reading the plan's container blocks. No credential material, only the mode.
+output "image_references" {
+  value = {
+    api                      = local.api_image
+    frontend                 = local.frontend_image
+    registry_server          = local.registry_server
+    registry_credential_mode = local.registry_credential_mode
+    release_channel          = var.release_channel
+    release_version          = local.release_channel_version
+  }
+  description = "The api and frontend image references the apps are created with, the registry server they pull from (empty when the apps have no registry block, as when registry_location, registry_credential_mode, a pull credential and acr_id are all omitted), the resolved registry_credential_mode, and the release channel with the MANIFEST.json release it resolved to. The release names where the default references came from; an image set explicitly is reported as given."
+}
+
 output "apps_identity_principal_id" {
   value       = module.apps_identity.principal_id
-  description = "Principal (object) id of the BACKEND apps' user-assigned identity (api + workers) — grant AcrPull on your registry scope to this principal when acr_id is left null. The frontend has its own; grant both."
+  description = "Principal (object) id of the BACKEND apps' user-assigned identity (api + workers) — grant AcrPull on your registry scope to this principal when acr_id is left null in the managed_identity or customer_registry mode. The frontend has its own; grant both."
 }
 
 output "apps_identity_client_id" {

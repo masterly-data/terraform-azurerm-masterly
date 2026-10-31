@@ -14,6 +14,12 @@ From your Masterly install bundle: `org_id`, the registry pull credential, the l
 JWT, and `license-issuer.jwk.json` (place it beside this example, or point `file()`
 somewhere else). From your own directory: an app registration for Masterly's sign-in.
 
+The registry credential arrives as `registry_token`, with the module's
+`registry_credential_mode = "token"`: a direct pull of `masterly.azurecr.io/release/api` and
+`release/frontend`, pinned by the digests `MANIFEST.json` records for `release_channel`
+(`"stable"` by default). Mirroring into your own registry is the `"customer_registry"` mode; see
+"Getting the images" in the [module README](../../README.md#getting-the-images-adr-0067).
+
 `mode = "production"` is gated at **plan** time. If any of it is missing, Terraform
 refuses before touching Azure and names what is absent.
 
@@ -44,7 +50,7 @@ one environment variable rather than flipping the install's whole posture.
 Supply them as environment variables, not in a file:
 
 ```bash
-export TF_VAR_registry_password='...'
+export TF_VAR_registry_token='{"username":"<appId>","password":"..."}'
 export TF_VAR_license_token='...'
 export TF_VAR_oidc_client_secret='...'
 ```
@@ -65,7 +71,9 @@ The first apply creates roughly 40 resources. Three worth checking before you ap
   for Redis and mean to keep it, set `"cache"`; applying `"managed"` over it plans a
   destroy of your running session store.
 - **Authentication** — a new production install authenticates to Postgres and Redis with
-  Microsoft Entra ID only, so `api_image_tag` must be `v0.133.7` or later. Upgrading an install
+  Microsoft Entra ID only, so the api image must be `v0.133.7` or later. Check the tag of the
+  release your `release_channel` resolves to in `MANIFEST.json`, or of an `api_image` you set
+  yourself. Upgrading an install
   that already exists? Its plan stops until you set `database_auth` and `redis_auth`; see
   "Moving an existing install to Microsoft Entra authentication" in the
   [module README](../../README.md#moving-an-existing-install-to-microsoft-entra-authentication).

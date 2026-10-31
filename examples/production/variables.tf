@@ -35,25 +35,19 @@ variable "masterly_region" {
   default     = "eu"
 }
 
-variable "api_image_tag" {
+variable "release_channel" {
   type        = string
-  description = "api image tag for this release (bundle release notes)."
+  description = "Which MANIFEST.json release the images resolve to: \"stable\" (the release this module version shipped with) or \"previous\" (the newest older release with no known issue). The references seed the apps when they are created; changing the channel does not roll a running install (terraform apply does not roll a running image). Roll a running install back with az containerapp update --image."
+  default     = "stable"
 }
 
-variable "frontend_image_tag" {
-  type        = string
-  description = "frontend image tag for this release (bundle release notes)."
-}
-
-variable "registry_username" {
-  type        = string
-  description = "Registry pull credential username (bundle)."
-}
-
-variable "registry_password" {
-  type        = string
+variable "registry_token" {
+  type = object({
+    username = string
+    password = string
+  })
   sensitive   = true
-  description = "Registry pull credential secret (bundle, secret)."
+  description = "Registry pull credential from the bundle: username is the appId, password its client secret."
 }
 
 variable "license_token" {

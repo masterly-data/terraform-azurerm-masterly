@@ -98,6 +98,20 @@ output "ingress_allowed_ip_ranges" {
   description = "CIDRs allowed to reach this app's ingress. Empty means unrestricted when the app is external."
 }
 
+# The image the app is created with, and how it pulls it. Same reason as the outputs around
+# them: `registry` is a dynamic block, absent entirely when acr_login_server is empty, so which
+# server an app pulls from, and whether with an identity or a username and its password secret,
+# cannot be read off the resource in a test. The secret's NAME only, never its value.
+output "image" {
+  value       = var.image
+  description = "The container image reference the app is created with."
+}
+
+output "registry" {
+  value       = local.registry
+  description = "The app's registry block as configured: server, and either the identity it pulls with or the username and the name of the secret holding the password. Null when the app has no registry block."
+}
+
 output "user_assigned_identity_ids" {
   # The identities actually attached to this app. Same reason as env_names and
   # ingress_external: which identity an app runs as is a security posture a test must be
