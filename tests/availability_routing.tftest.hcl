@@ -35,6 +35,8 @@ mock_provider "azurerm" {
   }
 }
 mock_provider "random" {}
+# The apps depend on the migrate job's start action (migrate.tf), so the apply reaches it.
+mock_provider "azapi" {}
 
 variables {
   location              = "swedencentral"
@@ -109,6 +111,26 @@ run "availability_alerts_route_to_the_module_action_group" {
       id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
       name = "ca-frontend"
       fqdn = "ca-frontend.example.com"
+    }
+  }
+
+  # The apps depend on the migrate job's start action, so the job and its identity are applied
+  # too, and the job parses the identity's ID.
+  override_module {
+    target = module.migrate_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
+      principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+      client_id    = "dddddddd-dddd-dddd-dddd-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-migrate"
+    }
+  }
+
+  override_resource {
+    target = azurerm_container_app_job.migrate
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/jobs/caj-migrate"
     }
   }
 

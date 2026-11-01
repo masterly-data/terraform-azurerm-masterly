@@ -165,6 +165,8 @@ module "workers" {
     azurerm_redis_cache_access_policy_assignment.apps,
     azurerm_private_endpoint.servicebus,
     azurerm_private_dns_zone_virtual_network_link.servicebus,
+    # MASTERLY_MIGRATIONS = job, as on the api (migrate.tf).
+    azapi_resource_action.migrate_start,
   ]
 }
 

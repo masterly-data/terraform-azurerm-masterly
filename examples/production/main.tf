@@ -132,6 +132,7 @@ module "masterly" {
   # production refuses a burstable SKU and requires HA and >= 14 days of backups on the
   # provisioned server.
   external_database_url          = var.external_database_url
+  external_database_admin_url    = var.external_database_admin_url # the migrate job's DSN; null reuses the one above
   postgres_sku_name              = "GP_Standard_D2ds_v5"
   postgres_zone_redundant_ha     = true
   postgres_backup_retention_days = 14

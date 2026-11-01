@@ -191,6 +191,22 @@ resource "azurerm_postgresql_flexible_server_active_directory_administrator" "ap
   principal_type      = "ServicePrincipal"
 }
 
+# The migrate job's identity as a second Entra administrator (migrate.tf), beside the apps' one
+# above, which is unchanged. A flexible server takes several. Created after `apps` so the two
+# administrator operations do not run against the server at the same time.
+resource "azurerm_postgresql_flexible_server_active_directory_administrator" "migrate" {
+  count = local.database_entra ? 1 : 0
+
+  server_name         = azurerm_postgresql_flexible_server.this[0].name
+  resource_group_name = azurerm_resource_group.data.name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  object_id           = module.migrate_identity.principal_id
+  principal_name      = module.migrate_identity.name
+  principal_type      = "ServicePrincipal"
+
+  depends_on = [azurerm_postgresql_flexible_server_active_directory_administrator.apps]
+}
+
 # --- Redis: a data access policy for the apps' identity, on whichever offering is active ------
 
 # Azure Managed Redis has one access policy, "default", with full data access; the assignment
