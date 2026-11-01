@@ -356,6 +356,16 @@ resource "azurerm_role_assignment" "kv_secrets_user_frontend" {
   principal_id         = module.frontend_identity.principal_id
 }
 
+# The migrate job's identity, the same way: read on each of the job's own secrets (its DSNs, and
+# the registry password and CA bundle when those are set), never on the vault, never Officer.
+resource "azurerm_role_assignment" "kv_secrets_user_migrate" {
+  for_each = var.enable_key_vault ? toset(local.migrate_secret_names) : toset([])
+
+  scope                = azurerm_key_vault_secret.install[each.key].resource_versionless_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.migrate_identity.principal_id
+}
+
 # Read-only data-plane for a separate planning identity: `plan` refreshes the secrets above.
 resource "azurerm_role_assignment" "kv_secrets_reader" {
   for_each = var.enable_key_vault ? toset(var.key_vault_secret_reader_object_ids) : toset([])
@@ -366,8 +376,8 @@ resource "azurerm_role_assignment" "kv_secrets_reader" {
 }
 
 locals {
-  # Every secret the module hands to any app — the set written to the vault.
-  install_secret_names = distinct(concat(local.api_secret_names, local.frontend_secret_names))
+  # Every secret the module hands to any app or to the migrate job — the set written to the vault.
+  install_secret_names = distinct(concat(local.api_secret_names, local.frontend_secret_names, local.migrate_secret_names))
 
   # The split the apps actually consume. With the vault on, no app carries a value; with it
   # off (dev/demo, no vault to put them in) they carry values exactly as before. `backend_*`
@@ -375,6 +385,7 @@ locals {
   backend_value_secrets  = var.enable_key_vault ? {} : local.backend_secrets
   api_value_secrets      = var.enable_key_vault ? {} : local.api_secrets
   frontend_value_secrets = var.enable_key_vault ? {} : local.frontend_secrets
+  migrate_value_secrets  = var.enable_key_vault ? {} : local.migrate_secrets
 
   backend_vault_secret_refs = var.enable_key_vault ? {
     for name in local.backend_secret_names : name => {
@@ -398,6 +409,14 @@ locals {
     for name in local.frontend_secret_names : name => {
       kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id
       identity_id  = module.frontend_identity.id
+    }
+  } : {}
+
+  # The migrate job's own identity, read on each of these alone (kv_secrets_user_migrate).
+  migrate_vault_secret_refs = var.enable_key_vault ? {
+    for name in local.migrate_secret_names : name => {
+      kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id
+      identity_id  = module.migrate_identity.id
     }
   } : {}
 }

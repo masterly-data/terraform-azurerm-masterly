@@ -51,11 +51,12 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
 
 | Path | Contents |
 |---|---|
-| `main.tf` | The core: two resource groups, the VNet and its two subnets, the ACA environment and the Log Analytics workspace, the `api` and `frontend` Container Apps, both user-assigned identities, the starter Postgres flexible server with its private DNS zone and endpoint, and the optional Service Bus namespace and queue |
+| `main.tf` | The core: two resource groups, the VNet and its two subnets, the ACA environment and the Log Analytics workspace, the `api` and `frontend` Container Apps, the three user-assigned identities (apps, frontend, migrate), the starter Postgres flexible server with its private DNS zone and endpoint, and the optional Service Bus namespace and queue |
 | `diagnostics.tf` | The observability surface: one action group, the diagnostic settings (five data-plane, one per Container App), twelve metric alerts and four log-search alert rules (one of them per Container App) |
 | `keyvault.tf` | The opt-in durable secret store (ADR 0066): vault, private endpoint and DNS, RBAC grants, and the install's own secrets as Key Vault references |
 | `redis.tf` | The opt-in session registry (ADR 0071): both offerings (`managed` / `cache`), each private-endpoint only |
 | `workers.tf`, `email.tf`, `entra-auth.tf` | The opt-in `ca-workers` app, customer-owned ACS email, and how the apps authenticate to the install's own Postgres and Redis (Entra token, or password and access key) |
+| `migrate.tf` | The `caj-migrate` Container Apps job (ADR 0120): schema migrations and new Environments' databases, as `id-<prefix>-migrate`, on a schedule and started at apply by an azapi action the apps depend on |
 | `variables.tf`, `outputs.tf`, `versions.tf` | The public surface. Every variable description is customer documentation |
 | `modules/` | Eight nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `license-claims-floor` (the plan-time licence claims-floor check; no resources), `log-analytics-workspace`, `postgres-connection-urls` (the starter server's pooler and direct URLs; no resources), `release-channel` (the plan-time choice of the default images from `MANIFEST.json`; no resources), `user-assigned-identity` |
 | `tests/` | `install.tftest.hcl` (the mock-provider run blocks), and `diagnostic_bundle_test.sh` with its `fixtures/`: the harness that proves the diagnostic bundle carries no secrets |

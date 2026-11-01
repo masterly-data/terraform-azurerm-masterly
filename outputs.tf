@@ -44,7 +44,7 @@ output "image_references" {
 
 output "apps_identity_principal_id" {
   value       = module.apps_identity.principal_id
-  description = "Principal (object) id of the BACKEND apps' user-assigned identity (api + workers) — grant AcrPull on your registry scope to this principal when acr_id is left null in the managed_identity or customer_registry mode. The frontend has its own; grant both."
+  description = "Principal (object) id of the BACKEND apps' user-assigned identity (api + workers) — grant AcrPull on your registry scope to this principal when acr_id is left null in the managed_identity or customer_registry mode. The frontend and the migrate job have their own; grant all three."
 }
 
 output "apps_identity_client_id" {
@@ -55,6 +55,11 @@ output "apps_identity_client_id" {
 output "frontend_identity_principal_id" {
   value       = module.frontend_identity.principal_id
   description = "Principal (object) id of the frontend's own user-assigned identity — image pull only. Grant AcrPull on your registry scope to this principal too when acr_id is left null."
+}
+
+output "migrate_identity_principal_id" {
+  value       = module.migrate_identity.principal_id
+  description = "Principal (object) id of the migrate job's own user-assigned identity (id-<prefix>-migrate, the job caj-migrate runs as). Grant AcrPull on your registry scope to this principal too when acr_id is left null in the managed_identity or customer_registry mode, or the job cannot pull the api image."
 }
 
 output "resource_group_aca" {

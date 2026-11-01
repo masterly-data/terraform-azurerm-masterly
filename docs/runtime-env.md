@@ -2,7 +2,7 @@
 
 [`RUNTIME_ENV.json`](../RUNTIME_ENV.json) is this module's machine-readable statement of which
 environment variables it sets on each of the install's container apps — `ca-api`, `ca-workers`
-and `ca-frontend` — by **name**. It carries no value: a value is per install, and several of
+and `ca-frontend` — and on the `caj-migrate` Container Apps job, by **name**. It carries no value: a value is per install, and several of
 them are secrets.
 
 It exists so that fact is written down once, by a program, and read everywhere. The application
@@ -16,8 +16,9 @@ its own code and runbook against, so the three descriptions cannot part quietly.
 
 **It is generated, never edited.** `scripts/check_runtime_env.py --write` derives it from the
 `.tf` files at the module root — the env a container receives is assembled from locals spread
-over `main.tf`, `email.tf`, `entra-auth.tf`, `keyvault.tf`, `redis.tf` and `workers.tf` and
-merged into each app's `env` and `env_secret_refs` — and the same script, without `--write`,
+over `main.tf`, `email.tf`, `entra-auth.tf`, `keyvault.tf`, `migrate.tf`, `redis.tf` and
+`workers.tf` and merged into each app's `env` and `env_secret_refs` (for the job, into its
+`dynamic "env"` blocks) — and the same script, without `--write`,
 fails CI on every pull request where the committed file is not what the `.tf` files produce. A name that appears
 only in a comment is not set and is not listed.
 
@@ -63,7 +64,7 @@ your own source is the defect this manifest exists to kill.
 |---|---|---|---|
 | `schema_version` | integer | yes | The version of *this shape*. `1` today. See "Compatibility". |
 | `module` | string | yes | The Terraform Registry source, `namespace/name/provider` — the same value `MANIFEST.json` carries. |
-| `apps` | object | yes | One entry per container app the module creates, keyed by the app's name (`ca-api`, `ca-workers`, `ca-frontend`). Sorted by key. |
+| `apps` | object | yes | One entry per container app and Container Apps job the module creates, keyed by its name (`ca-api`, `ca-frontend`, `ca-workers`, `caj-migrate`). Sorted by key. |
 | `apps[name].env` | array of strings | yes | Every variable name the module may set on that app as plain environment, sorted. Includes names set only under some inputs (see below) and names that are not `MASTERLY_`-prefixed, such as `AZURE_CLIENT_ID`. |
 | `apps[name].env_secret_refs` | array of strings | yes | Every variable name the module may set on that app as a reference to a Container App secret, sorted. The value never appears in the app's template; the name is what the application reads. |
 
@@ -86,7 +87,8 @@ the manifest does not list must get it from somewhere other than this module; a 
 manifest lists that no application reads is a module defect.
 
 `ca-api` and `ca-workers` carry the same list on purpose: the workers container runs the same
-image with a different command and reads the same settings.
+image with a different command and reads the same settings. `caj-migrate` runs the same image
+too, with a short list of its own: the database settings migrating needs, and nothing else.
 
 
 ## Compatibility
@@ -101,7 +103,7 @@ and its meaning. `apps` stays an object keyed by app name; each app keeps `env` 
 - new apps under `apps`, if the module ever ships another container;
 - new top-level keys, and new keys inside an app entry.
 
-Ignore keys you do not recognise, and do not assume `apps` has exactly three members.
+Ignore keys you do not recognise, and do not assume `apps` has a fixed number of members.
 
 **Will not happen without a `schema_version` bump:** renaming, removing or retyping any field in
 the table; an array becoming an object; a value appearing beside a name.

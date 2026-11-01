@@ -644,6 +644,20 @@ module "frontend_identity" {
   tags                = local.tags
 }
 
+# The migrate job's own identity (migrate.tf). On database_auth = "entra" it is the starter
+# server's second Microsoft Entra administrator, the install's most privileged database
+# principal, so it gets image pull and read on each of the job's own vault secrets
+# (kv_secrets_user_migrate), and never: a Container App, a vault-scope role, a Key Vault crypto
+# or Officer role, Service Bus, Redis or ACS.
+module "migrate_identity" {
+  source = "./modules/user-assigned-identity"
+
+  name                = "id-${var.name_prefix}-migrate"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  tags                = local.tags
+}
+
 # --- Registry and images -----------------------------------------------------------
 # Where the apps pull from, how they authenticate, and which images they run when api_image and
 # frontend_image are left null. The deprecated inputs (acr_login_server, registry_username,
@@ -710,8 +724,9 @@ module "release_channel" {
 # pull out of band and leave acr_id null). The token mode pulls with its credential, so
 # it creates no grant.
 #
-# BOTH identities need the grant when acr_id is null and you grant out of band — see the
-# `apps_identity_principal_id` / `frontend_identity_principal_id` outputs.
+# ALL THREE identities need the grant when acr_id is null and you grant out of band — see the
+# `apps_identity_principal_id` / `frontend_identity_principal_id` /
+# `migrate_identity_principal_id` outputs.
 resource "azurerm_role_assignment" "acr_pull" {
   count = !local.registry_token_mode && var.acr_id != null ? 1 : 0
 
@@ -726,6 +741,14 @@ resource "azurerm_role_assignment" "acr_pull_frontend" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
   principal_id         = module.frontend_identity.principal_id
+}
+
+resource "azurerm_role_assignment" "acr_pull_migrate" {
+  count = !local.registry_token_mode && var.acr_id != null ? 1 : 0
+
+  scope                = var.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = module.migrate_identity.principal_id
 }
 
 # --- Data plane: the starter Postgres Flexible Server (skipped on BYO-DB) --------
@@ -1150,6 +1173,20 @@ module "postgres_connection_urls" {
   direct_port = local.database_direct_port
 }
 
+# The migrate job's own URLs (migrate.tf): the same server and ports, with the migrate
+# identity's Entra role on "entra" and masterly_admin, as today, on "password".
+module "postgres_connection_urls_migrate" {
+  source = "./modules/postgres-connection-urls"
+  count  = local.provision_postgres ? 1 : 0
+
+  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
+  auth_mode   = local.database_auth_mode
+  role        = local.migrate_database_role
+  password    = local.database_entra ? null : random_password.postgres_admin[0].result
+  pooler_port = local.database_pooler_port
+  direct_port = local.database_direct_port
+}
+
 locals {
   # Identity (ADR 0024): the binding plus, on oidc, the backend's token-verification
   # config. The BFF client half lives on the frontend below; the client secret and the
@@ -1284,6 +1321,9 @@ locals {
     } : {},
     # Transaction pooling (MAS-1615): the backend needs to be told, or it fails through the pooler.
     var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
+    # Migrations run in the migrate job (migrate.tf, ADR 0120): the api and the workers only
+    # check the schema stamps, and are not ready until the job has brought them to head.
+    { MASTERLY_MIGRATIONS = "job" },
   )
 
   # --- The install's secret material -----------------------------------------------
@@ -1316,6 +1356,11 @@ locals {
     # also how a value reaches the file mount below (secret_file_mounts, MAS-446), not
     # because it needs hiding.
     "ca-bundle-pem" = var.ca_bundle_pem
+
+    # The migrate job's own DSNs (migrate.tf), named only in migrate_secret_names: never in the
+    # backend_*, api_* or frontend_* lists, so no Container App carries them.
+    "migrate-database-url"        = local.migrate_database_url
+    "migrate-database-direct-url" = local.migrate_database_direct_url
   }
 
   # Credential-based image pull (ADR 0067): in the token mode the SP secret rides on every app
@@ -1588,6 +1633,9 @@ module "api" {
     azurerm_redis_cache_access_policy_assignment.apps,
     azurerm_private_endpoint.servicebus,
     azurerm_private_dns_zone_virtual_network_link.servicebus,
+    # MASTERLY_MIGRATIONS = job: the migrate job's execution has started before a revision
+    # does (migrate.tf).
+    azapi_resource_action.migrate_start,
   ]
 }
 

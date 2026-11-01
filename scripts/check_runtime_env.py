@@ -1,7 +1,8 @@
 """The runtime-environment manifest states every environment variable the module sets, per app.
 
 `RUNTIME_ENV.json` is this module's machine-readable answer to "which environment variables does
-the module put on `ca-api`, `ca-workers` and `ca-frontend`?" — the names only, never a value.
+the module put on `ca-api`, `ca-workers`, `ca-frontend` and the `caj-migrate` job?" — the names
+only, never a value.
 The applications read those names at start, and each application's own repository documents
 the contract it reads; this file is what lets those repositories check that the names the
 module sets are names their code reads and their runbooks name, without parsing Terraform.
@@ -12,7 +13,10 @@ container receives is assembled from locals spread over several files — `main.
 `env_secret_refs`, so the one honest source is the files themselves. This script resolves that
 graph: it reads each `module "<app>"` block that instantiates `./modules/aca-container-app`,
 follows every `local.<name>` reference its `env` / `env_secret_refs` expressions make, and
-collects the keys of the maps it reaches. A name set only inside a comment is not set.
+collects the keys of the maps it reaches. A `resource "azurerm_container_app_job"` block is read
+the same way, from the `for_each` of each of its `dynamic "env"` blocks: one whose content names a
+`secret_name` is its `env_secret_refs`, any other its `env`. A name set only inside a comment is
+not set.
 
 A manifest nobody is forced to regenerate is a documented good intention, so CI runs this
 script on every pull request and fails when the committed manifest is not what the `.tf`
@@ -65,9 +69,15 @@ SCHEMA_VERSION = 1
 # The submodule whose instances are the install's container apps. A `module` block with any
 # other source carries no app env.
 CONTAINER_APP_SOURCE = "./modules/aca-container-app"
+# The resource type of the install's Container Apps jobs, which carry env of their own.
+CONTAINER_APP_JOB_TYPE = "azurerm_container_app_job"
 
-# A top-level `locals {` or `module "<label>" {` header, at column 0, as terraform fmt writes it.
-BLOCK_HEADER = re.compile(r'^(locals|module)(?:\s+"([^"]+)")?\s*\{\s*$')
+# A top-level `locals {`, `module "<label>" {` or `resource "<type>" "<label>" {` header, at
+# column 0, as terraform fmt writes it. For a resource the label kept is its type.
+BLOCK_HEADER = re.compile(r'^(locals|module|resource)(?:\s+"([^"]+)")?(?:\s+"[^"]+")?\s*\{\s*$')
+# A job's `dynamic "env" {` header, and the `for_each` inside it.
+DYNAMIC_ENV = re.compile(r'^\s*dynamic\s+"env"\s*\{\s*$')
+FOR_EACH = re.compile(r"^\s*for_each\s*=\s*(.*)$")
 # A depth-1 attribute inside such a block: two-space indent, `name =` (never `==`).
 ATTRIBUTE = re.compile(r"^  ([A-Za-z_][A-Za-z0-9_-]*)\s*=(?!=)\s*(.*)$")
 # A map key as the env maps write them: an uppercase identifier followed by `=`.
@@ -103,7 +113,7 @@ def uncommented(text: str) -> str:
 
 
 def top_level_blocks(text: str) -> list[tuple[str, str | None, list[str]]]:
-    """Every column-0 `locals` / `module` block as (kind, label, body lines)."""
+    """Every column-0 `locals` / `module` / `resource` block as (kind, label, body lines)."""
     blocks: list[tuple[str, str | None, list[str]]] = []
     current: tuple[str, str | None, list[str]] | None = None
     for line in text.splitlines():
@@ -134,8 +144,32 @@ def attributes(body: list[str]) -> dict[str, str]:
     return found
 
 
+def job_env(body: list[str]) -> dict[str, str]:
+    """A job's `dynamic "env"` blocks as the `env` / `env_secret_refs` expressions an app passes."""
+    found = {"env": "", "env_secret_refs": ""}
+    index = 0
+    while index < len(body):
+        if not DYNAMIC_ENV.match(body[index]):
+            index += 1
+            continue
+        block: list[str] = []
+        depth = 0
+        for line in body[index:]:
+            block.append(line)
+            depth += line.count("{") - line.count("}")
+            if depth == 0:
+                break
+        for_each = next((m.group(1) for m in map(FOR_EACH.match, block) if m), None)
+        if for_each is None:
+            raise CheckError(f'a `dynamic "env"` block in a {CONTAINER_APP_JOB_TYPE} has no `for_each`')
+        key = "env_secret_refs" if any("secret_name" in line for line in block) else "env"
+        found[key] += "\n" + for_each
+        index += len(block)
+    return found
+
+
 def read_tree(root: Path) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
-    """(every local by name, every container-app module block's attributes by its app name)."""
+    """(every local by name, every container app's and job's env expressions by its name)."""
     tf_files = sorted(root.glob("*.tf"))
     if not tf_files:
         raise CheckError(f"no .tf files at {root} — is RUNTIME_ENV_ROOT the module root?")
@@ -150,18 +184,21 @@ def read_tree(root: Path) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
                     raise CheckError(f"{path.name}: local(s) defined twice: {', '.join(duplicates)}")
                 locals_by_name.update(attrs)
                 continue
-            source = QUOTED.match(attrs.get("source", "").strip())
-            if source is None or source.group(1) != CONTAINER_APP_SOURCE:
-                continue
+            if kind == "resource":
+                if label != CONTAINER_APP_JOB_TYPE:
+                    continue
+                what = f"a {CONTAINER_APP_JOB_TYPE}'s"
+            else:
+                source = QUOTED.match(attrs.get("source", "").strip())
+                if source is None or source.group(1) != CONTAINER_APP_SOURCE:
+                    continue
+                what = f'module "{label}" instantiates {CONTAINER_APP_SOURCE} but its'
             app = QUOTED.match(attrs.get("name", "").strip())
             if app is None:
-                raise CheckError(
-                    f'{path.name}: module "{label}" instantiates {CONTAINER_APP_SOURCE} but its '
-                    "`name` is not a quoted literal, so the manifest cannot key it"
-                )
+                raise CheckError(f"{path.name}: {what} `name` is not a quoted literal, so the manifest cannot key it")
             if app.group(1) in apps:
                 raise CheckError(f"{path.name}: two container apps are named {app.group(1)}")
-            apps[app.group(1)] = attrs
+            apps[app.group(1)] = job_env(body) if kind == "resource" else attrs
     return locals_by_name, apps
 
 
@@ -338,6 +375,10 @@ locals {
   api_env_secret_refs = {
     MASTERLY_DATABASE_URL = "database-url"
   }
+
+  migrate_env = {
+    MASTERLY_DATABASE_AUTH = "entra"
+  }
 }
 
 module "api" {
@@ -368,6 +409,35 @@ module "not_an_app" {
 
   name = "ca-not-an-app"
   env  = { MASTERLY_NOT_AN_APP = "x" }
+}
+
+resource "azurerm_container_app_job" "migrate" {
+  name = "caj-migrate"
+
+  template {
+    container {
+      dynamic "env" {
+        for_each = local.migrate_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = { MASTERLY_DATABASE_URL = "migrate-database-url" }
+        content {
+          name        = env.key
+          secret_name = env.value
+        }
+      }
+    }
+  }
+}
+
+resource "azurerm_something_else" "not_a_job" {
+  name = "not-a-job"
+  env  = { MASTERLY_NOT_A_JOB = "x" }
 }
 '''
 
@@ -403,6 +473,10 @@ CANONICAL_MANIFEST = {
             "env": ["MASTERLY_ALLOW_DEV_BINDING", "MASTERLY_API_BASE_URL"],
             "env_secret_refs": ["MASTERLY_OIDC_CLIENT_SECRET"],
         },
+        "caj-migrate": {
+            "env": ["MASTERLY_DATABASE_AUTH"],
+            "env_secret_refs": ["MASTERLY_DATABASE_URL"],
+        },
     },
 }
 
@@ -432,6 +506,10 @@ def _scenarios() -> list[tuple[str, dict[str, object], int, str]]:
     )
     main_dangling = CANONICAL_MAIN_TF.replace("local.extra_env,", "local.extra_env,\n    local.gone_env,")
     main_unquoted_name = CANONICAL_MAIN_TF.replace('name            = "ca-api"', "name            = local.api_name")
+    main_job_new_name = CANONICAL_MAIN_TF.replace(
+        '    MASTERLY_DATABASE_AUTH = "entra"', '    MASTERLY_DATABASE_AUTH = "entra"\n    MASTERLY_JOB_NEW       = "x"'
+    )
+    main_job_unquoted_name = CANONICAL_MAIN_TF.replace('name = "caj-migrate"', "name = local.job_name")
     hand_edited = render(CANONICAL_MANIFEST).replace('"MASTERLY_MODE",\n', "")
     reordered = json.dumps(CANONICAL_MANIFEST) + "\n"
     allowlist_unset = CANONICAL_BUNDLE_SCRIPT.replace('"MASTERLY_MODE"', '"MASTERLY_MOED"')
@@ -470,6 +548,18 @@ def _scenarios() -> list[tuple[str, dict[str, object], int, str]]:
             "`name` is not a quoted literal",
         ),
         (
+            "a name a job starts setting fails until the manifest is regenerated",
+            {"main_tf": main_job_new_name},
+            1,
+            "caj-migrate.env: the module sets MASTERLY_JOB_NEW; the manifest does not list it",
+        ),
+        (
+            "a job whose name is not a literal fails rather than being keyed by a guess",
+            {"main_tf": main_job_unquoted_name},
+            1,
+            "azurerm_container_app_job's `name` is not a quoted literal",
+        ),
+        (
             "an allowlist entry the module sets on no app fails",
             {"bundle_script": allowlist_unset},
             1,
@@ -505,13 +595,14 @@ def selftest() -> int:
                 for line in report.strip().splitlines():
                     print(f"       | {line}")
     # The generator's own output is what `--write` commits, so prove its content once, directly:
-    # a comment-only name is absent, a two-hop local is attributed, a non-app module is skipped.
+    # a comment-only name is absent, a two-hop local is attributed, a non-app module or resource is
+    # skipped, and a job's dynamic env blocks land under env or env_secret_refs by their content.
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _stage(root, manifest=None)
         generated = generate(root)
         ok = generated == CANONICAL_MANIFEST
-        print(f"  {'ok  ' if ok else 'FAIL'} the generator attributes names through two hops, skips comments and non-app blocks")
+        print(f"  {'ok  ' if ok else 'FAIL'} the generator attributes names through two hops, reads jobs, skips comments and non-app blocks")
         if not ok:
             failures += 1
             print(f"       generated: {json.dumps(generated)}")
