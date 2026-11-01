@@ -1321,8 +1321,9 @@ locals {
     } : {},
     # Transaction pooling (MAS-1615): the backend needs to be told, or it fails through the pooler.
     var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
-    # Migrations run in the migrate job (migrate.tf, ADR 0120): the api and the workers only
-    # check the schema stamps, and are not ready until the job has brought them to head.
+    # Migrations run in the migrate job (migrate.tf, ADR 0120): an api image that honours this
+    # (a prerequisite of this module version) only checks the schema stamps in the api and the
+    # workers.
     { MASTERLY_MIGRATIONS = "job" },
   )
 

@@ -241,7 +241,7 @@ check, and a rebuilt app, both go by.
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
 | `id-masterly-migrate` UAMI (+ optional AcrPull) | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** on each of the job's own secrets only (its DSNs, and the registry password and CA bundle when set), and on `database_auth = "entra"` the starter server's **second** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
-| `caj-migrate` Container Apps job | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule` and once at every apply that changes the api image |
+| `caj-migrate` Container Apps job | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
@@ -291,7 +291,7 @@ In both identity modes, `acr_id` grants `AcrPull` to both app identities and to 
 job's. If you leave it null and grant out of band, grant all three:
 `apps_identity_principal_id`, `frontend_identity_principal_id` and
 `migrate_identity_principal_id`. Miss the second and the frontend cannot pull; miss the third
-and the migrate job cannot pull, so no migration runs and `ca-api` never becomes ready.
+and the migrate job cannot pull, so no migration runs.
 
 **The default images.** Leave `api_image` and `frontend_image` unset and each resolves to
 `<registry_location>/release/<role>@<digest>`: the digest the `release_channel` release
@@ -303,7 +303,7 @@ mode and the release. Like an explicit image, the channel's reference seeds an a
 created, and CD owns the running image thereafter: changing `release_channel` on an existing
 install rolls nothing (`terraform apply` does not roll a running image, see "Moving to Stable"
 below). To roll a running install back, redeploy the previous image with
-`az containerapp update --image`.
+`az containerapp update --image`. A release rolls the [migrate job](#the-migrate-job) first.
 
 **The deprecated inputs** still plan as before, with two exceptions. An install that pulls with
 a credential and also sets `acr_id` loses its two unused `AcrPull` grants, because the `token`
@@ -549,24 +549,38 @@ the credential, and `database_auth = "entra"` is refused at plan.
 
 Schema migrations, and the database of each new Masterly Environment, run in a Container Apps
 job, `caj-migrate`, as its own identity, `id-<prefix>-migrate` (ADR 0120). `ca-api` and
-`ca-workers` carry `MASTERLY_MIGRATIONS=job`: they check that the schema is at head and do not
-migrate, and `ca-api` is not ready until it is.
+`ca-workers` carry `MASTERLY_MIGRATIONS=job`, which tells an api image that honours it to check
+that the schema is at head instead of migrating. That image is a prerequisite of this version:
+see the upgrade note below.
 
-The job runs `python -m masterly_app.apps.migrate` on the api image (`api_image`, or the release
-channel's default), has no ingress, and starts in two ways:
+The job runs `python -m masterly_app.apps.migrate` on the api image, has no ingress, and runs in
+three ways:
 
-- **At apply.** An `azapi_resource_action` starts one execution whenever the resolved api image
-  changes, and `ca-api` and `ca-workers` depend on it, so the execution has started before either
-  app is created or updated. The start returns when the execution starts, not when it finishes:
-  `ca-api`'s readiness probe keeps traffic on the previous revision until the migrations are done.
+- **At install.** Terraform creates the job on the resolved api image (`api_image`, or the release
+  channel's default), and an `azapi_resource_action` starts one execution before `ca-api` and
+  `ca-workers` are created, which depend on it. The start returns when the execution starts, not
+  when it finishes. As on the apps, Terraform then ignores drift on the job's image: an apply
+  that changes `api_image` replaces the start action, so the job runs once more, but on the image
+  it already runs, and it rolls neither the job nor the apps.
+- **At each release, from CD.** Your CD owns the running image, on the job as on the apps (ADR
+  0086, as amended 2026-10-23: the migrate job runs the release's digest before the roles roll).
+  For each release it:
+  1. moves the job to the release's digest:
+     `az containerapp job update --name caj-migrate --resource-group rg-<prefix>-aca --image <registry>/release/api@sha256:<digest>`;
+  2. starts an execution: `az containerapp job start --name caj-migrate --resource-group rg-<prefix>-aca`;
+  3. waits until that execution's status is `Succeeded`
+     (`az containerapp job execution show --name caj-migrate --resource-group rg-<prefix>-aca --job-execution-name <name>`),
+     and stops if it fails;
+  4. only then rolls `ca-api` and `ca-workers` to the same digest (`az containerapp update --image`).
 - **On a schedule**, `migrate_job_schedule`: a five-field cron expression in UTC, default
-  `"*/5 * * * *"`. Each run also creates the databases of Environments waiting to be provisioned,
-  so the schedule is the longest a new Environment waits for its database. Five minutes keeps
-  that wait short for a person who has just created an Environment; a run with nothing to do
-  checks and exits, so the cost is a short container start each time. Lengthen it if that wait
-  does not matter to you.
+  `"*/5 * * * *"`. The release's migrate role is required to pick up, on each run, the
+  Environments waiting to be provisioned, so the schedule is the longest a new Environment waits
+  for its database. Five minutes keeps that wait short for a person who has just created an
+  Environment, at the cost of one short container start per run. Lengthen it if that wait does
+  not matter to you.
 
-The two can overlap, and the application's migration lock serialises them.
+Runs can overlap: a scheduled run with an install-time or CD-started one. The release's migrate
+role is required to serialise them with a migration lock.
 
 What the job's identity gets, and why so little: on `database_auth = "entra"` it is the starter
 server's second Microsoft Entra administrator, beside `id-<prefix>-apps`, which makes it the
@@ -584,15 +598,25 @@ role allowed to migrate and create databases. Only the job carries it; `ca-api` 
 keep `external_database_url`, so their role can be narrower. Unset, the job uses
 `external_database_url`. The plan refuses it without `external_database_url`.
 
-**Upgrading to this version.** The release needs an api image that has the migrate entry point
-(`masterly_app.apps.migrate`), honours `MASTERLY_MIGRATIONS=job`, and picks up pending
-provisioning runs on each migrate run: with an older image the job fails and `ca-api` never
-becomes ready, so move `api_image` to such a release in the same apply. On an existing
-`database_auth = "entra"` install, every object in the databases is owned by `id-<prefix>-apps`.
-A second Entra administrator is not a superuser, so the first migration as `id-<prefix>-migrate`
-fails unless the image's migrate role first takes ownership or membership of those objects. The
-job follows `api_image`, not an image rolled onto `ca-api` outside Terraform: when you roll a
-new release, move `api_image` and apply, so its migrations run.
+**Upgrading to this version.** This version needs an api image that has the migrate entry point
+(`masterly_app.apps.migrate`), honours `MASTERLY_MIGRATIONS=job`, picks up pending provisioning
+runs on each migrate run, and serialises overlapping runs. The module does not check the image
+for them, so confirm them in the api release's notes before you upgrade. With an older image the
+job fails. The order:
+
+1. **Roll a qualifying image first, with your CD**, onto `ca-api` and `ca-workers`, the way you
+   roll any release. The apply below does not change their image: it adds
+   `MASTERLY_MIGRATIONS=job` to the image they already run, as a new revision.
+2. **Apply this version**, with `api_image` set to that same image. The apply creates the job on
+   it and starts one execution before it updates `ca-api` and `ca-workers`.
+3. **From then on, roll every release through CD in the order above** (the job, wait for
+   `Succeeded`, then the apps). Keep `api_image` at the digest your install runs, as for the
+   apps: it seeds the job if it is ever recreated.
+
+On an existing `database_auth = "entra"` install, every object in the databases is owned by
+`id-<prefix>-apps`. A second Entra administrator is not a superuser, so the first migration as
+`id-<prefix>-migrate` fails unless the image's migrate role first takes ownership or membership
+of those objects; the qualifying image is required to do that too.
 
 ### Moving an existing install to Microsoft Entra authentication
 

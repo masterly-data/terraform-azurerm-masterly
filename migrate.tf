@@ -1,21 +1,24 @@
 # The migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23): schema migrations
 # and the databases of new Masterly Environments are created here, in a Container Apps job that
-# runs as its own identity, and no longer by ca-api and ca-workers at start. Those two only check
-# the schema stamps (MASTERLY_MIGRATIONS = job, main.tf), and are not ready until the job has
-# brought them to head.
+# runs as its own identity, and no longer by ca-api and ca-workers at start. Those two carry
+# MASTERLY_MIGRATIONS = job (main.tf), which tells an api image that honours it to check the
+# schema stamps instead of migrating. An image that has the migrate entry point and honours
+# MASTERLY_MIGRATIONS is a prerequisite of this module version (README, "The migrate job").
 #
 # How the job starts:
 #
-#   at apply      azapi_resource_action.migrate_start starts one execution. It is replaced, and so
-#                 starts another, whenever the resolved api image changes. ca-api and ca-workers
-#                 depend on it, so the execution has started before either app is created or
-#                 updated. The action returns once the execution has started, not when it ends:
-#                 ca-api's readiness probe (/readyz) and revision_mode Single keep traffic on the
-#                 previous revision until the stamps reach head.
-#   on a schedule migrate_job_schedule. Each run also picks up the provisioning runs a new
-#                 Environment leaves pending, which is how a new Environment's database is made.
+#   at install    azapi_resource_action.migrate_start starts one execution on the seeded image.
+#                 ca-api and ca-workers depend on it, so it has started before either app is
+#                 created. It returns once the execution has started, not when it ends. The
+#                 action is replaced when the resolved api image changes, but Terraform ignores
+#                 image drift on the job as on the apps, so that run uses the job's current image.
+#   at a release  CD owns the running image (ADR 0086 as amended 2026-10-23): it moves caj-migrate
+#                 to the release's digest, starts an execution, waits for it to succeed, and only
+#                 then rolls ca-api and ca-workers to the same digest. Terraform takes no part.
+#   on a schedule migrate_job_schedule. The release's migrate role is required to pick up the
+#                 provisioning runs a new Environment leaves pending.
 #
-# The two can overlap. The application's migration lock serialises them.
+# Runs can overlap; the release's migrate role is required to serialise them (a migration lock).
 #
 # The job's identity (main.tf, module.migrate_identity) is the install's most privileged database
 # principal, and the job wakes on a schedule. So it carries only what migrating needs: the
@@ -26,7 +29,7 @@
 variable "migrate_job_schedule" {
   type        = string
   default     = "*/5 * * * *"
-  description = "When the migrate job (caj-migrate) runs on its own, as a five-field cron expression in UTC. Each run applies any pending schema migration and creates the database of each Masterly Environment waiting to be provisioned, so this is the longest a new Environment waits for its database. A run with nothing to do checks and exits. Default every five minutes. The job also runs once at every apply that changes the api image, whatever this says."
+  description = "When the migrate job (caj-migrate) runs on its own, as a five-field cron expression in UTC. The api image this module version requires picks up, on each migrate run, the Masterly Environments waiting to be provisioned, so this is the longest a new Environment waits for its database. Default every five minutes. The job also runs once at install, and when CD starts it before a release rolls, whatever this says."
 
   validation {
     condition     = can(regex("^\\S+( \\S+){4}$", var.migrate_job_schedule))
@@ -188,8 +191,11 @@ resource "azurerm_container_app_job" "migrate" {
   tags = local.tags
 
   lifecycle {
-    # Azure back-fills "Consumption" in a VNet-integrated environment, as on the apps.
-    ignore_changes = [workload_profile_name]
+    # As on the apps (modules/aca-container-app): CD owns the running image, Terraform seeds it
+    # on create and then ignores drift, so CD can move the job to a release's digest and run it
+    # before it rolls ca-api and ca-workers. Azure back-fills "Consumption" in a VNet-integrated
+    # environment.
+    ignore_changes = [template[0].container[0].image, workload_profile_name]
   }
 
   # The grants must land before the first pull and the first secret read, as on the frontend
@@ -204,13 +210,14 @@ resource "azurerm_container_app_job" "migrate" {
   ]
 }
 
-# What replaces the start action: the image the job runs, after the channel and api_image are
-# resolved. A new image is a new release, whose migrations must run before the apps roll.
+# What replaces the start action: the resolved api image, after the channel and api_image. A new
+# value starts one more execution, on the image the job runs (CD's, once it has rolled one).
 resource "terraform_data" "migrate_image" {
   input = local.api_image
 }
 
-# Starts one execution of the job at apply (Microsoft.App/jobs start).
+# Starts one execution of the job at apply (Microsoft.App/jobs start): at install, before the
+# apps are created.
 resource "azapi_resource_action" "migrate_start" {
   type        = "Microsoft.App/jobs@2025-01-01"
   resource_id = azurerm_container_app_job.migrate.id

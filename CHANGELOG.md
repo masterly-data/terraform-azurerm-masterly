@@ -39,12 +39,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   - the job's own DSN, under its own secret names (`migrate-database-url`, plus
     `migrate-database-direct-url` with `postgres_pgbouncer`): the migrate identity's Entra role on
     `"entra"`, `masterly_admin` on `"password"`;
-  - an apply-time start: an `azapi_resource_action` starts one execution whenever the resolved
-    api image changes, and `ca-api` and `ca-workers` depend on it. The job also runs on a schedule,
-    the new input `migrate_job_schedule` (a five-field cron expression, default `"*/5 * * * *"`),
-    which is how a new Environment's pending provisioning run is picked up;
-  - `MASTERLY_MIGRATIONS=job` on `ca-api` and `ca-workers`: they check the schema stamps and no
-    longer migrate at start;
+  - an install-time start: an `azapi_resource_action` starts one execution, and `ca-api` and
+    `ca-workers` depend on it. As on the apps, Terraform seeds the job's image and then ignores
+    drift: your CD owns it, and rolls each release to the job first, starts an execution, waits
+    for it to succeed, and only then rolls `ca-api` and `ca-workers` to the same digest. The job
+    also runs on a schedule, the new input `migrate_job_schedule` (a five-field cron expression,
+    default `"*/5 * * * *"`), on which the release's migrate role is required to pick up a new
+    Environment's pending provisioning run;
+  - `MASTERLY_MIGRATIONS=job` on `ca-api` and `ca-workers`, which tells an api image that honours
+    it to check the schema stamps instead of migrating at start;
   - `external_database_admin_url`, a new optional, sensitive input for BYO-DB: a DSN for a role
     allowed to migrate and create databases. Only the job carries it; `ca-api` and `ca-workers`
     keep `external_database_url`. Refused unless `external_database_url` is set. Unset, the job
@@ -52,11 +55,13 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
   **Before you upgrade:** this version needs an api image that has the migrate entry point
   (`masterly_app.apps.migrate`), honours `MASTERLY_MIGRATIONS=job`, and picks up pending
-  provisioning runs on each migrate run. With an older image the job fails and the apps are never
-  ready. On an existing `database_auth = "entra"` install the database objects are owned by
-  `id-<prefix>-apps`; a second Entra administrator is not a superuser, so the image's migrate role
-  must take ownership or membership of them before its first migration. See "The migrate job" in
-  the [README](README.md#the-migrate-job).
+  provisioning runs on each migrate run, and serialises overlapping runs. With an older image the
+  job fails. Roll such an image onto `ca-api` and `ca-workers` with your CD first, then apply this
+  version with `api_image` set to it; the apply adds `MASTERLY_MIGRATIONS=job` to the image they
+  run and does not change it. On an existing `database_auth = "entra"` install the database
+  objects are owned by `id-<prefix>-apps`; a second Entra administrator is not a superuser, so the
+  image's migrate role must take ownership or membership of them before its first migration. See
+  "The migrate job" in the [README](README.md#the-migrate-job).
 
 - **`registry_private_endpoint`: the registry over a private endpoint.** A new optional input, off
   by default. On, it creates a private endpoint to the registry `acr_id` names (subresource
