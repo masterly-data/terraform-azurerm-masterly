@@ -80,6 +80,9 @@ DYNAMIC_ENV = re.compile(r'^\s*dynamic\s+"env"\s*\{\s*$')
 FOR_EACH = re.compile(r"^\s*for_each\s*=\s*(.*)$")
 # A depth-1 attribute inside such a block: two-space indent, `name =` (never `==`).
 ATTRIBUTE = re.compile(r"^  ([A-Za-z_][A-Za-z0-9_-]*)\s*=(?!=)\s*(.*)$")
+# A depth-1 nested block header (`  template {`, `  dynamic "env" {`), which ends the attribute
+# before it: a job's `name` is followed by its `template` block, not by another attribute.
+NESTED_BLOCK = re.compile(r'^  [A-Za-z_][A-Za-z0-9_-]*(?:\s+"[^"]*")*\s*\{\s*$')
 # A map key as the env maps write them: an uppercase identifier followed by `=`.
 ENV_KEY = re.compile(r"\b([A-Z][A-Z0-9_]*)\s*=(?!=)")
 LOCAL_REF = re.compile(r"\blocal\.([A-Za-z_][A-Za-z0-9_]*)")
@@ -139,6 +142,8 @@ def attributes(body: list[str]) -> dict[str, str]:
         if attribute:
             name = attribute.group(1)
             found[name] = attribute.group(2)
+        elif NESTED_BLOCK.match(line):
+            name = None
         elif name is not None:
             found[name] += "\n" + line
     return found
