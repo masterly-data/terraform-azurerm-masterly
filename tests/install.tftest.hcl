@@ -2115,13 +2115,11 @@ run "production_secrets_are_vault_references" {
   }
 
   # Every one of them is written into the vault, under the install- prefix that keeps the
-  # module's secrets clear of the ones the application seals at runtime (<slug>-<ulid>). The
-  # tenth is the migrate job's own DSN (migrate.tf); the registry password it shares.
+  # module's secrets clear of the ones the application seals at runtime (<slug>-<ulid>).
   assert {
     condition = (
-      length(azurerm_key_vault_secret.install) == 10 &&
+      length(azurerm_key_vault_secret.install) == 9 &&
       azurerm_key_vault_secret.install["database-url"].name == "install-database-url" &&
-      azurerm_key_vault_secret.install["migrate-database-url"].name == "install-migrate-database-url" &&
       azurerm_key_vault_secret.install["oidc-client-secret"].name == "install-oidc-client-secret"
     )
     error_message = "Each distinct install secret must be written to the vault once, under the install- prefix."
@@ -2917,6 +2915,7 @@ run "both_app_identities_keep_their_names" {
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    migrations            = "job" # the migrate identity exists only then
   }
 
   # A rename REPLACES the identity, and with it the principal id customers grant AcrPull to
@@ -2925,7 +2924,7 @@ run "both_app_identities_keep_their_names" {
     condition = (
       module.apps_identity.name == "id-masterly-apps" &&
       module.frontend_identity.name == "id-masterly-frontend" &&
-      module.migrate_identity.name == "id-masterly-migrate"
+      module.migrate_identity[0].name == "id-masterly-migrate"
     )
     error_message = "The identity names must stay id-<prefix>-apps, id-<prefix>-frontend and id-<prefix>-migrate."
   }
@@ -8596,6 +8595,7 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
     breakglass_owner_email  = "owner@example.com"
     breakglass_secret_hash  = "0000000000000000000000000000000000000000000000000000000000000000"
     external_database_url   = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations              = "job" # the migrate job's grants, asserted below
 
     key_vault_secret_operator_object_ids = ["11111111-1111-1111-1111-111111111111"]
   }
@@ -8750,7 +8750,7 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
         ra.scope == azurerm_key_vault_secret.install[k].resource_versionless_id &&
         ra.scope != azurerm_key_vault.this[0].id &&
         ra.role_definition_name == "Key Vault Secrets User" &&
-        ra.principal_id == module.migrate_identity.principal_id
+        ra.principal_id == module.migrate_identity[0].principal_id
       ])
     )
     error_message = "The migrate job's identity must hold Key Vault Secrets User on each of its own secrets alone, scoped to that secret, never to the vault."
@@ -9187,15 +9187,82 @@ run "builtin_auth_secret_is_a_vault_reference_in_production" {
 
 # --- The migrate job (migrate.tf) ------------------------------------------------------------
 #
-# Migrations and new Environments' databases run in caj-migrate, as id-<prefix>-migrate; ca-api
-# and ca-workers only check the schema stamps (MASTERLY_MIGRATIONS = job). The identities are
-# pinned with override_module, as in no_data_plane_grant_reaches_the_frontend, so the wiring is
-# checkable at plan.
+# With migrations = "job", migrations and new Environments' databases run in caj-migrate, as
+# id-<prefix>-migrate; ca-api and ca-workers only check the schema stamps (MASTERLY_MIGRATIONS =
+# job). The identities are pinned with override_module, as in
+# no_data_plane_grant_reaches_the_frontend, so the wiring is checkable at plan.
+
+# The default, "start", is main's install: no job, no migrate identity, no grant, no second
+# administrator, no MASTERLY_MIGRATIONS, so an install on a backend release up to v0.135.0, which
+# has no migrate entry point, is not broken by the upgrade.
+run "migrations_default_to_start_and_create_no_migrate_job" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    enable_key_vault      = true
+    database_auth         = "entra"
+    acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+  }
+
+  assert {
+    condition = (
+      var.migrations == "start" &&
+      length(azurerm_container_app_job.migrate) == 0 &&
+      length(azapi_resource_action.migrate_start) == 0 &&
+      length(terraform_data.migrate_image) == 0 &&
+      length(module.migrate_identity) == 0 &&
+      length(azurerm_role_assignment.acr_pull_migrate) == 0 &&
+      length(azurerm_role_assignment.kv_secrets_user_migrate) == 0 &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 0 &&
+      length(module.postgres_connection_urls_migrate) == 0 &&
+      length(local.migrate_secret_names) == 0 &&
+      output.migrate_job_name == null &&
+      output.migrate_identity_principal_id == null
+    )
+    error_message = "With migrations left at \"start\" the module must create no migrate job, identity, grant or administrator."
+  }
+
+  assert {
+    condition = (
+      !contains(module.api.env_names, "MASTERLY_MIGRATIONS") &&
+      !contains(module.workers[0].env_names, "MASTERLY_MIGRATIONS") &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 1 &&
+      !contains(keys(azurerm_key_vault_secret.install), "migrate-database-url")
+    )
+    error_message = "With migrations left at \"start\" ca-api and ca-workers must carry no MASTERLY_MIGRATIONS, so they migrate at start as on main."
+  }
+}
+
+run "migrations_refuses_an_unknown_value" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    migrations            = "both"
+  }
+
+  expect_failures = [var.migrations]
+}
+
+run "external_database_admin_url_refused_without_the_migrate_job" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    external_database_admin_url = "postgresql+asyncpg://masterly_owner:adminpw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  expect_failures = [var.external_database_admin_url]
+}
 
 run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_workers        = true
   }
@@ -9213,10 +9280,10 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
 
   assert {
     condition = (
-      azurerm_container_app_job.migrate.name == "caj-migrate" &&
-      azurerm_container_app_job.migrate.template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.0" &&
-      azurerm_container_app_job.migrate.template[0].container[0].image == module.api.image &&
-      azurerm_container_app_job.migrate.template[0].container[0].command == tolist(["python", "-m", "masterly_app.apps.migrate"])
+      azurerm_container_app_job.migrate[0].name == "caj-migrate" &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.0" &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].image == module.api.image &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].command == tolist(["python", "-m", "masterly_app.apps.migrate"])
     )
     error_message = "The migrate job must run python -m masterly_app.apps.migrate on the resolved api image."
   }
@@ -9224,22 +9291,22 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
   # azurerm_container_app_job has no ingress argument at all: the job takes no request.
   assert {
     condition = (
-      azurerm_container_app_job.migrate.identity[0].type == "UserAssigned" &&
-      length(azurerm_container_app_job.migrate.identity[0].identity_ids) == 1 &&
-      one(azurerm_container_app_job.migrate.identity[0].identity_ids) == module.migrate_identity.id
+      azurerm_container_app_job.migrate[0].identity[0].type == "UserAssigned" &&
+      length(azurerm_container_app_job.migrate[0].identity[0].identity_ids) == 1 &&
+      one(azurerm_container_app_job.migrate[0].identity[0].identity_ids) == module.migrate_identity[0].id
     )
     error_message = "The migrate job must run as id-<prefix>-migrate and nothing else."
   }
 
   assert {
     condition = (
-      length(azurerm_container_app_job.migrate.schedule_trigger_config) == 1 &&
-      azurerm_container_app_job.migrate.schedule_trigger_config[0].cron_expression == var.migrate_job_schedule &&
+      length(azurerm_container_app_job.migrate[0].schedule_trigger_config) == 1 &&
+      azurerm_container_app_job.migrate[0].schedule_trigger_config[0].cron_expression == var.migrate_job_schedule &&
       var.migrate_job_schedule == "*/5 * * * *" &&
-      azurerm_container_app_job.migrate.schedule_trigger_config[0].parallelism == 1 &&
-      azurerm_container_app_job.migrate.schedule_trigger_config[0].replica_completion_count == 1 &&
-      length(azurerm_container_app_job.migrate.manual_trigger_config) == 0 &&
-      length(azurerm_container_app_job.migrate.event_trigger_config) == 0
+      azurerm_container_app_job.migrate[0].schedule_trigger_config[0].parallelism == 1 &&
+      azurerm_container_app_job.migrate[0].schedule_trigger_config[0].replica_completion_count == 1 &&
+      length(azurerm_container_app_job.migrate[0].manual_trigger_config) == 0 &&
+      length(azurerm_container_app_job.migrate[0].event_trigger_config) == 0
     )
     error_message = "The migrate job must run on migrate_job_schedule (default every five minutes), one replica at a time."
   }
@@ -9277,7 +9344,7 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
       sort(keys(local.migrate_env_secret_refs)) == tolist(["MASTERLY_DATABASE_URL"]) &&
       local.migrate_env_secret_refs["MASTERLY_DATABASE_URL"] == "migrate-database-url" &&
       tolist(local.migrate_secret_names) == tolist(["migrate-database-url"]) &&
-      one([for e in azurerm_container_app_job.migrate.template[0].container[0].env : e.secret_name if e.name == "MASTERLY_DATABASE_URL"]) == "migrate-database-url" &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.secret_name if e.name == "MASTERLY_DATABASE_URL"]) == "migrate-database-url" &&
       length(local.migrate_vault_secret_refs) == 0
     )
     error_message = "The migrate job must carry MASTERLY_DATABASE_URL from its own secret, and no direct URL without the pooler."
@@ -9288,12 +9355,13 @@ run "migrate_job_follows_its_schedule_input" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     migrate_job_schedule  = "0 * * * *"
   }
 
   assert {
-    condition     = azurerm_container_app_job.migrate.schedule_trigger_config[0].cron_expression == "0 * * * *"
+    condition     = azurerm_container_app_job.migrate[0].schedule_trigger_config[0].cron_expression == "0 * * * *"
     error_message = "The migrate job's cron expression must be migrate_job_schedule."
   }
 }
@@ -9328,15 +9396,16 @@ run "migrate_job_is_started_at_apply" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
   }
 
   assert {
     condition = (
-      azapi_resource_action.migrate_start.type == "Microsoft.App/jobs@2025-01-01" &&
-      azapi_resource_action.migrate_start.action == "start" &&
-      azapi_resource_action.migrate_start.method == "POST" &&
-      terraform_data.migrate_image.input == "masterly.azurecr.io/release/api:v0.0.0"
+      azapi_resource_action.migrate_start[0].type == "Microsoft.App/jobs@2025-01-01" &&
+      azapi_resource_action.migrate_start[0].action == "start" &&
+      azapi_resource_action.migrate_start[0].method == "POST" &&
+      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.0.0"
     )
     error_message = "An azapi start action must start the migrate job, keyed on the resolved api image."
   }
@@ -9346,14 +9415,15 @@ run "migrate_job_start_follows_the_api_image" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     api_image             = "masterly.azurecr.io/release/api:v0.0.1"
   }
 
   assert {
     condition = (
-      terraform_data.migrate_image.input == "masterly.azurecr.io/release/api:v0.0.1" &&
-      azurerm_container_app_job.migrate.template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.1"
+      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.0.1" &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.1"
     )
     error_message = "A new api_image must reach the migrate job and the input that replaces its start action."
   }
@@ -9365,6 +9435,7 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
     enable_key_vault      = true
@@ -9408,19 +9479,19 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
 
   assert {
     condition = (
-      !contains(module.api.user_assigned_identity_ids, module.migrate_identity.id) &&
-      !contains(module.workers[0].user_assigned_identity_ids, module.migrate_identity.id) &&
-      !contains(module.frontend.user_assigned_identity_ids, module.migrate_identity.id) &&
-      !contains(module.api.secret_ref_identity_ids, module.migrate_identity.id) &&
-      !contains(module.workers[0].secret_ref_identity_ids, module.migrate_identity.id) &&
-      !contains(module.frontend.secret_ref_identity_ids, module.migrate_identity.id)
+      !contains(module.api.user_assigned_identity_ids, module.migrate_identity[0].id) &&
+      !contains(module.workers[0].user_assigned_identity_ids, module.migrate_identity[0].id) &&
+      !contains(module.frontend.user_assigned_identity_ids, module.migrate_identity[0].id) &&
+      !contains(module.api.secret_ref_identity_ids, module.migrate_identity[0].id) &&
+      !contains(module.workers[0].secret_ref_identity_ids, module.migrate_identity[0].id) &&
+      !contains(module.frontend.secret_ref_identity_ids, module.migrate_identity[0].id)
     )
     error_message = "No Container App may run as, or resolve a secret with, the migrate job's identity."
   }
 
   assert {
     condition = (
-      azurerm_role_assignment.acr_pull_migrate[0].principal_id == module.migrate_identity.principal_id &&
+      azurerm_role_assignment.acr_pull_migrate[0].principal_id == module.migrate_identity[0].principal_id &&
       azurerm_role_assignment.acr_pull_migrate[0].role_definition_name == "AcrPull" &&
       azurerm_role_assignment.acr_pull_migrate[0].scope == var.acr_id
     )
@@ -9433,9 +9504,9 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
       toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url"]) &&
       alltrue([
         for k, ra in azurerm_role_assignment.kv_secrets_user_migrate :
-        ra.role_definition_name == "Key Vault Secrets User" && ra.principal_id == module.migrate_identity.principal_id
+        ra.role_definition_name == "Key Vault Secrets User" && ra.principal_id == module.migrate_identity[0].principal_id
       ]) &&
-      alltrue([for name, ref in local.migrate_vault_secret_refs : ref.identity_id == module.migrate_identity.id])
+      alltrue([for name, ref in local.migrate_vault_secret_refs : ref.identity_id == module.migrate_identity[0].id])
     )
     error_message = "The migrate job's identity may hold Key Vault Secrets User on its own secrets alone."
   }
@@ -9457,7 +9528,7 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
         [for ra in azurerm_role_assignment.kv_secrets_user_frontend : ra.principal_id],
         [for ra in azurerm_role_assignment.kv_secrets_officer_deployer : ra.principal_id],
         [for ra in azurerm_role_assignment.kv_secrets_reader : ra.principal_id],
-      ) : principal != module.migrate_identity.principal_id
+      ) : principal != module.migrate_identity[0].principal_id
     ])
     error_message = "No vault-scope, Officer, Crypto, Service Bus, ACS or other app's grant may reach the migrate job's identity."
   }
@@ -9480,6 +9551,7 @@ run "migrate_identity_holds_no_redis_access" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_redis          = true
     redis_offering        = "managed"
@@ -9510,8 +9582,8 @@ run "migrate_identity_holds_no_redis_access" {
 
   assert {
     condition = alltrue(concat(
-      [for a in azurerm_managed_redis_access_policy_assignment.apps : a.object_id != module.migrate_identity.principal_id],
-      [for a in azurerm_redis_cache_access_policy_assignment.apps : a.object_id != module.migrate_identity.principal_id],
+      [for a in azurerm_managed_redis_access_policy_assignment.apps : a.object_id != module.migrate_identity[0].principal_id],
+      [for a in azurerm_redis_cache_access_policy_assignment.apps : a.object_id != module.migrate_identity[0].principal_id],
     )) && length(azurerm_managed_redis_access_policy_assignment.apps) + length(azurerm_redis_cache_access_policy_assignment.apps) == 1
     error_message = "The Redis access policy must go to the apps' identity, never the migrate job's."
   }
@@ -9526,6 +9598,7 @@ run "migrate_identity_is_a_second_entra_administrator" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     database_auth         = "entra"
   }
@@ -9561,7 +9634,7 @@ run "migrate_identity_is_a_second_entra_administrator" {
       length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 1 &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].principal_name == "id-masterly-migrate" &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].principal_type == "ServicePrincipal" &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].object_id == module.migrate_identity.principal_id
+      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].object_id == module.migrate_identity[0].principal_id
     )
     error_message = "On entra the server must have two Entra administrators: id-<prefix>-apps, unchanged, and id-<prefix>-migrate."
   }
@@ -9573,8 +9646,8 @@ run "migrate_identity_is_a_second_entra_administrator" {
       startswith(nonsensitive(local.migrate_database_url), "postgresql+asyncpg://id-masterly-migrate@") &&
       startswith(nonsensitive(local.database_url), "postgresql+asyncpg://id-masterly-apps@") &&
       local.migrate_env["MASTERLY_DATABASE_AUTH"] == "entra" &&
-      local.migrate_env["AZURE_CLIENT_ID"] == module.migrate_identity.client_id &&
-      one([for e in azurerm_container_app_job.migrate.template[0].container[0].env : e.value if e.name == "AZURE_CLIENT_ID"]) == "dddddddd-dddd-dddd-dddd-cccccccccccc" &&
+      local.migrate_env["AZURE_CLIENT_ID"] == module.migrate_identity[0].client_id &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "AZURE_CLIENT_ID"]) == "dddddddd-dddd-dddd-dddd-cccccccccccc" &&
       local.api_env["AZURE_CLIENT_ID"] == module.apps_identity.client_id
     )
     error_message = "On entra the migrate job's URL must name id-<prefix>-migrate and its AZURE_CLIENT_ID must be the migrate identity's client id."
@@ -9585,6 +9658,7 @@ run "migrate_job_gets_the_direct_url_with_pgbouncer" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     postgres_sku_name     = "GP_Standard_D2ds_v5"
     postgres_pgbouncer    = true
@@ -9597,7 +9671,7 @@ run "migrate_job_gets_the_direct_url_with_pgbouncer" {
       local.migrate_env_secret_refs["MASTERLY_DATABASE_DIRECT_URL"] == "migrate-database-direct-url" &&
       tolist(local.migrate_secret_names) == tolist(["migrate-database-url", "migrate-database-direct-url"]) &&
       local.migrate_env["MASTERLY_DATABASE_POOLER"] == "transaction" &&
-      one([for e in azurerm_container_app_job.migrate.template[0].container[0].env : e.secret_name if e.name == "MASTERLY_DATABASE_DIRECT_URL"]) == "migrate-database-direct-url" &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.secret_name if e.name == "MASTERLY_DATABASE_DIRECT_URL"]) == "migrate-database-direct-url" &&
       local.database_pooler_port == "6432" &&
       local.database_direct_port == "5432" &&
       length(module.postgres_connection_urls_migrate) == 1
@@ -9612,6 +9686,7 @@ run "external_database_admin_url_reaches_only_the_migrate_job" {
   command = plan
 
   variables {
+    migrations                  = "job"
     ingress_allowed_cidrs       = ["203.0.113.7/32"]
     enable_key_vault            = true
     enable_workers              = true
@@ -9656,6 +9731,7 @@ run "external_database_url_alone_reaches_the_migrate_job_too" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_key_vault      = true
     enable_workers        = true
@@ -9687,6 +9763,7 @@ run "external_database_admin_url_refused_without_external_database_url" {
   command = plan
 
   variables {
+    migrations                  = "job"
     ingress_allowed_cidrs       = ["203.0.113.7/32"]
     external_database_admin_url = "postgresql+asyncpg://masterly_owner:adminpw@pg.example.com:5432/postgres?ssl=require"
   }
@@ -9699,6 +9776,7 @@ run "external_database_admin_url_reaches_only_the_migrate_job_without_the_vault"
   command = plan
 
   variables {
+    migrations                  = "job"
     ingress_allowed_cidrs       = ["203.0.113.7/32"]
     enable_workers              = true
     external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
@@ -9725,6 +9803,7 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     acr_login_server      = null # the file-wide "" means no registry block at all
     acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
@@ -9738,9 +9817,9 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
   assert {
     condition = (
       length(azurerm_role_assignment.acr_pull_migrate) == 0 &&
-      azurerm_container_app_job.migrate.registry[0].username == "00000000-0000-0000-0000-000000000000" &&
-      azurerm_container_app_job.migrate.registry[0].password_secret_name == "registry-password" &&
-      azurerm_container_app_job.migrate.registry[0].identity == null &&
+      azurerm_container_app_job.migrate[0].registry[0].username == "00000000-0000-0000-0000-000000000000" &&
+      azurerm_container_app_job.migrate[0].registry[0].password_secret_name == "registry-password" &&
+      azurerm_container_app_job.migrate[0].registry[0].identity == null &&
       sort(nonsensitive(keys(local.migrate_value_secrets))) == tolist(["ca-bundle-pem", "migrate-database-url", "registry-password"])
     )
     error_message = "In the token mode the migrate job must pull with the credential, from its own registry-password secret, and get no AcrPull grant."
@@ -9749,10 +9828,10 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
   assert {
     condition = (
       local.migrate_env["SSL_CERT_FILE"] == "/mnt/secrets/ca-bundle/ca-bundle.pem" &&
-      length(azurerm_container_app_job.migrate.template[0].volume) == 1 &&
-      length(azurerm_container_app_job.migrate.template[0].init_container) == 1 &&
-      azurerm_container_app_job.migrate.template[0].init_container[0].image == azurerm_container_app_job.migrate.template[0].container[0].image &&
-      azurerm_container_app_job.migrate.template[0].container[0].volume_mounts[0].path == "/mnt/secrets/ca-bundle"
+      length(azurerm_container_app_job.migrate[0].template[0].volume) == 1 &&
+      length(azurerm_container_app_job.migrate[0].template[0].init_container) == 1 &&
+      azurerm_container_app_job.migrate[0].template[0].init_container[0].image == azurerm_container_app_job.migrate[0].template[0].container[0].image &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].volume_mounts[0].path == "/mnt/secrets/ca-bundle"
     )
     error_message = "With ca_bundle_pem the migrate job must mount the CA bundle at the path SSL_CERT_FILE names, as the apps do."
   }
@@ -9766,6 +9845,7 @@ run "migrate_job_leaves_the_stateful_resources_as_they_were" {
   command = plan
 
   variables {
+    migrations            = "job"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     database_auth         = "entra"
     enable_key_vault      = true

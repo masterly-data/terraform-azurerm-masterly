@@ -363,7 +363,7 @@ resource "azurerm_role_assignment" "kv_secrets_user_migrate" {
 
   scope                = azurerm_key_vault_secret.install[each.key].resource_versionless_id
   role_definition_name = "Key Vault Secrets User"
-  principal_id         = module.migrate_identity.principal_id
+  principal_id         = module.migrate_identity[0].principal_id
 }
 
 # Read-only data-plane for a separate planning identity: `plan` refreshes the secrets above.
@@ -416,7 +416,7 @@ locals {
   migrate_vault_secret_refs = var.enable_key_vault ? {
     for name in local.migrate_secret_names : name => {
       kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id
-      identity_id  = module.migrate_identity.id
+      identity_id  = module.migrate_identity[0].id
     }
   } : {}
 }

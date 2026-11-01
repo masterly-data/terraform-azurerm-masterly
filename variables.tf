@@ -604,11 +604,16 @@ variable "external_database_admin_url" {
   type        = string
   default     = null
   sensitive   = true
-  description = "BYO-DB only: a second DSN to the same database, for a role allowed to run schema migrations and create databases (ADR 0065, amended). Only the migrate job (caj-migrate) carries it; ca-api and ca-workers keep external_database_url. Null (default): the migrate job uses external_database_url too. Refused unless external_database_url is set: on the starter server the module composes the migrate job's DSN itself."
+  description = "BYO-DB only: a second DSN to the same database, for a role allowed to run schema migrations and create databases (ADR 0065, amended). Only the migrate job (caj-migrate) carries it; ca-api and ca-workers keep external_database_url. Null (default): the migrate job uses external_database_url too. Refused unless external_database_url is set: on the starter server the module composes the migrate job's DSN itself. Refused unless migrations = \"job\", since without the job nothing reads it."
 
   validation {
     condition     = var.external_database_admin_url == null || var.external_database_url != null
     error_message = "external_database_admin_url is set but external_database_url is not. external_database_admin_url is the migrate job's DSN to your own database (BYO-DB) and applies only with external_database_url; on the starter server the module composes the migrate job's DSN itself. Set external_database_url, or leave external_database_admin_url unset."
+  }
+
+  validation {
+    condition     = var.external_database_admin_url == null || var.migrations == "job"
+    error_message = "external_database_admin_url is set but migrations is not \"job\". Only the migrate job reads external_database_admin_url, and it exists only with migrations = \"job\". Set migrations = \"job\", or leave external_database_admin_url unset."
   }
 }
 

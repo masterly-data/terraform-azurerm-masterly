@@ -167,9 +167,9 @@ clients outside the environment — null unless `api_ingress_external = true`), 
 group, the Container App names (the values the app repos' release workflows use to roll
 images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
 `apps_identity_client_id` / `frontend_identity_principal_id` / `migrate_identity_principal_id`
-for out-of-band role grants. The install runs on **three** identities — two app identities and
-the migrate job's (see below) — so an out-of-band `AcrPull` grant has to reach all three
-principals.
+for out-of-band role grants. The install runs on two app identities, and with
+`migrations = "job"` on a **third**, the migrate job's (see below), so an out-of-band `AcrPull`
+grant has to reach each of them.
 
 `api_internal_fqdn` keeps its name so existing configurations still plan, but the name is older
 than `api_ingress_external`: it holds the API's internal hostname only while the API is
@@ -240,8 +240,8 @@ check, and a rebuilt app, both go by.
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
-| `id-masterly-migrate` UAMI (+ optional AcrPull) | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** on each of the job's own secrets only (its DSNs, and the registry password and CA bundle when set), and on `database_auth = "entra"` the starter server's **second** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
-| `caj-migrate` Container Apps job | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
+| `id-masterly-migrate` UAMI (+ optional AcrPull) — **only with `migrations = "job"`** | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** on each of the job's own secrets only (its DSNs, and the registry password and CA bundle when set), and on `database_auth = "entra"` the starter server's **second** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
+| `caj-migrate` Container Apps job — **only with `migrations = "job"`** | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
@@ -275,7 +275,7 @@ The three modes:
    scale-out pulls depend on Masterly's registry being reachable (running replicas are
    unaffected). The plan refuses this mode with no credential.
 2. **`managed_identity`: pull as the app identities.** Each app pulls as its own identity,
-   with no credential in the install. `acr_id` grants `AcrPull` to both identities, and to the migrate job's. With
+   with no credential in the install. `acr_id` grants `AcrPull` to both identities, and to the migrate job's when it exists. With
    `registry_location` omitted, set the mode or `acr_id` to pull from `masterly.azurecr.io`;
    with neither, the apps have no registry block.
 3. **`customer_registry`: mirror into your own ACR.** Import each image into the same
@@ -287,9 +287,9 @@ The three modes:
    image bundle instead of the import). The plan refuses this mode without a
    `registry_location` other than Masterly's.
 
-In both identity modes, `acr_id` grants `AcrPull` to both app identities and to the migrate
-job's. If you leave it null and grant out of band, grant all three:
-`apps_identity_principal_id`, `frontend_identity_principal_id` and
+In both identity modes, `acr_id` grants `AcrPull` to both app identities and, with
+`migrations = "job"`, to the migrate job's. If you leave it null and grant out of band, grant
+each: `apps_identity_principal_id`, `frontend_identity_principal_id` and, with the job,
 `migrate_identity_principal_id`. Miss the second and the frontend cannot pull; miss the third
 and the migrate job cannot pull, so no migration runs.
 
@@ -303,7 +303,8 @@ mode and the release. Like an explicit image, the channel's reference seeds an a
 created, and CD owns the running image thereafter: changing `release_channel` on an existing
 install rolls nothing (`terraform apply` does not roll a running image, see "Moving to Stable"
 below). To roll a running install back, redeploy the previous image with
-`az containerapp update --image`. A release rolls the [migrate job](#the-migrate-job) first.
+`az containerapp update --image`. With `migrations = "job"`, a release rolls the
+[migrate job](#the-migrate-job) first.
 
 **The deprecated inputs** still plan as before, with two exceptions. An install that pulls with
 a credential and also sets `acr_id` loses its two unused `AcrPull` grants, because the `token`
@@ -500,7 +501,7 @@ by `database_auth` and `redis_auth`:
 
 | | `"entra"` — Azure's recommendation | `"password"` / `"key"` — a departure |
 |---|---|---|
-| Postgres | Microsoft Entra authentication on, password authentication off. The apps' identity (`id-masterly-apps`) is the server's Microsoft Entra administrator, and so is the migrate job's (`id-masterly-migrate`, [below](#the-migrate-job)); each connection string names its own identity's role with no password | The `masterly_admin` login, with its password in the connection string, for the apps and the migrate job alike |
+| Postgres | Microsoft Entra authentication on, password authentication off. The apps' identity (`id-masterly-apps`) is the server's Microsoft Entra administrator, and so, with `migrations = "job"`, is the migrate job's (`id-masterly-migrate`, [below](#the-migrate-job)); each connection string names its own identity's role with no password | The `masterly_admin` login, with its password in the connection string, for the apps and the migrate job alike |
 | Redis | Access keys off. The apps' identity holds a data access policy: the default policy on Azure Managed Redis, *Data Contributor* on Azure Cache for Redis. The URL carries no key | The access key, in the URL |
 | The apps | `MASTERLY_DATABASE_AUTH=entra` / `MASTERLY_REDIS_AUTH=entra` and `AZURE_CLIENT_ID`, on `ca-api` and `ca-workers`. Needs **api images `v0.133.7` or later** | Nothing added |
 
@@ -547,11 +548,18 @@ the credential, and `database_auth = "entra"` is refused at plan.
 
 ### The migrate job
 
-Schema migrations, and the database of each new Masterly Environment, run in a Container Apps
-job, `caj-migrate`, as its own identity, `id-<prefix>-migrate` (ADR 0120). `ca-api` and
-`ca-workers` carry `MASTERLY_MIGRATIONS=job`, which tells an api image that honours it to check
-that the schema is at head instead of migrating. That image is a prerequisite of this version:
-see the upgrade note below.
+Opt-in, with `migrations = "job"`. Schema migrations, and the database of each new Masterly
+Environment, then run in a Container Apps job, `caj-migrate`, as its own identity,
+`id-<prefix>-migrate` (ADR 0120). `ca-api` and `ca-workers` carry `MASTERLY_MIGRATIONS=job`,
+which tells the api image to check that the schema is at head instead of migrating.
+
+`migrations` defaults to `"start"`: the module creates no job, no migrate identity, no grant and
+no second Entra administrator, sets no `MASTERLY_MIGRATIONS`, and `ca-api` and `ca-workers`
+migrate at start as before. **`"job"` needs an api image from a backend release later than
+v0.135.0.** The migrate entry point (`masterly_app/apps/migrate.py`, `composition/migrate.py`) and
+the `MASTERLY_MIGRATIONS` setting (`core/settings.py`) are on the backend's main branch but in no
+release up to v0.135.0, which cannot run the job. Leave the default until your install runs such a
+release; see the upgrade note below.
 
 The job runs `python -m masterly_app.apps.migrate` on the api image, has no ingress, and runs in
 three ways:
@@ -596,19 +604,21 @@ to authenticate, and the CA bundle when one is set. Its secrets have their own n
 **BYO-DB.** `external_database_admin_url` (sensitive, optional) is a DSN to your database for a
 role allowed to migrate and create databases. Only the job carries it; `ca-api` and `ca-workers`
 keep `external_database_url`, so their role can be narrower. Unset, the job uses
-`external_database_url`. The plan refuses it without `external_database_url`.
+`external_database_url`. The plan refuses it without `external_database_url`, and without
+`migrations = "job"`.
 
-**Upgrading to this version.** This version needs an api image that has the migrate entry point
-(`masterly_app.apps.migrate`), honours `MASTERLY_MIGRATIONS=job`, picks up pending provisioning
-runs on each migrate run, and serialises overlapping runs. The module does not check the image
-for them, so confirm them in the api release's notes before you upgrade. With an older image the
-job fails. The order:
+**Upgrading to this version, and turning the job on.** Upgrading changes nothing while
+`migrations` stays `"start"`. `"job"` needs an api image from a backend release later than
+v0.135.0 that has the migrate entry point (`masterly_app.apps.migrate`), honours
+`MASTERLY_MIGRATIONS=job`, picks up pending provisioning runs on each migrate run, and serialises
+overlapping runs. The module does not check the image for them, so confirm them in the api
+release's notes. With an older image the job fails. The order:
 
 1. **Roll a qualifying image first, with your CD**, onto `ca-api` and `ca-workers`, the way you
    roll any release. The apply below does not change their image: it adds
    `MASTERLY_MIGRATIONS=job` to the image they already run, as a new revision.
-2. **Apply this version**, with `api_image` set to that same image. The apply creates the job on
-   it and starts one execution before it updates `ca-api` and `ca-workers`.
+2. **Apply with `migrations = "job"`**, and `api_image` set to that same image. The apply creates
+   the job on it and starts one execution before it updates `ca-api` and `ca-workers`.
 3. **From then on, roll every release through CD in the order above** (the job, wait for
    `Succeeded`, then the apps). Keep `api_image` at the digest your install runs, as for the
    apps: it seeds the job if it is ever recreated.

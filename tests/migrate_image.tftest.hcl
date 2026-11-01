@@ -46,6 +46,7 @@ variables {
   acr_login_server      = ""
   ingress_allowed_cidrs = ["203.0.113.7/32"]
   enable_diagnostics    = false
+  migrations            = "job"
 }
 
 # Mock providers return random strings as resource IDs, and the resources that parse an ID refuse
@@ -139,7 +140,7 @@ run "migrate_job_is_seeded_with_the_api_image" {
   }
 
   assert {
-    condition     = azurerm_container_app_job.migrate.template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.0"
+    condition     = azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.0"
     error_message = "Terraform must seed the migrate job with the resolved api image on create."
   }
 }
@@ -159,12 +160,12 @@ run "migrate_job_keeps_the_image_cd_owns" {
   }
 
   assert {
-    condition     = azurerm_container_app_job.migrate.template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.0"
+    condition     = azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.0"
     error_message = "A changed api_image must not move the migrate job's image: CD owns it, and moves it to a release's digest and runs it before it rolls ca-api and ca-workers (ignore_changes on template[0].container[0].image, as on the apps)."
   }
 
   assert {
-    condition     = terraform_data.migrate_image.output == "masterly.azurecr.io/release/api:v0.0.1"
+    condition     = terraform_data.migrate_image[0].output == "masterly.azurecr.io/release/api:v0.0.1"
     error_message = "The start action's replace trigger must still follow the resolved api image."
   }
 }

@@ -24,9 +24,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
-- **The migrate job: schema migrations and new Environments' databases run in their own job, as
-  their own identity (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23).** A minor
-  release under ADR 0062: new resources and inputs, nothing renamed or removed. What is new:
+- **The migrate job, opt-in: schema migrations and new Environments' databases run in their own
+  job, as their own identity (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23).** A
+  minor release under ADR 0062: new resources and inputs, nothing renamed or removed. The new input
+  `migrations` defaults to `"start"`, which changes nothing: no job, no migrate identity, no grant,
+  no second administrator, no `MASTERLY_MIGRATIONS`, and the apps migrate at start as before.
+  `migrations = "job"` needs an api image from a **backend release later than v0.135.0**: the
+  migrate entry point and the `MASTERLY_MIGRATIONS` setting are in no release up to v0.135.0. With
+  `"job"`, what is new:
   - `caj-migrate`, a Container Apps job in the install's environment, runs
     `python -m masterly_app.apps.migrate` on the resolved api image, with no ingress;
   - `id-<prefix>-migrate`, its user-assigned identity, attached to no Container App. It gets
@@ -50,14 +55,15 @@ inventing one now would be exactly the retyped-value failure the manifest exists
     it to check the schema stamps instead of migrating at start;
   - `external_database_admin_url`, a new optional, sensitive input for BYO-DB: a DSN for a role
     allowed to migrate and create databases. Only the job carries it; `ca-api` and `ca-workers`
-    keep `external_database_url`. Refused unless `external_database_url` is set. Unset, the job
-    uses `external_database_url`.
+    keep `external_database_url`. Refused unless `external_database_url` is set and
+    `migrations = "job"`. Unset, the job uses `external_database_url`.
 
-  **Before you upgrade:** this version needs an api image that has the migrate entry point
-  (`masterly_app.apps.migrate`), honours `MASTERLY_MIGRATIONS=job`, and picks up pending
-  provisioning runs on each migrate run, and serialises overlapping runs. With an older image the
-  job fails. Roll such an image onto `ca-api` and `ca-workers` with your CD first, then apply this
-  version with `api_image` set to it; the apply adds `MASTERLY_MIGRATIONS=job` to the image they
+  **Before you set `migrations = "job"`:** it needs an api image from a backend release later than
+  v0.135.0 that has the migrate entry point (`masterly_app.apps.migrate`), honours
+  `MASTERLY_MIGRATIONS=job`, picks up pending provisioning runs on each migrate run, and
+  serialises overlapping runs. With an older image the job fails. Roll such an image onto `ca-api`
+  and `ca-workers` with your CD first, then apply with `migrations = "job"` and `api_image` set to
+  it; the apply adds `MASTERLY_MIGRATIONS=job` to the image they
   run and does not change it. On an existing `database_auth = "entra"` install the database
   objects are owned by `id-<prefix>-apps`; a second Entra administrator is not a superuser, so the
   image's migrate role must take ownership or membership of them before its first migration. See

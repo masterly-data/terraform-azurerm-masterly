@@ -64,7 +64,7 @@ your own source is the defect this manifest exists to kill.
 |---|---|---|---|
 | `schema_version` | integer | yes | The version of *this shape*. `1` today. See "Compatibility". |
 | `module` | string | yes | The Terraform Registry source, `namespace/name/provider` — the same value `MANIFEST.json` carries. |
-| `apps` | object | yes | One entry per container app and Container Apps job the module creates, keyed by its name (`ca-api`, `ca-frontend`, `ca-workers`, `caj-migrate`). Sorted by key. |
+| `apps` | object | yes | One entry per container app and Container Apps job the module can create, keyed by its name (`ca-api`, `ca-frontend`, `ca-workers`, `caj-migrate`). Sorted by key. |
 | `apps[name].env` | array of strings | yes | Every variable name the module may set on that app as plain environment, sorted. Includes names set only under some inputs (see below) and names that are not `MASTERLY_`-prefixed, such as `AZURE_CLIENT_ID`. |
 | `apps[name].env_secret_refs` | array of strings | yes | Every variable name the module may set on that app as a reference to a Container App secret, sorted. The value never appears in the app's template; the name is what the application reads. |
 
@@ -88,7 +88,9 @@ manifest lists that no application reads is a module defect.
 
 `ca-api` and `ca-workers` carry the same list on purpose: the workers container runs the same
 image with a different command and reads the same settings. `caj-migrate` runs the same image
-too, with a short list of its own: the database settings migrating needs, and nothing else.
+too, with a short list of its own: the database settings migrating needs, and nothing else. The
+module creates `caj-migrate`, and sets `MASTERLY_MIGRATIONS` on the other two, only with
+`migrations = "job"`; both are listed because that input can make the module set them.
 
 
 ## Compatibility

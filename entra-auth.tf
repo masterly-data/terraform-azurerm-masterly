@@ -195,13 +195,13 @@ resource "azurerm_postgresql_flexible_server_active_directory_administrator" "ap
 # above, which is unchanged. A flexible server takes several. Created after `apps` so the two
 # administrator operations do not run against the server at the same time.
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "migrate" {
-  count = local.database_entra ? 1 : 0
+  count = local.migrate_job && local.database_entra ? 1 : 0
 
   server_name         = azurerm_postgresql_flexible_server.this[0].name
   resource_group_name = azurerm_resource_group.data.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
-  object_id           = module.migrate_identity.principal_id
-  principal_name      = module.migrate_identity.name
+  object_id           = module.migrate_identity[0].principal_id
+  principal_name      = module.migrate_identity[0].name
   principal_type      = "ServicePrincipal"
 
   depends_on = [azurerm_postgresql_flexible_server_active_directory_administrator.apps]

@@ -648,9 +648,10 @@ module "frontend_identity" {
 # server's second Microsoft Entra administrator, the install's most privileged database
 # principal, so it gets image pull and read on each of the job's own vault secrets
 # (kv_secrets_user_migrate), and never: a Container App, a vault-scope role, a Key Vault crypto
-# or Officer role, Service Bus, Redis or ACS.
+# or Officer role, Service Bus, Redis or ACS. Only with migrations = "job".
 module "migrate_identity" {
   source = "./modules/user-assigned-identity"
+  count  = local.migrate_job ? 1 : 0
 
   name                = "id-${var.name_prefix}-migrate"
   resource_group_name = azurerm_resource_group.aca.name
@@ -744,11 +745,11 @@ resource "azurerm_role_assignment" "acr_pull_frontend" {
 }
 
 resource "azurerm_role_assignment" "acr_pull_migrate" {
-  count = !local.registry_token_mode && var.acr_id != null ? 1 : 0
+  count = local.migrate_job && !local.registry_token_mode && var.acr_id != null ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"
-  principal_id         = module.migrate_identity.principal_id
+  principal_id         = module.migrate_identity[0].principal_id
 }
 
 # --- Data plane: the starter Postgres Flexible Server (skipped on BYO-DB) --------
@@ -1177,7 +1178,7 @@ module "postgres_connection_urls" {
 # identity's Entra role on "entra" and masterly_admin, as today, on "password".
 module "postgres_connection_urls_migrate" {
   source = "./modules/postgres-connection-urls"
-  count  = local.provision_postgres ? 1 : 0
+  count  = local.migrate_job && local.provision_postgres ? 1 : 0
 
   server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
   auth_mode   = local.database_auth_mode
@@ -1321,10 +1322,10 @@ locals {
     } : {},
     # Transaction pooling (MAS-1615): the backend needs to be told, or it fails through the pooler.
     var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
-    # Migrations run in the migrate job (migrate.tf, ADR 0120): an api image that honours this
-    # (a prerequisite of this module version) only checks the schema stamps in the api and the
-    # workers.
-    { MASTERLY_MIGRATIONS = "job" },
+    # With migrations = "job", migrations run in the migrate job (migrate.tf, ADR 0120) and the
+    # api and the workers only check the schema stamps. Unset otherwise: the image's own default,
+    # migrating at start, as before.
+    local.migrate_job ? { MASTERLY_MIGRATIONS = "job" } : {},
   )
 
   # --- The install's secret material -----------------------------------------------

@@ -1,9 +1,10 @@
-# The migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23): schema migrations
-# and the databases of new Masterly Environments are created here, in a Container Apps job that
-# runs as its own identity, and no longer by ca-api and ca-workers at start. Those two carry
-# MASTERLY_MIGRATIONS = job (main.tf), which tells an api image that honours it to check the
-# schema stamps instead of migrating. An image that has the migrate entry point and honours
-# MASTERLY_MIGRATIONS is a prerequisite of this module version (README, "The migrate job").
+# The migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23), opt-in with
+# migrations = "job": schema migrations and the databases of new Masterly Environments are created
+# here, in a Container Apps job that runs as its own identity, and no longer by ca-api and
+# ca-workers at start. Those two then carry MASTERLY_MIGRATIONS = job (main.tf), which tells the
+# api image to check the schema stamps instead of migrating. The migrate entry point and that
+# setting are in no backend release up to v0.135.0, so the default, "start", creates none of this
+# and leaves the apps migrating at start as before (README, "The migrate job").
 #
 # How the job starts:
 #
@@ -26,10 +27,21 @@
 # Container App, and its grants are AcrPull (acr_pull_migrate) and Key Vault Secrets User on each
 # of its own secrets (kv_secrets_user_migrate), nothing else.
 
+variable "migrations" {
+  type        = string
+  default     = "start"
+  description = "Where schema migrations run. \"start\" (default): ca-api and ca-workers migrate at start, as before, and the module creates no migrate job. \"job\": the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job. \"job\" needs an api image from a backend release later than v0.135.0, which has the migrate entry point and honours MASTERLY_MIGRATIONS; an earlier image cannot run the job."
+
+  validation {
+    condition     = contains(["start", "job"], var.migrations)
+    error_message = "migrations must be \"start\" (the apps migrate at start; the default) or \"job\" (the migrate job does; needs a backend release later than v0.135.0)."
+  }
+}
+
 variable "migrate_job_schedule" {
   type        = string
   default     = "*/5 * * * *"
-  description = "When the migrate job (caj-migrate) runs on its own, as a five-field cron expression in UTC. The api image this module version requires picks up, on each migrate run, the Masterly Environments waiting to be provisioned, so this is the longest a new Environment waits for its database. Default every five minutes. The job also runs once at install, and when CD starts it before a release rolls, whatever this says."
+  description = "With migrations = \"job\": when the migrate job (caj-migrate) runs on its own, as a five-field cron expression in UTC. The api image the job requires picks up, on each migrate run, the Masterly Environments waiting to be provisioned, so this is the longest a new Environment waits for its database. Default every five minutes. The job also runs once at install, and when CD starts it before a release rolls, whatever this says."
 
   validation {
     condition     = can(regex("^\\S+( \\S+){4}$", var.migrate_job_schedule))
@@ -38,19 +50,25 @@ variable "migrate_job_schedule" {
 }
 
 locals {
+  # Everything in this file, the migrate identity, its grants and its Entra administrator exist
+  # only with migrations = "job".
+  migrate_job = var.migrations == "job"
+
   # The migrate job's Postgres role: the migrate identity's Entra role on "entra" (its
   # administrator is in entra-auth.tf), masterly_admin on "password". Never local.database_role,
   # which is the apps'.
-  migrate_database_role = local.database_entra ? module.migrate_identity.name : "masterly_admin"
+  migrate_database_role = local.migrate_job && local.database_entra ? module.migrate_identity[0].name : "masterly_admin"
 
   # On BYO-DB the admin DSN when one is given, else the same DSN the apps get. Only the job
   # carries either (migrate_secret_names).
-  migrate_database_url = var.external_database_url != null ? coalesce(var.external_database_admin_url, var.external_database_url) : module.postgres_connection_urls_migrate[0].pooler_url
+  migrate_database_url = !local.migrate_job ? null : (
+    var.external_database_url != null ? coalesce(var.external_database_admin_url, var.external_database_url) : module.postgres_connection_urls_migrate[0].pooler_url
+  )
 
   # Null on BYO-DB, where postgres_pgbouncer is refused and the secret is never named.
-  migrate_database_direct_url = var.external_database_url != null ? null : module.postgres_connection_urls_migrate[0].direct_url
+  migrate_database_direct_url = !local.migrate_job || var.external_database_url != null ? null : module.postgres_connection_urls_migrate[0].direct_url
 
-  migrate_secret_names = concat(
+  migrate_secret_names = !local.migrate_job ? [] : concat(
     ["migrate-database-url"],
     var.postgres_pgbouncer ? ["migrate-database-direct-url"] : [],
     local.registry_secret_names,
@@ -64,9 +82,9 @@ locals {
     var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
     local.ca_bundle_env,
     # The token is minted for the migrate identity, never the apps'.
-    local.database_entra ? {
+    local.migrate_job && local.database_entra ? {
       MASTERLY_DATABASE_AUTH = "entra"
-      AZURE_CLIENT_ID        = module.migrate_identity.client_id
+      AZURE_CLIENT_ID        = module.migrate_identity[0].client_id
     } : {},
   )
 
@@ -77,6 +95,8 @@ locals {
 }
 
 resource "azurerm_container_app_job" "migrate" {
+  count = local.migrate_job ? 1 : 0
+
   name                         = "caj-migrate"
   location                     = var.location
   resource_group_name          = azurerm_resource_group.aca.name
@@ -88,7 +108,7 @@ resource "azurerm_container_app_job" "migrate" {
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [module.migrate_identity.id]
+    identity_ids = [module.migrate_identity[0].id]
   }
 
   schedule_trigger_config {
@@ -102,7 +122,7 @@ resource "azurerm_container_app_job" "migrate" {
     for_each = local.registry_server == "" ? [] : [1]
     content {
       server               = local.registry_server
-      identity             = local.registry_username == null ? module.migrate_identity.id : null
+      identity             = local.registry_username == null ? module.migrate_identity[0].id : null
       username             = local.registry_username
       password_secret_name = local.registry_password_secret_name
     }
@@ -213,14 +233,18 @@ resource "azurerm_container_app_job" "migrate" {
 # What replaces the start action: the resolved api image, after the channel and api_image. A new
 # value starts one more execution, on the image the job runs (CD's, once it has rolled one).
 resource "terraform_data" "migrate_image" {
+  count = local.migrate_job ? 1 : 0
+
   input = local.api_image
 }
 
 # Starts one execution of the job at apply (Microsoft.App/jobs start): at install, before the
 # apps are created.
 resource "azapi_resource_action" "migrate_start" {
+  count = local.migrate_job ? 1 : 0
+
   type        = "Microsoft.App/jobs@2025-01-01"
-  resource_id = azurerm_container_app_job.migrate.id
+  resource_id = azurerm_container_app_job.migrate[0].id
   action      = "start"
   method      = "POST"
 
@@ -240,6 +264,6 @@ resource "azapi_resource_action" "migrate_start" {
 }
 
 output "migrate_job_name" {
-  value       = azurerm_container_app_job.migrate.name
-  description = "Name of the migrate Container Apps job (caj-migrate), in the apps resource group. `az containerapp job execution list` shows its runs."
+  value       = one(azurerm_container_app_job.migrate[*].name)
+  description = "Name of the migrate Container Apps job (caj-migrate), in the apps resource group, with migrations = \"job\"; null otherwise. `az containerapp job execution list` shows its runs."
 }
