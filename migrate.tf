@@ -23,18 +23,23 @@
 #
 # The job's identity (main.tf, module.migrate_identity) is the install's most privileged database
 # principal, and the job wakes on a schedule. So it carries only what migrating needs: the
-# database URLs, how to authenticate, and the CA bundle when one is set. It is attached to no
-# Container App, and its grants are AcrPull (acr_pull_migrate) and Key Vault Secrets User on each
-# of its own secrets (kv_secrets_user_migrate), nothing else.
+# install context, database URLs, how to authenticate, and the CA bundle when one is set. It is
+# attached to no Container App, and its grants are AcrPull (acr_pull_migrate) and Key Vault
+# Secrets User on each of its own secrets (kv_secrets_user_migrate), nothing else.
 
 variable "migrations" {
   type        = string
   default     = "start"
-  description = "Where schema migrations run. \"start\" (default): ca-api and ca-workers migrate at start, as before, and the module creates no migrate job. \"job\": the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job. \"job\" needs an api image from a backend release later than v0.135.0, which has the migrate entry point and honours MASTERLY_MIGRATIONS; an earlier image cannot run the job."
+  description = "Where schema migrations run. \"start\" (default): ca-api and ca-workers migrate at start, as before, and the module creates no migrate job. \"job\": the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job. \"job\" requires mode = \"production\" and an api image from a backend release later than v0.135.0, which has the migrate entry point and honours MASTERLY_MIGRATIONS; an earlier image cannot run the job."
 
   validation {
     condition     = contains(["start", "job"], var.migrations)
     error_message = "migrations must be \"start\" (the apps migrate at start; the default) or \"job\" (the migrate job does; needs a backend release later than v0.135.0)."
+  }
+
+  validation {
+    condition     = var.migrations != "job" || var.mode != "demo"
+    error_message = "migrations = \"job\" cannot be used with mode = \"demo\": demo's control plane is in memory, so there is nothing for the job to migrate. Keep migrations = \"start\" for demo, or use mode = \"production\"."
   }
 }
 
@@ -78,6 +83,10 @@ locals {
   migrate_secrets = { for name in local.migrate_secret_names : name => local.secret_values[name] }
 
   migrate_env = merge(
+    {
+      MASTERLY_ORG_ID = var.org_id
+      MASTERLY_MODE   = var.mode
+    },
     var.mode == "production" ? { MASTERLY_CONTROLPLANE_STORE = "postgres" } : {},
     var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
     local.ca_bundle_env,

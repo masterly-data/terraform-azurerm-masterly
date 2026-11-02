@@ -29,6 +29,9 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   minor release under ADR 0062: new resources and inputs, nothing renamed or removed. The new input
   `migrations` defaults to `"start"`, which changes nothing: no job, no migrate identity, no grant,
   no second administrator, no `MASTERLY_MIGRATIONS`, and the apps migrate at start as before.
+  Job mode requires `mode = "production"`; demo's control plane is in memory, so demo installs
+  must keep `migrations = "start"`. The job receives the same `MASTERLY_ORG_ID` and `MASTERLY_MODE`
+  as the API, with `MASTERLY_CONTROLPLANE_STORE=postgres`, to open the install's durable control plane.
   `migrations = "job"` needs an api image from a **backend release later than v0.135.0**: the
   migrate entry point and the `MASTERLY_MIGRATIONS` setting are in no release up to v0.135.0.
   Backend implementation reference: `masterly-application-backend` at commit `8d2cbd35`, in

@@ -553,6 +553,11 @@ Environment, then run in a Container Apps job, `caj-migrate`, as its own identit
 `id-<prefix>-migrate` (ADR 0120). `ca-api` and `ca-workers` carry `MASTERLY_MIGRATIONS=job`,
 which tells the api image to check that the schema is at head instead of migrating.
 
+Job mode requires `mode = "production"`. Demo's control plane is in memory, so there is nothing
+for a separate job to migrate; keep `migrations = "start"` for demo installs. The job receives
+the API's `MASTERLY_ORG_ID` and `MASTERLY_MODE`, and `MASTERLY_CONTROLPLANE_STORE=postgres`, so it
+opens the same install's durable control plane. Production's Key Vault requirement also applies.
+
 `migrations` defaults to `"start"`: the module creates no job, no migrate identity, no grant and
 no second Entra administrator, sets no `MASTERLY_MIGRATIONS`, and `ca-api` and `ca-workers`
 migrate at start as before. **`"job"` needs an api image from a backend release later than
