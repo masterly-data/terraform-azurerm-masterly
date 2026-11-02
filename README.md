@@ -566,12 +566,14 @@ qualifying release; see the upgrade note below.
 The job runs `python -m masterly_app.apps.migrate` on the api image, has no ingress, and runs in
 three ways:
 
-- **At install.** Terraform creates the job on the resolved api image (`api_image`, or the release
-  channel's default), and an `azapi_resource_action` starts one execution before `ca-api` and
-  `ca-workers` are created, which depend on it. The start returns when the execution starts, not
-  when it finishes. As on the apps, Terraform then ignores drift on the job's image: an apply
-  that changes `api_image` replaces the start action, so the job runs once more, but on the image
-  it already runs, and it rolls neither the job nor the apps.
+- **At apply.** Installing with `migrations = "job"`, or enabling it on an existing install,
+  creates the job on the resolved api image (`api_image`, or the release channel's default).
+  An `azapi_resource_action` starts one execution before `ca-api` and `ca-workers` are created
+  or updated to job mode: both depend on the action. It returns when the execution starts;
+  the apps rely on the backend's schema-stamp readiness checks until migrations finish.
+  As on the apps, Terraform then ignores drift on the job's image. Changing `api_image` replaces
+  the start action and starts another execution on the job's current image; it changes neither
+  the job's nor the apps' running image.
 - **At each release, from CD.** Your CD owns the running image, on the job as on the apps (ADR
   0086, as amended 2026-10-23: the migrate job runs the release's digest before the roles roll).
   For each release it:
@@ -589,7 +591,7 @@ three ways:
   Environment, at the cost of one short container start per run. Lengthen it if that wait does
   not matter to you.
 
-Runs can overlap: a scheduled run with an install-time or CD-started one. The release's migrate
+Runs can overlap: a scheduled run with an apply-started or CD-started one. The release's migrate
 role is required to serialise them with a migration lock.
 
 What the job's identity gets, and why so little: on `database_auth = "entra"` it is the starter
@@ -620,7 +622,8 @@ release's notes. With an older image the job fails. The order:
    roll any release. The apply below does not change their image: it adds
    `MASTERLY_MIGRATIONS=job` to the image they already run, as a new revision.
 2. **Apply with `migrations = "job"`**, and `api_image` set to that same image. The apply creates
-   the job on it and starts one execution before it updates `ca-api` and `ca-workers`.
+   the job on it and starts one execution before it updates `ca-api` and `ca-workers` to job mode.
+   This start is asynchronous; the apps' readiness still depends on migration completion.
 3. **From then on, roll every release through CD in the order above** (the job, wait for
    `Succeeded`, then the apps). Keep `api_image` at the digest your install runs, as for the
    apps: it seeds the job if it is ever recreated.

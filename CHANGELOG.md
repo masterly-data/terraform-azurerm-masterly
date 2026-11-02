@@ -47,8 +47,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   - the job's own DSN, under its own secret names (`migrate-database-url`, plus
     `migrate-database-direct-url` with `postgres_pgbouncer`): the migrate identity's Entra role on
     `"entra"`, `masterly_admin` on `"password"`;
-  - an install-time start: an `azapi_resource_action` starts one execution, and `ca-api` and
-    `ca-workers` depend on it. As on the apps, Terraform seeds the job's image and then ignores
+  - an apply-time start when installing with job mode or enabling it on an existing install:
+    an `azapi_resource_action` starts one execution before `ca-api` and `ca-workers` are created
+    or updated to job mode. It does not wait for completion; the apps rely on the backend's
+    schema-stamp readiness checks. As on the apps, Terraform seeds the job's image and then ignores
     drift: your CD owns it, and rolls each release to the job first, starts an execution, waits
     for it to succeed, and only then rolls `ca-api` and `ca-workers` to the same digest. The job
     also runs on a schedule, the new input `migrate_job_schedule` (a five-field cron expression,
