@@ -118,7 +118,7 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
   }
 
   override_module {
-    target  = module.apps_identity
+    target = module.apps_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
       principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -129,7 +129,7 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
   }
 
   override_module {
-    target  = module.frontend_identity
+    target = module.frontend_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"
       principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
@@ -140,7 +140,7 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
   }
 
   override_module {
-    target  = module.migrate_identity
+    target = module.migrate_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
       principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
@@ -228,7 +228,7 @@ run "migrate_identity_holds_no_redis_access" {
   }
 
   override_module {
-    target  = module.apps_identity
+    target = module.apps_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
       principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -239,7 +239,7 @@ run "migrate_identity_holds_no_redis_access" {
   }
 
   override_module {
-    target  = module.migrate_identity
+    target = module.migrate_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
       principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
@@ -271,7 +271,7 @@ run "migrate_identity_is_a_second_entra_administrator" {
   }
 
   override_module {
-    target  = module.apps_identity
+    target = module.apps_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
       principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -282,7 +282,7 @@ run "migrate_identity_is_a_second_entra_administrator" {
   }
 
   override_module {
-    target  = module.migrate_identity
+    target = module.migrate_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
       principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
@@ -446,7 +446,7 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
   variables {
     acr_login_server = null # the file-wide "" means no registry block at all
     acr_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
-    registry_token   = {
+    registry_token = {
       username = "00000000-0000-0000-0000-000000000000"
       password = "sp-client-secret"
     }
@@ -491,7 +491,7 @@ run "migrate_job_leaves_the_stateful_resources_as_they_were" {
   }
 
   override_module {
-    target  = module.apps_identity
+    target = module.apps_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
       principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"

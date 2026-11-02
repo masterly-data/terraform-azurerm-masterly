@@ -2913,9 +2913,30 @@ run "both_app_identities_keep_their_names" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
-    migrations            = "job" # the migrate identity exists only then
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    acr_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    migrations                     = "job" # the migrate identity exists only then
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "test-only"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = jsonencode({ kty = "EC" })
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "managed"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+    database_auth                  = "password"
   }
 
   # A rename REPLACES the identity, and with it the principal id customers grant AcrPull to
@@ -9301,7 +9322,7 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
   }
 
   override_module {
-    target  = module.migrate_identity
+    target = module.migrate_identity
     outputs = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
       principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"

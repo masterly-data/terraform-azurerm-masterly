@@ -110,7 +110,7 @@ override_resource {
 }
 
 override_module {
-  target  = module.aca_env
+  target = module.aca_env
   outputs = {
     id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/cae-masterly"
     default_domain                 = "masterly.swedencentral.azurecontainerapps.io"
@@ -121,7 +121,7 @@ override_module {
 }
 
 override_module {
-  target  = module.logs
+  target = module.logs
   outputs = {
     id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.OperationalInsights/workspaces/log-masterly"
   }
@@ -140,7 +140,7 @@ override_resource {
 }
 
 override_module {
-  target  = module.migrate_identity
+  target = module.migrate_identity
   outputs = {
     id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
     principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
