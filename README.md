@@ -556,10 +556,12 @@ which tells the api image to check that the schema is at head instead of migrati
 `migrations` defaults to `"start"`: the module creates no job, no migrate identity, no grant and
 no second Entra administrator, sets no `MASTERLY_MIGRATIONS`, and `ca-api` and `ca-workers`
 migrate at start as before. **`"job"` needs an api image from a backend release later than
-v0.135.0.** The migrate entry point (`masterly_app/apps/migrate.py`, `composition/migrate.py`) and
-the `MASTERLY_MIGRATIONS` setting (`core/settings.py`) are on the backend's main branch but in no
-release up to v0.135.0, which cannot run the job. Leave the default until your install runs such a
-release; see the upgrade note below.
+v0.135.0.** The backend implementation reference is `masterly-application-backend` at commit
+`8d2cbd35`: `masterly_app/apps/migrate.py` is the entry point, `composition/migrate.py` composes
+the migrate role, and `core/settings.py` defines `MASTERLY_MIGRATIONS`,
+`MASTERLY_MIGRATE_API_ROLE` and `MASTERLY_MIGRATE_WORKERS_ROLE`. These prerequisites are in no
+release up to v0.135.0, which cannot run the job. Leave the default until your install runs a
+qualifying release; see the upgrade note below.
 
 The job runs `python -m masterly_app.apps.migrate` on the api image, has no ingress, and runs in
 three ways:

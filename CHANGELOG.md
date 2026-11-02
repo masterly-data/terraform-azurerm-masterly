@@ -30,8 +30,11 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `migrations` defaults to `"start"`, which changes nothing: no job, no migrate identity, no grant,
   no second administrator, no `MASTERLY_MIGRATIONS`, and the apps migrate at start as before.
   `migrations = "job"` needs an api image from a **backend release later than v0.135.0**: the
-  migrate entry point and the `MASTERLY_MIGRATIONS` setting are in no release up to v0.135.0. With
-  `"job"`, what is new:
+  migrate entry point and the `MASTERLY_MIGRATIONS` setting are in no release up to v0.135.0.
+  Backend implementation reference: `masterly-application-backend` at commit `8d2cbd35`, in
+  `masterly_app/apps/migrate.py`, `composition/migrate.py` and `core/settings.py`
+  (`MASTERLY_MIGRATIONS`, `MASTERLY_MIGRATE_API_ROLE` and `MASTERLY_MIGRATE_WORKERS_ROLE`).
+  With `"job"`, what is new:
   - `caj-migrate`, a Container Apps job in the install's environment, runs
     `python -m masterly_app.apps.migrate` on the resolved api image, with no ingress;
   - `id-<prefix>-migrate`, its user-assigned identity, attached to no Container App. It gets
