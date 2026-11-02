@@ -76,6 +76,15 @@ override_module {
   }
 }
 
+# Teardown also plans ca-api, which parses the apps identity ID even though the applies target
+# only the migrate job and its image trigger.
+override_resource {
+  target = module.apps_identity.azurerm_user_assigned_identity.this
+  values = {
+    id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
+  }
+}
+
 override_module {
   target = module.migrate_identity
   outputs = {
