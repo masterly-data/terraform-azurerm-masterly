@@ -9236,6 +9236,7 @@ run "migrations_default_to_start_and_create_no_migrate_job" {
       length(module.migrate_identity) == 0 &&
       length(azurerm_role_assignment.acr_pull_migrate) == 0 &&
       length(azurerm_role_assignment.kv_secrets_user_migrate) == 0 &&
+      length(azurerm_role_assignment.kv_byo_database_reader_migrate) == 0 &&
       length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 0 &&
       length(module.postgres_connection_urls_migrate) == 0 &&
       length(local.migrate_secret_names) == 0 &&
@@ -9295,30 +9296,32 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
   command = plan
 
   variables {
-    migrations                     = "job"
-    ingress_allowed_cidrs          = ["203.0.113.7/32"]
-    mode                           = "production"
-    identity_binding               = "oidc"
-    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
-    oidc_audience                  = "api-client-id"
-    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
-    oidc_client_id                 = "bff-client-id"
-    oidc_client_secret             = "test-only"
-    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
-    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
-    license_token                  = "eyJ.fake.jwt"
-    license_public_jwk             = jsonencode({ kty = "EC" })
-    initial_owner_email            = "owner@example.com"
-    enable_key_vault               = true
-    enable_redis                   = true
-    redis_offering                 = "managed"
-    enable_workers                 = true
-    api_max_replicas               = 2
-    postgres_sku_name              = "GP_Standard_D2ds_v5"
-    postgres_zone_redundant_ha     = true
-    postgres_backup_retention_days = 14
-    database_auth                  = "password"
-    org_id                         = "org_migrate_regression"
+    migrations                        = "job"
+    ingress_allowed_cidrs             = ["203.0.113.7/32"]
+    mode                              = "production"
+    identity_binding                  = "oidc"
+    oidc_allowed_issuers              = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                     = "api-client-id"
+    oidc_jwks_uri                     = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                    = "bff-client-id"
+    oidc_client_secret                = "test-only"
+    oidc_authority                    = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri                 = "https://app.example.com/api/auth/callback"
+    license_token                     = "eyJ.fake.jwt"
+    license_public_jwk                = jsonencode({ kty = "EC" })
+    initial_owner_email               = "owner@example.com"
+    enable_key_vault                  = true
+    enable_redis                      = true
+    redis_offering                    = "managed"
+    enable_workers                    = true
+    api_max_replicas                  = 2
+    postgres_sku_name                 = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha        = true
+    postgres_backup_retention_days    = 14
+    database_auth                     = "password"
+    org_id                            = "org_migrate_regression"
+    org_name                          = "Migration regression organization"
+    migrate_byo_database_secret_names = ["environment-a-connection", "environment-b-connection"]
   }
 
   override_module {
@@ -9329,6 +9332,14 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
       client_id    = "dddddddd-dddd-dddd-dddd-cccccccccccc"
       tenant_id    = "00000000-0000-0000-0000-000000000000"
       name         = "id-masterly-migrate"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault.this[0]
+    values = {
+      id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test"
+      vault_uri = "https://kv-masterly-test.vault.azure.net/"
     }
   }
 
@@ -9380,6 +9391,8 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
       length(azurerm_container_app_job.migrate) == 1 &&
       one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_ORG_ID"]) == var.org_id &&
       one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_ORG_ID"]) == local.api_env["MASTERLY_ORG_ID"] &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_ORG_NAME"]) == var.org_name &&
+      local.api_env["MASTERLY_ORG_NAME"] == var.org_name &&
       one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_MODE"]) == var.mode &&
       one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_MODE"]) == local.api_env["MASTERLY_MODE"] &&
       one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_CONTROLPLANE_STORE"]) == "postgres"
@@ -9398,10 +9411,30 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
       local.migrate_database_role == "masterly_admin" &&
       local.migrate_database_role == local.database_role &&
       length(module.postgres_connection_urls_migrate) == 1 &&
-      !contains(keys(local.migrate_env), "AZURE_CLIENT_ID") &&
+      local.migrate_env["AZURE_CLIENT_ID"] == module.migrate_identity[0].client_id &&
       !contains(keys(local.migrate_env), "MASTERLY_DATABASE_AUTH")
     )
     error_message = "On password authentication the migrate job must connect as masterly_admin, with no Entra administrator of its own."
+  }
+
+  assert {
+    condition = (
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_SECRET_STORE"]) == "keyvault" &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_KEYVAULT_URL"]) == "https://kv-masterly-test.vault.azure.net/" &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "AZURE_CLIENT_ID"]) == "dddddddd-dddd-dddd-dddd-cccccccccccc"
+    )
+    error_message = "Even with password DB auth, the job must resolve runtime connection secrets through this vault using its own identity."
+  }
+
+  assert {
+    condition = (
+      toset(keys(azurerm_role_assignment.kv_byo_database_reader_migrate)) == var.migrate_byo_database_secret_names &&
+      alltrue([for name, grant in azurerm_role_assignment.kv_byo_database_reader_migrate :
+        grant.scope == "${azurerm_key_vault.this[0].id}/secrets/${name}" &&
+        grant.role_definition_name == "Key Vault Secrets User" && grant.principal_id == module.migrate_identity[0].principal_id
+      ])
+    )
+    error_message = "Runtime BYO-DB reads must cover exactly the named secrets, using the migrate principal and Secrets User at secret scope only."
   }
 
   # Without the pooler, the one URL; production carries the job's own vault secret.
@@ -9427,6 +9460,15 @@ run "migrate_job_schedule_refuses_an_empty_value" {
   }
 
   expect_failures = [var.migrate_job_schedule]
+}
+
+run "migrate_byo_database_secrets_require_job_mode" {
+  command = plan
+  variables {
+    ingress_allowed_cidrs             = ["203.0.113.7/32"]
+    migrate_byo_database_secret_names = ["environment-a-connection"]
+  }
+  expect_failures = [var.migrate_byo_database_secret_names]
 }
 
 run "migrate_job_schedule_refuses_four_fields" {

@@ -25,7 +25,7 @@
 # principal, and the job wakes on a schedule. So it carries only what migrating needs: the
 # install context, database URLs, how to authenticate, and the CA bundle when one is set. It is
 # attached to no Container App, and its grants are AcrPull (acr_pull_migrate) and Key Vault
-# Secrets User on each of its own secrets (kv_secrets_user_migrate), nothing else.
+# Secrets User on its own secrets and explicitly named per-Environment BYO-DB DSN secrets.
 
 variable "migrations" {
   type        = string
@@ -46,7 +46,7 @@ variable "migrations" {
 variable "migrate_job_schedule" {
   type        = string
   default     = "*/5 * * * *"
-  description = "With migrations = \"job\": when the migrate job (caj-migrate) runs on its own, as a five-field cron expression in UTC. The api image the job requires picks up, on each migrate run, the Masterly Environments waiting to be provisioned, so this is the longest a new Environment waits for its database. Default every five minutes. The job also runs once at install, and when CD starts it before a release rolls, whatever this says."
+  description = "With migrations = \"job\": when the migrate job (caj-migrate) runs on its own, as a five-field cron expression in UTC. Each run picks up pending Environment provisioning once database access is ready, including any migrate_byo_database_secret_names grants. Default every five minutes. The job also runs once at install, and when CD starts it before a release rolls, whatever this says."
 
   validation {
     condition     = can(regex("^\\S+( \\S+){4}$", var.migrate_job_schedule))
@@ -87,9 +87,15 @@ locals {
       MASTERLY_ORG_ID = var.org_id
       MASTERLY_MODE   = var.mode
     },
+    var.org_name != null ? { MASTERLY_ORG_NAME = var.org_name } : {},
     var.mode == "production" ? { MASTERLY_CONTROLPLANE_STORE = "postgres" } : {},
     var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
     local.ca_bundle_env,
+    local.migrate_job && var.enable_key_vault ? {
+      MASTERLY_SECRET_STORE = "keyvault"
+      MASTERLY_KEYVAULT_URL = azurerm_key_vault.this[0].vault_uri
+      AZURE_CLIENT_ID       = module.migrate_identity[0].client_id
+    } : {},
     # The token is minted for the migrate identity, never the apps'.
     local.migrate_job && local.database_entra ? {
       MASTERLY_DATABASE_AUTH = "entra"
@@ -232,6 +238,7 @@ resource "azurerm_container_app_job" "migrate" {
   depends_on = [
     azurerm_role_assignment.acr_pull_migrate,
     azurerm_role_assignment.kv_secrets_user_migrate,
+    azurerm_role_assignment.kv_byo_database_reader_migrate,
     azurerm_private_endpoint.registry,
     azurerm_private_dns_zone_virtual_network_link.registry,
     azurerm_private_endpoint.key_vault,

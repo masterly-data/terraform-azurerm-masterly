@@ -366,6 +366,16 @@ resource "azurerm_role_assignment" "kv_secrets_user_migrate" {
   principal_id         = module.migrate_identity[0].principal_id
 }
 
+# Runtime connection secrets are created by the API, not Terraform. The operator names only
+# BYO-DB DSNs here; construct their secret ARM scopes without reading their values into state.
+resource "azurerm_role_assignment" "kv_byo_database_reader_migrate" {
+  for_each = local.migrate_job && var.enable_key_vault ? var.migrate_byo_database_secret_names : toset([])
+
+  scope                = "${azurerm_key_vault.this[0].id}/secrets/${each.key}"
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.migrate_identity[0].principal_id
+}
+
 # Read-only data-plane for a separate planning identity: `plan` refreshes the secrets above.
 resource "azurerm_role_assignment" "kv_secrets_reader" {
   for_each = var.enable_key_vault ? toset(var.key_vault_secret_reader_object_ids) : toset([])

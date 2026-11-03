@@ -110,6 +110,12 @@ variable "migrations" {
   description = "\"start\" (default): the apps migrate at start. \"job\": the migrate job does; needs an api image from a backend release later than v0.135.0."
 }
 
+variable "migrate_byo_database_secret_names" {
+  type        = set(string)
+  default     = []
+  description = "Existing per-Environment BYO-DB connection secret names in the install vault. With migrations = \"job\", grants the job read on each listed secret; add or update names and apply before provisioning."
+}
+
 variable "key_vault_deployer_ip_rules" {
   type        = list(string)
   default     = []

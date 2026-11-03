@@ -30,8 +30,9 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `migrations` defaults to `"start"`, which changes nothing: no job, no migrate identity, no grant,
   no second administrator, no `MASTERLY_MIGRATIONS`, and the apps migrate at start as before.
   Job mode requires `mode = "production"`; demo's control plane is in memory, so demo installs
-  must keep `migrations = "start"`. The job receives the same `MASTERLY_ORG_ID` and `MASTERLY_MODE`
-  as the API, with `MASTERLY_CONTROLPLANE_STORE=postgres`, to open the install's durable control plane.
+  must keep `migrations = "start"`. The job receives the API's `MASTERLY_ORG_ID`, optional
+  `MASTERLY_ORG_NAME` and `MASTERLY_MODE`, with `MASTERLY_CONTROLPLANE_STORE=postgres`, to open
+  the install's durable control plane.
   `migrations = "job"` needs an api image from a **backend release later than v0.135.0**: the
   migrate entry point and the `MASTERLY_MIGRATIONS` setting are in no release up to v0.135.0.
   Backend implementation reference: `masterly-application-backend` at commit `8d2cbd35`, in
@@ -42,7 +43,7 @@ inventing one now would be exactly the retyped-value failure the manifest exists
     `python -m masterly_app.apps.migrate` on the resolved api image, with no ingress;
   - `id-<prefix>-migrate`, its user-assigned identity, attached to no Container App. It gets
     `AcrPull` through `acr_id` (outside the `token` mode) and, with `enable_key_vault`, Key Vault
-    Secrets User on each of the job's own secrets, and no other role. On
+    Secrets User on its own secrets and explicitly named per-Environment BYO-DB DSNs. On
     `database_auth = "entra"` it is the starter server's second Microsoft Entra administrator,
     beside `id-<prefix>-apps`, which is unchanged. New output `migrate_identity_principal_id`
     (grant it `AcrPull` out of band when `acr_id` is null, as for the other two), and
@@ -50,6 +51,11 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   - the job's own DSN, under its own secret names (`migrate-database-url`, plus
     `migrate-database-direct-url` with `postgres_pgbouncer`): the migrate identity's Entra role on
     `"entra"`, `masterly_admin` on `"password"`;
+  - the API's Key Vault secret-store binding, authenticated as the migrate identity even with
+    password database auth. `migrate_byo_database_secret_names` defaults to empty; list existing
+    per-Environment BYO-DB connection secret names and apply to grant read on those secrets only,
+    never the vault. Update and apply the list when a connection gets a new secret name, before
+    provisioning or the CD migration gate; Terraform does not discover or read runtime secrets;
   - an apply-time start when installing with job mode or enabling it on an existing install:
     an `azapi_resource_action` starts one execution before `ca-api` and `ca-workers` are created
     or updated to job mode. It does not wait for completion; the apps rely on the backend's

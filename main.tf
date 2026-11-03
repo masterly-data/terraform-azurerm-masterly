@@ -646,8 +646,8 @@ module "frontend_identity" {
 
 # The migrate job's own identity (migrate.tf). On database_auth = "entra" it is the starter
 # server's second Microsoft Entra administrator, the install's most privileged database
-# principal, so it gets image pull and read on each of the job's own vault secrets
-# (kv_secrets_user_migrate), and never: a Container App, a vault-scope role, a Key Vault crypto
+# principal, so it gets image pull and read on its own vault secrets and explicitly named
+# per-Environment BYO-DB DSNs, and never: a Container App, a vault-scope role, a Key Vault crypto
 # or Officer role, Service Bus, Redis or ACS. Only with migrations = "job".
 module "migrate_identity" {
   source = "./modules/user-assigned-identity"

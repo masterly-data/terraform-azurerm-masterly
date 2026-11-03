@@ -88,7 +88,7 @@ manifest lists that no application reads is a module defect.
 
 `ca-api` and `ca-workers` carry the same list on purpose: the workers container runs the same
 image with a different command and reads the same settings. `caj-migrate` runs the same image
-too, with a short list of its own: the database settings migrating needs, and nothing else. The
+too, with its install context, database settings and Key Vault binding for BYO-DB connections. The
 module creates `caj-migrate`, and sets `MASTERLY_MIGRATIONS` on the other two, only with
 `migrations = "job"`; both are listed because that input can make the module set them.
 

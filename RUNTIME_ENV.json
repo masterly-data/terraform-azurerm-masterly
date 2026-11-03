@@ -126,8 +126,11 @@
         "MASTERLY_CONTROLPLANE_STORE",
         "MASTERLY_DATABASE_AUTH",
         "MASTERLY_DATABASE_POOLER",
+        "MASTERLY_KEYVAULT_URL",
         "MASTERLY_MODE",
         "MASTERLY_ORG_ID",
+        "MASTERLY_ORG_NAME",
+        "MASTERLY_SECRET_STORE",
         "SSL_CERT_FILE"
       ],
       "env_secret_refs": [

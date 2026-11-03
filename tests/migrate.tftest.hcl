@@ -69,6 +69,27 @@ run "migrate_job_follows_its_schedule_input" {
     condition     = azurerm_container_app_job.migrate[0].schedule_trigger_config[0].cron_expression == "0 * * * *"
     error_message = "The migrate job's cron expression must be migrate_job_schedule."
   }
+
+  assert {
+    condition     = length(azurerm_role_assignment.kv_byo_database_reader_migrate) == 0 && !contains(keys(local.migrate_env), "MASTERLY_ORG_NAME")
+    error_message = "Unset runtime secret names grant no reads; an unset org_name must be omitted."
+  }
+}
+
+run "migrate_byo_database_secrets_refuse_paths" {
+  command = plan
+  variables {
+    migrate_byo_database_secret_names = ["secrets/environment-a-connection"]
+  }
+  expect_failures = [var.migrate_byo_database_secret_names]
+}
+
+run "migrate_byo_database_secrets_refuse_install_secrets" {
+  command = plan
+  variables {
+    migrate_byo_database_secret_names = ["INSTALL-license-token"]
+  }
+  expect_failures = [var.migrate_byo_database_secret_names]
 }
 
 # The start at apply. The action is replaced through terraform_data.migrate_image, whose input is
