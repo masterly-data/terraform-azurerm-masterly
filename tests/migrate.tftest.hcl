@@ -1,4 +1,4 @@
-# Migrate job plan regressions share a valid production posture. The install-context and
+# Migrate job regressions share a valid production posture. The install-context and
 # demo-mode guard regressions are in install.tftest.hcl; image drift applies are separate.
 
 mock_provider "azurerm" {
@@ -498,50 +498,263 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
   }
 }
 
-# Threat: the upgrade replaces nothing stateful. The names (which force replacement) of the
-# server, the vault, the namespace and the `apps` administrator are what they were before the
-# job existed. The ACA environment exposes no name here; its module call is unchanged in the
-# diff (aca-<prefix>), and the job only names its id.
-run "migrate_job_leaves_the_stateful_resources_as_they_were" {
-  command = plan
+# Only the upgrade runs use these computed mock values. Keep the real modules, including the
+# ACA environment, in state; ARM-shaped IDs let dependent resources apply and tear down.
+mock_provider "azurerm" {
+  alias = "upgrade"
+  mock_data "azurerm_client_config" {
+    defaults = {
+      tenant_id = "00000000-0000-0000-0000-000000000000"
+      object_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    }
+  }
+  mock_data "azurerm_resources" {
+    defaults = { resources = [] }
+  }
+  mock_resource "azurerm_resource_group" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data" }
+  }
+  mock_resource "azurerm_virtual_network" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/virtualNetworks/vnet-masterly" }
+  }
+  mock_resource "azurerm_subnet" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-aca" }
+  }
+  mock_resource "azurerm_network_security_group" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/networkSecurityGroups/nsg-masterly" }
+  }
+  mock_resource "azurerm_private_dns_zone" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com" }
+  }
+  mock_resource "azurerm_log_analytics_workspace" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.OperationalInsights/workspaces/log-masterly" }
+  }
+  mock_resource "azurerm_container_app_environment" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly" }
+  }
+  mock_resource "azurerm_container_app" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-test" }
+  }
+  mock_resource "azurerm_user_assigned_identity" {
+    defaults = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-test"
+      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+    }
+  }
+  mock_resource "azurerm_postgresql_flexible_server" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-before" }
+  }
+  mock_resource "azurerm_key_vault" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-before" }
+  }
+  mock_resource "azurerm_key_vault_secret" {
+    defaults = {
+      versionless_id          = "https://kv-masterly-before.vault.azure.net/secrets/install-test"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-before/secrets/install-test"
+    }
+  }
+  mock_resource "azurerm_servicebus_namespace" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ServiceBus/namespaces/sb-masterly-before" }
+  }
+  mock_resource "azurerm_servicebus_queue" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ServiceBus/namespaces/sb-masterly-before/queues/masterly-jobs" }
+  }
+  mock_resource "azurerm_managed_redis" {
+    defaults = {
+      id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redisEnterprise/redis-masterly-before"
+      default_database = [{ id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redisEnterprise/redis-masterly-before/databases/default" }]
+    }
+  }
+  mock_resource "azurerm_monitor_action_group" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Insights/actionGroups/ag-masterly-alerts" }
+  }
+}
+
+# KEEP THESE RUNS LAST: the apply establishes the previous migration defaults for the next
+# plan, including the ACA environment and all serving resources (no -target or module override).
+# Mock providers do not implement Azure ForceNew decisions. Retained computed IDs detect
+# Terraform-driven replacement/recreation; exact attributes also pin the replacement inputs.
+# A live branch plan is still required before release (validate-module-change).
+run "before_migrate_job_uses_previous_defaults" {
+  command   = apply
+  providers = { azurerm = azurerm.upgrade }
 
   variables {
+    migrations         = "start"
     database_auth      = "entra"
     enable_service_bus = true
     servicebus_sku     = "Standard"
   }
 
-  override_module {
-    target = module.apps_identity
-    outputs = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
-      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-      name         = "id-masterly-apps"
-    }
+  override_resource {
+    target = random_string.install
+    values = { result = "before" }
   }
 
   assert {
     condition = (
-      startswith(azurerm_postgresql_flexible_server.this[0].name, "psql-masterly-") &&
-      azurerm_postgresql_flexible_server.this[0].resource_group_name == azurerm_resource_group.data.name &&
-      azurerm_postgresql_flexible_server.this[0].location == "swedencentral" &&
-      startswith(azurerm_key_vault.this[0].name, "kv-masterly-") &&
-      azurerm_key_vault.this[0].resource_group_name == azurerm_resource_group.data.name &&
-      startswith(azurerm_servicebus_namespace.this[0].name, "sb-masterly-") &&
-      azurerm_servicebus_namespace.this[0].resource_group_name == azurerm_resource_group.aca.name
+      !contains(module.api.env_names, "MASTERLY_MIGRATIONS") && !contains(module.workers[0].env_names, "MASTERLY_MIGRATIONS") &&
+      length(azurerm_container_app_job.migrate) + length(module.migrate_identity) +
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) +
+      length(terraform_data.migrate_image) + length(azapi_resource_action.migrate_start) +
+      length(azurerm_role_assignment.kv_secrets_user_migrate) + length(azurerm_role_assignment.acr_pull_migrate) == 0 &&
+      !contains(output.vault_backed_secret_names, "migrate-database-url") && output.aca_environment_id != null
     )
-    error_message = "The server, vault and namespace must keep their names and resource groups."
+    error_message = "The baseline must apply the existing install and ACA environment, with MASTERLY_MIGRATIONS unset and no migration infrastructure."
+  }
+}
+
+run "migrate_job_preserves_the_existing_install" {
+  command   = plan
+  providers = { azurerm = azurerm.upgrade }
+
+  variables {
+    migrations         = "job"
+    database_auth      = "entra"
+    enable_service_bus = true
+    servicebus_sku     = "Standard"
   }
 
   assert {
     condition = (
+      output.aca_environment_id == run.before_migrate_job_uses_previous_defaults.aca_environment_id &&
+      output.postgres_fqdn == run.before_migrate_job_uses_previous_defaults.postgres_fqdn &&
+      output.key_vault_uri == run.before_migrate_job_uses_previous_defaults.key_vault_uri &&
+      output.service_bus_namespace == run.before_migrate_job_uses_previous_defaults.service_bus_namespace &&
+      output.apps_identity_principal_id == run.before_migrate_job_uses_previous_defaults.apps_identity_principal_id &&
+      output.frontend_identity_principal_id == run.before_migrate_job_uses_previous_defaults.frontend_identity_principal_id &&
+      random_string.install.result == "before"
+    )
+    error_message = "Enabling job migrations must retain the baseline environment, database, vault, namespace, identities and install suffix."
+  }
+
+  assert {
+    condition = alltrue([for group in [
+      azurerm_postgresql_flexible_server.this, azurerm_key_vault.this, azurerm_servicebus_namespace.this,
+      azurerm_postgresql_flexible_server_active_directory_administrator.apps,
+      azurerm_virtual_network.this, azurerm_subnet.aca, azurerm_subnet.private_endpoints,
+      azurerm_network_security_group.aca, azurerm_network_security_group.private_endpoints,
+      azurerm_subnet_network_security_group_association.aca, azurerm_subnet_network_security_group_association.private_endpoints,
+      azurerm_private_dns_zone.postgres, azurerm_private_dns_zone.key_vault, azurerm_private_dns_zone.redis,
+      azurerm_private_dns_zone_virtual_network_link.postgres, azurerm_private_dns_zone_virtual_network_link.key_vault, azurerm_private_dns_zone_virtual_network_link.redis,
+      azurerm_private_endpoint.postgres, azurerm_private_endpoint.key_vault, azurerm_private_endpoint.redis,
+      azurerm_managed_redis.this, azurerm_managed_redis_access_policy_assignment.apps, azurerm_servicebus_queue.jobs,
+      azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_scaler,
+      azurerm_role_assignment.kv_secrets_officer, azurerm_role_assignment.kv_crypto_officer,
+      azurerm_monitor_diagnostic_setting.postgres, azurerm_monitor_diagnostic_setting.key_vault,
+      azurerm_monitor_diagnostic_setting.redis, azurerm_monitor_diagnostic_setting.redis_database, azurerm_monitor_diagnostic_setting.service_bus,
+      azurerm_monitor_action_group.alerts, azurerm_monitor_metric_alert.postgres_storage, azurerm_monitor_metric_alert.postgres_cpu,
+      azurerm_monitor_metric_alert.postgres_connections, azurerm_monitor_metric_alert.postgres_iops, azurerm_monitor_metric_alert.postgres_unavailable,
+      azurerm_monitor_metric_alert.redis_evictions, azurerm_monitor_metric_alert.redis_memory,
+      azurerm_monitor_metric_alert.servicebus_dead_letters, azurerm_monitor_metric_alert.workers_memory,
+      azurerm_monitor_scheduled_query_rules_alert_v2.api_latency, azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready,
+      azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent, random_password.postgres_admin,
+      ] : length(group) == 1 && group[0].id != null]) && alltrue([for id in [
+      azurerm_resource_group.aca.id, azurerm_resource_group.data.id, module.aca_env.id, module.logs.id,
+      module.api.id, module.frontend.id, module.workers[0].id, module.apps_identity.id, module.frontend_identity.id,
+      azurerm_monitor_diagnostic_setting.aca_env.id, random_password.session_secret.id, random_password.bff_shared_secret.id,
+    ] : id != null])
+    error_message = "Every existing counted resource must remain at its address with a known state ID; replacement or recreation makes its computed ID unknown."
+  }
+
+  assert {
+    condition = (
+      alltrue([for k in run.before_migrate_job_uses_previous_defaults.vault_backed_secret_names : azurerm_key_vault_secret.install[k].id != null]) &&
+      alltrue([for group in [
+        azurerm_role_assignment.kv_secrets_user_frontend, azurerm_role_assignment.kv_secrets_officer_deployer,
+        azurerm_postgresql_flexible_server_configuration.log, azurerm_monitor_diagnostic_setting.app,
+        azurerm_monitor_metric_alert.app_5xx, azurerm_monitor_metric_alert.app_unavailable, azurerm_monitor_scheduled_query_rules_alert_v2.app_silent,
+      ] : alltrue([for r in group : r.id != null])]) &&
+      length(azurerm_role_assignment.kv_secrets_user_frontend) == 2 && length(azurerm_role_assignment.kv_secrets_officer_deployer) == 1 &&
+      length(azurerm_postgresql_flexible_server_configuration.log) == 3 && length(azurerm_monitor_diagnostic_setting.app) == 3 &&
+      length(azurerm_monitor_metric_alert.app_5xx) == 2 && length(azurerm_monitor_metric_alert.app_unavailable) == 3 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent) == 3
+    )
+    error_message = "Existing secrets, grants, server settings and per-app monitoring must remain in state with unchanged cardinality."
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.this[0].name == "psql-masterly-before" &&
+      azurerm_postgresql_flexible_server.this[0].resource_group_name == "rg-masterly-data" &&
+      azurerm_postgresql_flexible_server.this[0].location == "swedencentral" &&
+      azurerm_postgresql_flexible_server.this[0].version == "16" &&
+      azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled &&
+      !azurerm_postgresql_flexible_server.this[0].public_network_access_enabled &&
+      azurerm_key_vault.this[0].name == "kv-masterly-before" &&
+      azurerm_key_vault.this[0].resource_group_name == "rg-masterly-data" &&
+      azurerm_key_vault.this[0].location == "swedencentral" &&
+      azurerm_key_vault.this[0].tenant_id == "00000000-0000-0000-0000-000000000000" &&
+      azurerm_key_vault.this[0].soft_delete_retention_days == 90 && azurerm_key_vault.this[0].purge_protection_enabled &&
+      azurerm_servicebus_namespace.this[0].name == "sb-masterly-before" &&
+      azurerm_servicebus_namespace.this[0].resource_group_name == "rg-masterly-aca" &&
+      azurerm_servicebus_namespace.this[0].location == "swedencentral" &&
+      azurerm_servicebus_namespace.this[0].sku == "Standard" && azurerm_servicebus_namespace.this[0].premium_messaging_partitions == 0 &&
+      !module.aca_env.internal_load_balancer_enabled && module.aca_env.logs_destination == "azure-monitor" && module.aca_env.mutual_tls_enabled
+    )
+    error_message = "The complete stateful-resource names and replacement-sensitive settings must equal the pre-job configuration, not merely share a prefix."
+  }
+
+  # ACA exposes no name/location/subnet output. Pin its replacement inputs at both module
+  # boundaries, in addition to retaining its applied ID above. PostgreSQL's null admin login
+  # is Optional+Computed, so pin the requested expression rather than a fabricated mock value.
+  assert {
+    condition = (
+      jsonencode({ for pair in regexall("(?m)^  (name|resource_group_name|location|infrastructure_subnet_id|internal_load_balancer_enabled)\\s*=\\s*([^\\n]+)", regex("(?s)module \"aca_env\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0]) : pair[0] => trimspace(pair[1]) }) == jsonencode({
+        name                           = "\"aca-$${var.name_prefix}\""
+        resource_group_name            = "azurerm_resource_group.aca.name"
+        location                       = "var.location"
+        infrastructure_subnet_id       = "local.aca_subnet_id"
+        internal_load_balancer_enabled = "var.aca_internal_load_balancer"
+      }) &&
+      jsonencode({ for pair in regexall("(?m)^  (name|resource_group_name|location|infrastructure_subnet_id|internal_load_balancer_enabled|zone_redundancy_enabled|infrastructure_resource_group_name)\\s*=\\s*([^\\n]+)", regex("(?s)resource \"azurerm_container_app_environment\" \"this\" \\{(.*?)\\n\\}", file("${path.module}/modules/aca-env-consumption/main.tf"))[0]) : pair[0] => trimspace(pair[1]) }) == jsonencode({
+        name                           = "var.name"
+        resource_group_name            = "var.resource_group_name"
+        location                       = "var.location"
+        infrastructure_subnet_id       = "var.infrastructure_subnet_id"
+        internal_load_balancer_enabled = "var.internal_load_balancer_enabled"
+      }) &&
+      jsonencode({ for pair in regexall("(?m)^  (administrator_login|delegated_subnet_id|private_dns_zone_id|create_mode|source_server_id|point_in_time_restore_time_in_utc)\\s*=\\s*([^\\n]+)", regex("(?s)resource \"azurerm_postgresql_flexible_server\" \"this\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0]) : pair[0] => trimspace(pair[1]) }) == jsonencode({
+        administrator_login = "local.database_entra ? null : \"masterly_admin\""
+      })
+    )
+    error_message = "ACA replacement inputs and Postgres administrator/network/create-mode inputs must retain their base configuration."
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].server_name == "psql-masterly-before" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].resource_group_name == "rg-masterly-data" &&
       azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].principal_name == "id-masterly-apps" &&
       azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].principal_type == "ServicePrincipal" &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].object_id == module.apps_identity.principal_id &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].object_id == run.before_migrate_job_uses_previous_defaults.apps_identity_principal_id &&
       azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].tenant_id == "00000000-0000-0000-0000-000000000000"
     )
     error_message = "The apps' Entra administrator must stay exactly as it was."
+  }
+
+  assert {
+    condition = (
+      alltrue([for group in [
+        azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acs_email_sender,
+        azurerm_role_assignment.kv_secrets_reader, module.acs_email, azapi_resource.builtin_auth,
+        azurerm_redis_cache.this, azurerm_redis_cache_access_policy_assignment.apps,
+        azurerm_private_endpoint.servicebus, azurerm_private_dns_zone.servicebus, azurerm_private_dns_zone_virtual_network_link.servicebus,
+        azurerm_private_endpoint.registry, azurerm_private_dns_zone.registry, azurerm_private_dns_zone_virtual_network_link.registry,
+        azurerm_postgresql_flexible_server_configuration.operator, azurerm_postgresql_flexible_server_configuration.pgbouncer,
+        azurerm_monitor_metric_alert.postgres_cpu_credits,
+      ] : length(group) == 0]) &&
+      length(azurerm_container_app_job.migrate) == 1 && length(module.migrate_identity) == 1 &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 1 &&
+      length(terraform_data.migrate_image) == 1 && length(azapi_resource_action.migrate_start) == 1 &&
+      length(azurerm_role_assignment.acr_pull_migrate) == 0 && length(azurerm_role_assignment.kv_byo_database_reader_migrate) == 0 &&
+      toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url"]) &&
+      toset(keys(azurerm_key_vault_secret.install)) == setunion(toset(run.before_migrate_job_uses_previous_defaults.vault_backed_secret_names), toset(["migrate-database-url"])) &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == run.before_migrate_job_uses_previous_defaults.aca_environment_id &&
+      local.api_env["MASTERLY_MIGRATIONS"] == "job" && local.backend_env["MASTERLY_MIGRATIONS"] == "job"
+    )
+    error_message = "The upgrade must add only the dedicated migration job/identity and their administrator, start action, secret and scoped grant, and opt the existing serving apps into job mode."
   }
 }
