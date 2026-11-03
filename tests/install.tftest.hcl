@@ -8666,7 +8666,8 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
   override_resource {
     target = azurerm_key_vault.this
     values = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test"
+      id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test"
+      vault_uri = "https://kv-masterly-test.vault.azure.net/"
     }
   }
 
