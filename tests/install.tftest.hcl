@@ -5214,6 +5214,7 @@ run "private_egress_override_reaches_the_backend_apps" {
   command = plan
 
   variables {
+    migrations           = "job"
     mode                 = "production"
     identity_binding     = "oidc"
     oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
@@ -5241,6 +5242,14 @@ run "private_egress_override_reaches_the_backend_apps" {
   assert {
     condition     = local.api_env["MASTERLY_ALLOW_PRIVATE_EGRESS"] == "true"
     error_message = "allow_private_egress = true must set MASTERLY_ALLOW_PRIVATE_EGRESS to the string \"true\"."
+  }
+
+  assert {
+    condition = (
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_ALLOW_PRIVATE_EGRESS"]) == "true" &&
+      !contains([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.name], "MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS")
+    )
+    error_message = "The migrate job must carry the same legacy private-egress override as the serving apps, without a CIDR allowlist."
   }
 
   # ca-api resolves a BYO-DB Environment's connection (core/tenancy) -- the seam that refuses
@@ -5277,6 +5286,7 @@ run "private_egress_allowlist_reaches_the_backend_apps" {
   command = plan
 
   variables {
+    migrations           = "job"
     mode                 = "production"
     identity_binding     = "oidc"
     oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
@@ -5304,6 +5314,14 @@ run "private_egress_allowlist_reaches_the_backend_apps" {
   assert {
     condition     = local.api_env["MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS"] == "10.20.0.0/16,fd00:1::/64,10.30.3.4/32"
     error_message = "allowed_private_egress_cidrs must reach the application as one comma-joined string."
+  }
+
+  assert {
+    condition = (
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_ALLOWED_PRIVATE_EGRESS_CIDRS"]) == "10.20.0.0/16,fd00:1::/64,10.30.3.4/32" &&
+      !contains([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.name], "MASTERLY_ALLOW_PRIVATE_EGRESS")
+    )
+    error_message = "The migrate job must carry the serving apps' exact CIDR allowlist, without enabling the legacy private-egress override."
   }
 
   assert {

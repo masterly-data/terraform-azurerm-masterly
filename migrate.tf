@@ -91,6 +91,7 @@ locals {
     var.mode == "production" ? { MASTERLY_CONTROLPLANE_STORE = "postgres" } : {},
     var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
     local.ca_bundle_env,
+    local.private_egress_env,
     local.migrate_job && var.enable_key_vault ? {
       MASTERLY_SECRET_STORE = "keyvault"
       MASTERLY_KEYVAULT_URL = azurerm_key_vault.this[0].vault_uri
