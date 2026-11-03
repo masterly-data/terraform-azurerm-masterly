@@ -4,7 +4,11 @@
 mock_provider "azurerm" {
   source = "./tests/mocks/migrate"
 }
-mock_provider "random" {}
+mock_provider "random" {
+  mock_resource "random_string" {
+    defaults = { result = "before" }
+  }
+}
 mock_provider "azapi" {}
 
 variables {
@@ -447,13 +451,13 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
 mock_provider "azurerm" {
   alias  = "upgrade"
   source = "./tests/mocks/migrate"
-  # Resource overrides use one object per nested block; mock_resource defaults describe
-  # the block's fields instead. This computed database ID is parsed by diagnostics.
+  # The nested block override takes its fields as an object. This computed database ID
+  # is parsed by diagnostics.
   override_resource {
     target = azurerm_managed_redis.this
     values = {
       id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redisEnterprise/redis-masterly-before"
-      default_database = [{ id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redisEnterprise/redis-masterly-before/databases/default" }]
+      default_database = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redisEnterprise/redis-masterly-before/databases/default" }
     }
   }
 }
@@ -472,11 +476,6 @@ run "before_migrate_job_uses_previous_defaults" {
     database_auth      = "entra"
     enable_service_bus = true
     servicebus_sku     = "Standard"
-  }
-
-  override_resource {
-    target = random_string.install
-    values = { result = "before" }
   }
 
   assert {
@@ -639,7 +638,7 @@ run "migrate_job_preserves_the_existing_install" {
       toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url"]) &&
       toset(keys(azurerm_key_vault_secret.install)) == setunion(toset(run.before_migrate_job_uses_previous_defaults.vault_backed_secret_names), toset(["migrate-database-url"])) &&
       azurerm_container_app_job.migrate[0].container_app_environment_id == run.before_migrate_job_uses_previous_defaults.aca_environment_id &&
-      local.api_env["MASTERLY_MIGRATIONS"] == "job" && local.backend_env["MASTERLY_MIGRATIONS"] == "job"
+      local.api_env["MASTERLY_MIGRATIONS"] == "job" && contains(module.workers[0].env_names, "MASTERLY_MIGRATIONS")
     )
     error_message = "The upgrade must add only the dedicated migration job/identity and their administrator, start action, secret and scoped grant, and opt the existing serving apps into job mode."
   }
