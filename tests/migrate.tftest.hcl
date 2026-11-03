@@ -2,20 +2,7 @@
 # demo-mode guard regressions are in install.tftest.hcl; image drift applies are separate.
 
 mock_provider "azurerm" {
-  # The Key Vault resource validates tenant_id as a UUID; the auto-generated mock value
-  # is a random string, so pin the client-config data source.
-  mock_data "azurerm_client_config" {
-    defaults = {
-      tenant_id = "00000000-0000-0000-0000-000000000000"
-    }
-  }
-
-  # These plans model new installations, with no discovered server or cache.
-  mock_data "azurerm_resources" {
-    defaults = {
-      resources = []
-    }
-  }
+  source = "./tests/mocks/migrate"
 }
 mock_provider "random" {}
 mock_provider "azapi" {}
@@ -139,36 +126,18 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
   }
 
   override_module {
-    target = module.apps_identity
-    outputs = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
-      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-      name         = "id-masterly-apps"
-    }
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
   }
 
   override_module {
-    target = module.frontend_identity
-    outputs = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"
-      principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
-      client_id    = "ffffffff-ffff-ffff-ffff-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-      name         = "id-masterly-frontend"
-    }
+    target  = module.frontend_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend", principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff", client_id = "ffffffff-ffff-ffff-ffff-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-frontend" }
   }
 
   override_module {
-    target = module.migrate_identity
-    outputs = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
-      principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
-      client_id    = "dddddddd-dddd-dddd-dddd-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-      name         = "id-masterly-migrate"
-    }
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
   }
 
   assert {
@@ -249,25 +218,13 @@ run "migrate_identity_holds_no_redis_access" {
   }
 
   override_module {
-    target = module.apps_identity
-    outputs = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
-      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-      name         = "id-masterly-apps"
-    }
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
   }
 
   override_module {
-    target = module.migrate_identity
-    outputs = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
-      principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
-      client_id    = "dddddddd-dddd-dddd-dddd-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-      name         = "id-masterly-migrate"
-    }
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
   }
 
   assert {
@@ -292,25 +249,13 @@ run "migrate_identity_is_a_second_entra_administrator" {
   }
 
   override_module {
-    target = module.apps_identity
-    outputs = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"
-      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-      name         = "id-masterly-apps"
-    }
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
   }
 
   override_module {
-    target = module.migrate_identity
-    outputs = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
-      principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
-      client_id    = "dddddddd-dddd-dddd-dddd-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-      name         = "id-masterly-migrate"
-    }
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
   }
 
   # `apps` is unchanged; `migrate` stands beside it.
@@ -498,77 +443,18 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
   }
 }
 
-# Only the upgrade runs use these computed mock values. Keep the real modules, including the
-# ACA environment, in state; ARM-shaped IDs let dependent resources apply and tear down.
+# The upgrade uses real modules, including ACA and identities, with shared ARM-shaped IDs.
 mock_provider "azurerm" {
-  alias = "upgrade"
-  mock_data "azurerm_client_config" {
-    defaults = {
-      tenant_id = "00000000-0000-0000-0000-000000000000"
-      object_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
-    }
-  }
-  mock_data "azurerm_resources" {
-    defaults = { resources = [] }
-  }
-  mock_resource "azurerm_resource_group" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data" }
-  }
-  mock_resource "azurerm_virtual_network" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/virtualNetworks/vnet-masterly" }
-  }
-  mock_resource "azurerm_subnet" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-aca" }
-  }
-  mock_resource "azurerm_network_security_group" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/networkSecurityGroups/nsg-masterly" }
-  }
-  mock_resource "azurerm_private_dns_zone" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com" }
-  }
-  mock_resource "azurerm_log_analytics_workspace" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.OperationalInsights/workspaces/log-masterly" }
-  }
-  mock_resource "azurerm_container_app_environment" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly" }
-  }
-  mock_resource "azurerm_container_app" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-test" }
-  }
-  mock_resource "azurerm_user_assigned_identity" {
-    defaults = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-test"
-      principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-      client_id    = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc"
-      tenant_id    = "00000000-0000-0000-0000-000000000000"
-    }
-  }
-  mock_resource "azurerm_postgresql_flexible_server" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-before" }
-  }
-  mock_resource "azurerm_key_vault" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-before" }
-  }
-  mock_resource "azurerm_key_vault_secret" {
-    defaults = {
-      versionless_id          = "https://kv-masterly-before.vault.azure.net/secrets/install-test"
-      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-before/secrets/install-test"
-    }
-  }
-  mock_resource "azurerm_servicebus_namespace" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ServiceBus/namespaces/sb-masterly-before" }
-  }
-  mock_resource "azurerm_servicebus_queue" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ServiceBus/namespaces/sb-masterly-before/queues/masterly-jobs" }
-  }
-  mock_resource "azurerm_managed_redis" {
-    defaults = {
+  alias  = "upgrade"
+  source = "./tests/mocks/migrate"
+  # Resource overrides use one object per nested block; mock_resource defaults describe
+  # the block's fields instead. This computed database ID is parsed by diagnostics.
+  override_resource {
+    target = azurerm_managed_redis.this
+    values = {
       id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redisEnterprise/redis-masterly-before"
       default_database = [{ id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redisEnterprise/redis-masterly-before/databases/default" }]
     }
-  }
-  mock_resource "azurerm_monitor_action_group" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Insights/actionGroups/ag-masterly-alerts" }
   }
 }
 
