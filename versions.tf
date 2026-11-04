@@ -33,8 +33,9 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
-    # Container Apps built-in authentication only (builtin-auth.tf): azurerm has no resource
-    # for an app's auth configuration. Required by every configuration that uses the module,
+    # Container Apps built-in authentication (builtin-auth.tf), and starting the migrate job at
+    # apply (migrate.tf): azurerm has no resource for either. Required by every configuration
+    # that uses the module,
     # including one that leaves builtin_auth unset, so an air-gapped install mirrors it with
     # the other two. 2.x is the line whose `body` is an HCL object rather than a JSON string.
     azapi = {

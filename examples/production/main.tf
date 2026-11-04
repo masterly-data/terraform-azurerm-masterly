@@ -131,10 +131,13 @@ module "masterly" {
   # Bring your own Postgres, or leave external_database_url null for the starter server.
   # production refuses a burstable SKU and requires HA and >= 14 days of backups on the
   # provisioned server.
-  external_database_url          = var.external_database_url
-  postgres_sku_name              = "GP_Standard_D2ds_v5"
-  postgres_zone_redundant_ha     = true
-  postgres_backup_retention_days = 14
+  external_database_url             = var.external_database_url
+  external_database_admin_url       = var.external_database_admin_url # the migrate job's DSN; null reuses the one above
+  migrations                        = var.migrations                  # "job" runs migrations in caj-migrate (backend > v0.135.0)
+  migrate_byo_database_secret_names = var.migrate_byo_database_secret_names
+  postgres_sku_name                 = "GP_Standard_D2ds_v5"
+  postgres_zone_redundant_ha        = true
+  postgres_backup_retention_days    = 14
 
   # --- Scale ----------------------------------------------------------------------
   # production refuses a single-replica api: one replica is a single point of failure,

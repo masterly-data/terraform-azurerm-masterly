@@ -24,6 +24,66 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- **The migrate job, opt-in: schema migrations and new Environments' databases run in their own
+  job, as their own identity (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23).** A
+  minor release under ADR 0062: new resources and inputs, nothing renamed or removed. The new input
+  `migrations` defaults to `"start"`, which changes nothing: no job, no migrate identity, no grant,
+  no second administrator, no `MASTERLY_MIGRATIONS`, and the apps migrate at start as before.
+  Job mode requires `mode = "production"`; demo's control plane is in memory, so demo installs
+  must keep `migrations = "start"`. The job receives the API's `MASTERLY_ORG_ID`, optional
+  `MASTERLY_ORG_NAME` and `MASTERLY_MODE`, with `MASTERLY_CONTROLPLANE_STORE=postgres`, to open
+  the install's durable control plane.
+  `migrations = "job"` needs an api image from a **backend release later than v0.135.0**: the
+  migrate entry point and the `MASTERLY_MIGRATIONS` setting are in no release up to v0.135.0.
+  Backend implementation reference: `masterly-application-backend` at commit `8d2cbd35`, in
+  `masterly_app/apps/migrate.py`, `composition/migrate.py` and `core/settings.py`
+  (`MASTERLY_MIGRATIONS`, `MASTERLY_MIGRATE_API_ROLE` and `MASTERLY_MIGRATE_WORKERS_ROLE`).
+  With `"job"`, what is new:
+  - `caj-migrate`, a Container Apps job in the install's environment, runs
+    `python -m masterly_app.apps.migrate` on the resolved api image, with no ingress;
+  - `id-<prefix>-migrate`, its user-assigned identity, attached to no Container App. It gets
+    `AcrPull` through `acr_id` (outside the `token` mode) and, with `enable_key_vault`, Key Vault
+    Secrets User on its vault-backed secrets and explicitly named per-Environment BYO-DB DSNs. On
+    `database_auth = "entra"` it is the starter server's second Microsoft Entra administrator,
+    beside `id-<prefix>-apps`, which is unchanged. New output `migrate_identity_principal_id`
+    (grant it `AcrPull` out of band when `acr_id` is null, as for the other two), and
+    `migrate_job_name`;
+  - the job's own DSN, under its own secret names (`migrate-database-url`, plus
+    `migrate-database-direct-url` with `postgres_pgbouncer`): the migrate identity's Entra role on
+    `"entra"`, `masterly_admin` on `"password"`;
+  - the API's Key Vault secret-store binding, authenticated as the migrate identity even with
+    password database auth. `migrate_byo_database_secret_names` defaults to empty; list existing
+    per-Environment BYO-DB connection secret names and apply to grant read on those secrets only,
+    never the vault. Update and apply the list when a connection gets a new secret name, before
+    provisioning or the CD migration gate; Terraform does not discover or read runtime secrets;
+  - an apply-time start when installing with job mode or enabling it on an existing install:
+    an `azapi_resource_action` starts one execution before `ca-api` and `ca-workers` are created
+    or updated to job mode. It does not wait for completion; the apps rely on the backend's
+    schema-stamp readiness checks. As on the apps, Terraform seeds the job's image and then ignores
+    drift: your CD owns it, and rolls each release to the job first, starts an execution, waits
+    for it to succeed, and only then rolls `ca-api` and `ca-workers` to the same digest. The job
+    also runs on a schedule, the new input `migrate_job_schedule` (a five-field cron expression,
+    default `"*/5 * * * *"`), on which the release's migrate role is required to pick up a new
+    Environment's pending provisioning run;
+  - `MASTERLY_MIGRATIONS=job` on `ca-api` and `ca-workers`, which tells an api image that honours
+    it to check the schema stamps instead of migrating at start;
+  - `external_database_admin_url`, a new optional, sensitive input for BYO-DB: a DSN for a role
+    allowed to migrate and create databases. Only the job carries it, as an ACA job secret even
+    with `enable_key_vault`; it never enters the shared install vault or gets a Key Vault grant.
+    `ca-api` and `ca-workers` keep `external_database_url`. Refused unless `external_database_url`
+    is set and `migrations = "job"`. Unset, the job uses `external_database_url`.
+
+  **Before you set `migrations = "job"`:** it needs an api image from a backend release later than
+  v0.135.0 that has the migrate entry point (`masterly_app.apps.migrate`), honours
+  `MASTERLY_MIGRATIONS=job`, picks up pending provisioning runs on each migrate run, and
+  serialises overlapping runs. With an older image the job fails. Roll such an image onto `ca-api`
+  and `ca-workers` with your CD first, then apply with `migrations = "job"` and `api_image` set to
+  it; the apply adds `MASTERLY_MIGRATIONS=job` to the image they
+  run and does not change it. On an existing `database_auth = "entra"` install the database
+  objects are owned by `id-<prefix>-apps`; a second Entra administrator is not a superuser, so the
+  image's migrate role must take ownership or membership of them before its first migration. See
+  "The migrate job" in the [README](README.md#the-migrate-job).
+
 - **`registry_private_endpoint`: the registry over a private endpoint.** A new optional input, off
   by default. On, it creates a private endpoint to the registry `acr_id` names (subresource
   `registry`) on the install's private-endpoint subnet, a `privatelink.azurecr.io` private DNS

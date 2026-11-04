@@ -97,6 +97,25 @@ variable "external_database_url" {
   description = "Your own Postgres (BYO-DB). The role needs CREATEDB. Null provisions the module's starter server instead."
 }
 
+variable "external_database_admin_url" {
+  type        = string
+  sensitive   = true
+  default     = null
+  description = "BYO-DB only: a DSN for the role that runs migrations and creates databases, carried by the migrate job alone as an ACA job secret, never in the shared install vault. Needs migrations = \"job\". Null uses external_database_url."
+}
+
+variable "migrations" {
+  type        = string
+  default     = "start"
+  description = "\"start\" (default): the apps migrate at start. \"job\": the migrate job does; needs an api image from a backend release later than v0.135.0."
+}
+
+variable "migrate_byo_database_secret_names" {
+  type        = set(string)
+  default     = []
+  description = "Existing per-Environment BYO-DB connection secret names in the install vault. With migrations = \"job\", grants the job read on each listed secret; add or update names and apply before provisioning."
+}
+
 variable "key_vault_deployer_ip_rules" {
   type        = list(string)
   default     = []

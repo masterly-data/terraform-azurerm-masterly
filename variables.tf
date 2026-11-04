@@ -178,7 +178,7 @@ variable "registry_location" {
 variable "registry_credential_mode" {
   type        = string
   default     = null
-  description = "How the apps authenticate to the registry. \"token\": direct pull from registry_location (Masterly's registry unless you set it) with the pull credential from your install bundle (registry_token), stored as the Container App secret registry-password on every app; no AcrPull grant is created. \"managed_identity\": each app pulls as its own user-assigned identity, and acr_id (when set) grants AcrPull to both identities. \"customer_registry\": you mirror the images into your own registry, named by registry_location, under the same release/api and release/frontend repositories, and the apps pull from it as their identities, with AcrPull through acr_id as for managed_identity. Setting a mode makes an omitted registry_location mean Masterly's registry. Null (the default) derives the mode: \"token\" when a pull credential is set, \"customer_registry\" when the registry is not Masterly's, and \"managed_identity\" otherwise; with no registry block (registry_location, the mode, a credential and acr_id all omitted) nothing pulls with it."
+  description = "How the apps authenticate to the registry. \"token\": direct pull from registry_location (Masterly's registry unless you set it) with the pull credential from your install bundle (registry_token), stored as the Container App secret registry-password on every app; no AcrPull grant is created. \"managed_identity\": each app pulls as its own user-assigned identity, and acr_id (when set) grants AcrPull to both app identities and to the migrate job's. \"customer_registry\": you mirror the images into your own registry, named by registry_location, under the same release/api and release/frontend repositories, and the apps pull from it as their identities, with AcrPull through acr_id as for managed_identity. Setting a mode makes an omitted registry_location mean Masterly's registry. Null (the default) derives the mode: \"token\" when a pull credential is set, \"customer_registry\" when the registry is not Masterly's, and \"managed_identity\" otherwise; with no registry block (registry_location, the mode, a credential and acr_id all omitted) nothing pulls with it."
 
   validation {
     condition     = var.registry_credential_mode == null ? true : contains(["token", "managed_identity", "customer_registry"], var.registry_credential_mode)
@@ -598,6 +598,40 @@ variable "external_database_url" {
   default     = null
   sensitive   = true
   description = "BYO-DB: the install-level SQLAlchemy async DSN (postgresql+asyncpg://…) of the customer's own Postgres (role needs CREATEDB — the api creates one database per Masterly Environment, ADR 0003). When set, the module provisions NO database: no Flexible Server, no private endpoint, no Postgres private DNS zone — network reachability is the customer's responsibility. Null (default) provisions the starter Postgres Flexible Server. The postgres_* inputs are ignored when set, except postgres_server_parameters, which is refused when non-empty."
+}
+
+variable "external_database_admin_url" {
+  type        = string
+  default     = null
+  sensitive   = true
+  description = "BYO-DB only: a second DSN to the same database, for a role allowed to run schema migrations and create databases (ADR 0065, amended). Only the migrate job (caj-migrate) carries it, as an ACA job secret even with enable_key_vault; it never enters the shared install vault or gets a Key Vault grant. ca-api and ca-workers keep external_database_url. Null (default): the migrate job uses external_database_url too. Refused unless external_database_url is set: on the starter server the module composes the migrate job's DSN itself. Refused unless migrations = \"job\", since without the job nothing reads it."
+
+  validation {
+    condition     = var.external_database_admin_url == null || var.external_database_url != null
+    error_message = "external_database_admin_url is set but external_database_url is not. external_database_admin_url is the migrate job's DSN to your own database (BYO-DB) and applies only with external_database_url; on the starter server the module composes the migrate job's DSN itself. Set external_database_url, or leave external_database_admin_url unset."
+  }
+
+  validation {
+    condition     = var.external_database_admin_url == null || var.migrations == "job"
+    error_message = "external_database_admin_url is set but migrations is not \"job\". Only the migrate job reads external_database_admin_url, and it exists only with migrations = \"job\". Set migrations = \"job\", or leave external_database_admin_url unset."
+  }
+}
+
+variable "migrate_byo_database_secret_names" {
+  type        = set(string)
+  default     = []
+  nullable    = false
+  description = "Existing per-Environment BYO-DB connection secret names in this install's Key Vault that the migrate job may read. Default empty grants no runtime secret access. Add each sealed connection_ref's secret name and apply before provisioning; update this set when a connection gets a new secret name. Names only, never DSNs, URLs or install-* secrets. Requires migrations = \"job\"; grants Key Vault Secrets User at each secret, never at the vault."
+
+  validation {
+    condition     = length(var.migrate_byo_database_secret_names) == 0 || var.migrations == "job"
+    error_message = "migrate_byo_database_secret_names requires migrations = \"job\"; otherwise leave it empty."
+  }
+
+  validation {
+    condition     = alltrue([for name in var.migrate_byo_database_secret_names : can(regex("^[0-9A-Za-z-]{1,127}$", name)) && !can(regex("(?i)^install-", name))])
+    error_message = "migrate_byo_database_secret_names must contain only BYO-DB connection secret names (1-127 letters, digits or hyphens), never paths, URLs or reserved install-* secrets."
+  }
 }
 
 variable "postgres_sku_name" {
