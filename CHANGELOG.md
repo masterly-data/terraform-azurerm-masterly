@@ -43,7 +43,7 @@ inventing one now would be exactly the retyped-value failure the manifest exists
     `python -m masterly_app.apps.migrate` on the resolved api image, with no ingress;
   - `id-<prefix>-migrate`, its user-assigned identity, attached to no Container App. It gets
     `AcrPull` through `acr_id` (outside the `token` mode) and, with `enable_key_vault`, Key Vault
-    Secrets User on its own secrets and explicitly named per-Environment BYO-DB DSNs. On
+    Secrets User on its vault-backed secrets and explicitly named per-Environment BYO-DB DSNs. On
     `database_auth = "entra"` it is the starter server's second Microsoft Entra administrator,
     beside `id-<prefix>-apps`, which is unchanged. New output `migrate_identity_principal_id`
     (grant it `AcrPull` out of band when `acr_id` is null, as for the other two), and
@@ -68,9 +68,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   - `MASTERLY_MIGRATIONS=job` on `ca-api` and `ca-workers`, which tells an api image that honours
     it to check the schema stamps instead of migrating at start;
   - `external_database_admin_url`, a new optional, sensitive input for BYO-DB: a DSN for a role
-    allowed to migrate and create databases. Only the job carries it; `ca-api` and `ca-workers`
-    keep `external_database_url`. Refused unless `external_database_url` is set and
-    `migrations = "job"`. Unset, the job uses `external_database_url`.
+    allowed to migrate and create databases. Only the job carries it, as an ACA job secret even
+    with `enable_key_vault`; it never enters the shared install vault or gets a Key Vault grant.
+    `ca-api` and `ca-workers` keep `external_database_url`. Refused unless `external_database_url`
+    is set and `migrations = "job"`. Unset, the job uses `external_database_url`.
 
   **Before you set `migrations = "job"`:** it needs an api image from a backend release later than
   v0.135.0 that has the migrate entry point (`masterly_app.apps.migrate`), honours

@@ -1,31 +1,11 @@
-# The migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23), opt-in with
-# migrations = "job": schema migrations and the databases of new Masterly Environments are created
-# here, in a Container Apps job that runs as its own identity, and no longer by ca-api and
-# ca-workers at start. Those two then carry MASTERLY_MIGRATIONS = job (main.tf), which tells the
-# api image to check the schema stamps instead of migrating. The migrate entry point and that
-# setting are in no backend release up to v0.135.0, so the default, "start", creates none of this
-# and leaves the apps migrating at start as before (README, "The migrate job").
-#
-# How the job starts:
-#
-#   at install    azapi_resource_action.migrate_start starts one execution on the seeded image.
-#                 ca-api and ca-workers depend on it, so it has started before either app is
-#                 created. It returns once the execution has started, not when it ends. The
-#                 action is replaced when the resolved api image changes, but Terraform ignores
-#                 image drift on the job as on the apps, so that run uses the job's current image.
-#   at a release  CD owns the running image (ADR 0086 as amended 2026-10-23): it moves caj-migrate
-#                 to the release's digest, starts an execution, waits for it to succeed, and only
-#                 then rolls ca-api and ca-workers to the same digest. Terraform takes no part.
-#   on a schedule migrate_job_schedule. The release's migrate role is required to pick up the
-#                 provisioning runs a new Environment leaves pending.
-#
-# Runs can overlap; the release's migrate role is required to serialise them (a migration lock).
-#
-# The job's identity (main.tf, module.migrate_identity) is the install's most privileged database
-# principal, and the job wakes on a schedule. So it carries only what migrating needs: the
-# install context, database URLs, how to authenticate, and the CA bundle when one is set. It is
-# attached to no Container App, and its grants are AcrPull (acr_pull_migrate) and Key Vault
-# Secrets User on its own secrets and explicitly named per-Environment BYO-DB DSN secrets.
+# Opt-in migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23).
+# "start" preserves app-start migrations; "job" needs a backend release after v0.135.0.
+# At install, migrate_start acknowledges execution start before the apps roll; readiness
+# waits for schema stamps. CD owns image drift: update the job, start it, await success,
+# then roll the apps to the same digest. The schedule picks up pending provisioning runs.
+# Overlapping executions require the backend migration lock. See README, "The migrate job".
+# The identity is attached only to the job: AcrPull and secret-scoped Secrets User, never
+# vault-wide or other data-plane grants. The privileged BYO DSN stays in the ACA job secret.
 
 variable "migrations" {
   type        = string

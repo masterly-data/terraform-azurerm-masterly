@@ -101,7 +101,7 @@ variable "external_database_admin_url" {
   type        = string
   sensitive   = true
   default     = null
-  description = "BYO-DB only: a DSN for the role that runs migrations and creates databases, carried by the migrate job alone. Needs migrations = \"job\". Null uses external_database_url."
+  description = "BYO-DB only: a DSN for the role that runs migrations and creates databases, carried by the migrate job alone as an ACA job secret, never in the shared install vault. Needs migrations = \"job\". Null uses external_database_url."
 }
 
 variable "migrations" {

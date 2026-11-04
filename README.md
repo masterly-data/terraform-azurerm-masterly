@@ -240,7 +240,7 @@ check, and a rebuilt app, both go by.
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
-| `id-masterly-migrate` UAMI (+ optional AcrPull) — **only with `migrations = "job"`** | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus **Key Vault Secrets User** on each of its own secrets (its DSNs, registry password and CA bundle when set) and the per-Environment BYO-DB DSN secrets explicitly named in `migrate_byo_database_secret_names`. On `database_auth = "entra"`, the starter server's **second** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
+| `id-masterly-migrate` UAMI (+ optional AcrPull) — **only with `migrations = "job"`** | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus **Key Vault Secrets User** on each of its vault-backed secrets and the per-Environment BYO-DB DSN secrets explicitly named in `migrate_byo_database_secret_names`; no vault copy or grant for `external_database_admin_url`. On `database_auth = "entra"`, the starter server's **second** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
 | `caj-migrate` Container Apps job — **only with `migrations = "job"`** | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
@@ -605,17 +605,18 @@ server's second Microsoft Entra administrator, beside `id-<prefix>-apps`, which 
 install's most privileged database principal, and it wakes on a schedule. So it is attached to no
 Container App and holds only `AcrPull` (through `acr_id`; grant `migrate_identity_principal_id`
 out of band otherwise) and, with `enable_key_vault`, Key Vault Secrets User on each of the job's
-own secrets and explicitly named per-Environment BYO-DB DSNs. It has no vault-scope, Officer or
+vault-backed secrets and explicitly named per-Environment BYO-DB DSNs. It has no vault-scope, Officer or
 crypto role, and no Service Bus, Redis or ACS access. The job carries its database URL (the migrate identity's role
 on `"entra"`, `masterly_admin` on `"password"`), the direct URL with `postgres_pgbouncer`, how
 to authenticate, and the CA bundle when one is set. Its secrets have their own names
 (`migrate-database-url`, `migrate-database-direct-url`), which no Container App carries.
 
 **BYO-DB.** `external_database_admin_url` (sensitive, optional) is a DSN to your database for a
-role allowed to migrate and create databases. Only the job carries it; `ca-api` and `ca-workers`
-keep `external_database_url`, so their role can be narrower. Unset, the job uses
-`external_database_url`. The plan refuses it without `external_database_url`, and without
-`migrations = "job"`.
+role allowed to migrate and create databases. It stays in the ACA job's own secret even with
+`enable_key_vault`: no copy enters the shared install vault, and it gets no Key Vault grant.
+`ca-api` and `ca-workers` keep `external_database_url`, so their role can be narrower. Unset, the
+job uses `external_database_url`, with the usual vault reference. The plan refuses the admin URL
+without `external_database_url` or `migrations = "job"`.
 
 **Per-Environment BYO-DB connections.** The job uses `MASTERLY_SECRET_STORE=keyvault` and
 `MASTERLY_KEYVAULT_URL` for the same vault as the API, with its own `AZURE_CLIENT_ID` even on

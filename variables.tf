@@ -604,7 +604,7 @@ variable "external_database_admin_url" {
   type        = string
   default     = null
   sensitive   = true
-  description = "BYO-DB only: a second DSN to the same database, for a role allowed to run schema migrations and create databases (ADR 0065, amended). Only the migrate job (caj-migrate) carries it; ca-api and ca-workers keep external_database_url. Null (default): the migrate job uses external_database_url too. Refused unless external_database_url is set: on the starter server the module composes the migrate job's DSN itself. Refused unless migrations = \"job\", since without the job nothing reads it."
+  description = "BYO-DB only: a second DSN to the same database, for a role allowed to run schema migrations and create databases (ADR 0065, amended). Only the migrate job (caj-migrate) carries it, as an ACA job secret even with enable_key_vault; it never enters the shared install vault or gets a Key Vault grant. ca-api and ca-workers keep external_database_url. Null (default): the migrate job uses external_database_url too. Refused unless external_database_url is set: on the starter server the module composes the migrate job's DSN itself. Refused unless migrations = \"job\", since without the job nothing reads it."
 
   validation {
     condition     = var.external_database_admin_url == null || var.external_database_url != null

@@ -314,49 +314,6 @@ run "migrate_job_gets_the_direct_url_with_pgbouncer" {
   }
 }
 
-# Threat: the admin DSN reaches the job alone. The apps' secrets and env are exactly those of the
-# run below, which sets external_database_url only.
-run "external_database_admin_url_reaches_only_the_migrate_job" {
-  command = plan
-
-  variables {
-    external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
-    external_database_admin_url = "postgresql+asyncpg://masterly_owner:adminpw@pg.example.com:5432/postgres?ssl=require"
-  }
-
-  assert {
-    condition = (
-      nonsensitive(local.migrate_database_url) == "postgresql+asyncpg://masterly_owner:adminpw@pg.example.com:5432/postgres?ssl=require" &&
-      nonsensitive(azurerm_key_vault_secret.install["migrate-database-url"].value) == "postgresql+asyncpg://masterly_owner:adminpw@pg.example.com:5432/postgres?ssl=require" &&
-      nonsensitive(local.database_url) == "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require" &&
-      nonsensitive(azurerm_key_vault_secret.install["database-url"].value) == "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
-    )
-    error_message = "The migrate job must get external_database_admin_url, and the apps external_database_url."
-  }
-
-  assert {
-    condition = (
-      module.api.vault_backed_secret_names == tolist(["bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
-      module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
-      sort(keys(local.backend_env_secret_refs)) == tolist(["MASTERLY_DATABASE_URL", "MASTERLY_LICENSE_TOKEN", "MASTERLY_REDIS_URL", "MASTERLY_SESSION_SECRET"]) &&
-      sort(keys(local.api_env_secret_refs)) == tolist(["MASTERLY_BFF_SHARED_SECRET", "MASTERLY_DATABASE_URL", "MASTERLY_LICENSE_TOKEN", "MASTERLY_REDIS_URL", "MASTERLY_SESSION_SECRET"]) &&
-      local.api_env_secret_refs["MASTERLY_DATABASE_URL"] == "database-url" &&
-      length(module.api.value_secret_names) == 0 &&
-      length(module.workers[0].value_secret_names) == 0
-    )
-    error_message = "external_database_admin_url must change nothing in ca-api's or ca-workers' secrets or env."
-  }
-
-  assert {
-    condition = (
-      tolist(local.migrate_secret_names) == tolist(["migrate-database-url"]) &&
-      sort(keys(local.migrate_vault_secret_refs)) == tolist(["migrate-database-url"]) &&
-      issensitive(var.external_database_admin_url)
-    )
-    error_message = "The admin DSN must be a sensitive input, held only in the migrate job's own secret."
-  }
-}
-
 run "external_database_url_alone_reaches_the_migrate_job_too" {
   command = plan
 
@@ -368,6 +325,10 @@ run "external_database_url_alone_reaches_the_migrate_job_too" {
     condition = (
       nonsensitive(local.migrate_database_url) == "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require" &&
       nonsensitive(local.database_url) == "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require" &&
+      azurerm_key_vault_secret.install["migrate-database-url"].value == var.external_database_url &&
+      length(local.migrate_value_secrets) == 0 &&
+      toset(keys(local.migrate_vault_secret_refs)) == toset(["migrate-database-url"]) &&
+      toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url"]) &&
       length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 0
     )
     error_message = "With external_database_url alone the migrate job must use the same DSN as the apps."
@@ -462,7 +423,7 @@ mock_provider "azurerm" {
   }
 }
 
-# KEEP THESE RUNS LAST: the apply establishes the previous migration defaults for the next
+# Keep these two runs adjacent: the apply establishes the previous migration defaults for the next
 # plan, including the ACA environment and all serving resources (no -target or module override).
 # Mock providers do not implement Azure ForceNew decisions. Retained computed IDs detect
 # Terraform-driven replacement/recreation; exact attributes also pin the replacement inputs.
@@ -641,5 +602,52 @@ run "migrate_job_preserves_the_existing_install" {
       local.api_env["MASTERLY_MIGRATIONS"] == "job" && contains(module.workers[0].env_names, "MASTERLY_MIGRATIONS")
     )
     error_message = "The upgrade must add only the dedicated migration job/identity and their administrator, start action, secret and scoped grant, and opt the existing serving apps into job mode."
+  }
+}
+
+# Apply last so every vault value is known without affecting the preceding plan regressions.
+# The apps retain the secrets and env asserted in external_database_url_alone_reaches_the_migrate_job_too.
+run "external_database_admin_url_reaches_only_the_migrate_job" {
+  command = apply
+  providers = {
+    azurerm = azurerm.upgrade
+    random  = random
+    azapi   = azapi
+  }
+  variables {
+    enable_key_vault            = true
+    external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    external_database_admin_url = "postgresql+asyncpg://masterly_owner:adminpw@pg.example.com:5432/postgres?ssl=require"
+  }
+  assert {
+    condition = (
+      local.migrate_database_url == var.external_database_admin_url &&
+      one([for secret in azurerm_container_app_job.migrate[0].secret : secret.value if secret.name == "migrate-database-url"]) == var.external_database_admin_url &&
+      nonsensitive(local.database_url) == "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require" &&
+      nonsensitive(azurerm_key_vault_secret.install["database-url"].value) == "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require" &&
+      alltrue([for secret in azurerm_key_vault_secret.install : secret.value != var.external_database_admin_url])
+    )
+    error_message = "Only the ACA job secret may hold external_database_admin_url; every vault secret must exclude it. The apps keep external_database_url."
+  }
+  assert {
+    condition = (
+      module.api.vault_backed_secret_names == tolist(["bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
+      module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
+      sort(keys(local.backend_env_secret_refs)) == tolist(["MASTERLY_DATABASE_URL", "MASTERLY_LICENSE_TOKEN", "MASTERLY_REDIS_URL", "MASTERLY_SESSION_SECRET"]) &&
+      sort(keys(local.api_env_secret_refs)) == tolist(["MASTERLY_BFF_SHARED_SECRET", "MASTERLY_DATABASE_URL", "MASTERLY_LICENSE_TOKEN", "MASTERLY_REDIS_URL", "MASTERLY_SESSION_SECRET"]) &&
+      local.api_env_secret_refs["MASTERLY_DATABASE_URL"] == "database-url" &&
+      length(module.api.value_secret_names) == 0 &&
+      length(module.workers[0].value_secret_names) == 0
+    )
+    error_message = "external_database_admin_url must change nothing in ca-api's or ca-workers' secrets or env."
+  }
+  assert {
+    condition = (
+      tolist(local.migrate_secret_names) == tolist(["migrate-database-url"]) &&
+      length(local.migrate_vault_secret_refs) == 0 && length(azurerm_role_assignment.kv_secrets_user_migrate) == 0 &&
+      !contains(keys(azurerm_key_vault_secret.install), "migrate-database-url") &&
+      issensitive(var.external_database_admin_url) && issensitive(local.migrate_value_secrets["migrate-database-url"])
+    )
+    error_message = "The admin DSN must remain sensitive in the job secret, with no vault copy, reference or grant."
   }
 }

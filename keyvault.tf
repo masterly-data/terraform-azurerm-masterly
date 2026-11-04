@@ -356,10 +356,10 @@ resource "azurerm_role_assignment" "kv_secrets_user_frontend" {
   principal_id         = module.frontend_identity.principal_id
 }
 
-# The migrate job's identity, the same way: read on each of the job's own secrets (its DSNs, and
-# the registry password and CA bundle when those are set), never on the vault, never Officer.
+# The job reads its vault-backed secrets individually, never as Officer or at vault scope.
+# external_database_admin_url stays in the ACA job secret and gets no Key Vault grant.
 resource "azurerm_role_assignment" "kv_secrets_user_migrate" {
-  for_each = var.enable_key_vault ? toset(local.migrate_secret_names) : toset([])
+  for_each = var.enable_key_vault ? toset(local.migrate_vault_secret_names) : toset([])
 
   scope                = azurerm_key_vault_secret.install[each.key].resource_versionless_id
   role_definition_name = "Key Vault Secrets User"
@@ -386,8 +386,12 @@ resource "azurerm_role_assignment" "kv_secrets_reader" {
 }
 
 locals {
-  # Every secret the module hands to any app or to the migrate job — the set written to the vault.
-  install_secret_names = distinct(concat(local.api_secret_names, local.frontend_secret_names, local.migrate_secret_names))
+  # The apps can read this vault. Keep the privileged BYO DSN only in the ACA job secret.
+  # Declassify its presence, never its value, so these names can drive resource for_each.
+  migrate_vault_secret_names = [for name in local.migrate_secret_names : name
+    if !(nonsensitive(var.external_database_admin_url != null) && contains(["migrate-database-url", "migrate-database-direct-url"], name))
+  ]
+  install_secret_names = distinct(concat(local.api_secret_names, local.frontend_secret_names, local.migrate_vault_secret_names))
 
   # The split the apps actually consume. With the vault on, no app carries a value; with it
   # off (dev/demo, no vault to put them in) they carry values exactly as before. `backend_*`
@@ -395,7 +399,7 @@ locals {
   backend_value_secrets  = var.enable_key_vault ? {} : local.backend_secrets
   api_value_secrets      = var.enable_key_vault ? {} : local.api_secrets
   frontend_value_secrets = var.enable_key_vault ? {} : local.frontend_secrets
-  migrate_value_secrets  = var.enable_key_vault ? {} : local.migrate_secrets
+  migrate_value_secrets  = { for name, value in local.migrate_secrets : name => value if !var.enable_key_vault || !contains(local.migrate_vault_secret_names, name) }
 
   backend_vault_secret_refs = var.enable_key_vault ? {
     for name in local.backend_secret_names : name => {
@@ -424,7 +428,7 @@ locals {
 
   # The migrate job's own identity, read on each of these alone (kv_secrets_user_migrate).
   migrate_vault_secret_refs = var.enable_key_vault ? {
-    for name in local.migrate_secret_names : name => {
+    for name in local.migrate_vault_secret_names : name => {
       kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id
       identity_id  = module.migrate_identity[0].id
     }
