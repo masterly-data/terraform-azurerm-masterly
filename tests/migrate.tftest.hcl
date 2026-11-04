@@ -469,7 +469,7 @@ mock_provider "azurerm" {
 # A live branch plan is still required before release (validate-module-change).
 run "before_migrate_job_uses_previous_defaults" {
   command   = apply
-  providers = { azurerm = azurerm.upgrade }
+  providers = { azurerm = azurerm.upgrade, random = random, azapi = azapi }
 
   variables {
     migrations         = "start"
@@ -493,7 +493,7 @@ run "before_migrate_job_uses_previous_defaults" {
 
 run "migrate_job_preserves_the_existing_install" {
   command   = plan
-  providers = { azurerm = azurerm.upgrade }
+  providers = { azurerm = azurerm.upgrade, random = random, azapi = azapi }
 
   variables {
     migrations         = "job"
