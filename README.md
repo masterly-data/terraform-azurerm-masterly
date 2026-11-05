@@ -11,15 +11,15 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.22"
+  version = "~> 0.23"
 }
 ```
 
 <!-- release-manifest:pins:begin -->
-Pin a version. `version = "~> 0.22.0"` takes patches of 0.22 only: releases that
+Pin a version. `version = "~> 0.23.0"` takes patches of 0.23 only: releases that
 add no capability, no new input or required setting and no database migration, so you
 can take them without reading the changelog. Use it if that is all you want to receive.
-`version = "~> 0.22"`, as in the examples on this page, also takes every later
+`version = "~> 0.23"`, as in the examples on this page, also takes every later
 0.x minor. Before 1.0.0 a minor may carry a breaking change, listed under its own heading in
 the changelog, so read it before you take one.
 `=` pins one release exactly. [Versioning](#versioning) says what each kind of
@@ -62,7 +62,7 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.22"
+  version = "~> 0.23"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -1905,6 +1905,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.23.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-11-05 |
 | `0.22.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-10-29 |
 | `0.21.0` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-28 |
 | `0.20.0` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-23 |
