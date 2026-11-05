@@ -9755,3 +9755,134 @@ run "sensitive_registry_token_plans_in_production_with_key_vault" {
     error_message = "A sensitive registry_token must still resolve to the token mode and grant no AcrPull."
   }
 }
+
+# oidc_tenant_id (MAS-4145): a single-tenant Entra registration needs the tenant id alone; the
+# three endpoints and the audience follow from it and the client id.
+run "oidc_tenant_id_derives_the_entra_endpoints" {
+  command = plan
+
+  variables {
+    identity_binding   = "oidc"
+    oidc_tenant_id     = "11111111-2222-3333-4444-555555555555"
+    oidc_client_id     = "bff-client-id"
+    oidc_client_secret = "s3cret"
+    oidc_redirect_uri  = "https://app.example.com/api/auth/callback"
+  }
+
+  assert {
+    condition = (
+      local.identity_env.MASTERLY_OIDC_ALLOWED_ISSUERS == "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0" &&
+      local.identity_env.MASTERLY_OIDC_JWKS_URI == "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/discovery/v2.0/keys" &&
+      local.oidc_authority == "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
+    )
+    error_message = "oidc_tenant_id must derive the single-tenant Entra v2.0 issuer, JWKS URI and authority."
+  }
+
+  assert {
+    condition     = local.identity_env.MASTERLY_OIDC_AUDIENCE == "bff-client-id"
+    error_message = "oidc_audience must default to oidc_client_id."
+  }
+}
+
+# An explicit endpoint or audience always wins over the derived one: a customer who set them
+# before oidc_tenant_id existed sees no change.
+run "explicit_oidc_inputs_win_over_the_tenant_id" {
+  command = plan
+
+  variables {
+    identity_binding     = "oidc"
+    oidc_tenant_id       = "11111111-2222-3333-4444-555555555555"
+    oidc_allowed_issuers = "https://issuer.example.com"
+    oidc_jwks_uri        = "https://issuer.example.com/keys"
+    oidc_authority       = "https://issuer.example.com/authority"
+    oidc_audience        = "api://custom"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+  }
+
+  assert {
+    condition = (
+      local.identity_env.MASTERLY_OIDC_ALLOWED_ISSUERS == "https://issuer.example.com" &&
+      local.identity_env.MASTERLY_OIDC_JWKS_URI == "https://issuer.example.com/keys" &&
+      local.oidc_authority == "https://issuer.example.com/authority" &&
+      local.identity_env.MASTERLY_OIDC_AUDIENCE == "api://custom"
+    )
+    error_message = "Explicit oidc_allowed_issuers, oidc_jwks_uri, oidc_authority and oidc_audience must win over oidc_tenant_id."
+  }
+}
+
+# Neither the tenant id nor the three endpoints: still refused at plan.
+run "oidc_without_tenant_or_endpoints_is_rejected" {
+  command = plan
+
+  variables {
+    identity_binding   = "oidc"
+    oidc_client_id     = "bff-client-id"
+    oidc_client_secret = "s3cret"
+    oidc_redirect_uri  = "https://app.example.com/api/auth/callback"
+  }
+
+  expect_failures = [var.identity_binding]
+}
+
+run "oidc_tenant_id_must_be_a_guid" {
+  command = plan
+
+  variables {
+    identity_binding   = "oidc"
+    oidc_tenant_id     = "contoso.onmicrosoft.com"
+    oidc_client_id     = "bff-client-id"
+    oidc_client_secret = "s3cret"
+    oidc_redirect_uri  = "https://app.example.com/api/auth/callback"
+  }
+
+  expect_failures = [var.oidc_tenant_id]
+}
+
+# breakglass_owner_email defaults to initial_owner_email, but only once a hash arms break-glass:
+# an install without one sets no break-glass env at all, as before.
+run "breakglass_email_defaults_to_the_first_owner_when_armed" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs  = ["203.0.113.7/32"]
+    initial_owner_email    = "owner@example.com"
+    breakglass_secret_hash = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA"
+  }
+
+  assert {
+    condition     = local.identity_env.MASTERLY_BREAKGLASS_OWNER_EMAIL == "owner@example.com"
+    error_message = "With a breakglass_secret_hash and no breakglass_owner_email, break-glass must default to initial_owner_email."
+  }
+}
+
+run "breakglass_stays_unset_without_a_hash" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    initial_owner_email   = "owner@example.com"
+  }
+
+  assert {
+    condition     = !contains(keys(local.identity_env), "MASTERLY_BREAKGLASS_OWNER_EMAIL")
+    error_message = "Without a breakglass_secret_hash, no break-glass email may be set: defaulting it must arm nothing new."
+  }
+}
+
+run "explicit_breakglass_email_wins" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs  = ["203.0.113.7/32"]
+    initial_owner_email    = "owner@example.com"
+    breakglass_owner_email = "recovery@example.com"
+    breakglass_secret_hash = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA"
+  }
+
+  assert {
+    condition     = local.identity_env.MASTERLY_BREAKGLASS_OWNER_EMAIL == "recovery@example.com"
+    error_message = "An explicit breakglass_owner_email must win over the initial_owner_email default."
+  }
+}

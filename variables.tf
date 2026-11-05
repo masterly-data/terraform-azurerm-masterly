@@ -286,34 +286,44 @@ variable "identity_binding" {
   # oidc needs both halves configured: backend token verification + frontend BFF client.
   validation {
     condition = var.identity_binding != "oidc" || (
-      var.oidc_allowed_issuers != null &&
-      var.oidc_audience != null &&
-      var.oidc_jwks_uri != null &&
+      (var.oidc_allowed_issuers != null || var.oidc_tenant_id != null) &&
+      (var.oidc_jwks_uri != null || var.oidc_tenant_id != null) &&
+      (var.oidc_authority != null || var.oidc_tenant_id != null) &&
       var.oidc_client_id != null &&
       var.oidc_client_secret != null &&
-      var.oidc_authority != null &&
       var.oidc_redirect_uri != null
     )
-    error_message = "identity_binding=oidc requires oidc_allowed_issuers, oidc_audience, oidc_jwks_uri (backend verification) and oidc_client_id, oidc_client_secret, oidc_authority, oidc_redirect_uri (frontend BFF client)."
+    error_message = "identity_binding=oidc requires oidc_client_id, oidc_client_secret and oidc_redirect_uri, and either oidc_tenant_id (Entra, single tenant) or all three of oidc_allowed_issuers, oidc_jwks_uri and oidc_authority. oidc_audience defaults to oidc_client_id."
+  }
+}
+
+variable "oidc_tenant_id" {
+  type        = string
+  default     = null
+  description = "Your Microsoft Entra tenant (directory) id, when Entra is your identity provider. Set it and the three endpoints below default to that tenant's single-tenant v2.0 values: oidc_authority and oidc_allowed_issuers to https://login.microsoftonline.com/<tenant>/v2.0, oidc_jwks_uri to https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys. Any of the three you set yourself wins. Leave null for another identity provider, or for a multitenant Entra registration, and set the three explicitly."
+
+  validation {
+    condition     = var.oidc_tenant_id == null || can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.oidc_tenant_id))
+    error_message = "oidc_tenant_id must be a tenant id (a GUID such as 00000000-0000-0000-0000-000000000000), not a domain name. Find it as Directory (tenant) ID on the app registration's overview."
   }
 }
 
 variable "oidc_allowed_issuers" {
   type        = string
   default     = null
-  description = "Comma-separated allowlist of acceptable token `iss` values — the trust boundary. Entra v2.0: https://login.microsoftonline.com/{tenant_id}/v2.0. Normally ONE entry: this install's own issuer. Every entry is trusted install-wide, so do not add a customer tenant here to onboard them — register an org-scoped SSO connection in the product instead, which is bound to the Organizations that registered it."
+  description = "Comma-separated allowlist of acceptable token `iss` values — the trust boundary. Defaults from oidc_tenant_id when that is set. Entra v2.0: https://login.microsoftonline.com/{tenant_id}/v2.0. Normally ONE entry: this install's own issuer. Every entry is trusted install-wide, so do not add a customer tenant here to onboard them — register an org-scoped SSO connection in the product instead, which is bound to the Organizations that registered it."
 }
 
 variable "oidc_audience" {
   type        = string
   default     = null
-  description = "Audience the ID token must carry (the IdP app registration's client id)."
+  description = "Audience the ID token must carry. Null (the default) uses oidc_client_id: the backend verifies the ID token the BFF obtained, whose audience is that same client id, so one app registration serves both. Set it only if your identity provider issues tokens for a different audience."
 }
 
 variable "oidc_jwks_uri" {
   type        = string
   default     = null
-  description = "The IdP's signing-key endpoint. Entra multitenant: https://login.microsoftonline.com/organizations/discovery/v2.0/keys."
+  description = "The IdP's signing-key endpoint. Defaults from oidc_tenant_id when that is set. Entra multitenant: https://login.microsoftonline.com/organizations/discovery/v2.0/keys."
 }
 
 variable "oidc_client_id" {
@@ -332,7 +342,7 @@ variable "oidc_client_secret" {
 variable "oidc_authority" {
   type        = string
   default     = null
-  description = "The IdP's discovery base for the BFF, e.g. https://login.microsoftonline.com/organizations/v2.0 — /.well-known/openid-configuration is appended."
+  description = "The IdP's discovery base for the BFF. Defaults from oidc_tenant_id when that is set. For example https://login.microsoftonline.com/organizations/v2.0 — /.well-known/openid-configuration is appended."
 }
 
 variable "oidc_redirect_uri" {
@@ -414,7 +424,7 @@ variable "builtin_auth_client_secret" {
 variable "breakglass_owner_email" {
   type        = string
   default     = null
-  description = "Break-glass local Owner (ADR 0024): IdP-independent emergency sign-in for an email that already holds the Owner role — recovery, not bootstrap (the endpoint answers 403 until that member exists). Armed only when both breakglass inputs are set; initial_owner_email remains the bootstrap."
+  description = "Break-glass local Owner (ADR 0024): IdP-independent emergency sign-in for an email that already holds the Owner role — recovery, not bootstrap (the endpoint answers 403 until that member exists). Armed only when both breakglass inputs are set; initial_owner_email remains the bootstrap. Null (the default) uses initial_owner_email once breakglass_secret_hash is set, which is the usual choice: that address becomes the first Owner, so it is the one break-glass can admit. Without a hash it stays unset, as before."
 }
 
 variable "breakglass_secret_hash" {

@@ -229,6 +229,12 @@ jobs:
       - name: RUNTIME_ENV.json is what the .tf files produce, and the bundle allowlist names only what is set
         run: python3 scripts/check_runtime_env.py
 
+      - name: The inputs reference check still rejects a stale page or an untitled file
+        run: python3 scripts/check_inputs_reference.py --selftest
+
+      - name: docs/inputs.md lists every input, grouped as the .tf files are
+        run: python3 scripts/check_inputs_reference.py
+
   # The GitHub Release page for a tag, with that version's CHANGELOG.md section as its body. The
   # module version is the one customer-facing version (ADR 0062), and this page is where a reader
   # looks for what it changed. MAS-258.

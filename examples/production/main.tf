@@ -70,14 +70,13 @@ module "masterly" {
 
   # --- Identity provider ----------------------------------------------------------
   # production requires oidc. There is no broker: the install verifies your tokens.
+  # With Entra, the tenant id is enough: the issuer, the signing-key endpoint and the
+  # authority follow from it, and the audience defaults to oidc_client_id. For another IdP,
+  # set oidc_allowed_issuers, oidc_jwks_uri and oidc_authority instead.
   identity_binding   = "oidc"
+  oidc_tenant_id     = var.oidc_tenant_id
   oidc_client_id     = var.oidc_client_id
   oidc_client_secret = var.oidc_client_secret
-  oidc_audience      = var.oidc_client_id
-
-  oidc_authority       = "https://login.microsoftonline.com/${var.oidc_tenant_id}/v2.0"
-  oidc_allowed_issuers = "https://login.microsoftonline.com/${var.oidc_tenant_id}/v2.0"
-  oidc_jwks_uri        = "https://login.microsoftonline.com/${var.oidc_tenant_id}/discovery/v2.0/keys"
 
   # Without a custom domain the frontend hostname is an OUTPUT of the first apply, so it
   # cannot be registered at your IdP beforehand. Leave the placeholder for apply 1, read
@@ -92,8 +91,8 @@ module "masterly" {
   # not a substitute, because that path admits an address that already holds the role.
   initial_owner_email = var.initial_owner_email
 
-  # Break-glass needs BOTH halves. The email alone arms nothing.
-  breakglass_owner_email = var.initial_owner_email
+  # Break-glass: set the hash and it signs in as initial_owner_email (breakglass_owner_email
+  # defaults to it). Null leaves break-glass off.
   breakglass_secret_hash = var.breakglass_secret_hash
 
   # --- Durable stores -------------------------------------------------------------
