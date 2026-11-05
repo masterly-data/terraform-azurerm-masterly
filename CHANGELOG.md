@@ -22,6 +22,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-05
+
+Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143.0`.
+
 ### Added
 
 - **The migrate job, opt-in: schema migrations and new Environments' databases run in their own
@@ -1235,7 +1239,9 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - The first public tag. The Terraform content was unchanged from the internal repository it was
   extracted from, api readiness-probe tolerances included, and `examples/production` was added.
 
-[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/masterly-data/terraform-azurerm-masterly/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.23.0
+[0.22.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.22.0
 [0.21.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.21.0
 [0.20.0]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.20.0
 [0.19.1]: https://github.com/masterly-data/terraform-azurerm-masterly/releases/tag/v0.19.1
