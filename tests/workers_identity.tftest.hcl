@@ -1,6 +1,7 @@
 # ca-workers' own identity with migrations = "job" on the starter server (main.tf
-# workers_identity, workers.tf): the grants it holds, compared with the apps identity's, and the
-# frontend's and migrate job's grants beside them.
+# workers_identity, workers.tf): the grants it holds, compared with the apps identity's (which
+# gives up Service Bus Receiver and the jobs queue's Data Owner to it), and the frontend's and
+# migrate job's grants beside them.
 #
 # Applies, in their own file, because the grants' scopes (the vault, the namespace, the queue,
 # the ACS resource, the Redis instance) are computed: at plan they are unknown and
@@ -64,7 +65,7 @@ variables {
 }
 
 # Every grant on, Azure Managed Redis, "entra" and PgBouncer.
-run "workers_identity_gains_nothing_the_apps_identity_lacks_on_managed_redis" {
+run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
   command = apply
 
   variables {
@@ -106,7 +107,9 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_managed_redis" {
   }
 
   # Threat: privilege creep. Every (scope, role) pair id-<prefix>-workers holds is also held by
-  # the apps identity, among the role assignments and the Redis access policies.
+  # the apps identity, among the role assignments and the Redis access policies, or is one of the
+  # two the apps identity held before "job" and gives up to it: Service Bus Data Receiver on the
+  # namespace and Data Owner on the jobs queue (ADR 0120).
   assert {
     condition = (
       length([
@@ -131,7 +134,7 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_managed_redis" {
             values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
             values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
           ) : "${ra.scope}|${ra.role_definition_name}" if ra.principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-          ] : contains([
+          ] : contains(concat([
             for ra in concat(
               azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
               azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
@@ -141,7 +144,10 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_managed_redis" {
               values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
               values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
             ) : "${ra.scope}|${ra.role_definition_name}" if ra.principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        ], pair)
+            ], [
+            "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver",
+            "${azurerm_servicebus_queue.jobs[0].id}|Azure Service Bus Data Owner",
+        ]), pair)
       ]) &&
       length(azurerm_managed_redis_access_policy_assignment.workers) == 1 &&
       azurerm_managed_redis_access_policy_assignment.workers[0].object_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
@@ -151,7 +157,23 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_managed_redis" {
       ]) &&
       length(azurerm_redis_cache_access_policy_assignment.workers) == 0
     )
-    error_message = "id-<prefix>-workers must hold its seven role assignments and its Redis policy, each on a (scope, role) the apps identity also holds."
+    error_message = "id-<prefix>-workers must hold its seven role assignments and its Redis policy, each on a (scope, role) the apps identity also holds or the Receiver and queue Data Owner it gave up."
+  }
+
+  # ca-api's identity sends alone; Receiver and the queue's Data Owner are ca-workers' own.
+  assert {
+    condition = (
+      length(azurerm_role_assignment.sb_sender) == 1 &&
+      azurerm_role_assignment.sb_sender[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      azurerm_role_assignment.sb_sender[0].scope == azurerm_servicebus_namespace.this[0].id &&
+      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 0 &&
+      azurerm_role_assignment.sb_sender_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.sb_receiver_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      local.workers_scale_on_queue &&
+      azurerm_role_assignment.sb_scaler_workers[0].scope == azurerm_servicebus_queue.jobs[0].id &&
+      azurerm_role_assignment.sb_scaler_workers[0].scope != azurerm_servicebus_namespace.this[0].id
+    )
+    error_message = "With migrations = \"job\" the apps identity must hold Service Bus Sender alone, and id-<prefix>-workers Sender and Receiver on the namespace and Data Owner on the jobs queue alone."
   }
 
   # Each grant on its own scope: the vault, the registry, ACS, the namespace and the jobs queue.
@@ -167,11 +189,12 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_managed_redis" {
       azurerm_role_assignment.sb_scaler_workers[0].scope == azurerm_servicebus_queue.jobs[0].id &&
       azurerm_role_assignment.sb_scaler_workers[0].role_definition_name == "Azure Service Bus Data Owner" &&
       azurerm_managed_redis_access_policy_assignment.workers[0].managed_redis_id == azurerm_managed_redis.this[0].id &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].object_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0 &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 1 &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].object_id == "dddddddd-dddd-dddd-dddd-dddddddddddd" &&
       output.workers_identity_principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     )
-    error_message = "id-<prefix>-workers' grants must be on the vault, the registry, ACS, the namespace and the jobs queue, and it must be no Postgres administrator."
+    error_message = "id-<prefix>-workers' grants must be on the vault, the registry, ACS, the namespace and the jobs queue; the migrate identity must be the only Postgres administrator."
   }
 
   # Threat, the public front door and the schema owner: the frontend holds AcrPull and Key Vault
@@ -237,7 +260,7 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_managed_redis" {
 }
 
 # The same comparison on Azure Cache for Redis and "password", without PgBouncer.
-run "workers_identity_gains_nothing_the_apps_identity_lacks_on_azure_cache_for_redis" {
+run "workers_identity_gains_only_what_the_apps_identity_held_on_azure_cache_for_redis" {
   command = apply
 
   variables {
@@ -283,7 +306,7 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_azure_cache_for_r
             values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
             values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
           ) : "${ra.scope}|${ra.role_definition_name}" if ra.principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-          ] : contains([
+          ] : contains(concat([
             for ra in concat(
               azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
               azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
@@ -293,7 +316,10 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_azure_cache_for_r
               values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
               values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
             ) : "${ra.scope}|${ra.role_definition_name}" if ra.principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        ], pair)
+            ], [
+            "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver",
+            "${azurerm_servicebus_queue.jobs[0].id}|Azure Service Bus Data Owner",
+        ]), pair)
       ]) &&
       length(azurerm_managed_redis_access_policy_assignment.workers) + length(azurerm_managed_redis_access_policy_assignment.apps) == 0 &&
       length(azurerm_redis_cache_access_policy_assignment.workers) == 1 &&
@@ -303,7 +329,26 @@ run "workers_identity_gains_nothing_the_apps_identity_lacks_on_azure_cache_for_r
         contains([for b in azurerm_redis_cache_access_policy_assignment.apps : "${b.redis_cache_id}|${b.access_policy_name}" if b.object_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], "${a.redis_cache_id}|${a.access_policy_name}")
       ])
     )
-    error_message = "On Azure Cache for Redis, every (scope, role) id-<prefix>-workers holds must also be held by the apps identity, its Redis policy included."
+    error_message = "On Azure Cache for Redis, every (scope, role) id-<prefix>-workers holds must also be held by the apps identity, its Redis policy included, or be the Receiver and queue Data Owner it gave up."
+  }
+
+  # On "password" too, ca-api's identity sends alone and ca-workers' own receives and scales.
+  assert {
+    condition = (
+      length(azurerm_role_assignment.sb_sender) == 1 &&
+      azurerm_role_assignment.sb_sender[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      azurerm_role_assignment.sb_sender[0].scope == azurerm_servicebus_namespace.this[0].id &&
+      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 0 &&
+      azurerm_role_assignment.sb_sender_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.sb_sender_workers[0].scope == azurerm_servicebus_namespace.this[0].id &&
+      azurerm_role_assignment.sb_receiver_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.sb_receiver_workers[0].scope == azurerm_servicebus_namespace.this[0].id &&
+      local.workers_scale_on_queue &&
+      azurerm_role_assignment.sb_scaler_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.sb_scaler_workers[0].scope == azurerm_servicebus_queue.jobs[0].id &&
+      azurerm_role_assignment.sb_scaler_workers[0].scope != azurerm_servicebus_namespace.this[0].id
+    )
+    error_message = "On password with migrations = \"job\" the apps identity must hold Service Bus Sender alone, and id-<prefix>-workers Sender and Receiver on the namespace and Data Owner on the jobs queue alone."
   }
 
   # Its own assignment on the cache, distinct from the apps identity's by name and alias.
