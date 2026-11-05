@@ -645,8 +645,13 @@ grant (see [What the module creates](#what-the-module-creates)). These grants, i
 the `workers-*` URL secrets exist only while `enable_workers` is on.
 
 This is additive. `id-<prefix>-apps` keeps its Entra administrator and every grant, and the shared
-`database-url` (and `database-direct-url`) stays in the vault, named by no app, so the revisions
-running before the change keep working until their replacements are ready. Both backend
+`database-url` (and `database-direct-url`) stays in the vault, so the revisions running before the
+change keep working until their replacements are ready. `ca-api` also keeps its Container App
+secret for it, resolved as `id-<prefix>-apps` as before: Container App secrets belong to the app,
+not to a revision, and its old revision may restart or scale while the new one waits for the job.
+No env of the new revisions names it. `ca-workers` keeps none: its identities belong to the app
+too, so once it runs only as `id-<prefix>-workers` its old revision cannot sign in as before
+whatever secrets stay. Removing the shared secrets is later work. Both backend
 identities hold Key Vault Secrets Officer on the vault, so each can still read every vault secret,
 the other app's URL and the role-password secrets among them; narrowing that is later work. The
 passwords are generated once and never rotated by Terraform, because the job never changes an

@@ -357,7 +357,7 @@ run "backend_apps_get_their_own_password_urls_with_pgbouncer" {
       nonsensitive(azurerm_key_vault_secret.install["api-database-direct-url"].value) == nonsensitive("postgresql+asyncpg://masterly_api:${random_password.migrate_api_role[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require") &&
       nonsensitive(azurerm_key_vault_secret.install["workers-database-url"].value) == nonsensitive("postgresql+asyncpg://masterly_workers:${random_password.migrate_workers_role[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:6432/postgres?ssl=require") &&
       nonsensitive(azurerm_key_vault_secret.install["workers-database-direct-url"].value) == nonsensitive("postgresql+asyncpg://masterly_workers:${random_password.migrate_workers_role[0].result}@${azurerm_postgresql_flexible_server.this[0].fqdn}:5432/postgres?ssl=require") &&
-      module.api.vault_backed_secret_names == tolist(["api-database-direct-url", "api-database-url", "bff-shared-secret", "license-token", "redis-url", "session-secret"]) &&
+      module.api.vault_backed_secret_names == tolist(["api-database-direct-url", "api-database-url", "bff-shared-secret", "database-direct-url", "database-url", "license-token", "redis-url", "session-secret"]) &&
       module.workers[0].vault_backed_secret_names == tolist(["license-token", "redis-url", "session-secret", "workers-database-direct-url", "workers-database-url"]) &&
       length(module.api.value_secret_names) + length(module.workers[0].value_secret_names) == 0
     )

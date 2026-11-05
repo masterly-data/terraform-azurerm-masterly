@@ -1276,10 +1276,18 @@ locals {
   workers_database_secret_name        = local.workers_own_identity ? "workers-database-url" : "database-url"
   workers_database_direct_secret_name = local.workers_own_identity ? "workers-database-direct-url" : "database-direct-url"
 
-  # The shared DSN secrets no app names with the app roles. They stay in the vault
+  # The shared DSN secrets no app's env names with the app roles. They stay in the vault
   # (install_secret_names, keyvault.tf), because the revisions running before an upgrade to
   # migrations = "job" still reference them until their replacements are ready.
   shared_database_secret_names = concat(["database-url"], var.postgres_pgbouncer ? ["database-direct-url"] : [])
+
+  # ca-api keeps their Container App secret definitions too, as vault references no env names
+  # (api_vault_secret_refs, keyvault.tf): its revision from before the upgrade still resolves
+  # them while the new one waits for the migrate job. ca-workers keeps none: identities belong to
+  # the app too, and it now runs only as id-<prefix>-workers (workers.tf), so its old revision
+  # cannot sign in as before whatever secrets stay. "job" requires the
+  # vault, so these are never value secrets.
+  api_retained_secret_names = local.migrate_app_roles && var.enable_key_vault ? local.shared_database_secret_names : []
 }
 
 locals {

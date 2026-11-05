@@ -535,10 +535,11 @@ run "migrate_app_roles_on_entra_name_their_identities" {
     error_message = "On entra ca-api's URL must name masterly_api and ca-workers' masterly_workers, with no password, and neither may be masterly_admin or the apps identity's administrator role."
   }
 
-  # Each app carries its own DSN secret, from the vault, and neither the other's nor the shared one.
+  # Each app reads its own DSN secret, from the vault, and neither the other's nor the shared one.
+  # ca-api keeps only the shared one's definition, as a reference no env names (below).
   assert {
     condition = (
-      module.api.vault_backed_secret_names == tolist(["api-database-url", "bff-shared-secret", "license-token", "redis-url", "session-secret"]) &&
+      module.api.vault_backed_secret_names == tolist(["api-database-url", "bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
       module.workers[0].vault_backed_secret_names == tolist(["license-token", "redis-url", "session-secret", "workers-database-url"]) &&
       module.frontend.vault_backed_secret_names == tolist(["bff-shared-secret", "oidc-client-secret"]) &&
       length(module.api.value_secret_names) + length(module.workers[0].value_secret_names) + length(module.frontend.value_secret_names) == 0 &&
@@ -553,7 +554,21 @@ run "migrate_app_roles_on_entra_name_their_identities" {
       local.database_role == "id-masterly-apps" &&
       !anytrue([for name in concat(module.api.env_names, module.workers[0].env_names, module.frontend.env_names) : startswith(name, "MASTERLY_MIGRATE_")])
     )
-    error_message = "With the app roles each backend app must carry its own DSN secret alone, the frontend and the job neither, and the shared database-url must stay in the vault, named by no app."
+    error_message = "With the app roles each backend app must carry its own DSN secret alone, the frontend and the job neither, and the shared database-url must stay in the vault, named by no app's secret list or env."
+  }
+
+  # ACA secrets belong to the app, not to a revision: ca-api's revision from before the upgrade
+  # serves, and may restart, until the new one is ready, so the shared DSN's definition stays on
+  # ca-api exactly as it was (its vault secret, resolved as id-<prefix>-apps). No env names it,
+  # and ca-workers, whose identity changes, keeps none.
+  assert {
+    condition = (
+      local.api_retained_secret_names == tolist(["database-url"]) &&
+      local.api_vault_secret_refs["database-url"].identity_id == module.apps_identity.id &&
+      !contains(values(local.api_env_secret_refs), "database-url") &&
+      !contains(keys(local.backend_vault_secret_refs), "database-url")
+    )
+    error_message = "ca-api must keep the shared database-url's secret definition, unchanged and named by no env, so its pre-upgrade revision still resolves it; ca-workers must keep none."
   }
 
   # id-<prefix>-workers holds a copy of each backend grant, and nothing names it as administrator.
@@ -633,7 +648,7 @@ run "migrate_app_roles_on_entra_get_their_own_direct_urls_with_pgbouncer" {
       startswith(nonsensitive(local.api_database_direct_url), "postgresql+asyncpg://masterly_api@") &&
       startswith(nonsensitive(local.workers_database_url), "postgresql+asyncpg://masterly_workers@") &&
       startswith(nonsensitive(local.workers_database_direct_url), "postgresql+asyncpg://masterly_workers@") &&
-      module.api.vault_backed_secret_names == tolist(["api-database-direct-url", "api-database-url", "bff-shared-secret", "license-token", "redis-url", "session-secret"]) &&
+      module.api.vault_backed_secret_names == tolist(["api-database-direct-url", "api-database-url", "bff-shared-secret", "database-direct-url", "database-url", "license-token", "redis-url", "session-secret"]) &&
       module.workers[0].vault_backed_secret_names == tolist(["license-token", "redis-url", "session-secret", "workers-database-direct-url", "workers-database-url"]) &&
       local.api_env_secret_refs["MASTERLY_DATABASE_URL"] == "api-database-url" &&
       local.api_env_secret_refs["MASTERLY_DATABASE_DIRECT_URL"] == "api-database-direct-url" &&
@@ -805,7 +820,7 @@ run "migrate_app_roles_on_password_read_their_vault_secrets" {
       module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id]) &&
       module.workers[0].secret_ref_identity_ids == tolist([module.workers_identity[0].id]) &&
       module.frontend.user_assigned_identity_ids == tolist([module.frontend_identity.id]) &&
-      module.api.vault_backed_secret_names == tolist(["api-database-url", "bff-shared-secret", "license-token", "redis-url", "session-secret"]) &&
+      module.api.vault_backed_secret_names == tolist(["api-database-url", "bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
       module.workers[0].vault_backed_secret_names == tolist(["license-token", "redis-url", "session-secret", "workers-database-url"]) &&
       module.frontend.vault_backed_secret_names == tolist(["bff-shared-secret", "oidc-client-secret"]) &&
       length(module.api.value_secret_names) + length(module.workers[0].value_secret_names) + length(module.frontend.value_secret_names) == 0 &&
@@ -1145,7 +1160,8 @@ run "migrate_job_preserves_the_existing_install" {
   }
 
   # The upgrade adds id-<prefix>-workers and its copies of the backend grants beside the shared
-  # ones, which stay; the shared database-url stays in the vault, named by no app.
+  # ones, which stay; the shared database-url stays in the vault, and on ca-api as the definition
+  # its running revision resolves until the new one is ready, named by no env of the new one.
   assert {
     condition = (
       length(module.workers_identity) == 1 &&
@@ -1157,10 +1173,12 @@ run "migrate_job_preserves_the_existing_install" {
       length(azurerm_role_assignment.acr_pull_workers) + length(azurerm_role_assignment.acs_email_sender_workers) + length(azurerm_redis_cache_access_policy_assignment.workers) == 0 &&
       length(module.postgres_connection_urls_api) == 1 && length(module.postgres_connection_urls_workers) == 1 &&
       azurerm_key_vault_secret.install["database-url"].id != null &&
-      !contains(module.api.vault_backed_secret_names, "database-url") && !contains(module.workers[0].vault_backed_secret_names, "database-url") &&
+      contains(run.before_migrate_job_uses_previous_defaults.vault_backed_secret_names, "database-url") &&
+      contains(module.api.vault_backed_secret_names, "database-url") && local.api_vault_secret_refs["database-url"].identity_id == module.apps_identity.id &&
+      !contains(values(local.api_env_secret_refs), "database-url") && !contains(module.workers[0].vault_backed_secret_names, "database-url") &&
       contains(module.api.vault_backed_secret_names, "api-database-url") && contains(module.workers[0].vault_backed_secret_names, "workers-database-url")
     )
-    error_message = "The upgrade must add id-<prefix>-workers' grants and each app's own DSN beside the shared grants and the shared database-url secret, which stay."
+    error_message = "The upgrade must add id-<prefix>-workers' grants and each app's own DSN beside the shared grants and the shared database-url secret, which stay in the vault and on ca-api, named by no env."
   }
 }
 
@@ -1279,7 +1297,7 @@ run "migrate_app_role_secrets_are_read_one_by_one" {
         )
       ])) &&
       length(module.api.value_secret_names) + length(module.workers[0].value_secret_names) + length(module.frontend.value_secret_names) == 0 &&
-      module.api.vault_backed_secret_names == tolist(["api-database-url", "bff-shared-secret", "license-token", "redis-url", "session-secret"]) &&
+      module.api.vault_backed_secret_names == tolist(["api-database-url", "bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
       module.workers[0].vault_backed_secret_names == tolist(["license-token", "redis-url", "session-secret", "workers-database-url"])
     )
     error_message = "Each app-role password must reach an app only inside that app's own DSN vault secret: in no job or app env, no ACA secret and no other install secret."

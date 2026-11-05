@@ -456,8 +456,8 @@ locals {
   migrate_vault_secret_names = [for name in local.migrate_secret_names : name
     if !(nonsensitive(var.external_database_admin_url != null) && contains(["migrate-database-url", "migrate-database-direct-url"], name))
   ]
-  # With the app roles each backend app names its own DSN secrets, and no app names the shared
-  # ones, which stay here so that an upgrade does not delete what running revisions reference.
+  # With the app roles each backend app reads its own DSN secrets, and no app's env names the
+  # shared ones, which stay here so that an upgrade does not delete what running revisions reference.
   # Without ca-workers nothing reads its list, so its DSN secrets are not created.
   install_secret_names = distinct(concat(
     local.api_secret_names,
@@ -484,8 +484,13 @@ locals {
     }
   } : {}
 
+  # With the app roles ca-api also keeps the shared DSN secrets (api_retained_secret_names), as
+  # it carried them before the upgrade: same name, vault secret and identity, so they plan no
+  # change. ACA secrets belong to the app, not to a revision, and the revision running before
+  # the upgrade keeps serving, and may restart or scale, until the new one is ready, which waits
+  # on the migrate job. No env of the new revision names them. Removing them is MAS-3961's.
   api_vault_secret_refs = var.enable_key_vault ? {
-    for name in local.api_secret_names : name => {
+    for name in concat(local.api_secret_names, local.api_retained_secret_names) : name => {
       kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id
       identity_id  = module.apps_identity.id
     }

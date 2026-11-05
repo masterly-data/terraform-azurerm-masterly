@@ -29,8 +29,9 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   release under ADR 0062: new resources, secrets and one output, no new input, nothing renamed or
   removed. Additive: `id-<prefix>-apps` keeps its Entra administrator and every grant, and the
   shared `database-url` / `database-direct-url` vault secrets stay, so running revisions keep
-  working until they are replaced. With `migrations = "start"`, or `"job"` on BYO-DB, nothing
-  changes. What is new under `"job"` on the starter server:
+  working until they are replaced. `ca-api` keeps its Container App secret for them too, named by
+  no env, because its old revision may restart while the new one waits for the job. With
+  `migrations = "start"`, or `"job"` on BYO-DB, nothing changes. What is new under `"job"` on the starter server:
   - `ca-workers` runs, pulls, scales (the KEDA jobs-queue rule) and resolves its Key Vault
     references as `id-<prefix>-workers`, with that identity's `AZURE_CLIENT_ID`. `ca-api` stays on
     `id-<prefix>-apps`;
@@ -38,7 +39,7 @@ inventing one now would be exactly the retyped-value failure the manifest exists
     `masterly_api`, `workers-database-url` with user `masterly_workers` (plus `api-database-direct-url`
     / `workers-database-direct-url` with `postgres_pgbouncer`). No password on `"entra"`; on
     `"password"`, that role's generated password, only inside its own vault secret. Neither app
-    carries the other's URL or the shared one;
+    carries the other's URL, and no env of either names the shared one;
   - `id-<prefix>-workers` gets copies of the backend grants (each `*_workers`): Key Vault Secrets
     Officer and Crypto Officer on the vault, `AcrPull` through `acr_id`, ACS Email Owner with
     `email_acs_enabled`, Service Bus Data Sender and Receiver, Data Owner on the jobs queue when
