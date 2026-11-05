@@ -51,7 +51,7 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
 
 | Path | Contents |
 |---|---|
-| `main.tf` | The core: two resource groups, the VNet and its two subnets, the ACA environment and the Log Analytics workspace, the `api` and `frontend` Container Apps, the user-assigned identities (apps, frontend, and migrate with `migrations = "job"`), the starter Postgres flexible server with its private DNS zone and endpoint, and the optional Service Bus namespace and queue |
+| `main.tf` | The core: two resource groups, the VNet and its two subnets, the ACA environment and the Log Analytics workspace, the `api` and `frontend` Container Apps, the user-assigned identities (apps, frontend, and migrate and workers with `migrations = "job"`), the starter Postgres flexible server with its private DNS zone and endpoint, and the optional Service Bus namespace and queue |
 | `diagnostics.tf` | The observability surface: one action group, the diagnostic settings (five data-plane, one per Container App), twelve metric alerts and four log-search alert rules (one of them per Container App) |
 | `keyvault.tf` | The opt-in durable secret store (ADR 0066): vault, private endpoint and DNS, RBAC grants, and the install's own secrets as Key Vault references |
 | `redis.tf` | The opt-in session registry (ADR 0071): both offerings (`managed` / `cache`), each private-endpoint only |

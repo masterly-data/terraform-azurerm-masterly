@@ -659,6 +659,20 @@ module "migrate_identity" {
   tags                = local.tags
 }
 
+# ca-workers' own principal for its database role, masterly_workers, which the migrate job creates
+# on database_auth = "entra" from this identity's object id (migrate.tf). Until ca-workers moves
+# onto it (MAS-3961) it is attached to no Container App or job and holds no role assignment. Only
+# with migrations = "job" on the starter server.
+module "workers_identity" {
+  source = "./modules/user-assigned-identity"
+  count  = local.migrate_app_roles ? 1 : 0
+
+  name                = "id-${var.name_prefix}-workers"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  tags                = local.tags
+}
+
 # --- Registry and images -----------------------------------------------------------
 # Where the apps pull from, how they authenticate, and which images they run when api_image and
 # frontend_image are left null. The deprecated inputs (acr_login_server, registry_username,

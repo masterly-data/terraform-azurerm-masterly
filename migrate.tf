@@ -62,6 +62,21 @@ locals {
 
   migrate_secrets = { for name in local.migrate_secret_names : name => local.secret_values[name] }
 
+  # The DML-only login roles the job creates for ca-api and ca-workers (ADR 0120 §6), on the
+  # starter server only: on BYO-DB the database is the customer's. Lowercase Postgres
+  # identifiers, distinct from masterly_admin and from local.migrate_database_role. The job never
+  # alters a role that already exists, so these names, the identities and the passwords below
+  # must stay stable once applied.
+  migrate_app_roles     = local.migrate_job && nonsensitive(var.external_database_url == null)
+  migrate_api_role      = "masterly_api"
+  migrate_workers_role  = "masterly_workers"
+  migrate_app_passwords = local.migrate_app_roles && !local.database_entra && var.enable_key_vault
+
+  # The vault secrets holding the app-role passwords (keyvault.tf). The job reads them by name
+  # with its own identity; they are never an ACA secret, so never in migrate_secret_names.
+  migrate_api_role_password_secret_name     = "install-migrate-api-role-password"
+  migrate_workers_role_password_secret_name = "install-migrate-workers-role-password"
+
   migrate_env = merge(
     {
       MASTERLY_ORG_ID = var.org_id
@@ -82,12 +97,43 @@ locals {
       MASTERLY_DATABASE_AUTH = "entra"
       AZURE_CLIENT_ID        = module.migrate_identity[0].client_id
     } : {},
+    # The app roles, and how each signs in: its identity's object id on "entra", the name of its
+    # password's vault secret on "password" (a reference, never the value).
+    local.migrate_app_roles ? {
+      MASTERLY_MIGRATE_API_ROLE     = local.migrate_api_role
+      MASTERLY_MIGRATE_WORKERS_ROLE = local.migrate_workers_role
+    } : {},
+    local.migrate_app_roles && local.database_entra ? {
+      MASTERLY_MIGRATE_API_ROLE_OBJECT_ID     = module.apps_identity.principal_id
+      MASTERLY_MIGRATE_WORKERS_ROLE_OBJECT_ID = module.workers_identity[0].principal_id
+    } : {},
+    local.migrate_app_passwords ? {
+      MASTERLY_MIGRATE_API_ROLE_PASSWORD_REF     = azurerm_key_vault_secret.migrate_api_role_password[0].name
+      MASTERLY_MIGRATE_WORKERS_ROLE_PASSWORD_REF = azurerm_key_vault_secret.migrate_workers_role_password[0].name
+    } : {},
   )
 
   migrate_env_secret_refs = merge(
     { MASTERLY_DATABASE_URL = "migrate-database-url" },
     var.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = "migrate-database-direct-url" } : {},
   )
+}
+
+# The app roles' passwords on database_auth = "password", held in the vault (keyvault.tf) for the
+# job to read when it creates the roles. No keepers: the job never alters an existing role, so a
+# regenerated password would silently differ from the one in the database.
+resource "random_password" "migrate_api_role" {
+  count = local.migrate_app_passwords ? 1 : 0
+
+  length  = 32
+  special = false # as postgres_admin: URL-safe in a DSN
+}
+
+resource "random_password" "migrate_workers_role" {
+  count = local.migrate_app_passwords ? 1 : 0
+
+  length  = 32
+  special = false
 }
 
 resource "azurerm_container_app_job" "migrate" {
@@ -220,6 +266,8 @@ resource "azurerm_container_app_job" "migrate" {
     azurerm_role_assignment.acr_pull_migrate,
     azurerm_role_assignment.kv_secrets_user_migrate,
     azurerm_role_assignment.kv_byo_database_reader_migrate,
+    azurerm_role_assignment.kv_secrets_user_migrate_api_role_password,
+    azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
     azurerm_private_endpoint.registry,
     azurerm_private_dns_zone_virtual_network_link.registry,
     azurerm_private_endpoint.key_vault,

@@ -366,6 +366,53 @@ resource "azurerm_role_assignment" "kv_secrets_user_migrate" {
   principal_id         = module.migrate_identity[0].principal_id
 }
 
+# The app roles' passwords (migrate.tf), for the job alone. Their own resources, never in
+# install_secret_names or migrate_secret_names: those become Key Vault references or values on a
+# Container App or the job, and these reach the job only as a secret name in its env, which it
+# reads from the vault with its own identity.
+resource "azurerm_key_vault_secret" "migrate_api_role_password" {
+  count = local.migrate_app_passwords ? 1 : 0
+
+  name         = local.migrate_api_role_password_secret_name
+  value        = random_password.migrate_api_role[0].result
+  key_vault_id = azurerm_key_vault.this[0].id
+  content_type = "text/plain"
+
+  tags = local.tags
+
+  depends_on = [azurerm_role_assignment.kv_secrets_officer_deployer]
+}
+
+resource "azurerm_key_vault_secret" "migrate_workers_role_password" {
+  count = local.migrate_app_passwords ? 1 : 0
+
+  name         = local.migrate_workers_role_password_secret_name
+  value        = random_password.migrate_workers_role[0].result
+  key_vault_id = azurerm_key_vault.this[0].id
+  content_type = "text/plain"
+
+  tags = local.tags
+
+  depends_on = [azurerm_role_assignment.kv_secrets_officer_deployer]
+}
+
+# Read on each of those two secrets alone, as kv_secrets_user_migrate: never at vault scope.
+resource "azurerm_role_assignment" "kv_secrets_user_migrate_api_role_password" {
+  count = local.migrate_app_passwords ? 1 : 0
+
+  scope                = azurerm_key_vault_secret.migrate_api_role_password[0].resource_versionless_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.migrate_identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "kv_secrets_user_migrate_workers_role_password" {
+  count = local.migrate_app_passwords ? 1 : 0
+
+  scope                = azurerm_key_vault_secret.migrate_workers_role_password[0].resource_versionless_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.migrate_identity[0].principal_id
+}
+
 # Runtime connection secrets are created by the API, not Terraform. The operator names only
 # BYO-DB DSNs here; construct their secret ARM scopes without reading their values into state.
 resource "azurerm_role_assignment" "kv_byo_database_reader_migrate" {
