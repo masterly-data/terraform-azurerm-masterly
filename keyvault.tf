@@ -237,6 +237,24 @@ resource "azurerm_role_assignment" "kv_crypto_officer" {
   principal_id         = module.apps_identity.principal_id
 }
 
+# The same two vault-scope roles for ca-workers' own identity, when it runs as it
+# (main.tf, workers_identity): ca-workers seals material and runs erasure as the api does.
+resource "azurerm_role_assignment" "kv_secrets_officer_workers" {
+  count = local.migrate_app_roles && var.enable_key_vault ? 1 : 0
+
+  scope                = azurerm_key_vault.this[0].id
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = module.workers_identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "kv_crypto_officer_workers" {
+  count = local.migrate_app_roles && var.enable_key_vault ? 1 : 0
+
+  scope                = azurerm_key_vault.this[0].id
+  role_definition_name = "Key Vault Crypto Officer"
+  principal_id         = module.workers_identity[0].principal_id
+}
+
 # Private DNS + endpoint (production only): the vault's public hostname resolves to the
 # private endpoint inside the VNet, so MASTERLY_KEYVAULT_URL is unchanged. Skipped when a
 # central zone is injected (key_vault_private_dns_zone_id).
@@ -298,9 +316,9 @@ resource "azurerm_private_endpoint" "key_vault" {
 # apps without an apply. Pinning the version would have put the copy back, one indirection
 # further away.
 #
-# The apps identity already holds Secrets Officer on this vault (above) for its own sealed
-# material, so it can read these too. That is the same trust boundary, not a widening: the
-# values are handed to those apps as environment either way.
+# The apps identity (and ca-workers' own, when it has one) already holds Secrets Officer on this
+# vault (above) for its own sealed material, so it can read these too. That is the same trust
+# boundary, not a widening: the values are handed to those apps as environment either way.
 
 resource "azurerm_key_vault_secret" "install" {
   for_each = var.enable_key_vault ? toset(local.install_secret_names) : toset([])
@@ -438,20 +456,30 @@ locals {
   migrate_vault_secret_names = [for name in local.migrate_secret_names : name
     if !(nonsensitive(var.external_database_admin_url != null) && contains(["migrate-database-url", "migrate-database-direct-url"], name))
   ]
-  install_secret_names = distinct(concat(local.api_secret_names, local.frontend_secret_names, local.migrate_vault_secret_names))
+  # With the app roles each backend app names its own DSN secrets, and no app names the shared
+  # ones, which stay here so that an upgrade does not delete what running revisions reference.
+  install_secret_names = distinct(concat(
+    local.api_secret_names,
+    local.backend_secret_names,
+    local.frontend_secret_names,
+    local.migrate_vault_secret_names,
+    local.migrate_app_roles ? local.shared_database_secret_names : [],
+  ))
 
   # The split the apps actually consume. With the vault on, no app carries a value; with it
   # off (dev/demo, no vault to put them in) they carry values exactly as before. `backend_*`
-  # is what ca-workers carries: the api's set without the BFF shared secret.
+  # is what ca-workers carries: the api's set without the BFF shared secret, and with its own
+  # DSNs instead of the api's when the app roles exist.
   backend_value_secrets  = var.enable_key_vault ? {} : local.backend_secrets
   api_value_secrets      = var.enable_key_vault ? {} : local.api_secrets
   frontend_value_secrets = var.enable_key_vault ? {} : local.frontend_secrets
   migrate_value_secrets  = { for name, value in local.migrate_secrets : name => value if !var.enable_key_vault || !contains(local.migrate_vault_secret_names, name) }
 
+  # ca-workers resolves its references as the identity it runs as (workers.tf).
   backend_vault_secret_refs = var.enable_key_vault ? {
     for name in local.backend_secret_names : name => {
       kv_secret_id = azurerm_key_vault_secret.install[name].versionless_id
-      identity_id  = module.apps_identity.id
+      identity_id  = local.workers_identity_id
     }
   } : {}
 

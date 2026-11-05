@@ -56,6 +56,15 @@ resource "azurerm_role_assignment" "acs_email_sender" {
   principal_id         = module.apps_identity.principal_id
 }
 
+# The same role for ca-workers' own identity, when it runs as it (workers.tf): email delivery
+# runs in the workers process.
+resource "azurerm_role_assignment" "acs_email_sender_workers" {
+  count                = local.migrate_app_roles && var.email_acs_enabled ? 1 : 0
+  scope                = module.acs_email[0].communication_service_id
+  role_definition_name = "Communication and Email Service Owner"
+  principal_id         = module.workers_identity[0].principal_id
+}
+
 output "acs_email_endpoint" {
   value       = var.email_acs_enabled ? module.acs_email[0].endpoint : null
   description = "ACS endpoint to enter under Notifications -> Integrations -> Email (provider azure-acs)."

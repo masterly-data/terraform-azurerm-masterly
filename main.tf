@@ -659,10 +659,11 @@ module "migrate_identity" {
   tags                = local.tags
 }
 
-# ca-workers' own principal for its database role, masterly_workers, which the migrate job creates
-# on database_auth = "entra" from this identity's object id (migrate.tf). Until ca-workers moves
-# onto it (MAS-3961) it is attached to no Container App or job and holds no role assignment. Only
-# with migrations = "job" on the starter server.
+# ca-workers' own identity, and the principal of its database role, masterly_workers, which the
+# migrate job creates on database_auth = "entra" from this identity's object id (migrate.tf).
+# ca-workers runs as it (workers.tf) and it holds copies of the backend grants the apps identity
+# holds (each `*_workers` grant), never one that identity lacks, and is no Postgres administrator.
+# Only with migrations = "job" on the starter server; otherwise ca-workers runs as the apps identity.
 module "workers_identity" {
   source = "./modules/user-assigned-identity"
   count  = local.migrate_app_roles ? 1 : 0
@@ -739,9 +740,9 @@ module "release_channel" {
 # pull out of band and leave acr_id null). The token mode pulls with its credential, so
 # it creates no grant.
 #
-# ALL THREE identities need the grant when acr_id is null and you grant out of band — see the
+# EVERY identity needs the grant when acr_id is null and you grant out of band — see the
 # `apps_identity_principal_id` / `frontend_identity_principal_id` /
-# `migrate_identity_principal_id` outputs.
+# `migrate_identity_principal_id` / `workers_identity_principal_id` outputs.
 resource "azurerm_role_assignment" "acr_pull" {
   count = !local.registry_token_mode && var.acr_id != null ? 1 : 0
 
@@ -764,6 +765,16 @@ resource "azurerm_role_assignment" "acr_pull_migrate" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
   principal_id         = module.migrate_identity[0].principal_id
+}
+
+# ca-workers pulls as its own identity once it runs as it (the registry block takes the app's
+# first identity, modules/aca-container-app).
+resource "azurerm_role_assignment" "acr_pull_workers" {
+  count = local.migrate_app_roles && !local.registry_token_mode && var.acr_id != null ? 1 : 0
+
+  scope                = var.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = module.workers_identity[0].principal_id
 }
 
 # --- Data plane: the starter Postgres Flexible Server (skipped on BYO-DB) --------
@@ -1083,6 +1094,23 @@ resource "azurerm_role_assignment" "sb_receiver" {
   principal_id         = module.apps_identity.principal_id
 }
 
+# The same two roles for ca-workers' own identity, when it runs as it.
+resource "azurerm_role_assignment" "sb_sender_workers" {
+  count = local.migrate_app_roles && var.enable_service_bus ? 1 : 0
+
+  scope                = azurerm_servicebus_namespace.this[0].id
+  role_definition_name = "Azure Service Bus Data Sender"
+  principal_id         = module.workers_identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "sb_receiver_workers" {
+  count = local.migrate_app_roles && var.enable_service_bus ? 1 : 0
+
+  scope                = azurerm_servicebus_namespace.this[0].id
+  role_definition_name = "Azure Service Bus Data Receiver"
+  principal_id         = module.workers_identity[0].principal_id
+}
+
 # Private DNS + endpoint (production on Premium only): the namespace's public hostname
 # resolves to the private endpoint inside the VNet, so MASTERLY_SERVICEBUS_NAMESPACE and the
 # hostname the apps connect to are unchanged. Skipped when a central zone is injected
@@ -1200,6 +1228,55 @@ module "postgres_connection_urls_migrate" {
   password    = local.database_entra ? null : random_password.postgres_admin[0].result
   pooler_port = local.database_pooler_port
   direct_port = local.database_direct_port
+}
+
+# The backend apps' own URLs with migrations = "job" on the starter server: each app signs in as
+# the DML-only role the migrate job creates for it (migrate.tf, ADR 0120 §6). On "entra" the role
+# is bound to the app's identity and the URL carries no password; on "password" it carries that
+# role's generated password, and reaches the app only inside its own vault secret ("job" requires
+# mode = production, which requires the vault).
+module "postgres_connection_urls_api" {
+  source = "./modules/postgres-connection-urls"
+  count  = local.migrate_app_roles ? 1 : 0
+
+  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
+  auth_mode   = local.database_auth_mode
+  role        = local.migrate_api_role
+  password    = local.database_entra ? null : random_password.migrate_api_role[0].result
+  pooler_port = local.database_pooler_port
+  direct_port = local.database_direct_port
+}
+
+module "postgres_connection_urls_workers" {
+  source = "./modules/postgres-connection-urls"
+  count  = local.migrate_app_roles ? 1 : 0
+
+  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
+  auth_mode   = local.database_auth_mode
+  role        = local.migrate_workers_role
+  password    = local.database_entra ? null : random_password.migrate_workers_role[0].result
+  pooler_port = local.database_pooler_port
+  direct_port = local.database_direct_port
+}
+
+locals {
+  # Null without the app roles, where the secrets below are never named.
+  api_database_url            = one(module.postgres_connection_urls_api[*].pooler_url)
+  api_database_direct_url     = one(module.postgres_connection_urls_api[*].direct_url)
+  workers_database_url        = one(module.postgres_connection_urls_workers[*].pooler_url)
+  workers_database_direct_url = one(module.postgres_connection_urls_workers[*].direct_url)
+
+  # The secret each backend app reads its DSN (and, with postgres_pgbouncer, its direct DSN) from:
+  # its own with the app roles, the shared install-level one otherwise, as before.
+  api_database_secret_name            = local.migrate_app_roles ? "api-database-url" : "database-url"
+  api_database_direct_secret_name     = local.migrate_app_roles ? "api-database-direct-url" : "database-direct-url"
+  workers_database_secret_name        = local.migrate_app_roles ? "workers-database-url" : "database-url"
+  workers_database_direct_secret_name = local.migrate_app_roles ? "workers-database-direct-url" : "database-direct-url"
+
+  # The shared DSN secrets no app names with the app roles. They stay in the vault
+  # (install_secret_names, keyvault.tf), because the revisions running before an upgrade to
+  # migrations = "job" still reference them until their replacements are ready.
+  shared_database_secret_names = concat(["database-url"], var.postgres_pgbouncer ? ["database-direct-url"] : [])
 }
 
 locals {
@@ -1342,6 +1419,14 @@ locals {
     local.migrate_job ? { MASTERLY_MIGRATIONS = "job" } : {},
   )
 
+  # ca-workers reads the api's env contract (workers.tf). With the app roles it runs as its own
+  # identity, so its AZURE_CLIENT_ID, which the Key Vault, Service Bus and Entra settings above
+  # set to the apps identity's, is that identity's instead. Merged last, so it is the only value.
+  workers_env = merge(
+    local.api_env,
+    local.migrate_app_roles ? { AZURE_CLIENT_ID = module.workers_identity[0].client_id } : {},
+  )
+
   # --- The install's secret material -----------------------------------------------
   #
   # Named first, valued second, and deliberately in that order: everything downstream —
@@ -1377,23 +1462,34 @@ locals {
     # backend_*, api_* or frontend_* lists, so no Container App carries them.
     "migrate-database-url"        = local.migrate_database_url
     "migrate-database-direct-url" = local.migrate_database_direct_url
+
+    # Each backend app's own DSNs with the app roles: the api's named only in api_secret_names,
+    # the workers' only in backend_secret_names, so neither app carries the other's.
+    "api-database-url"            = local.api_database_url
+    "api-database-direct-url"     = local.api_database_direct_url
+    "workers-database-url"        = local.workers_database_url
+    "workers-database-direct-url" = local.workers_database_direct_url
   }
 
   # Credential-based image pull (ADR 0067): in the token mode the SP secret rides on every app
   # that pulls; the identity modes carry none.
   registry_secret_names = local.registry_token_mode ? ["registry-password"] : []
 
-  # The secrets both backend processes carry: ca-api, and ca-workers, which builds the same
-  # services from the same settings (workers.tf).
-  #
+  # The secrets ca-workers carries, which builds the same services from the same settings as
+  # ca-api (workers.tf): its DSNs, then the set both backend processes share
+  # (backend_shared_secret_names).
+  backend_secret_names = concat(
+    [local.workers_database_secret_name, "session-secret"],
+    # The direct (non-pooled) DSN, named only with the pooler: var.postgres_pgbouncer is a plain bool.
+    var.postgres_pgbouncer ? [local.workers_database_direct_secret_name] : [],
+    local.backend_shared_secret_names,
+  )
+
   # nonsensitive() on the PRESENCE tests, not on any value: `var.license_token != null` is a
   # bool derived from a sensitive variable, so Terraform marks it, and a marked list cannot
   # drive for_each (the vault writes) or a precondition. Whether a licence was supplied is not
   # the secret — the same narrow unmarking, for the same reason, as redis_url_wired.
-  backend_secret_names = concat(
-    ["database-url", "session-secret"],
-    # The direct (non-pooled) DSN, named only with the pooler: var.postgres_pgbouncer is a plain bool.
-    var.postgres_pgbouncer ? ["database-direct-url"] : [],
+  backend_shared_secret_names = concat(
     # Only while a rotation is in flight; unset is the steady state (see the variable).
     nonsensitive(var.session_secret_previous != null) ? ["session-secret-previous"] : [],
     local.registry_secret_names,
@@ -1404,10 +1500,13 @@ locals {
     var.ca_bundle_pem != null ? ["ca-bundle-pem"] : [],
   )
 
-  # The api adds the BFF shared secret, which belongs to the api and the frontend alone
+  # The api carries its own DSNs (the same as ca-workers' without the app roles) and the shared
+  # set, and adds the BFF shared secret, which belongs to the api and the frontend alone
   # (random_password.bff_shared_secret). ca-workers serves no request, so it does not get it.
   api_secret_names = concat(
-    local.backend_secret_names,
+    [local.api_database_secret_name, "session-secret"],
+    var.postgres_pgbouncer ? [local.api_database_direct_secret_name] : [],
+    local.backend_shared_secret_names,
     ["bff-shared-secret"],
     local.builtin_auth_secret_names,
   )
@@ -1425,19 +1524,21 @@ locals {
   api_secrets      = { for name in local.api_secret_names : name => local.secret_values[name] }
   frontend_secrets = { for name in local.frontend_secret_names : name => local.secret_values[name] }
 
-  # The env both backend processes read from their secrets; the api's adds the BFF shared
-  # secret below.
+  # The env ca-workers reads from its secrets: its own DSNs and the shared set. The api's names
+  # its own DSNs and adds the BFF shared secret below.
   backend_env_secret_refs = merge(
-    {
-      MASTERLY_DATABASE_URL   = "database-url"
-      MASTERLY_SESSION_SECRET = "session-secret"
-    },
+    { MASTERLY_DATABASE_URL = local.workers_database_secret_name },
+    var.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = local.workers_database_direct_secret_name } : {},
+    local.backend_shared_env_secret_refs,
+  )
+
+  backend_shared_env_secret_refs = merge(
+    { MASTERLY_SESSION_SECRET = "session-secret" },
     # nonsensitive() on the PRESENCE test alone, as above: whether a rotation is in flight is
     # not the secret, and it is what decides whether the api is told to accept a second key.
     nonsensitive(var.session_secret_previous != null) ? {
       MASTERLY_SESSION_SECRET_PREVIOUS = "session-secret-previous"
     } : {},
-    var.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = "database-direct-url" } : {},
     local.redis_secret_refs,
     var.license_token != null ? { MASTERLY_LICENSE_TOKEN = "license-token" } : {},
     var.breakglass_secret_hash != null ? { MASTERLY_BREAKGLASS_SECRET_HASH = "breakglass-secret-hash" } : {},
@@ -1445,7 +1546,9 @@ locals {
   )
 
   api_env_secret_refs = merge(
-    local.backend_env_secret_refs,
+    { MASTERLY_DATABASE_URL = local.api_database_secret_name },
+    var.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = local.api_database_direct_secret_name } : {},
+    local.backend_shared_env_secret_refs,
     { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret" },
   )
 

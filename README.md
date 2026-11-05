@@ -166,10 +166,11 @@ Outputs include `frontend_url`, `api_url` (the API's base URL for the Python SDK
 clients outside the environment — null unless `api_ingress_external = true`), the apps resource
 group, the Container App names (the values the app repos' release workflows use to roll
 images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
-`apps_identity_client_id` / `frontend_identity_principal_id` / `migrate_identity_principal_id`
-for out-of-band role grants. The install runs on two app identities, and with
-`migrations = "job"` on a **third**, the migrate job's (see below), so an out-of-band `AcrPull`
-grant has to reach each of them.
+`apps_identity_client_id` / `frontend_identity_principal_id` / `migrate_identity_principal_id` /
+`workers_identity_principal_id` for out-of-band role grants. The install runs on two app
+identities, and with `migrations = "job"` on a **third**, the migrate job's, and on the starter
+server a **fourth**, `ca-workers`' own (see below), so an out-of-band `AcrPull` grant has to reach
+each of them.
 
 `api_internal_fqdn` keeps its name so existing configurations still plan, but the name is older
 than `api_ingress_external`: it holds the API's internal hostname only while the API is
@@ -238,9 +239,10 @@ check, and a rebuilt app, both go by.
 | `rg-masterly-aca`, `rg-masterly-data` | Customer-naming resource groups (`rg-masterly-<purpose>`) |
 | VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
-| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, `ca-workers`): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Later install identity work (ADR 0020) |
+| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, and `ca-workers` unless it has its own, below): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
 | `id-masterly-migrate` UAMI (+ optional AcrPull) — **only with `migrations = "job"`** | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus **Key Vault Secrets User** on each of its vault-backed secrets and the per-Environment BYO-DB DSN secrets explicitly named in `migrate_byo_database_secret_names`; no vault copy or grant for `external_database_admin_url`. On `database_auth = "entra"`, the starter server's **second** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
+| `id-masterly-workers` UAMI (+ optional AcrPull) — **only with `migrations = "job"` on the starter server** | **`ca-workers`' own identity**: it runs, pulls, scales and resolves its Key Vault references as it, and signs in to Postgres as `masterly_workers` (on `"entra"`, the role the migrate job binds to this identity). It holds a copy of each backend grant `id-masterly-apps` holds — Key Vault Secrets Officer and Crypto Officer on the vault, AcrPull (through `acr_id`), ACS Email Owner, Service Bus send + receive, Data Owner on the jobs queue when `ca-workers` scales on it, and its own Redis data access policy on `"entra"` — and never one that identity lacks. It is no Postgres administrator. `id-masterly-apps` keeps all of its grants. See [The migrate job](#the-migrate-job) |
 | `caj-migrate` Container Apps job — **only with `migrations = "job"`** | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
@@ -275,7 +277,7 @@ The three modes:
    scale-out pulls depend on Masterly's registry being reachable (running replicas are
    unaffected). The plan refuses this mode with no credential.
 2. **`managed_identity`: pull as the app identities.** Each app pulls as its own identity,
-   with no credential in the install. `acr_id` grants `AcrPull` to both identities, and to the migrate job's when it exists. With
+   with no credential in the install. `acr_id` grants `AcrPull` to both identities, and to the migrate job's and `ca-workers`' own when they exist. With
    `registry_location` omitted, set the mode or `acr_id` to pull from `masterly.azurecr.io`;
    with neither, the apps have no registry block.
 3. **`customer_registry`: mirror into your own ACR.** Import each image into the same
@@ -288,10 +290,14 @@ The three modes:
    `registry_location` other than Masterly's.
 
 In both identity modes, `acr_id` grants `AcrPull` to both app identities and, with
-`migrations = "job"`, to the migrate job's. If you leave it null and grant out of band, grant
-each: `apps_identity_principal_id`, `frontend_identity_principal_id` and, with the job,
-`migrate_identity_principal_id`. Miss the second and the frontend cannot pull; miss the third
-and the migrate job cannot pull, so no migration runs.
+`migrations = "job"`, to the migrate job's and (on the starter server) `ca-workers`' own. If you
+leave it null and grant out of band, grant each: `apps_identity_principal_id`,
+`frontend_identity_principal_id` and, with the job, `migrate_identity_principal_id` and
+`workers_identity_principal_id` (null on BYO-DB). Miss the second and the frontend cannot pull;
+miss the third and the migrate job cannot pull, so no migration runs; miss the fourth and
+`ca-workers` cannot pull its new revision. `workers_identity_principal_id` is known only once the
+identity exists: create it first (`terraform apply -target='module.masterly.module.workers_identity'`,
+with your own module name), grant it `AcrPull`, then apply the rest.
 
 **The default images.** Leave `api_image` and `frontend_image` unset and each resolves to
 `<registry_location>/release/<role>@<digest>`: the digest the `release_channel` release
@@ -501,8 +507,8 @@ by `database_auth` and `redis_auth`:
 
 | | `"entra"` — Azure's recommendation | `"password"` / `"key"` — a departure |
 |---|---|---|
-| Postgres | Microsoft Entra authentication on, password authentication off. The apps' identity (`id-masterly-apps`) is the server's Microsoft Entra administrator, and so, with `migrations = "job"`, is the migrate job's (`id-masterly-migrate`, [below](#the-migrate-job)); each connection string names its own identity's role with no password | The `masterly_admin` login, with its password in the connection string, for the apps and the migrate job alike |
-| Redis | Access keys off. The apps' identity holds a data access policy: the default policy on Azure Managed Redis, *Data Contributor* on Azure Cache for Redis. The URL carries no key | The access key, in the URL |
+| Postgres | Microsoft Entra authentication on, password authentication off. The apps' identity (`id-masterly-apps`) is the server's Microsoft Entra administrator, and so, with `migrations = "job"`, is the migrate job's (`id-masterly-migrate`, [below](#the-migrate-job)); each connection string names its own identity's role with no password. With `migrations = "job"` on the starter server, `ca-api` and `ca-workers` instead sign in as the DML-only roles `masterly_api` and `masterly_workers`, bound to `id-masterly-apps` and `id-masterly-workers` | The `masterly_admin` login, with its password in the connection string, for the apps and the migrate job alike. With `migrations = "job"`, `ca-api` and `ca-workers` instead sign in as `masterly_api` and `masterly_workers`, each with its own generated password |
+| Redis | Access keys off. The apps' identity holds a data access policy: the default policy on Azure Managed Redis, *Data Contributor* on Azure Cache for Redis. With `migrations = "job"` on the starter server, `id-masterly-workers` holds its own (`masterly-workers` on Azure Cache for Redis). The URL carries no key | The access key, in the URL |
 | The apps | `MASTERLY_DATABASE_AUTH=entra` / `MASTERLY_REDIS_AUTH=entra` and `AZURE_CLIENT_ID`, on `ca-api` and `ca-workers`. Needs **api images `v0.133.7` or later** | Nothing added |
 
 When an input is unset, the module picks for you, and it never changes what an existing
@@ -627,15 +633,28 @@ how each role signs in:
   Secrets User on each of those two secrets alone, never on the vault. They are no ACA secret on the
   job or any app, and are not in `vault_backed_secret_names`.
 
-The apps do not use these roles yet: `ca-api`, `ca-workers` and `ca-frontend` keep their
-identities, database user, env and secrets, and `id-<prefix>-workers` is attached to no Container
-App or job and holds no role assignment. The passwords are generated once and never rotated by
-Terraform, because the job never changes an existing role's password. The backend reads these
+Each backend app signs in as its own role. `ca-api` stays on `id-<prefix>-apps` and reads
+`api-database-url` (and `api-database-direct-url` with `postgres_pgbouncer`), whose user is
+`masterly_api`. `ca-workers` runs as `id-<prefix>-workers`, with that identity's `AZURE_CLIENT_ID`,
+Key Vault references and scale rule, and reads `workers-database-url` (and
+`workers-database-direct-url`), whose user is `masterly_workers`. On `"entra"` these URLs carry no
+password; on `"password"` each carries its own role's password, and only inside its own Key Vault
+secret: never in env, an ACA value secret or an output. Neither app carries the other's URL, and
+`ca-frontend` and `caj-migrate` carry neither. `id-<prefix>-workers` holds a copy of each backend
+grant (see [What the module creates](#what-the-module-creates)).
+
+This is additive. `id-<prefix>-apps` keeps its Entra administrator and every grant, and the shared
+`database-url` (and `database-direct-url`) stays in the vault, named by no app, so the revisions
+running before the change keep working until their replacements are ready. Both backend
+identities hold Key Vault Secrets Officer on the vault, so each can still read every vault secret,
+the other app's URL and the role-password secrets among them; narrowing that is later work. The
+passwords are generated once and never rotated by Terraform, because the job never changes an
+existing role's password. The backend reads these
 settings from a release later than v0.135.0 with the `migrate_*_role` settings
 (`masterly-application-backend` at commit `cf741e0e1fda`, `core/settings.py`); confirm them in the
-api release's notes. The app roles are a minor release under ADR 0062: new resources and job env
-only, no new input, nothing renamed or removed. Nothing changes while `migrations` stays `"start"`
-or on BYO-DB.
+api release's notes. The app roles, and the apps signing in as them, are a minor release under ADR
+0062: new resources, secrets, job env and one output (`workers_identity_principal_id`), no new
+input, nothing renamed or removed. Nothing changes while `migrations` stays `"start"` or on BYO-DB.
 
 **BYO-DB.** `external_database_admin_url` (sensitive, optional) is a DSN to your database for a
 role allowed to migrate and create databases. It stays in the ACA job's own secret even with
@@ -671,6 +690,21 @@ release's notes. With an older image the job fails. The order:
 3. **From then on, roll every release through CD in the order above** (the job, wait for
    `Succeeded`, then the apps). Keep `api_image` at the digest your install runs, as for the
    apps: it seeds the job if it is ever recreated.
+
+**The apps' move to their own roles** (starter server only). The same apply, or the upgrade of an
+install already on `"job"`, moves `ca-api` and `ca-workers` to `masterly_api` and
+`masterly_workers` and `ca-workers` to `id-<prefix>-workers`; nothing is removed, so the running
+revisions keep the shared URL and identity until they are replaced.
+
+- **With `acr_id` null, grant `AcrPull` to `workers_identity_principal_id` before applying** (see
+  [Getting the images](#getting-the-images-adr-0067)), or `ca-workers` cannot pull its new
+  revision and stalls.
+- **`ca-api`'s new revision becomes ready once the job has created `masterly_api`**; until then
+  it cannot sign in and does not become ready, and on an existing install the old revision keeps
+  serving.
+- **`ca-workers` has no probe**, so its new revision replaces the old one at once and restarts
+  until the job has created `masterly_workers`. The apply starts the job but does not wait for it
+  to finish, so expect those restarts for the length of the first execution.
 
 On an existing `database_auth = "entra"` install, every object in the databases is owned by
 `id-<prefix>-apps`. A second Entra administrator is not a superuser, so the first migration as

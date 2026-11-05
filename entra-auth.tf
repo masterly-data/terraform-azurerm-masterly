@@ -168,7 +168,8 @@ locals {
     local.database_entra ? { MASTERLY_DATABASE_AUTH = "entra" } : {},
     local.redis_entra ? { MASTERLY_REDIS_AUTH = "entra" } : {},
     # The identity the token is minted for (DefaultAzureCredential). The same key and value the
-    # Key Vault and Service Bus bindings set, so the merge is safe.
+    # Key Vault and Service Bus bindings set, so the merge is safe. ca-workers overrides it with
+    # its own identity's when it has one (workers_env, main.tf).
     local.database_entra || local.redis_entra ? { AZURE_CLIENT_ID = module.apps_identity.client_id } : {},
   )
 }
@@ -228,6 +229,26 @@ resource "azurerm_redis_cache_access_policy_assignment" "apps" {
   access_policy_name = "Data Contributor"
   object_id          = module.apps_identity.principal_id
   object_id_alias    = local.database_entra_role
+}
+
+# ca-workers' own identity, when it runs as it (workers.tf), gets the same policy on the same
+# offering under its own assignment. The Redis URL carries no username on "entra", so the one
+# URL serves both apps.
+resource "azurerm_managed_redis_access_policy_assignment" "workers" {
+  count = local.migrate_app_roles && local.redis_entra && local.use_managed_redis ? 1 : 0
+
+  managed_redis_id = azurerm_managed_redis.this[0].id
+  object_id        = module.workers_identity[0].principal_id
+}
+
+resource "azurerm_redis_cache_access_policy_assignment" "workers" {
+  count = local.migrate_app_roles && local.redis_entra && local.use_legacy_redis ? 1 : 0
+
+  name               = "masterly-workers"
+  redis_cache_id     = azurerm_redis_cache.this[0].id
+  access_policy_name = "Data Contributor"
+  object_id          = module.workers_identity[0].principal_id
+  object_id_alias    = module.workers_identity[0].name
 }
 
 # The posture, assertable in `terraform test`. Names only; the URLs stay secrets.
