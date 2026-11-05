@@ -181,7 +181,7 @@ module "workers" {
     azurerm_private_dns_zone_virtual_network_link.redis,
     azurerm_private_endpoint.key_vault,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
-    azurerm_role_assignment.kv_secrets_officer,
+    azurerm_role_assignment.kv_app_secrets,
     azurerm_role_assignment.sb_sender,
     # On an install moving to migrations = "job", these three edges also make Terraform remove
     # the apps identity's Receiver, scaler grant and Entra administrator only after this app's
@@ -193,7 +193,7 @@ module "workers" {
     azurerm_redis_cache_access_policy_assignment.apps,
     # Its own identity's grants, when it runs as it.
     azurerm_role_assignment.acr_pull_workers,
-    azurerm_role_assignment.kv_secrets_officer_workers,
+    azurerm_role_assignment.kv_app_secrets_workers,
     azurerm_role_assignment.kv_crypto_officer_workers,
     azurerm_role_assignment.sb_sender_workers,
     azurerm_role_assignment.sb_receiver_workers,

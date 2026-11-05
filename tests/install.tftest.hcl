@@ -1834,7 +1834,7 @@ run "small_vnet_with_explicit_subnets_plans" {
   }
 }
 
-# Key Vault (ADR 0066): enabled provisions the vault + Secrets Officer grant and flips
+# Key Vault (ADR 0066): enabled provisions the vault + the app secrets role and grant and flips
 # the api's secret-store env; default provisions nothing.
 run "key_vault_enabled_provisions_vault_and_grant" {
   command = plan
@@ -1847,9 +1847,10 @@ run "key_vault_enabled_provisions_vault_and_grant" {
   assert {
     condition = (
       length(azurerm_key_vault.this) == 1 &&
-      length(azurerm_role_assignment.kv_secrets_officer) == 1
+      length(azurerm_role_definition.app_secrets) == 1 &&
+      length(azurerm_role_assignment.kv_app_secrets) == 1
     )
-    error_message = "enable_key_vault must provision the vault and the Secrets Officer grant."
+    error_message = "enable_key_vault must provision the vault, the app secrets role and its grant."
   }
 
   assert {
@@ -2015,13 +2016,14 @@ run "the_frontend_reads_its_own_secrets_and_only_reads" {
     error_message = "A frontend carrying vault-backed secrets must get Key Vault Secrets User on its own identity, once per frontend secret — read, and nothing more."
   }
 
-  # The Officer grants stay where they were: on the backend apps, never on the public one.
+  # The app secrets and Crypto Officer grants stay where they were: on the backend apps, never on
+  # the public one.
   assert {
     condition = (
-      azurerm_role_assignment.kv_secrets_officer[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.kv_app_secrets[0].principal_id == module.apps_identity.principal_id &&
       azurerm_role_assignment.kv_crypto_officer[0].principal_id == module.apps_identity.principal_id
     )
-    error_message = "Key Vault Secrets Officer and Crypto Officer must never reach the frontend's identity."
+    error_message = "The app secrets role and Key Vault Crypto Officer must never reach the frontend's identity."
   }
 
   # And the references name the identity that actually holds the grant. ACA resolves a vault
@@ -2907,7 +2909,7 @@ run "credential_registry_pull_plans" {
 }
 
 # One identity per app, and the frontend is why. Every data-plane grant in the install —
-# Key Vault Secrets Officer, Service Bus send + receive, ACS Email Owner — belongs to the
+# the app secrets role on the vault, Service Bus send + receive, ACS Email Owner — belongs to the
 # BACKEND identity; the internet-facing frontend runs as its own, holding image pull alone.
 run "both_app_identities_keep_their_names" {
   command = plan
@@ -3027,7 +3029,7 @@ run "no_data_plane_grant_reaches_the_frontend" {
 
   assert {
     condition = (
-      azurerm_role_assignment.kv_secrets_officer[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.kv_app_secrets[0].principal_id == module.apps_identity.principal_id &&
       azurerm_role_assignment.sb_sender[0].principal_id == module.apps_identity.principal_id &&
       azurerm_role_assignment.sb_receiver[0].principal_id == module.apps_identity.principal_id &&
       azurerm_role_assignment.sb_scaler[0].principal_id == module.apps_identity.principal_id &&
@@ -3042,7 +3044,7 @@ run "no_data_plane_grant_reaches_the_frontend" {
   # is read on that secret, and nothing more.
   assert {
     condition = (
-      azurerm_role_assignment.kv_secrets_officer[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.kv_app_secrets[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_sender[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_receiver[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_scaler[0].principal_id != module.frontend_identity.principal_id &&
@@ -9290,7 +9292,7 @@ run "migrations_default_to_start_and_create_no_migrate_job" {
     condition = (
       !local.workers_own_identity &&
       length(module.workers_identity) == 0 &&
-      length(azurerm_role_assignment.kv_secrets_officer_workers) == 0 &&
+      length(azurerm_role_assignment.kv_app_secrets_workers) == 0 &&
       length(azurerm_role_assignment.kv_crypto_officer_workers) == 0 &&
       length(azurerm_role_assignment.acr_pull_workers) == 0 &&
       length(azurerm_role_assignment.acs_email_sender_workers) == 0 &&
@@ -9357,7 +9359,7 @@ run "migrations_start_creates_no_workers_grant_with_every_feature_on" {
   assert {
     condition = (
       var.migrations == "start" &&
-      length(azurerm_role_assignment.kv_secrets_officer) == 1 &&
+      length(azurerm_role_assignment.kv_app_secrets) == 1 &&
       length(azurerm_role_assignment.kv_crypto_officer) == 1 &&
       length(azurerm_role_assignment.acr_pull) == 1 &&
       length(azurerm_role_assignment.acs_email_sender) == 1 &&
@@ -9372,7 +9374,7 @@ run "migrations_start_creates_no_workers_grant_with_every_feature_on" {
   assert {
     condition = (
       length(module.workers_identity) == 0 &&
-      length(azurerm_role_assignment.kv_secrets_officer_workers) == 0 &&
+      length(azurerm_role_assignment.kv_app_secrets_workers) == 0 &&
       length(azurerm_role_assignment.kv_crypto_officer_workers) == 0 &&
       length(azurerm_role_assignment.acr_pull_workers) == 0 &&
       length(azurerm_role_assignment.acs_email_sender_workers) == 0 &&
