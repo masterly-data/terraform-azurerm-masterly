@@ -191,8 +191,6 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
           azurerm_role_assignment.kv_secrets_officer[0].principal_id,
           azurerm_role_assignment.kv_crypto_officer[0].principal_id,
           azurerm_role_assignment.sb_sender[0].principal_id,
-          azurerm_role_assignment.sb_receiver[0].principal_id,
-          azurerm_role_assignment.sb_scaler[0].principal_id,
           azurerm_role_assignment.acs_email_sender[0].principal_id,
           azurerm_role_assignment.acr_pull[0].principal_id,
           azurerm_role_assignment.acr_pull_frontend[0].principal_id,
@@ -257,7 +255,7 @@ run "migrate_identity_holds_no_redis_access" {
   }
 }
 
-run "migrate_identity_is_a_second_entra_administrator" {
+run "migrate_identity_is_the_only_entra_administrator" {
   command = plan
 
   variables {
@@ -270,22 +268,45 @@ run "migrate_identity_is_a_second_entra_administrator" {
   }
 
   override_module {
+    target  = module.frontend_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend", principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff", client_id = "ffffffff-ffff-ffff-ffff-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-frontend" }
+  }
+
+  override_module {
     target  = module.migrate_identity
     outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
   }
 
-  # `apps` is unchanged; `migrate` stands beside it.
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  # Threat: a Container App's identity is a Postgres administrator. With "job" the migrate
+  # identity is the server's only Entra administrator (ADR 0120); `apps` is gone.
   assert {
     condition = (
-      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 1 &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].principal_name == "id-masterly-apps" &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].object_id == module.apps_identity.principal_id &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0 &&
       length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 1 &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].principal_name == "id-masterly-migrate" &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].principal_type == "ServicePrincipal" &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].object_id == module.migrate_identity[0].principal_id
     )
-    error_message = "On entra the server must have two Entra administrators: id-<prefix>-apps, unchanged, and id-<prefix>-migrate."
+    error_message = "With migrations = \"job\" on entra the server must have one Entra administrator, id-<prefix>-migrate, and none for id-<prefix>-apps."
+  }
+
+  assert {
+    condition = alltrue([
+      for admin in concat(
+        azurerm_postgresql_flexible_server_active_directory_administrator.apps,
+        azurerm_postgresql_flexible_server_active_directory_administrator.migrate,
+        ) : !contains([
+          module.apps_identity.principal_id,
+          module.workers_identity[0].principal_id,
+          module.frontend_identity.principal_id,
+      ], admin.object_id)
+    ])
+    error_message = "No Container App identity (apps, workers, frontend) may be a Postgres Entra administrator with migrations = \"job\"."
   }
 
   # The job connects as its own role with its own token; the apps keep theirs.
@@ -571,7 +592,8 @@ run "migrate_app_roles_on_entra_name_their_identities" {
     error_message = "ca-api must keep the shared database-url's secret definition, unchanged and named by no env, so its pre-upgrade revision still resolves it; ca-workers must keep none."
   }
 
-  # id-<prefix>-workers holds a copy of each backend grant, and nothing names it as administrator.
+  # id-<prefix>-workers holds each backend grant ca-workers needs, and nothing names it as
+  # administrator.
   assert {
     condition = (
       azurerm_role_assignment.kv_secrets_officer_workers[0].role_definition_name == "Key Vault Secrets Officer" &&
@@ -594,25 +616,28 @@ run "migrate_app_roles_on_entra_name_their_identities" {
       azurerm_managed_redis_access_policy_assignment.workers[0].object_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       length(azurerm_managed_redis_access_policy_assignment.apps) == 1 &&
       length(azurerm_redis_cache_access_policy_assignment.workers) == 0 &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].object_id != module.workers_identity[0].principal_id &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0 &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].object_id != module.workers_identity[0].principal_id &&
       output.workers_identity_principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     )
-    error_message = "id-<prefix>-workers must hold the Key Vault, AcrPull, ACS, Service Bus and Redis grants the apps identity holds, and be no Postgres administrator."
+    error_message = "id-<prefix>-workers must hold the Key Vault, AcrPull, ACS, Service Bus and Redis grants ca-workers needs, and be no Postgres administrator; the apps identity must be none either."
   }
 
   # Threat, the public front door and the schema owner: no new grant names either of them, and
-  # the shared grants stay on the apps identity.
+  # the shared grants stay on the apps identity. Its Receiver, scaler grant and Entra
+  # administrator are gone: ca-workers holds the first two as its own identity.
   assert {
     condition = alltrue(concat(
       [
         for principal in [
           azurerm_role_assignment.kv_secrets_officer[0].principal_id, azurerm_role_assignment.kv_crypto_officer[0].principal_id,
-          azurerm_role_assignment.sb_sender[0].principal_id, azurerm_role_assignment.sb_receiver[0].principal_id,
-          azurerm_role_assignment.sb_scaler[0].principal_id, azurerm_role_assignment.acs_email_sender[0].principal_id,
+          azurerm_role_assignment.sb_sender[0].principal_id, azurerm_role_assignment.acs_email_sender[0].principal_id,
           azurerm_role_assignment.acr_pull[0].principal_id, azurerm_managed_redis_access_policy_assignment.apps[0].object_id,
-          azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].object_id,
         ] : principal == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      ],
+      [
+        length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) +
+        length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0
       ],
       [
         for principal in [
@@ -629,7 +654,92 @@ run "migrate_app_roles_on_entra_name_their_identities" {
       [toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url"])],
       [for ra in azurerm_role_assignment.kv_secrets_user_migrate : ra.principal_id == module.migrate_identity[0].principal_id && ra.role_definition_name == "Key Vault Secrets User"],
     ))
-    error_message = "The shared grants must stay on the apps identity; no workers grant may name the frontend, migrate or apps identity; the frontend and migrate grants must be as on main."
+    error_message = "The shared grants must stay on the apps identity, without its Receiver, scaler grant or Entra administrator; no workers grant may name the frontend, migrate or apps identity; the frontend and migrate grants must be as on main."
+  }
+}
+
+# Threat, ca-api's identity gains a role it should not (ADR 0120 §6). With migrations = "job" and
+# every grant on, every azurerm_role_assignment in the module is listed here by address (the
+# 23-block count in workers_identity.tftest.hcl keeps the list complete), and those on the apps
+# principal hold exactly these roles, plus one Redis access policy and no Postgres administrator.
+run "apps_identity_holds_only_its_own_roles_with_job" {
+  command = plan
+
+  variables {
+    database_auth      = "entra"
+    redis_auth         = "entra"
+    acr_login_server   = null
+    acr_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    enable_service_bus = true
+    servicebus_sku     = "Standard"
+    email_acs_enabled  = true
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.frontend_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend", principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff", client_id = "ffffffff-ffff-ffff-ffff-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-frontend" }
+  }
+
+  override_module {
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  assert {
+    condition = sort([
+      for ra in concat(
+        azurerm_role_assignment.acr_pull,
+        azurerm_role_assignment.acr_pull_frontend,
+        azurerm_role_assignment.acr_pull_migrate,
+        azurerm_role_assignment.acr_pull_workers,
+        azurerm_role_assignment.sb_sender,
+        azurerm_role_assignment.sb_receiver,
+        azurerm_role_assignment.sb_sender_workers,
+        azurerm_role_assignment.sb_receiver_workers,
+        azurerm_role_assignment.kv_secrets_officer,
+        azurerm_role_assignment.kv_crypto_officer,
+        azurerm_role_assignment.kv_secrets_officer_workers,
+        azurerm_role_assignment.kv_crypto_officer_workers,
+        values(azurerm_role_assignment.kv_secrets_officer_deployer),
+        values(azurerm_role_assignment.kv_secrets_user_frontend),
+        values(azurerm_role_assignment.kv_secrets_user_migrate),
+        azurerm_role_assignment.kv_secrets_user_migrate_api_role_password,
+        azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
+        values(azurerm_role_assignment.kv_byo_database_reader_migrate),
+        values(azurerm_role_assignment.kv_secrets_reader),
+        azurerm_role_assignment.acs_email_sender,
+        azurerm_role_assignment.acs_email_sender_workers,
+        azurerm_role_assignment.sb_scaler,
+        azurerm_role_assignment.sb_scaler_workers,
+      ) : ra.role_definition_name if ra.principal_id == module.apps_identity.principal_id
+      ]) == sort([
+      "AcrPull",
+      "Azure Service Bus Data Sender",
+      "Communication and Email Service Owner",
+      "Key Vault Crypto Officer",
+      "Key Vault Secrets Officer",
+    ])
+    error_message = "With migrations = \"job\" the apps identity (ca-api) may hold AcrPull, Key Vault Secrets Officer and Crypto Officer, Service Bus Data Sender and the ACS role, and no other role assignment."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_managed_redis_access_policy_assignment.apps) + length(azurerm_redis_cache_access_policy_assignment.apps) == 1 &&
+      alltrue([for a in azurerm_managed_redis_access_policy_assignment.apps : a.object_id == module.apps_identity.principal_id]) &&
+      alltrue([for a in azurerm_redis_cache_access_policy_assignment.apps : a.object_id == module.apps_identity.principal_id]) &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0
+    )
+    error_message = "With migrations = \"job\" the apps identity must hold one Redis access policy and be no Postgres Entra administrator."
   }
 }
 
@@ -829,6 +939,192 @@ run "migrate_app_roles_on_password_read_their_vault_secrets" {
       !anytrue([for name in concat(module.api.env_names, module.workers[0].env_names, module.frontend.env_names) : startswith(name, "MASTERLY_MIGRATE_")])
     )
     error_message = "On password, ca-workers must run as id-<prefix>-workers and each backend app must read its own URL, as its own role, from the vault alone."
+  }
+}
+
+# Threat: the apps' Entra administrator, Receiver or scaler grant goes before ca-api and
+# ca-workers run as their own roles and identity. Terraform destroys a resource only after it
+# has created or updated every resource that depends on it, so these depends_on edges order the
+# removals on an install moving to "job": after the migrate administrator (which depends on the
+# apps one, so the two never run against the server at once) and after both apps' updates, which
+# themselves follow migrate_start. `terraform test` cannot read depends_on, so this reads the
+# configuration, comments stripped. The trailing comma keeps `sb_receiver_workers` from matching
+# `sb_receiver`.
+run "migrate_app_removals_follow_the_apps_updates" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for ref in [
+        "azurerm_postgresql_flexible_server_active_directory_administrator.apps,",
+        "azurerm_role_assignment.sb_receiver,",
+        "azapi_resource_action.migrate_start,",
+      ] :
+      strcontains(replace(regex("(?s)depends_on = \\[([^\\]]*)\\]", regex("(?s)module \"api\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0])[0], "/#[^\\n]*/", ""), ref)
+    ])
+    error_message = "ca-api must depend on the apps' Entra administrator, sb_receiver and migrate_start, so their removal follows its update."
+  }
+
+  assert {
+    condition = alltrue([
+      for ref in [
+        "azurerm_postgresql_flexible_server_active_directory_administrator.apps,",
+        "azurerm_role_assignment.sb_receiver,",
+        "azurerm_role_assignment.sb_scaler,",
+        "azapi_resource_action.migrate_start,",
+      ] :
+      strcontains(replace(regex("(?s)depends_on = \\[([^\\]]*)\\]", regex("(?s)module \"workers\" \\{(.*?)\\n\\}", file("${path.module}/workers.tf"))[0])[0], "/#[^\\n]*/", ""), ref)
+    ])
+    error_message = "ca-workers must depend on the apps' Entra administrator, sb_receiver, sb_scaler and migrate_start, so their removal follows its update."
+  }
+
+  assert {
+    condition = (
+      strcontains(
+        regex("(?s)depends_on = \\[([^\\]]*)\\]", regex("(?s)resource \"azurerm_postgresql_flexible_server_active_directory_administrator\" \"migrate\" \\{(.*?)\\n\\}", file("${path.module}/entra-auth.tf"))[0])[0],
+        "azurerm_postgresql_flexible_server_active_directory_administrator.apps",
+      ) &&
+      !strcontains(regex("(?s)resource \"azurerm_postgresql_flexible_server_active_directory_administrator\" \"apps\" \\{(.*?)\\n\\}", file("${path.module}/entra-auth.tf"))[0], "depends_on")
+    )
+    error_message = "The migrate administrator must depend on the apps' one, and the apps' one on nothing (a depends_on there would cycle with the apps)."
+  }
+}
+
+# Service Bus with "job" on the starter server, on "password" (the file's default) and on
+# "entra": ca-api's identity sends alone, and ca-workers' own identity sends, receives and scales.
+# Each grant's scope is compared at apply in tests/workers_identity.tftest.hcl.
+run "migrate_app_roles_narrow_the_apps_service_bus_grants_on_password" {
+  command = plan
+
+  variables {
+    enable_service_bus = true
+    servicebus_sku     = "Standard"
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.sb_sender) == 1 &&
+      azurerm_role_assignment.sb_sender[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.sb_sender[0].role_definition_name == "Azure Service Bus Data Sender" &&
+      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 0 &&
+      length(azurerm_role_assignment.sb_sender_workers) == 1 && length(azurerm_role_assignment.sb_receiver_workers) == 1 &&
+      azurerm_role_assignment.sb_sender_workers[0].principal_id == module.workers_identity[0].principal_id &&
+      azurerm_role_assignment.sb_receiver_workers[0].principal_id == module.workers_identity[0].principal_id &&
+      azurerm_role_assignment.sb_receiver_workers[0].role_definition_name == "Azure Service Bus Data Receiver" &&
+      local.workers_scale_on_queue && length(azurerm_role_assignment.sb_scaler_workers) == 1 &&
+      azurerm_role_assignment.sb_scaler_workers[0].principal_id == module.workers_identity[0].principal_id &&
+      azurerm_role_assignment.sb_scaler_workers[0].role_definition_name == "Azure Service Bus Data Owner"
+    )
+    error_message = "With migrations = \"job\" on password, the apps identity must hold Service Bus Sender alone, and id-<prefix>-workers Sender, Receiver and the queue's Data Owner."
+  }
+}
+
+run "migrate_app_roles_narrow_the_apps_service_bus_grants_on_entra" {
+  command = plan
+
+  variables {
+    database_auth      = "entra"
+    enable_service_bus = true
+    servicebus_sku     = "Standard"
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.sb_sender) == 1 &&
+      azurerm_role_assignment.sb_sender[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.sb_sender[0].role_definition_name == "Azure Service Bus Data Sender" &&
+      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 0 &&
+      length(azurerm_role_assignment.sb_sender_workers) == 1 && length(azurerm_role_assignment.sb_receiver_workers) == 1 &&
+      azurerm_role_assignment.sb_sender_workers[0].principal_id == module.workers_identity[0].principal_id &&
+      azurerm_role_assignment.sb_receiver_workers[0].principal_id == module.workers_identity[0].principal_id &&
+      azurerm_role_assignment.sb_receiver_workers[0].role_definition_name == "Azure Service Bus Data Receiver" &&
+      local.workers_scale_on_queue && length(azurerm_role_assignment.sb_scaler_workers) == 1 &&
+      azurerm_role_assignment.sb_scaler_workers[0].principal_id == module.workers_identity[0].principal_id &&
+      azurerm_role_assignment.sb_scaler_workers[0].role_definition_name == "Azure Service Bus Data Owner" &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0
+    )
+    error_message = "With migrations = \"job\" on entra, the apps identity must hold Service Bus Sender alone and no Entra administrator, and id-<prefix>-workers Sender, Receiver and the queue's Data Owner."
+  }
+}
+
+# "start" and "job" on BYO-DB keep the shared Service Bus grants on the apps identity, as on main.
+run "shared_service_bus_grants_stay_with_start" {
+  command = plan
+
+  variables {
+    migrations         = "start"
+    enable_service_bus = true
+    servicebus_sku     = "Standard"
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  assert {
+    condition = (
+      local.workers_scale_on_queue &&
+      alltrue([
+        for group in [azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_scaler] :
+        length(group) == 1 && group[0].principal_id == module.apps_identity.principal_id
+      ]) &&
+      azurerm_role_assignment.sb_receiver[0].role_definition_name == "Azure Service Bus Data Receiver" &&
+      azurerm_role_assignment.sb_scaler[0].role_definition_name == "Azure Service Bus Data Owner" &&
+      length(azurerm_role_assignment.sb_sender_workers) + length(azurerm_role_assignment.sb_receiver_workers) +
+      length(azurerm_role_assignment.sb_scaler_workers) == 0
+    )
+    error_message = "With migrations = \"start\" the apps identity must keep Service Bus Sender, Receiver and the queue's Data Owner, and no workers grant may exist."
+  }
+}
+
+run "shared_service_bus_grants_stay_on_byo_database" {
+  command = plan
+
+  variables {
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    enable_service_bus    = true
+    servicebus_sku        = "Standard"
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  assert {
+    condition = (
+      local.workers_scale_on_queue &&
+      alltrue([
+        for group in [azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_scaler] :
+        length(group) == 1 && group[0].principal_id == module.apps_identity.principal_id
+      ]) &&
+      azurerm_role_assignment.sb_receiver[0].role_definition_name == "Azure Service Bus Data Receiver" &&
+      azurerm_role_assignment.sb_scaler[0].role_definition_name == "Azure Service Bus Data Owner" &&
+      length(azurerm_role_assignment.sb_sender_workers) + length(azurerm_role_assignment.sb_receiver_workers) +
+      length(azurerm_role_assignment.sb_scaler_workers) == 0
+    )
+    error_message = "With migrations = \"job\" on BYO-DB the apps identity must keep Service Bus Sender, Receiver and the queue's Data Owner, and no workers grant may exist."
   }
 }
 
@@ -1034,7 +1330,6 @@ run "migrate_job_preserves_the_existing_install" {
   assert {
     condition = alltrue([for group in [
       azurerm_postgresql_flexible_server.this, azurerm_key_vault.this, azurerm_servicebus_namespace.this,
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps,
       azurerm_virtual_network.this, azurerm_subnet.aca, azurerm_subnet.private_endpoints,
       azurerm_network_security_group.aca, azurerm_network_security_group.private_endpoints,
       azurerm_subnet_network_security_group_association.aca, azurerm_subnet_network_security_group_association.private_endpoints,
@@ -1042,7 +1337,7 @@ run "migrate_job_preserves_the_existing_install" {
       azurerm_private_dns_zone_virtual_network_link.postgres, azurerm_private_dns_zone_virtual_network_link.key_vault, azurerm_private_dns_zone_virtual_network_link.redis,
       azurerm_private_endpoint.postgres, azurerm_private_endpoint.key_vault, azurerm_private_endpoint.redis,
       azurerm_managed_redis.this, azurerm_managed_redis_access_policy_assignment.apps, azurerm_servicebus_queue.jobs,
-      azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_scaler,
+      azurerm_role_assignment.sb_sender,
       azurerm_role_assignment.kv_secrets_officer, azurerm_role_assignment.kv_crypto_officer,
       azurerm_monitor_diagnostic_setting.postgres, azurerm_monitor_diagnostic_setting.key_vault,
       azurerm_monitor_diagnostic_setting.redis, azurerm_monitor_diagnostic_setting.redis_database, azurerm_monitor_diagnostic_setting.service_bus,
@@ -1124,16 +1419,22 @@ run "migrate_job_preserves_the_existing_install" {
     error_message = "ACA replacement inputs and Postgres administrator/network/create-mode inputs must retain their base configuration."
   }
 
+  # The upgrade removes the apps identity's Entra administrator, Receiver and scaler grant (ADR
+  # 0120): the migrate identity becomes the server's administrator, and ca-workers receives and
+  # scales as its own identity. Terraform destroys the three only after updating ca-api and
+  # ca-workers, which depend on them (migrate_app_removals_follow_the_apps_updates).
   assert {
     condition = (
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].server_name == "psql-masterly-before" &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].resource_group_name == "rg-masterly-data" &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].principal_name == "id-masterly-apps" &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].principal_type == "ServicePrincipal" &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].object_id == run.before_migrate_job_uses_previous_defaults.apps_identity_principal_id &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].tenant_id == "00000000-0000-0000-0000-000000000000"
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0 &&
+      length(azurerm_role_assignment.sb_receiver) == 0 && length(azurerm_role_assignment.sb_scaler) == 0 &&
+      azurerm_role_assignment.sb_sender[0].principal_id == run.before_migrate_job_uses_previous_defaults.apps_identity_principal_id &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].server_name == "psql-masterly-before" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].resource_group_name == "rg-masterly-data" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].principal_name == "id-masterly-migrate" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].principal_type == "ServicePrincipal" &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].tenant_id == "00000000-0000-0000-0000-000000000000"
     )
-    error_message = "The apps' Entra administrator must stay exactly as it was."
+    error_message = "The upgrade to \"job\" must remove the apps' Entra administrator, Service Bus Receiver and scaler grant, keep Sender on the apps identity, and make id-<prefix>-migrate the server's administrator."
   }
 
   assert {
@@ -1159,8 +1460,8 @@ run "migrate_job_preserves_the_existing_install" {
     error_message = "The upgrade must add only the dedicated migration job/identity and their administrator, start action, secret and scoped grant, each backend app's own DSN secret, and opt the existing serving apps into job mode."
   }
 
-  # The upgrade adds id-<prefix>-workers and its copies of the backend grants beside the shared
-  # ones, which stay; the shared database-url stays in the vault, and on ca-api as the definition
+  # The upgrade adds id-<prefix>-workers and its backend grants beside the shared ones, which
+  # stay but for the two above; the shared database-url stays in the vault, and on ca-api as the definition
   # its running revision resolves until the new one is ready, named by no env of the new one.
   assert {
     condition = (
@@ -1178,7 +1479,7 @@ run "migrate_job_preserves_the_existing_install" {
       !contains(values(local.api_env_secret_refs), "database-url") && !contains(module.workers[0].vault_backed_secret_names, "database-url") &&
       contains(module.api.vault_backed_secret_names, "api-database-url") && contains(module.workers[0].vault_backed_secret_names, "workers-database-url")
     )
-    error_message = "The upgrade must add id-<prefix>-workers' grants and each app's own DSN beside the shared grants and the shared database-url secret, which stay in the vault and on ca-api, named by no env."
+    error_message = "The upgrade must add id-<prefix>-workers' grants and each app's own DSN beside the remaining shared grants and the shared database-url secret, which stay in the vault and on ca-api, named by no env."
   }
 }
 

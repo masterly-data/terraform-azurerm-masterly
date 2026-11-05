@@ -36,6 +36,32 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- **With `migrations = "job"` on the starter server, `id-<prefix>-apps` is no longer a Postgres
+  Entra administrator, and holds Service Bus Data Sender alone (ADR 0120 §6).** A minor release
+  under ADR 0062: no input or output is added, renamed or removed. Under `"job"` on the starter
+  server the module now removes three things from `ca-api`'s identity:
+  - `azurerm_postgresql_flexible_server_active_directory_administrator.apps` (on `"entra"`). The
+    migrate identity, `id-<prefix>-migrate`, is the server's only Entra administrator;
+  - `azurerm_role_assignment.sb_receiver`, Azure Service Bus Data Receiver on the namespace;
+  - `azurerm_role_assignment.sb_scaler`, Azure Service Bus Data Owner on the jobs queue.
+
+  `ca-workers` already receives and scales as `id-<prefix>-workers`, which keeps its Sender,
+  Receiver and jobs-queue Data Owner. `ca-api` keeps Sender. The Receiver goes only where
+  `ca-workers` runs as its own identity, so no deployment that still receives as
+  `id-<prefix>-apps` loses it. With `migrations = "start"`, or `"job"` on BYO-DB, nothing changes.
+  The shared `database-url` / `database-direct-url` vault secrets and `ca-api`'s Container App
+  secret for them stay as in 0.23.0.
+
+  Terraform destroys the three only after it has created the migrate administrator and updated
+  `ca-api` and `ca-workers`, because those resources depend on them; no `depends_on` changed.
+  Removing the administrator does not wait for the new revisions to become ready, though, and on
+  an existing `"entra"` install every database object is still owned by the `id-<prefix>-apps`
+  role. **Order for an existing `"entra"` install:** be on 0.23.x with `migrations = "job"`, confirm
+  a migrate job execution has Succeeded and that both apps run as `masterly_api` /
+  `masterly_workers`, then upgrade to this version. An install moving from `"start"` straight to
+  `"job"` on this version does all of it in one apply; the README's upgrade note under "The
+  migrate job" has the details, and what Azure does to the `id-<prefix>-apps` role when its
+  administrator is removed is confirmed on a live install before this version is released.
 - **`oidc_audience` defaults to `oidc_client_id`.** The backend verifies the ID token the BFF
   obtained, whose audience is that same client id, so this is the value almost every install
   sets. An explicit value still wins.
@@ -46,7 +72,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `~>` range, as the install-root guidance already did: Terraform does not lock module
   versions, so a range lets every fresh `terraform init` take a newer release.
 
-No migration is needed, with one case to check. The OIDC defaults change nothing for an existing
+The identity defaults above (`oidc_tenant_id`, `oidc_audience`, `breakglass_owner_email`) need no
+migration, with one case to check. The OIDC defaults change nothing for an existing
 install: `identity_binding = "oidc"` refused an unset `oidc_audience`, `oidc_authority`,
 `oidc_allowed_issuers` or `oidc_jwks_uri` before. **An install that sets `breakglass_secret_hash`
 but not `breakglass_owner_email` had break-glass off, and the next apply arms it** for

@@ -645,7 +645,7 @@ module "frontend_identity" {
 }
 
 # The migrate job's own identity (migrate.tf). On database_auth = "entra" it is the starter
-# server's second Microsoft Entra administrator, the install's most privileged database
+# server's Microsoft Entra administrator, the install's most privileged database
 # principal, so it gets image pull and read on its own vault secrets and explicitly named
 # per-Environment BYO-DB DSNs, and never: a Container App, a vault-scope role, a Key Vault crypto
 # or Officer role, Service Bus, Redis or ACS. Only with migrations = "job".
@@ -661,8 +661,9 @@ module "migrate_identity" {
 
 # ca-workers' own identity, and the principal of its database role, masterly_workers, which the
 # migrate job creates on database_auth = "entra" from this identity's object id (migrate.tf).
-# ca-workers runs as it (workers.tf) and it holds copies of the backend grants the apps identity
-# holds (each `*_workers` grant), never one that identity lacks, and is no Postgres administrator.
+# ca-workers runs as it (workers.tf) and it holds the backend grants ca-workers needs (each
+# `*_workers` grant), and is no Postgres administrator. Two of them the apps identity no longer
+# holds once this one exists: Service Bus Data Receiver and the jobs queue's Data Owner.
 # Only with migrations = "job" on the starter server; otherwise ca-workers runs as the apps identity.
 # Without ca-workers (enable_workers = false) the identity still exists for the migrate job's role,
 # but holds no grant and no DSN secret (local.workers_own_identity, workers.tf).
@@ -1078,8 +1079,12 @@ resource "azurerm_servicebus_queue" "jobs" {
   lock_duration = "PT5M"
 }
 
-# The apps' managed identity sends (publish) and receives (the in-process worker) — the two
-# least-privilege data-plane roles rather than Data Owner.
+# The apps' managed identity sends (publish), and receives (the worker loop) only while
+# ca-workers runs as it: the two least-privilege data-plane roles rather than Data Owner. When
+# ca-workers runs as its own identity (local.workers_own_identity, migrations = "job" on the
+# starter server), that identity holds the Receiver below and ca-api keeps Sender alone (ADR
+# 0120). ca-api and ca-workers depend on sb_receiver, so on an install moving to "job" Terraform
+# removes it only after updating both apps.
 resource "azurerm_role_assignment" "sb_sender" {
   count = var.enable_service_bus ? 1 : 0
 
@@ -1089,7 +1094,7 @@ resource "azurerm_role_assignment" "sb_sender" {
 }
 
 resource "azurerm_role_assignment" "sb_receiver" {
-  count = var.enable_service_bus ? 1 : 0
+  count = var.enable_service_bus && !local.workers_own_identity ? 1 : 0
 
   scope                = azurerm_servicebus_namespace.this[0].id
   role_definition_name = "Azure Service Bus Data Receiver"
@@ -1777,7 +1782,9 @@ module "api" {
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
     # On "entra" the api authenticates as its identity at boot, so the database role and the
-    # Redis access policy must exist before a revision starts.
+    # Redis access policy must exist before a revision starts. On an install moving to
+    # migrations = "job", the same edges make Terraform destroy the apps administrator and
+    # sb_receiver only after this app's update: keep them.
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,
     azurerm_managed_redis_access_policy_assignment.apps,
     azurerm_redis_cache_access_policy_assignment.apps,
