@@ -10,7 +10,7 @@
 variable "migrations" {
   type        = string
   default     = "start"
-  description = "Where schema migrations run. \"start\" (default): ca-api and ca-workers migrate at start, as before, and the module creates no migrate job. \"job\": the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job. \"job\" requires mode = \"production\" and an api image from a backend release later than v0.135.0, which has the migrate entry point and honours MASTERLY_MIGRATIONS; an earlier image cannot run the job."
+  description = "Where schema migrations run. \"start\" (default): ca-api and ca-workers migrate at start, as before, and the module creates no migrate job. \"job\": the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job. \"job\" requires mode = \"production\" and an api image from a backend release later than v0.135.0, which has the migrate entry point and honours MASTERLY_MIGRATIONS; an earlier image cannot run the job. On the starter server, \"job\" also moves ca-api and ca-workers to the DML-only roles masterly_api and masterly_workers, so the image must also create those roles, which no release up to v0.135.0 does; see the README's upgrade note under \"The migrate job\"."
 
   validation {
     condition     = contains(["start", "job"], var.migrations)

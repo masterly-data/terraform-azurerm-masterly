@@ -2951,14 +2951,23 @@ run "both_app_identities_keep_their_names" {
   }
 
   # Image pull is the one thing the frontend identity gets, so acr_id must grant BOTH
-  # principals or the frontend cannot pull at all; the migrate job pulls the api image too.
+  # principals or the frontend cannot pull at all; the migrate job pulls the api image too, and
+  # with "job" on the starter server ca-workers pulls as id-<prefix>-workers.
   assert {
     condition = (
       length(azurerm_role_assignment.acr_pull) == 1 &&
       length(azurerm_role_assignment.acr_pull_frontend) == 1 &&
-      length(azurerm_role_assignment.acr_pull_migrate) == 1
+      length(azurerm_role_assignment.acr_pull_migrate) == 1 &&
+      length(azurerm_role_assignment.acr_pull_workers) == 1
     )
-    error_message = "acr_id must grant AcrPull to both app identities and to the migrate job's identity."
+    error_message = "acr_id must grant AcrPull to both app identities, to the migrate job's identity and, with \"job\" on the starter server, to the workers' identity."
+  }
+
+  # With "job" on the starter server ca-workers runs as its own identity; its name is contract
+  # for the same reason, since customers grant it AcrPull out of band when acr_id is null.
+  assert {
+    condition     = module.workers_identity[0].name == "id-masterly-workers"
+    error_message = "The workers' identity name must stay id-<prefix>-workers."
   }
 }
 
@@ -9273,6 +9282,146 @@ run "migrations_default_to_start_and_create_no_migrate_job" {
       !contains(keys(azurerm_key_vault_secret.install), "migrate-database-url")
     )
     error_message = "With migrations left at \"start\" ca-api and ca-workers must carry no MASTERLY_MIGRATIONS, so they migrate at start as on main."
+  }
+
+  # Nor does "start" create the workers' identity, its grant copies, its Redis policies or the
+  # per-app DSNs: both apps keep id-<prefix>-apps and the shared database-url, as on main.
+  assert {
+    condition = (
+      !local.workers_own_identity &&
+      length(module.workers_identity) == 0 &&
+      length(azurerm_role_assignment.kv_secrets_officer_workers) == 0 &&
+      length(azurerm_role_assignment.kv_crypto_officer_workers) == 0 &&
+      length(azurerm_role_assignment.acr_pull_workers) == 0 &&
+      length(azurerm_role_assignment.acs_email_sender_workers) == 0 &&
+      length(azurerm_role_assignment.sb_sender_workers) == 0 &&
+      length(azurerm_role_assignment.sb_receiver_workers) == 0 &&
+      length(azurerm_role_assignment.sb_scaler_workers) == 0 &&
+      length(azurerm_managed_redis_access_policy_assignment.workers) == 0 &&
+      length(azurerm_redis_cache_access_policy_assignment.workers) == 0 &&
+      length(module.postgres_connection_urls_api) == 0 &&
+      length(module.postgres_connection_urls_workers) == 0 &&
+      output.workers_identity_principal_id == null
+    )
+    error_message = "With migrations left at \"start\" the module must create no workers' identity, workers grant, workers Redis policy or per-app DSN."
+  }
+
+  assert {
+    condition = (
+      contains(module.api.vault_backed_secret_names, "database-url") &&
+      contains(module.workers[0].vault_backed_secret_names, "database-url") &&
+      !contains(keys(azurerm_key_vault_secret.install), "api-database-url") &&
+      !contains(keys(azurerm_key_vault_secret.install), "workers-database-url")
+    )
+    error_message = "With migrations left at \"start\" both backend apps must read the shared database-url, and no per-app DSN secret may exist."
+  }
+}
+
+# The same with every feature a workers grant copies switched on (Service Bus with the queue
+# scaler, ACS email, Entra Redis on each offering): the shared grants exist, their workers copies
+# do not, because the copies are gated on migrations = "job" on the starter server, not on the
+# feature alone.
+run "migrations_start_creates_no_workers_grant_with_every_feature_on" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    database_auth                  = "entra"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "test-only"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = jsonencode({ kty = "EC" })
+    initial_owner_email            = "owner@example.com"
+    acr_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "managed"
+    redis_auth                     = "entra"
+    enable_workers                 = true
+    enable_service_bus             = true
+    servicebus_sku                 = "Standard"
+    email_acs_enabled              = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition = (
+      var.migrations == "start" &&
+      length(azurerm_role_assignment.kv_secrets_officer) == 1 &&
+      length(azurerm_role_assignment.kv_crypto_officer) == 1 &&
+      length(azurerm_role_assignment.acr_pull) == 1 &&
+      length(azurerm_role_assignment.acs_email_sender) == 1 &&
+      length(azurerm_role_assignment.sb_sender) == 1 &&
+      length(azurerm_role_assignment.sb_receiver) == 1 &&
+      length(azurerm_role_assignment.sb_scaler) == 1 &&
+      length(azurerm_managed_redis_access_policy_assignment.apps) == 1
+    )
+    error_message = "This run must switch on every feature a workers grant copies, or its absence checks below prove nothing."
+  }
+
+  assert {
+    condition = (
+      length(module.workers_identity) == 0 &&
+      length(azurerm_role_assignment.kv_secrets_officer_workers) == 0 &&
+      length(azurerm_role_assignment.kv_crypto_officer_workers) == 0 &&
+      length(azurerm_role_assignment.acr_pull_workers) == 0 &&
+      length(azurerm_role_assignment.acs_email_sender_workers) == 0 &&
+      length(azurerm_role_assignment.sb_sender_workers) == 0 &&
+      length(azurerm_role_assignment.sb_receiver_workers) == 0 &&
+      length(azurerm_role_assignment.sb_scaler_workers) == 0 &&
+      length(azurerm_managed_redis_access_policy_assignment.workers) == 0 &&
+      length(module.postgres_connection_urls_api) == 0 &&
+      length(module.postgres_connection_urls_workers) == 0
+    )
+    error_message = "With migrations left at \"start\" no workers grant, Redis policy or per-app DSN may exist, whatever features are on."
+  }
+}
+
+run "migrations_start_creates_no_workers_redis_policy_on_azure_cache_for_redis" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    database_auth                  = "entra"
+    ingress_allowed_cidrs          = ["203.0.113.7/32"]
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "test-only"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = jsonencode({ kty = "EC" })
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    redis_auth                     = "entra"
+    enable_workers                 = true
+    api_max_replicas               = 2
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_zone_redundant_ha     = true
+    postgres_backup_retention_days = 14
+  }
+
+  assert {
+    condition = (
+      length(azurerm_redis_cache_access_policy_assignment.apps) == 1 &&
+      length(azurerm_redis_cache_access_policy_assignment.workers) == 0
+    )
+    error_message = "With migrations left at \"start\" on Azure Cache for Redis, only the apps identity may hold an access policy."
   }
 }
 

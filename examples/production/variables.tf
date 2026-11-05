@@ -107,7 +107,7 @@ variable "external_database_admin_url" {
 variable "migrations" {
   type        = string
   default     = "start"
-  description = "\"start\" (default): the apps migrate at start. \"job\": the migrate job does; needs an api image from a backend release later than v0.135.0."
+  description = "\"start\" (default): the apps migrate at start. \"job\": the migrate job does; needs an api image from a backend release later than v0.135.0 that also creates the app roles masterly_api and masterly_workers (see the module README's upgrade note)."
 }
 
 variable "migrate_byo_database_secret_names" {

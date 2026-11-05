@@ -70,6 +70,16 @@ locals {
   # 5 messages per replica is kept: a drain runs every job of its Environment that it can
   # claim, so one replica per message would add replicas faster than the work needs them.
   workers_scale_message_count = 5
+
+  # Whether ca-workers runs as its own identity (id-<prefix>-workers, main.tf): with migrations =
+  # "job" on the starter server, where the migrate job binds masterly_workers to it, and only when
+  # ca-workers exists. Every `*_workers` grant, Redis policy and the workers' DSN secrets count on
+  # it, so an install without ca-workers gets none of them.
+  workers_own_identity = local.migrate_app_roles && var.enable_workers
+
+  # The identity ca-workers runs as, pulls with, resolves its vault references with and scales
+  # with: its own when workers_own_identity, the apps identity otherwise, as before.
+  workers_identity_id = local.workers_own_identity ? module.workers_identity[0].id : module.apps_identity.id
 }
 
 # The scale rule reads the queue's message count, which the scaler's documentation says needs
@@ -83,6 +93,15 @@ resource "azurerm_role_assignment" "sb_scaler" {
   scope                = azurerm_servicebus_queue.jobs[0].id
   role_definition_name = "Azure Service Bus Data Owner"
   principal_id         = module.apps_identity.principal_id
+}
+
+# The same role on the same queue for ca-workers' own identity, which the scale rule then uses.
+resource "azurerm_role_assignment" "sb_scaler_workers" {
+  count = local.workers_own_identity && local.workers_scale_on_queue ? 1 : 0
+
+  scope                = azurerm_servicebus_queue.jobs[0].id
+  role_definition_name = "Azure Service Bus Data Owner"
+  principal_id         = module.workers_identity[0].principal_id
 }
 
 check "workers_scale_on_the_polling_binding" {
@@ -102,7 +121,7 @@ module "workers" {
   image               = local.api_image # the same image as the api; only the command differs
 
   acr_login_server           = local.registry_server
-  user_assigned_identity_ids = [module.apps_identity.id]
+  user_assigned_identity_ids = [local.workers_identity_id]
 
   registry_username             = local.registry_username
   registry_password_secret_name = local.registry_password_secret_name
@@ -118,7 +137,7 @@ module "workers" {
 
   termination_grace_period_seconds = var.workers_termination_grace_period_seconds
 
-  # KEDA's Service Bus scaler, authenticated as the apps' managed identity (the namespace
+  # KEDA's Service Bus scaler, authenticated as ca-workers' managed identity (the namespace
   # refuses SAS). The queue, and its namespace by short name, are the ones the workers
   # receive from (MASTERLY_SERVICEBUS_QUEUE / MASTERLY_SERVICEBUS_NAMESPACE in main.tf).
   custom_scale_rules = local.workers_scale_on_queue ? [{
@@ -129,16 +148,17 @@ module "workers" {
       queueName    = azurerm_servicebus_queue.jobs[0].name
       messageCount = tostring(local.workers_scale_message_count)
     }
-    identity_id = module.apps_identity.id
+    identity_id = local.workers_identity_id
   }] : []
 
   # The full api env contract: build_services in the workers process reads the same
   # settings (identity, license, bus, secret store, redis) as the api. That includes the
   # CA bundle mount (MAS-446): SMTP/webhook/stream-push delivery runs here, so ca-workers
-  # needs the same trusted CA the api does, at the same path. The one exception is the BFF
-  # shared secret: it authenticates the frontend's calls to the api, ca-workers serves no
-  # request, so it gets the backend_* set, which is the api's without it (main.tf).
-  env                = local.api_env
+  # needs the same trusted CA the api does, at the same path. The exceptions: the BFF shared
+  # secret authenticates the frontend's calls to the api, and ca-workers serves no request, so
+  # it gets the backend_* set, which is the api's without it (main.tf); and with its own
+  # identity its AZURE_CLIENT_ID and its DSNs are its own (workers_env, workers-database-url).
+  env                = local.workers_env
   secrets            = local.backend_value_secrets
   secret_refs        = local.backend_vault_secret_refs
   env_secret_refs    = local.backend_env_secret_refs
@@ -163,6 +183,16 @@ module "workers" {
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,
     azurerm_managed_redis_access_policy_assignment.apps,
     azurerm_redis_cache_access_policy_assignment.apps,
+    # Its own identity's grants, when it runs as it.
+    azurerm_role_assignment.acr_pull_workers,
+    azurerm_role_assignment.kv_secrets_officer_workers,
+    azurerm_role_assignment.kv_crypto_officer_workers,
+    azurerm_role_assignment.sb_sender_workers,
+    azurerm_role_assignment.sb_receiver_workers,
+    azurerm_role_assignment.sb_scaler_workers,
+    azurerm_role_assignment.acs_email_sender_workers,
+    azurerm_managed_redis_access_policy_assignment.workers,
+    azurerm_redis_cache_access_policy_assignment.workers,
     azurerm_private_endpoint.servicebus,
     azurerm_private_dns_zone_virtual_network_link.servicebus,
     # MASTERLY_MIGRATIONS = job, as on the api (migrate.tf).

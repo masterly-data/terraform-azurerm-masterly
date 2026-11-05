@@ -28,6 +28,44 @@ Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143
 
 ### Added
 
+- **With `migrations = "job"` on the starter server, `ca-api` and `ca-workers` sign in to Postgres
+  as their own DML-only roles, and `ca-workers` runs as its own identity (ADR 0120 §6).** A minor
+  release under ADR 0062: new resources, secrets and one output, no new input, nothing renamed or
+  removed. Additive: `id-<prefix>-apps` keeps its Entra administrator and every grant, and the
+  shared `database-url` / `database-direct-url` vault secrets stay, so running revisions keep
+  working until they are replaced. `ca-api` keeps its Container App secret for them too, named by
+  no env, because its old revision may restart while the new one waits for the job. With
+  `migrations = "start"`, or `"job"` on BYO-DB, nothing changes. What is new under `"job"` on the starter server:
+  - `ca-workers` runs, pulls, scales (the KEDA jobs-queue rule) and resolves its Key Vault
+    references as `id-<prefix>-workers`, with that identity's `AZURE_CLIENT_ID`. `ca-api` stays on
+    `id-<prefix>-apps`;
+  - each app reads its own URL from its own vault secret: `api-database-url` with user
+    `masterly_api`, `workers-database-url` with user `masterly_workers` (plus `api-database-direct-url`
+    / `workers-database-direct-url` with `postgres_pgbouncer`). No password on `"entra"`; on
+    `"password"`, that role's generated password, only inside its own vault secret. Neither app
+    carries the other's URL, and no env of either names the shared one;
+  - `id-<prefix>-workers` gets copies of the backend grants (each `*_workers`): Key Vault Secrets
+    Officer and Crypto Officer on the vault, `AcrPull` through `acr_id`, ACS Email Owner with
+    `email_acs_enabled`, Service Bus Data Sender and Receiver, Data Owner on the jobs queue when
+    `ca-workers` scales on it, and its own Redis access policy on `"entra"` (`masterly-workers` on
+    Azure Cache for Redis). Never a grant `id-<prefix>-apps` lacks, and no Postgres administrator.
+    These grants, its Redis policy and the `workers-*` URL secrets exist only while
+    `enable_workers` is on;
+  - new output `workers_identity_principal_id` (null otherwise). **With `acr_id` null, grant it
+    `AcrPull` out of band before applying**, or `ca-workers` cannot pull its new revision.
+
+  **This needs an api image that creates `masterly_api` and `masterly_workers`, and no released
+  image does** (none up to v0.135.0; backend reference `masterly-application-backend` at commit
+  `462467d1`, in no release tag yet). The module does not check the image, and has no input to
+  defer the move: with an image that runs the job but lacks the role creation, `ca-api`'s new
+  revision never becomes ready and `ca-workers` restarts without end. On the starter server, keep
+  `migrations = "start"`, and do not upgrade an install already on `"job"` to this version, until
+  it runs a backend
+  release whose notes name the app-role creation. With such an image, on apply, `ca-api`'s new
+  revision becomes ready once the migrate job has created `masterly_api`. `ca-workers` has no
+  probe: its new revision replaces the old one at once and restarts until the job has created
+  `masterly_workers`. The upgrade note under "The migrate job" in the README has the order.
+
 - **The migrate job, opt-in: schema migrations and new Environments' databases run in their own
   job, as their own identity (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23).** A
   minor release under ADR 0062: new resources and inputs, nothing renamed or removed. The new input
