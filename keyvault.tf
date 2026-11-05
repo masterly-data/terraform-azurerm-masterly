@@ -240,7 +240,7 @@ resource "azurerm_role_assignment" "kv_crypto_officer" {
 # The same two vault-scope roles for ca-workers' own identity, when it runs as it
 # (main.tf, workers_identity): ca-workers seals material and runs erasure as the api does.
 resource "azurerm_role_assignment" "kv_secrets_officer_workers" {
-  count = local.migrate_app_roles && var.enable_key_vault ? 1 : 0
+  count = local.workers_own_identity && var.enable_key_vault ? 1 : 0
 
   scope                = azurerm_key_vault.this[0].id
   role_definition_name = "Key Vault Secrets Officer"
@@ -248,7 +248,7 @@ resource "azurerm_role_assignment" "kv_secrets_officer_workers" {
 }
 
 resource "azurerm_role_assignment" "kv_crypto_officer_workers" {
-  count = local.migrate_app_roles && var.enable_key_vault ? 1 : 0
+  count = local.workers_own_identity && var.enable_key_vault ? 1 : 0
 
   scope                = azurerm_key_vault.this[0].id
   role_definition_name = "Key Vault Crypto Officer"
@@ -458,9 +458,10 @@ locals {
   ]
   # With the app roles each backend app names its own DSN secrets, and no app names the shared
   # ones, which stay here so that an upgrade does not delete what running revisions reference.
+  # Without ca-workers nothing reads its list, so its DSN secrets are not created.
   install_secret_names = distinct(concat(
     local.api_secret_names,
-    local.backend_secret_names,
+    var.enable_workers ? local.backend_secret_names : [],
     local.frontend_secret_names,
     local.migrate_vault_secret_names,
     local.migrate_app_roles ? local.shared_database_secret_names : [],

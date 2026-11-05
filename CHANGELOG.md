@@ -43,7 +43,9 @@ inventing one now would be exactly the retyped-value failure the manifest exists
     Officer and Crypto Officer on the vault, `AcrPull` through `acr_id`, ACS Email Owner with
     `email_acs_enabled`, Service Bus Data Sender and Receiver, Data Owner on the jobs queue when
     `ca-workers` scales on it, and its own Redis access policy on `"entra"` (`masterly-workers` on
-    Azure Cache for Redis). Never a grant `id-<prefix>-apps` lacks, and no Postgres administrator;
+    Azure Cache for Redis). Never a grant `id-<prefix>-apps` lacks, and no Postgres administrator.
+    These grants, its Redis policy and the `workers-*` URL secrets exist only while
+    `enable_workers` is on;
   - new output `workers_identity_principal_id` (null otherwise). **With `acr_id` null, grant it
     `AcrPull` out of band before applying**, or `ca-workers` cannot pull its new revision.
 

@@ -235,14 +235,14 @@ resource "azurerm_redis_cache_access_policy_assignment" "apps" {
 # offering under its own assignment. The Redis URL carries no username on "entra", so the one
 # URL serves both apps.
 resource "azurerm_managed_redis_access_policy_assignment" "workers" {
-  count = local.migrate_app_roles && local.redis_entra && local.use_managed_redis ? 1 : 0
+  count = local.workers_own_identity && local.redis_entra && local.use_managed_redis ? 1 : 0
 
   managed_redis_id = azurerm_managed_redis.this[0].id
   object_id        = module.workers_identity[0].principal_id
 }
 
 resource "azurerm_redis_cache_access_policy_assignment" "workers" {
-  count = local.migrate_app_roles && local.redis_entra && local.use_legacy_redis ? 1 : 0
+  count = local.workers_own_identity && local.redis_entra && local.use_legacy_redis ? 1 : 0
 
   name               = "masterly-workers"
   redis_cache_id     = azurerm_redis_cache.this[0].id

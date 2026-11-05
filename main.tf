@@ -664,6 +664,8 @@ module "migrate_identity" {
 # ca-workers runs as it (workers.tf) and it holds copies of the backend grants the apps identity
 # holds (each `*_workers` grant), never one that identity lacks, and is no Postgres administrator.
 # Only with migrations = "job" on the starter server; otherwise ca-workers runs as the apps identity.
+# Without ca-workers (enable_workers = false) the identity still exists for the migrate job's role,
+# but holds no grant and no DSN secret (local.workers_own_identity, workers.tf).
 module "workers_identity" {
   source = "./modules/user-assigned-identity"
   count  = local.migrate_app_roles ? 1 : 0
@@ -770,7 +772,7 @@ resource "azurerm_role_assignment" "acr_pull_migrate" {
 # ca-workers pulls as its own identity once it runs as it (the registry block takes the app's
 # first identity, modules/aca-container-app).
 resource "azurerm_role_assignment" "acr_pull_workers" {
-  count = local.migrate_app_roles && !local.registry_token_mode && var.acr_id != null ? 1 : 0
+  count = local.workers_own_identity && !local.registry_token_mode && var.acr_id != null ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -1096,7 +1098,7 @@ resource "azurerm_role_assignment" "sb_receiver" {
 
 # The same two roles for ca-workers' own identity, when it runs as it.
 resource "azurerm_role_assignment" "sb_sender_workers" {
-  count = local.migrate_app_roles && var.enable_service_bus ? 1 : 0
+  count = local.workers_own_identity && var.enable_service_bus ? 1 : 0
 
   scope                = azurerm_servicebus_namespace.this[0].id
   role_definition_name = "Azure Service Bus Data Sender"
@@ -1104,7 +1106,7 @@ resource "azurerm_role_assignment" "sb_sender_workers" {
 }
 
 resource "azurerm_role_assignment" "sb_receiver_workers" {
-  count = local.migrate_app_roles && var.enable_service_bus ? 1 : 0
+  count = local.workers_own_identity && var.enable_service_bus ? 1 : 0
 
   scope                = azurerm_servicebus_namespace.this[0].id
   role_definition_name = "Azure Service Bus Data Receiver"
@@ -1249,7 +1251,7 @@ module "postgres_connection_urls_api" {
 
 module "postgres_connection_urls_workers" {
   source = "./modules/postgres-connection-urls"
-  count  = local.migrate_app_roles ? 1 : 0
+  count  = local.workers_own_identity ? 1 : 0
 
   server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
   auth_mode   = local.database_auth_mode
@@ -1260,7 +1262,8 @@ module "postgres_connection_urls_workers" {
 }
 
 locals {
-  # Null without the app roles, where the secrets below are never named.
+  # Null without the app roles (the workers' also without ca-workers), where the secrets below
+  # are never named.
   api_database_url            = one(module.postgres_connection_urls_api[*].pooler_url)
   api_database_direct_url     = one(module.postgres_connection_urls_api[*].direct_url)
   workers_database_url        = one(module.postgres_connection_urls_workers[*].pooler_url)
@@ -1270,8 +1273,8 @@ locals {
   # its own with the app roles, the shared install-level one otherwise, as before.
   api_database_secret_name            = local.migrate_app_roles ? "api-database-url" : "database-url"
   api_database_direct_secret_name     = local.migrate_app_roles ? "api-database-direct-url" : "database-direct-url"
-  workers_database_secret_name        = local.migrate_app_roles ? "workers-database-url" : "database-url"
-  workers_database_direct_secret_name = local.migrate_app_roles ? "workers-database-direct-url" : "database-direct-url"
+  workers_database_secret_name        = local.workers_own_identity ? "workers-database-url" : "database-url"
+  workers_database_direct_secret_name = local.workers_own_identity ? "workers-database-direct-url" : "database-direct-url"
 
   # The shared DSN secrets no app names with the app roles. They stay in the vault
   # (install_secret_names, keyvault.tf), because the revisions running before an upgrade to
@@ -1424,7 +1427,7 @@ locals {
   # set to the apps identity's, is that identity's instead. Merged last, so it is the only value.
   workers_env = merge(
     local.api_env,
-    local.migrate_app_roles ? { AZURE_CLIENT_ID = module.workers_identity[0].client_id } : {},
+    local.workers_own_identity ? { AZURE_CLIENT_ID = module.workers_identity[0].client_id } : {},
   )
 
   # --- The install's secret material -----------------------------------------------

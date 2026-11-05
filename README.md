@@ -641,7 +641,8 @@ Key Vault references and scale rule, and reads `workers-database-url` (and
 password; on `"password"` each carries its own role's password, and only inside its own Key Vault
 secret: never in env, an ACA value secret or an output. Neither app carries the other's URL, and
 `ca-frontend` and `caj-migrate` carry neither. `id-<prefix>-workers` holds a copy of each backend
-grant (see [What the module creates](#what-the-module-creates)).
+grant (see [What the module creates](#what-the-module-creates)). These grants, its Redis policy and
+the `workers-*` URL secrets exist only while `enable_workers` is on.
 
 This is additive. `id-<prefix>-apps` keeps its Entra administrator and every grant, and the shared
 `database-url` (and `database-direct-url`) stays in the vault, named by no app, so the revisions

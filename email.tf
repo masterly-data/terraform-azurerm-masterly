@@ -59,7 +59,7 @@ resource "azurerm_role_assignment" "acs_email_sender" {
 # The same role for ca-workers' own identity, when it runs as it (workers.tf): email delivery
 # runs in the workers process.
 resource "azurerm_role_assignment" "acs_email_sender_workers" {
-  count                = local.migrate_app_roles && var.email_acs_enabled ? 1 : 0
+  count                = local.workers_own_identity && var.email_acs_enabled ? 1 : 0
   scope                = module.acs_email[0].communication_service_id
   role_definition_name = "Communication and Email Service Owner"
   principal_id         = module.workers_identity[0].principal_id

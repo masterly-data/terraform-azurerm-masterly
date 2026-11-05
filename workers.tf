@@ -71,10 +71,15 @@ locals {
   # claim, so one replica per message would add replicas faster than the work needs them.
   workers_scale_message_count = 5
 
+  # Whether ca-workers runs as its own identity (id-<prefix>-workers, main.tf): with migrations =
+  # "job" on the starter server, where the migrate job binds masterly_workers to it, and only when
+  # ca-workers exists. Every `*_workers` grant, Redis policy and the workers' DSN secrets count on
+  # it, so an install without ca-workers gets none of them.
+  workers_own_identity = local.migrate_app_roles && var.enable_workers
+
   # The identity ca-workers runs as, pulls with, resolves its vault references with and scales
-  # with: its own (id-<prefix>-workers, main.tf) with migrations = "job" on the starter server,
-  # where the migrate job binds masterly_workers to it; the apps identity otherwise, as before.
-  workers_identity_id = local.migrate_app_roles ? module.workers_identity[0].id : module.apps_identity.id
+  # with: its own when workers_own_identity, the apps identity otherwise, as before.
+  workers_identity_id = local.workers_own_identity ? module.workers_identity[0].id : module.apps_identity.id
 }
 
 # The scale rule reads the queue's message count, which the scaler's documentation says needs
@@ -92,7 +97,7 @@ resource "azurerm_role_assignment" "sb_scaler" {
 
 # The same role on the same queue for ca-workers' own identity, which the scale rule then uses.
 resource "azurerm_role_assignment" "sb_scaler_workers" {
-  count = local.migrate_app_roles && local.workers_scale_on_queue ? 1 : 0
+  count = local.workers_own_identity && local.workers_scale_on_queue ? 1 : 0
 
   scope                = azurerm_servicebus_queue.jobs[0].id
   role_definition_name = "Azure Service Bus Data Owner"
