@@ -50,10 +50,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   - new output `workers_identity_principal_id` (null otherwise). **With `acr_id` null, grant it
     `AcrPull` out of band before applying**, or `ca-workers` cannot pull its new revision.
 
-  On apply, `ca-api`'s new revision becomes ready once the migrate job has created `masterly_api`.
-  `ca-workers` has no probe: its new revision replaces the old one at once and restarts until the
-  job has created `masterly_workers`. The upgrade note under "The migrate job" in the README has the
-  order.
+  **This needs an api image that creates `masterly_api` and `masterly_workers`, and no released
+  image does** (none up to v0.135.0; backend reference `masterly-application-backend` at commit
+  `462467d1`, in no release tag yet). The module does not check the image, and has no input to
+  defer the move: with an image that runs the job but lacks the role creation, `ca-api`'s new
+  revision never becomes ready and `ca-workers` restarts without end. On the starter server, keep
+  `migrations = "start"`, and do not upgrade an install already on `"job"` to this version, until
+  it runs a backend
+  release whose notes name the app-role creation. With such an image, on apply, `ca-api`'s new
+  revision becomes ready once the migrate job has created `masterly_api`. `ca-workers` has no
+  probe: its new revision replaces the old one at once and restarts until the job has created
+  `masterly_workers`. The upgrade note under "The migrate job" in the README has the order.
 
 - **The migrate job, opt-in: schema migrations and new Environments' databases run in their own
   job, as their own identity (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23).** A

@@ -1236,7 +1236,9 @@ module "postgres_connection_urls_migrate" {
 # the DML-only role the migrate job creates for it (migrate.tf, ADR 0120 §6). On "entra" the role
 # is bound to the app's identity and the URL carries no password; on "password" it carries that
 # role's generated password, and reaches the app only inside its own vault secret ("job" requires
-# mode = production, which requires the vault).
+# mode = production, which requires the vault). The roles exist only if the api image's migrate
+# role creates them, which no release up to v0.135.0 does; the README's upgrade note gates "job"
+# on such a release, and the module cannot check the image.
 module "postgres_connection_urls_api" {
   source = "./modules/postgres-connection-urls"
   count  = local.migrate_app_roles ? 1 : 0

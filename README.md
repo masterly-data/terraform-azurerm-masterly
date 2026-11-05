@@ -655,11 +655,13 @@ whatever secrets stay. Removing the shared secrets is later work. Both backend
 identities hold Key Vault Secrets Officer on the vault, so each can still read every vault secret,
 the other app's URL and the role-password secrets among them; narrowing that is later work. The
 passwords are generated once and never rotated by Terraform, because the job never changes an
-existing role's password. The backend reads these
-settings from a release later than v0.135.0 with the `migrate_*_role` settings
-(`masterly-application-backend` at commit `cf741e0e1fda`, `core/settings.py`); confirm them in the
-api release's notes. The app roles, and the apps signing in as them, are a minor release under ADR
-0062: new resources, secrets, job env and one output (`workers_identity_principal_id`), no new
+existing role's password. **No released api image creates these roles.** The backend reads these
+settings, and its migrate role creates the roles, only in a release later than v0.135.0
+(`masterly-application-backend`: the `migrate_*_role` settings at commit `cf741e0e1fda`,
+`core/settings.py`; the role creation at commit `462467d1`; neither is in a release tag yet).
+The module does not check the image; confirm both in the api release's notes before your install
+runs `"job"` on the starter server on this version (see the upgrade note below). The app roles,
+and the apps signing in as them, are a minor release under ADR 0062: new resources, secrets, job env and one output (`workers_identity_principal_id`), no new
 input, nothing renamed or removed. Nothing changes while `migrations` stays `"start"` or on BYO-DB.
 
 **BYO-DB.** `external_database_admin_url` (sensitive, optional) is a DSN to your database for a
@@ -684,8 +686,10 @@ unlisted connection cannot be migrated, even though the schedule continues to ru
 `migrations` stays `"start"`. `"job"` needs an api image from a backend release later than
 v0.135.0 that has the migrate entry point (`masterly_app.apps.migrate`), honours
 `MASTERLY_MIGRATIONS=job`, picks up pending provisioning runs on each migrate run, and serialises
-overlapping runs. The module does not check the image for them, so confirm them in the api
-release's notes. With an older image the job fails. The order:
+overlapping runs. On the starter server it must also create the app roles `masterly_api` and
+`masterly_workers` (see the apps' move below); no released image does yet. The module does not
+check the image for them, so confirm them in the api release's notes. With an older image the job
+fails. A qualifying image, below, is one with all of these. The order:
 
 1. **Roll a qualifying image first, with your CD**, onto `ca-api` and `ca-workers`, the way you
    roll any release. The apply below does not change their image: it adds
@@ -700,8 +704,15 @@ release's notes. With an older image the job fails. The order:
 **The apps' move to their own roles** (starter server only). The same apply, or the upgrade of an
 install already on `"job"`, moves `ca-api` and `ca-workers` to `masterly_api` and
 `masterly_workers` and `ca-workers` to `id-<prefix>-workers`; nothing is removed, so the running
-revisions keep the shared URL and identity until they are replaced.
+revisions keep the shared URL and identity until they are replaced. There is no input to defer
+the move: on this version, `"job"` on the starter server always moves both apps.
 
+- **The api image must create `masterly_api` and `masterly_workers`.** No released image does (none
+  up to v0.135.0). An image with the migrate entry point but without the role creation runs the
+  job, yet neither role ever exists: `ca-api`'s new revision never becomes ready, and `ca-workers`
+  restarts without end. The module does not check the image. Keep `migrations = "start"`, and do
+  not upgrade an install already on `"job"` to this version, until it runs a backend release whose
+  notes name the app-role creation. The readiness below assumes such an image.
 - **With `acr_id` null, grant `AcrPull` to `workers_identity_principal_id` before applying** (see
   [Getting the images](#getting-the-images-adr-0067)), or `ca-workers` cannot pull its new
   revision and stalls.
