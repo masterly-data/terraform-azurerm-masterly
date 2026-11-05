@@ -9650,6 +9650,112 @@ run "migrate_job_schedule_refuses_four_fields" {
   expect_failures = [var.migrate_job_schedule]
 }
 
+# A calling root may declare its registry credential variables sensitive, as it reasonably
+# would for anything taken from the install bundle. The module must plan the same way: whether
+# a credential was supplied is not the secret, so the presence and mode tests that decide which
+# secrets exist (keys of a for_each) must not carry the caller's mark. The deprecated
+# registry_username, marked sensitive by the caller, in production with the Key Vault on.
+run "sensitive_registry_username_plans_in_production_with_key_vault" {
+  command = plan
+
+  variables {
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+    acr_login_server     = null
+    registry_username    = sensitive("install-puller")
+    registry_password    = sensitive("pull-secret")
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition     = contains(keys(azurerm_key_vault_secret.install), "registry-password")
+    error_message = "A sensitive registry_username must still store the pull password in the vault as registry-password."
+  }
+
+  assert {
+    condition = (
+      contains(module.api.vault_backed_secret_names, "registry-password") &&
+      contains(module.frontend.vault_backed_secret_names, "registry-password") &&
+      contains(module.workers[0].vault_backed_secret_names, "registry-password")
+    )
+    error_message = "A sensitive registry_username must still reach every app as the registry-password Key Vault reference."
+  }
+
+  assert {
+    condition     = output.image_references.registry_credential_mode == "token" && output.image_references.registry_server == "masterly.azurecr.io"
+    error_message = "A sensitive registry_username must still derive the token mode against Masterly's registry."
+  }
+}
+
+# The same for registry_token passed from a sensitive object with the mode stated. The input is
+# declared sensitive already, so this guards the presence test the token mode is derived from.
+run "sensitive_registry_token_plans_in_production_with_key_vault" {
+  command = plan
+
+  variables {
+    mode                     = "production"
+    identity_binding         = "oidc"
+    oidc_allowed_issuers     = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience            = "api-client-id"
+    oidc_jwks_uri            = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id           = "bff-client-id"
+    oidc_client_secret       = "s3cret"
+    oidc_authority           = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri        = "https://app.example.com/api/auth/callback"
+    license_token            = "eyJ.fake.jwt"
+    license_public_jwk       = "{\"kty\":\"EC\"}"
+    initial_owner_email      = "owner@example.com"
+    enable_key_vault         = true
+    enable_redis             = true
+    redis_offering           = "cache"
+    enable_workers           = true
+    api_max_replicas         = 3
+    acr_login_server         = null
+    registry_credential_mode = "token"
+    registry_token = sensitive({
+      username = "00000000-0000-0000-0000-000000000000"
+      password = "sp-client-secret"
+    })
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition     = contains(keys(azurerm_key_vault_secret.install), "registry-password")
+    error_message = "A sensitive registry_token must still store the pull password in the vault as registry-password."
+  }
+
+  assert {
+    condition = (
+      contains(module.api.vault_backed_secret_names, "registry-password") &&
+      contains(module.frontend.vault_backed_secret_names, "registry-password") &&
+      contains(module.workers[0].vault_backed_secret_names, "registry-password")
+    )
+    error_message = "A sensitive registry_token must still reach every app as the registry-password Key Vault reference."
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.acr_pull) == 0 && output.image_references.registry_credential_mode == "token"
+    error_message = "A sensitive registry_token must still resolve to the token mode and grant no AcrPull."
+  }
+}
+
 # oidc_tenant_id (MAS-4145): a single-tenant Entra registration needs the tenant id alone; the
 # three endpoints and the audience follow from it and the client id.
 run "oidc_tenant_id_derives_the_entra_endpoints" {
