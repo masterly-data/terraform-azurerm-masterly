@@ -686,16 +686,21 @@ locals {
   # images, which is what acr_login_server = "" migrates to.
   registry_server = var.registry_location != null ? var.registry_location : (
     var.acr_login_server != null ? var.acr_login_server : (
-      var.registry_credential_mode != null || local.registry_token_set || var.registry_username != null || var.acr_id != null ? "masterly.azurecr.io" : ""
+      var.registry_credential_mode != null || local.registry_token_set || local.registry_username_set || var.acr_id != null ? "masterly.azurecr.io" : ""
     )
   )
 
   # Whether a credential was supplied is not the secret: the same narrow unmarking as the
   # licence's presence in backend_secret_names.
   registry_token_set = nonsensitive(var.registry_token != null)
+  # The same for the deprecated registry_username, which a calling root may pass from a variable
+  # it declares sensitive: unmarked, its presence would mark the derived mode, and with it the
+  # registry-password key of every secret for_each (azurerm_key_vault_secret.install). Only the
+  # null test is unmarked; the username itself keeps whatever mark the caller gave it.
+  registry_username_set = nonsensitive(var.registry_username != null)
 
   registry_credential_mode = var.registry_credential_mode != null ? var.registry_credential_mode : (
-    local.registry_token_set || var.registry_username != null ? "token" : (
+    local.registry_token_set || local.registry_username_set ? "token" : (
       contains(["", "masterly.azurecr.io"], lower(local.registry_server)) ? "managed_identity" : "customer_registry"
     )
   )
