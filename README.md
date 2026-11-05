@@ -633,7 +633,9 @@ App or job and holds no role assignment. The passwords are generated once and ne
 Terraform, because the job never changes an existing role's password. The backend reads these
 settings from a release later than v0.135.0 with the `migrate_*_role` settings
 (`masterly-application-backend` at commit `cf741e0e1fda`, `core/settings.py`); confirm them in the
-api release's notes.
+api release's notes. The app roles are a minor release under ADR 0062: new resources and job env
+only, no new input, nothing renamed or removed. Nothing changes while `migrations` stays `"start"`
+or on BYO-DB.
 
 **BYO-DB.** `external_database_admin_url` (sensitive, optional) is a DSN to your database for a
 role allowed to migrate and create databases. It stays in the ACA job's own secret even with
