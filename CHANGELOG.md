@@ -285,6 +285,18 @@ Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143
   whose last segment is `api` or `frontend`. Name the registry host in full. Write a digest in
   lowercase, with its `sha256:` prefix.
 
+### Fixed
+
+- **A calling root may pass `registry_username` from a variable it declares sensitive (MAS-4148).**
+  Until now that failed the plan with "Invalid for_each argument ... local.install_secret_names
+  has a sensitive value" at `azurerm_key_vault_secret.install` (with `enable_key_vault`), and the
+  `image_references` and `vault_backed_secret_names` outputs failed with "Output refers to
+  sensitive values". The test of whether a username was supplied is now unmarked with
+  `nonsensitive()`, as the test for `registry_token` already was. The username itself keeps the
+  caller's mark. Nothing else changes. A root that declared the variable non-sensitive to get
+  around this can mark it sensitive again. `registry_token` was not affected: it is declared
+  sensitive, and its presence test was already unmarked.
+
 ## [0.22.0] - 2026-10-29
 
 ### Changed
