@@ -87,8 +87,13 @@ locals {
 # built-in roles only Azure Service Bus Data Owner does. It is granted on the jobs queue only, not
 # on the namespace, so it reaches no other entity. That queue scope is enough is checked on a
 # live install before the release that carries this rule; namespace scope is the fallback.
+#
+# The apps identity holds it only while ca-workers runs as that identity: with
+# local.workers_own_identity the scale rule uses sb_scaler_workers below, and ca-api never needs
+# Data Owner (ADR 0120). module.workers depends on this grant, so on an install moving to
+# migrations = "job" Terraform removes it only after updating ca-workers.
 resource "azurerm_role_assignment" "sb_scaler" {
-  count = local.workers_scale_on_queue ? 1 : 0
+  count = local.workers_scale_on_queue && !local.workers_own_identity ? 1 : 0
 
   scope                = azurerm_servicebus_queue.jobs[0].id
   role_definition_name = "Azure Service Bus Data Owner"
@@ -178,6 +183,9 @@ module "workers" {
     azurerm_private_dns_zone_virtual_network_link.key_vault,
     azurerm_role_assignment.kv_secrets_officer,
     azurerm_role_assignment.sb_sender,
+    # On an install moving to migrations = "job", these three edges also make Terraform remove
+    # the apps identity's Receiver, scaler grant and Entra administrator only after this app's
+    # update: keep them.
     azurerm_role_assignment.sb_receiver,
     azurerm_role_assignment.sb_scaler,
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,

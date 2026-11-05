@@ -12,7 +12,8 @@
 #              authentication off. The apps' identity is the server's Microsoft Entra
 #              administrator, which makes it a database role that can create databases (the api
 #              creates one per Masterly Environment, ADR 0003). The connection URL names that role
-#              and carries no password; the api presents a token instead.
+#              and carries no password; the api presents a token instead. With migrations = "job"
+#              the migrate job's identity is the administrator instead (below).
 #   Redis      Access-key authentication is off. The apps' identity holds a data access policy on
 #              whichever redis_offering is active, and the URL carries no key.
 #
@@ -181,8 +182,14 @@ locals {
 # which is reachable only through its private endpoint, and this module runs no SQL. The
 # privilege is the same as the masterly_admin login it replaces, which was the server's
 # administrator too.
+#
+# With migrations = "job" there is none (ADR 0120): the migrate job is the server's only
+# administrator, and ca-api and ca-workers connect as the DML-only roles it creates
+# (masterly_api, masterly_workers). On an install moving to "job", Terraform destroys this
+# administrator only after it has updated ca-api and ca-workers, because both depend on it
+# (main.tf, workers.tf); the README's "The migrate job" gives the order for an existing install.
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "apps" {
-  count = local.database_entra ? 1 : 0
+  count = local.database_entra && !local.migrate_app_roles ? 1 : 0
 
   server_name         = azurerm_postgresql_flexible_server.this[0].name
   resource_group_name = azurerm_resource_group.data.name
@@ -192,9 +199,10 @@ resource "azurerm_postgresql_flexible_server_active_directory_administrator" "ap
   principal_type      = "ServicePrincipal"
 }
 
-# The migrate job's identity as a second Entra administrator (migrate.tf), beside the apps' one
-# above, which is unchanged. A flexible server takes several. Created after `apps` so the two
-# administrator operations do not run against the server at the same time.
+# The migrate job's identity as the server's Entra administrator (migrate.tf), and with "job" its
+# only one: the apps' one above is removed. The depends_on stays so the two administrator
+# operations never run against the server at the same time: on an install moving from "start",
+# this one is created first, and the apps' one destroyed after it.
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "migrate" {
   count = local.migrate_job && local.database_entra ? 1 : 0
 
