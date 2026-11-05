@@ -84,6 +84,27 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   image's migrate role must take ownership or membership of them before its first migration. See
   "The migrate job" in the [README](README.md#the-migrate-job).
 
+- **With `migrations = "job"` on the starter server, the migrate job creates DML-only database
+  roles for `ca-api` and `ca-workers` (ADR 0120 §6).** A minor release under ADR 0062: new
+  resources and job env only, no new input, nothing renamed or removed, and nothing changes while
+  `migrations` stays `"start"` or on BYO-DB (`external_database_url`). What is new:
+  - `MASTERLY_MIGRATE_API_ROLE=masterly_api` and `MASTERLY_MIGRATE_WORKERS_ROLE=masterly_workers`
+    on `caj-migrate`;
+  - `id-<prefix>-workers`, a user-assigned identity for the `masterly_workers` role, attached to no
+    Container App or job and holding no role assignment;
+  - on `database_auth = "entra"`, `MASTERLY_MIGRATE_API_ROLE_OBJECT_ID` (`id-<prefix>-apps`) and
+    `MASTERLY_MIGRATE_WORKERS_ROLE_OBJECT_ID` (`id-<prefix>-workers`) on the job;
+  - on `"password"`, two generated passwords in two new vault secrets,
+    `install-migrate-api-role-password` and `install-migrate-workers-role-password`, Key Vault
+    Secrets User for the migrate identity on each of those two secrets (never the vault), and
+    `MASTERLY_MIGRATE_API_ROLE_PASSWORD_REF` / `MASTERLY_MIGRATE_WORKERS_ROLE_PASSWORD_REF` on the
+    job, naming those secrets. The passwords are no ACA secret on the job or any app.
+
+  `ca-api`, `ca-workers` and `ca-frontend` keep their identities, database user, env and secrets,
+  and no existing grant changes. The roles need an api image from a backend release later than
+  v0.135.0 with the `migrate_*_role` settings (`masterly-application-backend` at commit
+  `cf741e0e1fda`); the job never alters a role that already exists.
+
 - **`registry_private_endpoint`: the registry over a private endpoint.** A new optional input, off
   by default. On, it creates a private endpoint to the registry `acr_id` names (subresource
   `registry`) on the install's private-endpoint subnet, a `privatelink.azurecr.io` private DNS

@@ -559,9 +559,9 @@ the API's `MASTERLY_ORG_ID`, optional `MASTERLY_ORG_NAME` and `MASTERLY_MODE`, w
 `MASTERLY_CONTROLPLANE_STORE=postgres`, to open the same install's durable control plane.
 Production's Key Vault requirement also applies.
 
-`migrations` defaults to `"start"`: the module creates no job, no migrate identity, no grant and
-no second Entra administrator, sets no `MASTERLY_MIGRATIONS`, and `ca-api` and `ca-workers`
-migrate at start as before. **`"job"` needs an api image from a backend release later than
+`migrations` defaults to `"start"`: the module creates no job, no migrate or workers identity, no
+app-role password, no grant and no second Entra administrator, sets no `MASTERLY_MIGRATIONS`, and
+`ca-api` and `ca-workers` migrate at start as before. **`"job"` needs an api image from a backend release later than
 v0.135.0.** The backend implementation reference is `masterly-application-backend` at commit
 `8d2cbd35`: `masterly_app/apps/migrate.py` is the entry point, `composition/migrate.py` composes
 the migrate role, and `core/settings.py` defines `MASTERLY_MIGRATIONS`,
@@ -610,6 +610,30 @@ crypto role, and no Service Bus, Redis or ACS access. The job carries its databa
 on `"entra"`, `masterly_admin` on `"password"`), the direct URL with `postgres_pgbouncer`, how
 to authenticate, and the CA bundle when one is set. Its secrets have their own names
 (`migrate-database-url`, `migrate-database-direct-url`), which no Container App carries.
+
+**The app roles.** On the starter server (not on BYO-DB, where the database is yours), the job
+also creates two DML-only login roles, `masterly_api` for `ca-api` and `masterly_workers` for
+`ca-workers`, and re-applies their grants on each run. It never alters a role that already exists.
+The job carries `MASTERLY_MIGRATE_API_ROLE` and `MASTERLY_MIGRATE_WORKERS_ROLE` (the names), and
+how each role signs in:
+
+- on `database_auth = "entra"`, `MASTERLY_MIGRATE_API_ROLE_OBJECT_ID` (the `id-<prefix>-apps`
+  object id) and `MASTERLY_MIGRATE_WORKERS_ROLE_OBJECT_ID` (the object id of `id-<prefix>-workers`,
+  a new user-assigned identity for `ca-workers`'s role);
+- on `"password"`, `MASTERLY_MIGRATE_API_ROLE_PASSWORD_REF` and
+  `MASTERLY_MIGRATE_WORKERS_ROLE_PASSWORD_REF`: the names of two new vault secrets,
+  `install-migrate-api-role-password` and `install-migrate-workers-role-password`, each holding a
+  generated 32-character password. The job reads them with its own identity, which gets Key Vault
+  Secrets User on each of those two secrets alone, never on the vault. They are no ACA secret on the
+  job or any app, and are not in `vault_backed_secret_names`.
+
+The apps do not use these roles yet: `ca-api`, `ca-workers` and `ca-frontend` keep their
+identities, database user, env and secrets, and `id-<prefix>-workers` is attached to no Container
+App or job and holds no role assignment. The passwords are generated once and never rotated by
+Terraform, because the job never changes an existing role's password. The backend reads these
+settings from a release later than v0.135.0 with the `migrate_*_role` settings
+(`masterly-application-backend` at commit `cf741e0e1fda`, `core/settings.py`); confirm them in the
+api release's notes.
 
 **BYO-DB.** `external_database_admin_url` (sensitive, optional) is a DSN to your database for a
 role allowed to migrate and create databases. It stays in the ACA job's own secret even with

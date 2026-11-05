@@ -408,6 +408,300 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
   }
 }
 
+# The app roles on "entra": two stable Postgres identifiers, each bound to its own identity's
+# object id. id-<prefix>-workers exists for that alone: no Container App or job runs as it and
+# nothing grants it anything. Every grant is on, so "nothing" covers them all.
+run "migrate_app_roles_on_entra_name_their_identities" {
+  command = plan
+
+  variables {
+    database_auth      = "entra"
+    acr_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    enable_service_bus = true
+    servicebus_sku     = "Standard"
+    email_acs_enabled  = true
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.frontend_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend", principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff", client_id = "ffffffff-ffff-ffff-ffff-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-frontend" }
+  }
+
+  override_module {
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  # Names the backend accepts, distinct from each other and from both admin roles.
+  assert {
+    condition = (
+      local.migrate_env["MASTERLY_MIGRATE_API_ROLE"] == "masterly_api" &&
+      local.migrate_env["MASTERLY_MIGRATE_WORKERS_ROLE"] == "masterly_workers" &&
+      local.migrate_env["MASTERLY_MIGRATE_API_ROLE"] != local.migrate_env["MASTERLY_MIGRATE_WORKERS_ROLE"] &&
+      local.migrate_database_role == "id-masterly-migrate" &&
+      alltrue([
+        for role in [local.migrate_env["MASTERLY_MIGRATE_API_ROLE"], local.migrate_env["MASTERLY_MIGRATE_WORKERS_ROLE"]] :
+        can(regex("^[a-z_][a-z0-9_]{0,62}$", role)) && role != "masterly_admin" && role != local.migrate_database_role
+      ])
+    )
+    error_message = "The app roles must be masterly_api and masterly_workers: valid Postgres identifiers, distinct, and neither masterly_admin nor the migrate role."
+  }
+
+  assert {
+    condition = (
+      local.migrate_env["MASTERLY_MIGRATE_API_ROLE_OBJECT_ID"] == module.apps_identity.principal_id &&
+      local.migrate_env["MASTERLY_MIGRATE_WORKERS_ROLE_OBJECT_ID"] == module.workers_identity[0].principal_id &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_MIGRATE_API_ROLE_OBJECT_ID"]) == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_MIGRATE_WORKERS_ROLE_OBJECT_ID"]) == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      module.workers_identity[0].name == "id-masterly-workers" &&
+      length([for k in keys(local.migrate_env) : k if endswith(k, "_PASSWORD_REF")]) == 0 &&
+      !contains(keys(local.migrate_env_secret_refs), "MASTERLY_MIGRATE_API_ROLE") &&
+      length(random_password.migrate_api_role) + length(random_password.migrate_workers_role) +
+      length(azurerm_key_vault_secret.migrate_api_role_password) + length(azurerm_key_vault_secret.migrate_workers_role_password) +
+      length(azurerm_role_assignment.kv_secrets_user_migrate_api_role_password) + length(azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password) == 0
+    )
+    error_message = "On entra the job must get the apps identity's and id-<prefix>-workers' object ids, and no password, vault secret, grant or password ref."
+  }
+
+  # Threat: id-<prefix>-workers attached or granted before ca-workers moves onto it.
+  assert {
+    condition = (
+      !contains(module.api.user_assigned_identity_ids, module.workers_identity[0].id) &&
+      !contains(module.workers[0].user_assigned_identity_ids, module.workers_identity[0].id) &&
+      !contains(module.frontend.user_assigned_identity_ids, module.workers_identity[0].id) &&
+      !contains(azurerm_container_app_job.migrate[0].identity[0].identity_ids, module.workers_identity[0].id) &&
+      !contains(module.api.secret_ref_identity_ids, module.workers_identity[0].id) &&
+      !contains(module.workers[0].secret_ref_identity_ids, module.workers_identity[0].id) &&
+      !contains(module.frontend.secret_ref_identity_ids, module.workers_identity[0].id) &&
+      alltrue([for name, ref in local.migrate_vault_secret_refs : ref.identity_id != module.workers_identity[0].id])
+    )
+    error_message = "No Container App or job may run as, or resolve a secret with, id-<prefix>-workers."
+  }
+
+  assert {
+    condition = alltrue([
+      for principal in concat(
+        [
+          azurerm_role_assignment.kv_secrets_officer[0].principal_id,
+          azurerm_role_assignment.kv_crypto_officer[0].principal_id,
+          azurerm_role_assignment.sb_sender[0].principal_id,
+          azurerm_role_assignment.sb_receiver[0].principal_id,
+          azurerm_role_assignment.sb_scaler[0].principal_id,
+          azurerm_role_assignment.acs_email_sender[0].principal_id,
+          azurerm_role_assignment.acr_pull[0].principal_id,
+          azurerm_role_assignment.acr_pull_frontend[0].principal_id,
+          azurerm_role_assignment.acr_pull_migrate[0].principal_id,
+          azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].object_id,
+          azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].object_id,
+        ],
+        [for ra in azurerm_role_assignment.kv_secrets_user_frontend : ra.principal_id],
+        [for ra in azurerm_role_assignment.kv_secrets_user_migrate : ra.principal_id],
+        [for ra in azurerm_role_assignment.kv_byo_database_reader_migrate : ra.principal_id],
+        [for ra in azurerm_role_assignment.kv_secrets_officer_deployer : ra.principal_id],
+        [for ra in azurerm_role_assignment.kv_secrets_reader : ra.principal_id],
+        [for a in azurerm_managed_redis_access_policy_assignment.apps : a.object_id],
+        [for a in azurerm_redis_cache_access_policy_assignment.apps : a.object_id],
+      ) : principal != module.workers_identity[0].principal_id
+    ])
+    error_message = "No role assignment, Entra administrator or Redis access policy may name id-<prefix>-workers' principal."
+  }
+
+  # The apps stay as on main: same identities, secrets and database role, no migrate env.
+  assert {
+    condition = (
+      module.api.user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
+      module.frontend.user_assigned_identity_ids == tolist([module.frontend_identity.id]) &&
+      module.api.vault_backed_secret_names == tolist(["bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
+      module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
+      module.frontend.vault_backed_secret_names == tolist(["bff-shared-secret", "oidc-client-secret"]) &&
+      length(module.api.value_secret_names) + length(module.workers[0].value_secret_names) + length(module.frontend.value_secret_names) == 0 &&
+      local.database_role == "id-masterly-apps" &&
+      local.api_env["AZURE_CLIENT_ID"] == module.apps_identity.client_id &&
+      !anytrue([for name in concat(module.api.env_names, module.workers[0].env_names, module.frontend.env_names) : startswith(name, "MASTERLY_MIGRATE_")])
+    )
+    error_message = "On entra, ca-api, ca-workers and ca-frontend must keep their identities, secrets, env and database role."
+  }
+}
+
+# The app roles on "password": one generated password each, held in a vault secret of its own and
+# handed to the job by name. The job reads each with its own identity, on that secret alone.
+run "migrate_app_roles_on_password_read_their_vault_secrets" {
+  command = plan
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.frontend_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend", principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff", client_id = "ffffffff-ffff-ffff-ffff-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-frontend" }
+  }
+
+  override_module {
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  assert {
+    condition = (
+      length(random_password.migrate_api_role) == 1 && length(random_password.migrate_workers_role) == 1 &&
+      alltrue([for p in [random_password.migrate_api_role[0], random_password.migrate_workers_role[0]] : p.length == 32 && !p.special]) &&
+      length(azurerm_key_vault_secret.migrate_api_role_password) == 1 && length(azurerm_key_vault_secret.migrate_workers_role_password) == 1 &&
+      azurerm_key_vault_secret.migrate_api_role_password[0].name == "install-migrate-api-role-password" &&
+      azurerm_key_vault_secret.migrate_workers_role_password[0].name == "install-migrate-workers-role-password"
+    )
+    error_message = "On password each app role must get a 32-character generated password, held in its own vault secret."
+  }
+
+  assert {
+    condition = (
+      local.migrate_env["MASTERLY_MIGRATE_API_ROLE"] == "masterly_api" &&
+      local.migrate_env["MASTERLY_MIGRATE_WORKERS_ROLE"] == "masterly_workers" &&
+      local.migrate_database_role == "masterly_admin" &&
+      local.migrate_env["MASTERLY_MIGRATE_API_ROLE_PASSWORD_REF"] == azurerm_key_vault_secret.migrate_api_role_password[0].name &&
+      local.migrate_env["MASTERLY_MIGRATE_WORKERS_ROLE_PASSWORD_REF"] == azurerm_key_vault_secret.migrate_workers_role_password[0].name &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_MIGRATE_API_ROLE_PASSWORD_REF"]) == "install-migrate-api-role-password" &&
+      one([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value if e.name == "MASTERLY_MIGRATE_WORKERS_ROLE_PASSWORD_REF"]) == "install-migrate-workers-role-password" &&
+      length([for k in keys(local.migrate_env) : k if endswith(k, "_OBJECT_ID")]) == 0 &&
+      length([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e if startswith(e.name, "MASTERLY_MIGRATE_") && e.secret_name != null]) == 0
+    )
+    error_message = "On password the job's plain env must name each app role's vault secret, with no object id and no ACA secret reference."
+  }
+
+  # Threat: privilege creep. Two new grants for the migrate identity, Secrets User, one per secret.
+  # Their scope (the secret's ARM id) is known only at apply: migrate_app_role_secrets_are_read_one_by_one.
+  assert {
+    condition = (
+      length(azurerm_role_assignment.kv_secrets_user_migrate_api_role_password) == 1 &&
+      length(azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password) == 1 &&
+      alltrue([
+        for ra in [azurerm_role_assignment.kv_secrets_user_migrate_api_role_password[0], azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password[0]] :
+        ra.role_definition_name == "Key Vault Secrets User" && ra.principal_id == module.migrate_identity[0].principal_id
+      ]) &&
+      toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url"]) &&
+      length(azurerm_role_assignment.kv_byo_database_reader_migrate) == 0 &&
+      length(azurerm_role_assignment.acr_pull_migrate) == 0
+    )
+    error_message = "On password the migrate identity must gain exactly one Key Vault Secrets User grant per app-role secret, and nothing else."
+  }
+
+  # The job waits for both grants before its first execution reads the secrets. `terraform test`
+  # cannot read depends_on, so this reads the job's own configuration.
+  assert {
+    condition = alltrue([
+      for ref in ["azurerm_role_assignment.kv_secrets_user_migrate_api_role_password", "azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password"] :
+      strcontains(regex("(?s)depends_on = \\[([^\\]]*)\\]", regex("(?s)resource \"azurerm_container_app_job\" \"migrate\" \\{(.*?)\\n\\}", file("${path.module}/migrate.tf"))[0])[0], ref)
+    ])
+    error_message = "caj-migrate must depend on both app-role password grants."
+  }
+
+  # Threat: password exposure. The secrets are no ACA secret on the job or any app.
+  assert {
+    condition = (
+      tolist(local.migrate_secret_names) == tolist(["migrate-database-url"]) &&
+      tolist(local.migrate_vault_secret_names) == tolist(["migrate-database-url"]) &&
+      sort([for s in azurerm_container_app_job.migrate[0].secret : s.name]) == tolist(["migrate-database-url"]) &&
+      length(local.migrate_value_secrets) == 0 &&
+      !anytrue([
+        for name in concat(
+          module.api.vault_backed_secret_names, module.workers[0].vault_backed_secret_names, module.frontend.vault_backed_secret_names,
+          module.api.value_secret_names, module.workers[0].value_secret_names, module.frontend.value_secret_names,
+          keys(azurerm_key_vault_secret.install), output.vault_backed_secret_names,
+        ) : strcontains(name, "role-password")
+      ])
+    )
+    error_message = "The app-role passwords must be no Container App or job secret, by value or by Key Vault reference, and outside the install secret set."
+  }
+
+  # The passwords are read in one place, their vault secrets: no env, secret or output reads them.
+  assert {
+    condition = (
+      length(regexall("random_password\\.migrate_(api|workers)_role", file("${path.module}/keyvault.tf"))) == 2 &&
+      alltrue([
+        for f in fileset(path.module, "*.tf") :
+        length(regexall("random_password\\.migrate_(api|workers)_role", file("${path.module}/${f}"))) == 0 if f != "keyvault.tf"
+      ])
+    )
+    error_message = "Only the two app-role vault secrets may read the app-role passwords."
+  }
+
+  assert {
+    condition = (
+      module.api.user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
+      module.frontend.user_assigned_identity_ids == tolist([module.frontend_identity.id]) &&
+      module.api.vault_backed_secret_names == tolist(["bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
+      module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
+      module.frontend.vault_backed_secret_names == tolist(["bff-shared-secret", "oidc-client-secret"]) &&
+      local.database_role == "masterly_admin" &&
+      !anytrue([for name in concat(module.api.env_names, module.workers[0].env_names, module.frontend.env_names) : startswith(name, "MASTERLY_MIGRATE_")]) &&
+      length(module.workers_identity) == 1 &&
+      !contains(module.workers[0].user_assigned_identity_ids, module.workers_identity[0].id)
+    )
+    error_message = "On password, ca-api, ca-workers and ca-frontend must keep their identities, secrets, env and database role."
+  }
+}
+
+# With migrations = "start" nothing of the app roles exists.
+run "migrate_app_roles_absent_with_start" {
+  command = plan
+
+  variables {
+    migrations = "start"
+  }
+
+  assert {
+    condition = (
+      length(module.workers_identity) + length(random_password.migrate_api_role) + length(random_password.migrate_workers_role) +
+      length(azurerm_key_vault_secret.migrate_api_role_password) + length(azurerm_key_vault_secret.migrate_workers_role_password) +
+      length(azurerm_role_assignment.kv_secrets_user_migrate_api_role_password) + length(azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password) +
+      length(azurerm_container_app_job.migrate) == 0 &&
+      !anytrue([for k in keys(local.migrate_env) : startswith(k, "MASTERLY_MIGRATE_")]) &&
+      !anytrue([for name in concat(module.api.env_names, module.workers[0].env_names, module.frontend.env_names) : startswith(name, "MASTERLY_MIGRATE_")])
+    )
+    error_message = "With migrations = \"start\" there must be no workers identity, app-role password, vault secret, grant or MASTERLY_MIGRATE_* env."
+  }
+}
+
+# On BYO-DB the database is the customer's: the job creates no app roles there.
+run "migrate_app_roles_absent_on_byo_database" {
+  command = plan
+
+  variables {
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_container_app_job.migrate) == 1 &&
+      length(module.workers_identity) + length(random_password.migrate_api_role) + length(random_password.migrate_workers_role) +
+      length(azurerm_key_vault_secret.migrate_api_role_password) + length(azurerm_key_vault_secret.migrate_workers_role_password) +
+      length(azurerm_role_assignment.kv_secrets_user_migrate_api_role_password) + length(azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password) == 0 &&
+      !anytrue([for k in keys(local.migrate_env) : startswith(k, "MASTERLY_MIGRATE_")]) &&
+      !anytrue([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : startswith(e.name, "MASTERLY_MIGRATE_")]) &&
+      toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url"])
+    )
+    error_message = "On BYO-DB there must be no workers identity, app-role password, vault secret, grant or MASTERLY_MIGRATE_* env on the job."
+  }
+}
+
 # The upgrade uses real modules, including ACA and identities, with shared ARM-shaped IDs.
 mock_provider "azurerm" {
   alias  = "upgrade"
@@ -649,5 +943,81 @@ run "external_database_admin_url_reaches_only_the_migrate_job" {
       issensitive(var.external_database_admin_url) && issensitive(local.migrate_value_secrets["migrate-database-url"])
     )
     error_message = "The admin DSN must remain sensitive in the job secret, with no vault copy, reference or grant."
+  }
+}
+
+# Applied, so the secrets' ARM ids and the passwords are known: each grant is scoped to its own
+# secret, never the vault, and no password value reaches an env, a Container App or job secret, or
+# another vault secret. Distinct ids, so a grant on the wrong secret fails.
+run "migrate_app_role_secrets_are_read_one_by_one" {
+  command = apply
+  providers = {
+    azurerm = azurerm.upgrade
+    random  = random
+    azapi   = azapi
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.migrate_api_role_password
+    values = {
+      versionless_id          = "https://kv-masterly-before.vault.azure.net/secrets/install-migrate-api-role-password"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-before/secrets/install-migrate-api-role-password"
+    }
+  }
+
+  override_resource {
+    target = azurerm_key_vault_secret.migrate_workers_role_password
+    values = {
+      versionless_id          = "https://kv-masterly-before.vault.azure.net/secrets/install-migrate-workers-role-password"
+      resource_versionless_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-before/secrets/install-migrate-workers-role-password"
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_key_vault_secret.migrate_api_role_password[0].key_vault_id == azurerm_key_vault.this[0].id &&
+      azurerm_key_vault_secret.migrate_workers_role_password[0].key_vault_id == azurerm_key_vault.this[0].id &&
+      azurerm_role_assignment.kv_secrets_user_migrate_api_role_password[0].scope == azurerm_key_vault_secret.migrate_api_role_password[0].resource_versionless_id &&
+      azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password[0].scope == azurerm_key_vault_secret.migrate_workers_role_password[0].resource_versionless_id &&
+      azurerm_role_assignment.kv_secrets_user_migrate_api_role_password[0].scope != azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password[0].scope &&
+      alltrue([
+        for ra in [azurerm_role_assignment.kv_secrets_user_migrate_api_role_password[0], azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password[0]] :
+        ra.scope != azurerm_key_vault.this[0].id && startswith(ra.scope, "${azurerm_key_vault.this[0].id}/secrets/install-migrate-")
+      ])
+    )
+    error_message = "Each app-role password grant must be scoped to its own secret's ARM id, never to the vault."
+  }
+
+  # Threat: password exposure.
+  assert {
+    condition = (
+      azurerm_key_vault_secret.migrate_api_role_password[0].value == random_password.migrate_api_role[0].result &&
+      azurerm_key_vault_secret.migrate_workers_role_password[0].value == random_password.migrate_workers_role[0].result &&
+      issensitive(random_password.migrate_api_role[0].result) && issensitive(random_password.migrate_workers_role[0].result) &&
+      alltrue(flatten([
+        for password in [random_password.migrate_api_role[0].result, random_password.migrate_workers_role[0].result] : concat(
+          [for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : e.value != password],
+          [for s in azurerm_container_app_job.migrate[0].secret : s.value != password],
+          [for v in values(local.migrate_env) : v != password],
+          [for v in values(local.api_env) : v != password],
+          [for v in values(local.secret_values) : v != password],
+          [for s in azurerm_key_vault_secret.install : s.value != password],
+        )
+      ]))
+    )
+    error_message = "Each app-role password must live in its own vault secret alone: in no job or app env, no ACA secret and no install secret."
+  }
+
+  assert {
+    condition = (
+      tolist(local.migrate_secret_names) == tolist(["migrate-database-url"]) &&
+      tolist(local.migrate_vault_secret_names) == tolist(["migrate-database-url"]) &&
+      sort([for s in azurerm_container_app_job.migrate[0].secret : s.name]) == tolist(["migrate-database-url"]) &&
+      local.migrate_env["MASTERLY_MIGRATE_API_ROLE_PASSWORD_REF"] == "install-migrate-api-role-password" &&
+      local.migrate_env["MASTERLY_MIGRATE_WORKERS_ROLE_PASSWORD_REF"] == "install-migrate-workers-role-password" &&
+      !contains(output.vault_backed_secret_names, "migrate-api-role-password") &&
+      !contains(output.vault_backed_secret_names, "migrate-workers-role-password")
+    )
+    error_message = "The job must get the app-role passwords only as vault secret names, with its ACA secrets as on main."
   }
 }
