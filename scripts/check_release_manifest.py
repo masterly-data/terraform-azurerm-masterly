@@ -120,7 +120,9 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 # The README lines that restate a manifest fact. Each keeps everything up to the opening quote —
 # the HCL blocks in the README are aligned, and a rewrite must not disturb that.
-VERSION_PIN_RE = re.compile(r'^(?P<head>\s*version\s*=\s*)"~>\s*\d+\.\d+"\s*$')
+# Either form is recognised so a README written with a range is rewritten, not missed; the
+# README is always rendered with the exact version (pin_guidance says why).
+VERSION_PIN_RE = re.compile(r'^(?P<head>\s*version\s*=\s*)"(?:~>\s*\d+\.\d+|\d+\.\d+\.\d+)"\s*$')
 IMAGE_PIN_RE = re.compile(r'^(?P<head>\s*(?P<name>api_image|frontend_image)\s*=\s*)"[^"]*"\s*$')
 
 BEGIN_MARKER = "<!-- release-manifest:begin -->"
@@ -619,22 +621,23 @@ def release_table(manifest: dict) -> list[str]:
 
 def pin_guidance(manifest: dict) -> list[str]:
     """The README's paragraph on choosing a `version` constraint, for the manifest's `latest`."""
-    major, minor, _ = semver(manifest["latest"])
+    latest = manifest["latest"]
+    major, minor, _ = semver(latest)
     line = f"{major}.{minor}"
     lines = [
-        f'Pin a version. `version = "~> {line}.0"` takes patches of {line} only: releases that',
-        "add no capability, no new input or required setting and no database migration, so you",
-        "can take them without reading the changelog. Use it if that is all you want to receive.",
-        f'`version = "~> {line}"`, as in the examples on this page, also takes every later',
-        f"{major}.x minor.",
+        f'Pin the exact version, as the examples on this page do (`version = "{latest}"`).',
+        "Terraform does not lock module versions: `.terraform.lock.hcl` records providers only, so",
+        "with a range every fresh `terraform init` (a new laptop, a CI runner, a clean clone) takes",
+        "the newest release the range admits. With an exact version your configuration is the",
+        "record of what the install runs, and an upgrade is a reviewed one-line change.",
+        f'If you do want a range, `version = "~> {line}.0"` takes patches of {line} only: releases',
+        "that add no capability, no new input or required setting and no database migration.",
+        f'`version = "~> {line}"` also takes every later {major}.x minor.',
     ]
     if major == 0:
-        lines[-1] += (
-            " Before 1.0.0 a minor may carry a breaking change, listed under its own heading in"
-        )
-        lines.append("the changelog, so read it before you take one.")
-    lines.append("`=` pins one release exactly. [Versioning](#versioning) says what each kind of")
-    lines.append("release promises.")
+        lines.append("Before 1.0.0 a minor may carry a breaking change, listed under its own heading")
+        lines.append("in the changelog, so read it before you take one.")
+    lines.append("[Versioning](#versioning) says what each kind of release promises.")
     return lines
 
 
@@ -687,8 +690,7 @@ def _replace_region(body: str, begin: str, end: str, content: list[str], what: s
 def render_readme(manifest: dict, readme: str) -> str:
     """`readme` with every fact the manifest owns replaced by the manifest's value."""
     latest = manifest["releases"][manifest["latest"]]
-    major, minor, _ = semver(manifest["latest"])
-    constraint = f"~> {major}.{minor}"
+    constraint = manifest["latest"]
 
     rendered: list[str] = []
     seen = {"version": 0, "api_image": 0, "frontend_image": 0}

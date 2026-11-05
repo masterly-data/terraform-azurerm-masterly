@@ -1293,17 +1293,35 @@ locals {
 }
 
 locals {
+  # The identity provider's endpoints: an explicit input wins, otherwise derived from
+  # oidc_tenant_id for a single-tenant Entra registration, otherwise null (and the oidc
+  # validation in variables.tf has already refused that combination).
+  oidc_tenant_base     = var.oidc_tenant_id == null ? null : "https://login.microsoftonline.com/${var.oidc_tenant_id}"
+  oidc_authority       = var.oidc_authority != null ? var.oidc_authority : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/v2.0")
+  oidc_allowed_issuers = var.oidc_allowed_issuers != null ? var.oidc_allowed_issuers : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/v2.0")
+  oidc_jwks_uri        = var.oidc_jwks_uri != null ? var.oidc_jwks_uri : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/discovery/v2.0/keys")
+  oidc_audience        = var.oidc_audience != null ? var.oidc_audience : var.oidc_client_id
+
+  # Break-glass admits an address that already holds the Owner role, and the first Owner is
+  # initial_owner_email, so that is the default once a hash arms it. The presence test is
+  # unmarked (the hash is sensitive, whether one was given is not), as for the secret names.
+  breakglass_owner_email = var.breakglass_owner_email != null ? var.breakglass_owner_email : (
+    nonsensitive(var.breakglass_secret_hash != null) ? var.initial_owner_email : null
+  )
+}
+
+locals {
   # Identity (ADR 0024): the binding plus, on oidc, the backend's token-verification
   # config. The BFF client half lives on the frontend below; the client secret and the
   # break-glass hash travel as Container App secrets, never plain env.
   identity_env = merge(
     { MASTERLY_IDENTITY_BINDING = var.identity_binding },
     var.identity_binding == "oidc" ? {
-      MASTERLY_OIDC_ALLOWED_ISSUERS = var.oidc_allowed_issuers
-      MASTERLY_OIDC_AUDIENCE        = var.oidc_audience
-      MASTERLY_OIDC_JWKS_URI        = var.oidc_jwks_uri
+      MASTERLY_OIDC_ALLOWED_ISSUERS = local.oidc_allowed_issuers
+      MASTERLY_OIDC_AUDIENCE        = local.oidc_audience
+      MASTERLY_OIDC_JWKS_URI        = local.oidc_jwks_uri
     } : {},
-    var.breakglass_owner_email != null ? { MASTERLY_BREAKGLASS_OWNER_EMAIL = var.breakglass_owner_email } : {},
+    local.breakglass_owner_email != null ? { MASTERLY_BREAKGLASS_OWNER_EMAIL = local.breakglass_owner_email } : {},
   )
 
   # The servicebus binding when enabled (ADR 0029). DefaultAzureCredential resolves the
@@ -1843,7 +1861,7 @@ module "frontend" {
     var.identity_binding == "oidc" ? merge(
       {
         MASTERLY_OIDC_CLIENT_ID    = var.oidc_client_id
-        MASTERLY_OIDC_AUTHORITY    = var.oidc_authority
+        MASTERLY_OIDC_AUTHORITY    = local.oidc_authority
         MASTERLY_OIDC_REDIRECT_URI = var.oidc_redirect_uri
       },
       var.oidc_scopes != null ? { MASTERLY_OIDC_SCOPES = var.oidc_scopes } : {},

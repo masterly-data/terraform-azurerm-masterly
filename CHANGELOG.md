@@ -22,6 +22,37 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Added
+
+- **`oidc_tenant_id`.** For a single-tenant Microsoft Entra registration, the tenant id is now
+  enough: `oidc_allowed_issuers` and `oidc_authority` default to
+  `https://login.microsoftonline.com/<tenant>/v2.0`, and `oidc_jwks_uri` to
+  `https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys`. Any of the three you set
+  yourself still wins. Another identity provider, or a multitenant Entra registration, sets the
+  three as before. `identity_binding = "oidc"` now requires `oidc_tenant_id` or all three.
+- **`docs/inputs.md`**: every input of the module, grouped by the subsystem it configures, with
+  its type, default and the first sentence of its description. Generated from the `.tf` files by
+  `scripts/check_inputs_reference.py`; CI fails when it is out of date.
+
+### Changed
+
+- **`oidc_audience` defaults to `oidc_client_id`.** The backend verifies the ID token the BFF
+  obtained, whose audience is that same client id, so this is the value almost every install
+  sets. An explicit value still wins.
+- **`breakglass_owner_email` defaults to `initial_owner_email` once `breakglass_secret_hash` is
+  set.** Break-glass admits only an existing Owner, and that address is the first one. Without a
+  hash nothing changes: no break-glass email is set. An explicit value still wins.
+- **The README recommends an exact module version** (`version = "0.23.0"`) instead of a
+  `~>` range, as the install-root guidance already did: Terraform does not lock module
+  versions, so a range lets every fresh `terraform init` take a newer release.
+
+No migration is needed, with one case to check. The OIDC defaults change nothing for an existing
+install: `identity_binding = "oidc"` refused an unset `oidc_audience`, `oidc_authority`,
+`oidc_allowed_issuers` or `oidc_jwks_uri` before. **An install that sets `breakglass_secret_hash`
+but not `breakglass_owner_email` had break-glass off, and the next apply arms it** for
+`initial_owner_email`: the plan shows `MASTERLY_BREAKGLASS_OWNER_EMAIL` added to `ca-api` and
+`ca-workers`. If that is not what you want, remove the hash.
+
 ## [0.23.0] - 2026-11-05
 
 Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143.0`.

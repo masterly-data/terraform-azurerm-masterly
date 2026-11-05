@@ -11,19 +11,22 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.23"
+  version = "0.23.0"
 }
 ```
 
 <!-- release-manifest:pins:begin -->
-Pin a version. `version = "~> 0.23.0"` takes patches of 0.23 only: releases that
-add no capability, no new input or required setting and no database migration, so you
-can take them without reading the changelog. Use it if that is all you want to receive.
-`version = "~> 0.23"`, as in the examples on this page, also takes every later
-0.x minor. Before 1.0.0 a minor may carry a breaking change, listed under its own heading in
-the changelog, so read it before you take one.
-`=` pins one release exactly. [Versioning](#versioning) says what each kind of
-release promises.
+Pin the exact version, as the examples on this page do (`version = "0.23.0"`).
+Terraform does not lock module versions: `.terraform.lock.hcl` records providers only, so
+with a range every fresh `terraform init` (a new laptop, a CI runner, a clean clone) takes
+the newest release the range admits. With an exact version your configuration is the
+record of what the install runs, and an upgrade is a reviewed one-line change.
+If you do want a range, `version = "~> 0.23.0"` takes patches of 0.23 only: releases
+that add no capability, no new input or required setting and no database migration.
+`version = "~> 0.23"` also takes every later 0.x minor.
+Before 1.0.0 a minor may carry a breaking change, listed under its own heading
+in the changelog, so read it before you take one.
+[Versioning](#versioning) says what each kind of release promises.
 <!-- release-manifest:pins:end -->
 
 Sourcing straight from GitHub also works
@@ -59,10 +62,13 @@ an existing install does are in [docs/networking.md](docs/networking.md).
 
 ## Usage
 
+Every input, grouped by subsystem, is in [docs/inputs.md](docs/inputs.md) (generated from the
+`.tf` files, so it cannot drift).
+
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "~> 0.23"
+  version = "0.23.0"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -100,18 +106,16 @@ module "masterly" {
   # The api at 1 vCPU / 2Gi; the other apps keep 0.5 vCPU / 1Gi. See "Scaling".
   app_resources = { api = { cpu = 1 } }
 
-  # Identity (ADR 0024): your own OIDC IdP — Entra, Okta, Keycloak, …
-  identity_binding     = "oidc"
-  oidc_allowed_issuers = "https://login.microsoftonline.com/<tenant_id>/v2.0"
-  # The SAME value as oidc_client_id below, not a second registration: the api verifies the ID
-  # token the frontend BFF obtained, and that token's aud is by construction the BFF's own
-  # client id. Registering a separate "api" app and naming it here fails at first sign-in.
-  oidc_audience        = "<bff client id>"
-  oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
-  oidc_client_id       = "<bff client id>"
-  oidc_client_secret   = var.oidc_client_secret # from your secret store
-  oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
-  oidc_redirect_uri    = "https://<frontend host>/api/auth/callback"
+  # Identity (ADR 0024): your own OIDC IdP. For a single-tenant Entra registration the tenant
+  # id is enough: the issuer, signing-key endpoint and authority follow from it, and the
+  # audience defaults to oidc_client_id (one app registration serves both). For Okta,
+  # Keycloak or multitenant Entra, leave oidc_tenant_id out and set oidc_allowed_issuers,
+  # oidc_jwks_uri and oidc_authority instead.
+  identity_binding   = "oidc"
+  oidc_tenant_id     = "<tenant id>"
+  oidc_client_id     = "<bff client id>"
+  oidc_client_secret = var.oidc_client_secret # from your secret store
+  oidc_redirect_uri  = "https://<frontend host>/api/auth/callback"
 
   # License (ADR 0013): from your install bundle.
   license_token      = var.license_token # from your secret store
@@ -362,12 +366,16 @@ Before you turn it on:
 - **`oidc`** — production: your own IdP. The backend verifies tokens against
   `oidc_allowed_issuers`/`oidc_audience`/`oidc_jwks_uri`; the frontend BFF is the
   confidential client (`oidc_client_id`/`oidc_client_secret`/`oidc_authority`/
-  `oidc_redirect_uri`). Optional break-glass local Owner via
-  `breakglass_owner_email` + `breakglass_secret_hash` — a salted Argon2id value minted
+  `oidc_redirect_uri`). With Entra, `oidc_tenant_id` fills in the issuer, the signing-key
+  endpoint and the authority for a single-tenant registration; any of the three you set
+  yourself wins. `oidc_audience` defaults to `oidc_client_id`. Optional break-glass local
+  Owner via `breakglass_secret_hash` — a salted Argon2id value minted
   inside the api image with `python -m masterly_app.core.breakglass_credential`, never the
   secret and never a sha256 digest, which the api refuses at startup. A break-glass attempt
   made in the GUI is throttled by the browser's address rather than the frontend's, through
-  the [BFF shared secret](#the-bff-shared-secret) the module generates. See
+  the [BFF shared secret](#the-bff-shared-secret) the module generates. Break-glass signs in
+  as `breakglass_owner_email`, which defaults to `initial_owner_email` once a hash is set:
+  that address becomes the first Owner, and break-glass admits only an existing Owner. See
   [Access and identity](https://masterlydata.com/docs/self-hosted/install/#access-and-identity).
 
   `oidc_allowed_issuers` normally holds **one** entry — this install's own issuer. Every

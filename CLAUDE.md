@@ -31,6 +31,7 @@ terraform init -backend=false -input=false && terraform validate
 terraform test                                   # mock providers, no cloud access
 python3 scripts/check_release_manifest.py --selftest && python3 scripts/check_release_manifest.py
 python3 scripts/check_runtime_env.py --selftest && python3 scripts/check_runtime_env.py
+python3 scripts/check_inputs_reference.py --selftest && python3 scripts/check_inputs_reference.py
 python3 scripts/release_notes.py --selftest && python3 scripts/release_gate.py --selftest
 bash tests/diagnostic_bundle_test.sh --selftest && bash tests/diagnostic_bundle_test.sh
 shellcheck --severity=style $(git ls-files '*.sh')   # any finding fails; never lower the severity
@@ -43,6 +44,7 @@ CI pins Terraform 1.10.5 (the `required_version = ">= 1.10"` floor). Generated f
 ```bash
 python3 scripts/check_release_manifest.py --write   # README release table, from MANIFEST.json
 python3 scripts/check_runtime_env.py --write        # RUNTIME_ENV.json, from the .tf files
+python3 scripts/check_inputs_reference.py --write   # docs/inputs.md, from the .tf files
 ```
 
 ## Layout
@@ -61,12 +63,12 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
 | `modules/` | Eight nested submodules the root composes: `aca-container-app`, `aca-env-consumption`, `acs-email`, `license-claims-floor` (the plan-time licence claims-floor check; no resources), `log-analytics-workspace`, `postgres-connection-urls` (the starter server's pooler and direct URLs; no resources), `release-channel` (the plan-time choice of the default images from `MANIFEST.json`; no resources), `user-assigned-identity` |
 | `tests/` | `install.tftest.hcl` (the mock-provider run blocks), its own files for runs that apply (`availability_routing.tftest.hcl`, `migrate_image.tftest.hcl`), and `diagnostic_bundle_test.sh` with its `fixtures/`: the harness that proves the diagnostic bundle carries no secrets |
 | `examples/production/` | The production-posture example a customer copies; `source = "../../"`, so it validates the working tree |
-| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the release and docs gates), `check_runtime_env.py` (generates and checks `RUNTIME_ENV.json`, and that the bundle's env allowlist names only what the module sets), `release_notes.py` (a version's changelog section, as its GitHub Release body), `release_gate.py` (the check `cut-release.yml` runs before it creates a tag). Standard library only: release metadata should not depend on anything resolving. Also `iac_scan.sh`, the `iac-scan` job's Trivy scan and its check that every `.trivyignore.yaml` suppression names a rule ID and a README departure (and that no `.tf` file carries an inline `trivy:ignore`/`tfsec:ignore`, which would bypass it); CI only, so it is `export-ignore`d with its inputs |
+| `scripts/` | `preflight.sh` (pre-apply subscription check), `diagnostic-bundle.sh` (the operator's support bundle), `check_release_manifest.py` and `check_docs_module_pin.py` (the release and docs gates), `check_runtime_env.py` (generates and checks `RUNTIME_ENV.json`, and that the bundle's env allowlist names only what the module sets), `release_notes.py` (a version's changelog section, as its GitHub Release body), `release_gate.py` (the check `cut-release.yml` runs before it creates a tag), `check_inputs_reference.py` (generates and checks `docs/inputs.md`). Standard library only: release metadata should not depend on anything resolving. Also `iac_scan.sh`, the `iac-scan` job's Trivy scan and its check that every `.trivyignore.yaml` suppression names a rule ID and a README departure (and that no `.tf` file carries an inline `trivy:ignore`/`tfsec:ignore`, which would bypass it); CI only, so it is `export-ignore`d with its inputs |
 | `MANIFEST.json` | The release manifest: which image pair each published module version was released against. Fields: `schema_version` (`1` today), `module`, `latest`, and `releases` keyed by bare semver, each with a `date` and an `images` object naming `api` and `frontend`. Its published contract is `docs/release-manifest.md`: which fields are stable, which may be added without a `schema_version` bump, and what will never change silently. A change to its shape changes what other repositories and the public docs parse |
 | `RUNTIME_ENV.json` | Every env name the module sets, per app. Generated, never edited; contract `docs/runtime-env.md`. The application repositories vendor it and check their code and runbooks against it (MAS-545) |
 | `CHANGELOG.md` | Keep a Changelog. New entries go under `Unreleased`; cutting a release renames that heading |
 | `README.md` | The module surface reference. The customer walkthrough lives in the public docs, not here |
-| `docs/` | `networking.md` (the three topologies), `release-manifest.md`, `runtime-env.md`, and `releasing.md` (what gates a tag, and the repository settings that make `cut-release` the only path) |
+| `docs/` | `inputs.md` (every input, grouped by subsystem; generated), `networking.md` (the three topologies), `release-manifest.md`, `runtime-env.md`, and `releasing.md` (what gates a tag, and the repository settings that make `cut-release` the only path) |
 | `SECURITY.md` | The vulnerability-reporting policy we publish; hold to our half of it |
 
 ## Conventions
@@ -105,7 +107,8 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
   `cut-module-release`; `docs/releasing.md` says which repository settings are applied.
 - **Never treat a green PR as release-readiness**, and never bump `MANIFEST.json` outside a release
   commit. The manifest, changelog and README move in one commit on `main`, before the tag.
-- **Never hand-edit generated files** (README release table, `RUNTIME_ENV.json`).
+- **Never hand-edit generated files** (README release table and pin guidance, `RUNTIME_ENV.json`,
+  `docs/inputs.md`).
 - **Never claim application behaviour a released image tag lacks.** Skill `check-app-behaviour-claim`.
 - **Never commit credentials or key material, not even fake ones.** CI writes a throwaway
   `examples/production/license-issuer.jwk.json` and deletes it, because a fake key in a public repo
