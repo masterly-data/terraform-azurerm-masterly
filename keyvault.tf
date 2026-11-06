@@ -233,11 +233,12 @@ resource "azurerm_role_definition" "app_secrets" {
 # The grant, scoped to this vault only. It was Key Vault Secrets Officer under the name
 # kv_secrets_officer; the moved block keeps the address, so an upgrade replaces this one grant
 # (a role change forces a new assignment) rather than adding a grant beside an orphaned one that
-# nothing orders. Terraform removes the Secrets Officer grant and creates this one in the same
-# step, and ca-api and ca-workers depend on this address, so neither app is updated (and
-# restarted) before the new grant exists. A running app that reaches the vault in the seconds
-# between the two, or before Azure has propagated the new grant, can be refused; the CHANGELOG's
-# upgrade note says so.
+# nothing orders. The replacement is destroy-then-create: Terraform removes the Secrets Officer
+# grant first and creates this one after it (create_before_destroy here would put the app modules
+# in a dependency cycle). ca-api and ca-workers depend on this address, so neither app is updated
+# (and restarted) before the new grant exists. A running app that reaches the vault in the seconds
+# between the removal and the create, or before Azure has propagated the new grant, can be
+# refused; the CHANGELOG's upgrade note says so.
 resource "azurerm_role_assignment" "kv_app_secrets" {
   count = var.enable_key_vault ? 1 : 0
 

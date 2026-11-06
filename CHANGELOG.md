@@ -118,10 +118,10 @@ apply by a deployer holding the right succeeds. If that happens, grant the right
 With the right in place, the plan shows `azurerm_role_definition.app_secrets[0]` created, and
 `kv_secrets_officer` moved to `kv_app_secrets` (with `migrations = "job"` on the starter server,
 `kv_secrets_officer_workers` to `kv_app_secrets_workers` too), each replaced because its role
-changes. The vault and the
-Crypto Officer grants are not replaced or changed. Terraform removes each Secrets Officer grant
-and creates its replacement in the same step, and updates `ca-api` and `ca-workers` only after
-it. An app that reaches the vault in between, or before Azure has propagated the new grant
+changes. The vault and the Crypto Officer grants are not replaced or changed. Each replacement
+is destroy-then-create: Terraform removes the Secrets Officer grant first, then creates the new
+grant, and updates `ca-api` and `ca-workers` only after the new grant exists. An app that reaches
+the vault between the removal and the create, or before Azure has propagated the new grant
 (usually seconds, sometimes minutes), can be refused: apply in a quiet window, and restart a
 revision that failed to resolve a secret. On an install with `enable_key_vault = false` the plan
 shows no change from this release.
