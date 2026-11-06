@@ -618,8 +618,9 @@ resource "azurerm_monitor_diagnostic_setting" "aca_env" {
 # --- App identities --------------------------------------------------------------
 # One identity per app is the platform's rule, and the reason is the frontend: it is the
 # only internet-facing app in the install, and it needs nothing but image pull. Sharing
-# `apps_identity` with it handed the public front door Key Vault Secrets Officer, Service
-# Bus send + receive and ACS Email Owner — permissions it never uses, on the one app an
+# `apps_identity` with it handed the public front door write access to the install's Key Vault
+# secrets (Key Vault Secrets Officer then, the narrower app secrets role now), Service Bus send
+# + receive and ACS Email Owner — permissions it never uses, on the one app an
 # attacker reaches first. So the backend apps (api, workers) keep `apps_identity` and the
 # data-plane grants that go with it; the frontend gets its own, holding AcrPull alone.
 
@@ -1783,7 +1784,9 @@ module "api" {
     # With registry_private_endpoint, the first image pull already takes the private path.
     azurerm_private_endpoint.registry,
     azurerm_private_dns_zone_virtual_network_link.registry,
-    azurerm_role_assignment.kv_secrets_officer,
+    # The app secrets grant exists before this app's update; on an upgrade it replaces the
+    # Secrets Officer grant at the same address (keyvault.tf).
+    azurerm_role_assignment.kv_app_secrets,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
     # On "entra" the api authenticates as its identity at boot, so the database role and the

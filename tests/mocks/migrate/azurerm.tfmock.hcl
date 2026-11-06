@@ -41,4 +41,16 @@ mock_resource "azurerm_redis_cache" {
     id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redis/redis-masterly-test"
   }
 }
+# Every role definition shares this id unless a test file overrides it. A file that compares grants
+# by role id overrides each role definition it names with an id of its own, so a grant of any other
+# role definition does not compare equal to it.
+mock_resource "azurerm_role_definition" { defaults = { role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/11111111-1111-1111-1111-111111111111" } }
+# A grant names its role by name or by id and Azure computes the other. These stand-ins keep the
+# computed half the same on every grant, so (scope, name, id) compares two grants of one role.
+mock_resource "azurerm_role_assignment" {
+  defaults = {
+    role_definition_name = "(assigned by id)"
+    role_definition_id   = "(assigned by name)"
+  }
+}
 mock_resource "azurerm_container_app_job" { defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/jobs/caj-migrate" } }

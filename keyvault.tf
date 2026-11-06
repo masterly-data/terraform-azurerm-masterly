@@ -1,8 +1,9 @@
 # The install's Key Vault (ADR 0066 increment 2) — the durable secret-store binding.
 # Opt-in (default off; dev/demo run the in-process store): when enabled, this provisions a
-# per-install vault (RBAC mode, no access policies) and grants the apps identity the
-# Secrets Officer data-plane role, plus Crypto Officer for the erasure keys of ADR 0081 (the
-# grant below says why that one is vault-scoped). The api is flipped to
+# per-install vault (RBAC mode, no access policies) and grants the apps identity a custom
+# data-plane role that reads, writes and deletes secrets and nothing more (app_secrets, below),
+# plus Crypto Officer for the erasure keys of ADR 0081 (the grant below says why that one is
+# vault-scoped). The api is flipped to
 # MASTERLY_SECRET_STORE=keyvault and handed the vault URI; auth is the managed identity via
 # AZURE_CLIENT_ID — no secret.
 # Sealed material (BYO-DB connection strings, GitOps tokens) then survives restarts.
@@ -191,14 +192,64 @@ resource "azurerm_key_vault" "this" {
   tags = local.tags
 }
 
-# The apps identity reads/writes/deletes secrets — the Secrets Officer data-plane role,
-# scoped to this vault only.
-resource "azurerm_role_assignment" "kv_secrets_officer" {
+# The apps identity reads, writes and deletes secrets: it resolves the install-* references
+# below and seals its own material at runtime (KeyVaultSecretStore, ADR 0066) under
+# <slug>-<ulid>. That is four data actions, so the module defines a role holding exactly those
+# rather than granting the built-in Key Vault Secrets Officer, whose secrets/* also carries
+# purge, backup, restore and recover on every secret in the vault, the BYO-DB connection
+# strings included. With this role a compromised app can still read and overwrite secrets, as
+# it must to work, but it cannot copy them out as backups, restore old ones, or recover and
+# purge what was deleted.
+#
+# Role definition names are unique across an Entra tenant, so the name carries the install
+# suffix: two installs in one tenant never collide. The role is defined on, and assignable
+# only within, the install's data resource group, where the vault lives. Creating it needs
+# Microsoft.Authorization/roleDefinitions/write, which Owner and User Access Administrator
+# carry and Role Based Access Control Administrator does not. Before upgrading, run
+# scripts/preflight.sh --principal <deployer object id> and grant roleDefinitions/write if it
+# reports it missing: nothing orders the removal of the old Secrets Officer grants after this
+# create, so a deployer without it may lose those grants before this create fails, leaving the
+# apps with no secrets grant on the vault.
+resource "azurerm_role_definition" "app_secrets" {
   count = var.enable_key_vault ? 1 : 0
 
-  scope                = azurerm_key_vault.this[0].id
-  role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = module.apps_identity.principal_id
+  name        = "Masterly app secrets (${var.name_prefix}-${random_string.install.result})"
+  scope       = azurerm_resource_group.data.id
+  description = "Read, write and delete secrets in the Masterly install's Key Vault. No purge, backup, restore or recover."
+
+  permissions {
+    actions = []
+    data_actions = [
+      "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+      "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+      "Microsoft.KeyVault/vaults/secrets/delete",
+      "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+    ]
+  }
+
+  assignable_scopes = [azurerm_resource_group.data.id]
+}
+
+# The grant, scoped to this vault only. It was Key Vault Secrets Officer under the name
+# kv_secrets_officer; the moved block keeps the address, so an upgrade replaces this one grant
+# (a role change forces a new assignment) rather than adding a grant beside an orphaned one that
+# nothing orders. The replacement is destroy-then-create: Terraform removes the Secrets Officer
+# grant first and creates this one after it (create_before_destroy here would put the app modules
+# in a dependency cycle). ca-api and ca-workers depend on this address, so neither app is updated
+# (and restarted) before the new grant exists. A running app that reaches the vault in the seconds
+# between the removal and the create, or before Azure has propagated the new grant, can be
+# refused; the CHANGELOG's upgrade note says so.
+resource "azurerm_role_assignment" "kv_app_secrets" {
+  count = var.enable_key_vault ? 1 : 0
+
+  scope              = azurerm_key_vault.this[0].id
+  role_definition_id = azurerm_role_definition.app_secrets[0].role_definition_resource_id
+  principal_id       = module.apps_identity.principal_id
+}
+
+moved {
+  from = azurerm_role_assignment.kv_secrets_officer
+  to   = azurerm_role_assignment.kv_app_secrets
 }
 
 # The apps identity also creates and uses this vault's KEYS — the Crypto Officer data-plane
@@ -210,7 +261,7 @@ resource "azurerm_role_assignment" "kv_secrets_officer" {
 #   - a SIGNING key, held as a vault key. The application asks the vault to sign each erasure
 #     listing and never holds the key's private half, so a listing cannot be forged by anyone
 #     who only reaches the database.
-#   - a SUPPRESSION key, held as a vault secret — already covered by the Secrets Officer grant
+#   - a SUPPRESSION key, held as a vault secret — already covered by the app secrets grant
 #     above, and named here only so the pair is not mistaken for one grant covering both.
 #
 # Why this grant is on the vault rather than on those two keys, and why Crypto Officer rather
@@ -239,12 +290,18 @@ resource "azurerm_role_assignment" "kv_crypto_officer" {
 
 # The same two vault-scope roles for ca-workers' own identity, when it runs as it
 # (main.tf, workers_identity): ca-workers seals material and runs erasure as the api does.
-resource "azurerm_role_assignment" "kv_secrets_officer_workers" {
+# Renamed and replaced as kv_app_secrets is, for the same reason.
+resource "azurerm_role_assignment" "kv_app_secrets_workers" {
   count = local.workers_own_identity && var.enable_key_vault ? 1 : 0
 
-  scope                = azurerm_key_vault.this[0].id
-  role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = module.workers_identity[0].principal_id
+  scope              = azurerm_key_vault.this[0].id
+  role_definition_id = azurerm_role_definition.app_secrets[0].role_definition_resource_id
+  principal_id       = module.workers_identity[0].principal_id
+}
+
+moved {
+  from = azurerm_role_assignment.kv_secrets_officer_workers
+  to   = azurerm_role_assignment.kv_app_secrets_workers
 }
 
 resource "azurerm_role_assignment" "kv_crypto_officer_workers" {
@@ -316,8 +373,8 @@ resource "azurerm_private_endpoint" "key_vault" {
 # apps without an apply. Pinning the version would have put the copy back, one indirection
 # further away.
 #
-# The apps identity (and ca-workers' own, when it has one) already holds Secrets Officer on this
-# vault (above) for its own sealed material, so it can read these too. That is the same trust
+# The apps identity (and ca-workers' own, when it has one) already holds the app secrets role on
+# this vault (above) for its own sealed material, so it can read these too. That is the same trust
 # boundary, not a widening: the values are handed to those apps as environment either way.
 
 resource "azurerm_key_vault_secret" "install" {

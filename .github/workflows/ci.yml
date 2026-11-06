@@ -138,6 +138,28 @@ jobs:
       - name: No secrets or credentials, and record data flagged where it is not guaranteed absent
         run: bash tests/diagnostic_bundle_test.sh
 
+  # The module defines a custom role for the app identities' secrets grant, so the deployer must
+  # be able to write role definitions (Microsoft.Authorization/roleDefinitions/write), which Role
+  # Based Access Control Administrator cannot. scripts/preflight.sh is what tells a customer that
+  # before an apply fails halfway, so this job runs it against a stub `az`: in production a
+  # deployer without the right FAILs, naming the action; in demo, where the vault is optional, it
+  # WARNs. The selftest runs FIRST, for the reason the diagnostic-bundle job runs its own first: it
+  # breaks the script several ways and fails unless the suite notices each.
+  # No cloud, no credential: safe on a pull request from a fork.
+  preflight:
+    name: The preflight judges the deployer's rights as the apply will
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: The check still checks (a broken script must fail the suite)
+        run: bash tests/preflight_test.sh --selftest
+
+      - name: Role-definition right FAILs in production, WARNs in demo
+        run: bash tests/preflight_test.sh
+
   # A release states its version and its tested image pair once, in MANIFEST.json, and what
   # changed once, in CHANGELOG.md. This job is what makes that unforgettable rather than
   # well-intentioned: on a pull request it fails when the manifest, the changelog and the README
@@ -260,7 +282,7 @@ jobs:
   release:
     name: Publish the GitHub Release from the changelog
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [validate, shell-lint, diagnostic-bundle, release-metadata]
+    needs: [validate, shell-lint, diagnostic-bundle, preflight, release-metadata]
     runs-on: ubuntu-latest
     # The only job in this repository that writes: it creates or edits the Release object. It
     # pushes no commit and no tag.

@@ -185,9 +185,20 @@ another — apps in the same environment address the API by its Container App na
 ## Preflight
 
 `scripts/preflight.sh` reads a target subscription and reports what a first apply needs:
-resource-provider registration, the deploying identity's two roles, PostgreSQL SKU
+resource-provider registration, the deploying identity's roles, PostgreSQL SKU
 availability, and — in production — whether the tenant can still create an Azure Cache for
 Redis. It is read-only unless you pass `--register`.
+
+The identity that runs `terraform apply` needs, at subscription scope, **Contributor** (or Owner)
+to create resources and a role that can write role assignments: **Role Based Access Control
+Administrator**, **User Access Administrator** or **Owner**. With `enable_key_vault` (always on in
+production) the module also defines a role of its own, the apps' role on the vault (see
+[What the module creates](#what-the-module-creates)), which needs
+**`Microsoft.Authorization/roleDefinitions/write`**: Owner and User Access Administrator carry it,
+Role Based Access Control Administrator does not. With `--principal`, the preflight FAILs a
+deployer without it in production and WARNs in demo, where the vault is optional. It reads role
+names, so a custom role of yours that does carry the action reads as missing: the message names
+the action so you can confirm it yourself.
 
 ```bash
 ./scripts/preflight.sh --subscription <id> --location swedencentral --mode production \
@@ -243,17 +254,17 @@ check, and a rebuilt app, both go by.
 | `rg-masterly-aca`, `rg-masterly-data` | Customer-naming resource groups (`rg-masterly-<purpose>`) |
 | VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
-| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, and `ca-workers` unless it has its own, below): image pull, plus every data-plane grant the install makes — Key Vault Secrets Officer, Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. With `migrations = "job"` on the starter server it is **no** Postgres administrator and holds Service Bus send only: receive and the jobs queue's Data Owner are `id-masterly-workers`' (ADR 0120). Later install identity work (ADR 0020) |
+| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, and `ca-workers` unless it has its own, below): image pull, plus every data-plane grant the install makes — the module's **app secrets role** on the vault (read, write and delete secrets: `getSecret`, `setSecret`, `delete` and `readMetadata`; unlike the built-in Key Vault Secrets Officer it replaces, no purge, backup, restore or recover), Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. With `migrations = "job"` on the starter server it is **no** Postgres administrator and holds Service Bus send only: receive and the jobs queue's Data Owner are `id-masterly-workers`' (ADR 0120). Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
 | `id-masterly-migrate` UAMI (+ optional AcrPull) — **only with `migrations = "job"`** | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus **Key Vault Secrets User** on each of its vault-backed secrets and the per-Environment BYO-DB DSN secrets explicitly named in `migrate_byo_database_secret_names`; no vault copy or grant for `external_database_admin_url`. On `database_auth = "entra"`, the starter server's **only** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
-| `id-masterly-workers` UAMI (+ optional AcrPull) — **only with `migrations = "job"` on the starter server** | **`ca-workers`' own identity**: it runs, pulls, scales and resolves its Key Vault references as it, and signs in to Postgres as `masterly_workers` (on `"entra"`, the role the migrate job binds to this identity). It holds the backend grants `ca-workers` needs — Key Vault Secrets Officer and Crypto Officer on the vault, AcrPull (through `acr_id`), ACS Email Owner, Service Bus send + receive, Data Owner on the jobs queue when `ca-workers` scales on it, and its own Redis data access policy on `"entra"`. It is no Postgres administrator. `id-masterly-apps` keeps the others but gives up Service Bus receive and the jobs queue's Data Owner to it, and its Entra administrator to `id-masterly-migrate`. See [The migrate job](#the-migrate-job) |
+| `id-masterly-workers` UAMI (+ optional AcrPull) — **only with `migrations = "job"` on the starter server** | **`ca-workers`' own identity**: it runs, pulls, scales and resolves its Key Vault references as it, and signs in to Postgres as `masterly_workers` (on `"entra"`, the role the migrate job binds to this identity). It holds the backend grants `ca-workers` needs — the app secrets role and Crypto Officer on the vault, AcrPull (through `acr_id`), ACS Email Owner, Service Bus send + receive, Data Owner on the jobs queue when `ca-workers` scales on it, and its own Redis data access policy on `"entra"`. It is no Postgres administrator. `id-masterly-apps` keeps the others but gives up Service Bus receive and the jobs queue's Data Owner to it, and its Entra administrator to `id-masterly-migrate`. See [The migrate job](#the-migrate-job) |
 | `caj-migrate` Container Apps job — **only with `migrations = "job"`** | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
 | Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding. In `mode = "production"`, `enable_service_bus = true` also requires **`servicebus_sku`**, which has no default there: `"Premium"` (recommended) runs the namespace private, behind a **private endpoint** with public network access disabled, at about $677 per month; `"Standard"` keeps a public endpoint. See [Where this module departs from Azure's recommended baseline](#where-this-module-departs-from-azures-recommended-baseline). |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
-| Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault, Secrets Officer and Crypto Officer grants to the apps identity, `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
+| Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault; to the apps identity on the vault, Crypto Officer and the app secrets role, an install-unique custom role (`Masterly app secrets (<prefix>-<suffix>)`, defined on and assignable only within the data resource group) that reads, writes and deletes secrets and nothing more; `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
 | Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the URL rides as a Container App secret, keyless on `redis_auth = "entra"` — [authentication](#authentication-to-the-starter-server-and-redis)). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
 | Registry private endpoint (opt-in) | `registry_private_endpoint`: a private endpoint to your registry (`acr_id`, `registry` subresource) on the private-endpoints subnet, with a `privatelink.azurecr.io` private DNS zone linked to the VNet, so the identity modes pull over the VNet. See [The registry over a private endpoint](#the-registry-over-a-private-endpoint). |
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
@@ -656,8 +667,8 @@ Redis policy and the `workers-*` URL secrets exist only while `enable_workers` i
 identity is no Postgres administrator and holds Service Bus send only. The module creates no
 Entra administrator for it (on `"entra"`, `id-<prefix>-migrate` is the server's only one), and no
 Service Bus Data Receiver or jobs-queue Data Owner for it: `ca-workers` receives and scales as
-`id-<prefix>-workers`, which holds both. It keeps AcrPull, Key Vault Secrets Officer and Crypto
-Officer, Service Bus Data Sender, ACS Email Owner and its Redis data access policy. The Receiver
+`id-<prefix>-workers`, which holds both. It keeps AcrPull, the app secrets role and Crypto
+Officer on the vault, Service Bus Data Sender, ACS Email Owner and its Redis data access policy. The Receiver
 and the queue's Data Owner go only where `ca-workers` runs as its own identity, so nothing that
 still receives as `id-<prefix>-apps` loses them. Terraform removes the three only after it has
 created the migrate administrator and updated `ca-api` and `ca-workers`: both apps depend on them,
@@ -672,7 +683,7 @@ not to a revision, and its old revision may restart or scale while the new one w
 No env of the new revisions names it. `ca-workers` keeps none: its identities belong to the app
 too, so once it runs only as `id-<prefix>-workers` its old revision cannot sign in as before
 whatever secrets stay. Removing the shared secrets is later work. Both backend
-identities hold Key Vault Secrets Officer on the vault, so each can still read every vault secret,
+identities hold the app secrets role on the vault, so each can still read every vault secret,
 the other app's URL and the role-password secrets among them; narrowing that is later work. The
 passwords are generated once and never rotated by Terraform, because the job never changes an
 existing role's password. **No released api image creates these roles.** The backend reads these
@@ -1819,7 +1830,7 @@ Three consequences for whoever operates the install:
    the data plane, not only for start-up.
 
 The module's part in this is one role assignment: the apps identity gets **Key Vault Crypto
-Officer** on the install vault, alongside the Secrets Officer grant above, so the application
+Officer** on the install vault, alongside its app secrets role on the vault, so the application
 can create and use those keys. It is vault-scoped because the keys do not exist when Terraform
 runs — the application creates each one, only if absent, at a name derived from an Environment
 created long after the apply — and an Azure role assignment cannot name a key that does not

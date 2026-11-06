@@ -147,7 +147,10 @@ if [[ -z "$PRINCIPAL" ]]; then
   manual "Confirm the identity running 'terraform apply' holds Contributor AND (User Access
           Administrator, Role Based Access Control Administrator, or Owner) at SUBSCRIPTION
           scope. Contributor alone cannot write role assignments and the apply fails
-          mid-run, not at plan."
+          mid-run, not at plan. With enable_key_vault (always on in production) it also
+          needs Microsoft.Authorization/roleDefinitions/write, to define the apps' role on
+          the vault: Owner and User Access Administrator carry it, Role Based Access
+          Control Administrator does not."
 else
   roles="ERROR"
   UNEXPANDED=false
@@ -189,6 +192,19 @@ else
         pass "can create role assignments"
       else
         fail "cannot create role assignments, and the module creates them — grant Role Based Access Control Administrator, User Access Administrator or Owner at subscription scope"
+      fi
+      # With enable_key_vault the module also DEFINES a role (the apps' read, write and delete
+      # on vault secrets), which needs Microsoft.Authorization/roleDefinitions/write. Role Based
+      # Access Control Administrator can assign roles but not define them, so it passes the
+      # check above and would fail here at apply. This reads role names, so a custom role that
+      # does carry the action reads as missing: the message names the action so you can tell.
+      # Production forces the vault, so it is a FAIL there; demo may run without one.
+      if echo "$roles" | grep -qxE 'Owner|User Access Administrator'; then
+        pass "can create role definitions (Microsoft.Authorization/roleDefinitions/write)"
+      elif [[ "$MODE" == "production" ]]; then
+        fail "cannot create role definitions: production forces enable_key_vault, and the module then defines a role for the apps on the vault, which needs Microsoft.Authorization/roleDefinitions/write. Role Based Access Control Administrator lacks it — grant User Access Administrator or Owner at subscription scope (or confirm a custom role of yours carries the action)"
+      else
+        warn "no Microsoft.Authorization/roleDefinitions/write seen: fine while enable_key_vault = false, but with enable_key_vault = true the module defines a role for the apps on the vault and the apply fails. Role Based Access Control Administrator lacks it — grant User Access Administrator or Owner before turning the vault on"
       fi
     fi
   fi
