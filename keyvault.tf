@@ -206,6 +206,8 @@ resource "azurerm_key_vault" "this" {
 # only within, the install's data resource group, where the vault lives. Creating it needs
 # Microsoft.Authorization/roleDefinitions/write, which Owner and User Access Administrator
 # carry and Role Based Access Control Administrator does not (scripts/preflight.sh checks).
+# Grant it before upgrading: nothing orders the removal of the old Secrets Officer grants after
+# this create, so a deployer without the right can fail here with those grants already gone.
 resource "azurerm_role_definition" "app_secrets" {
   count = var.enable_key_vault ? 1 : 0
 

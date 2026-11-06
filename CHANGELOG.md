@@ -104,10 +104,17 @@ but not `breakglass_owner_email` had break-glass off, and the next apply arms it
 
 **Upgrading an install with `enable_key_vault = true`.** Before you upgrade, grant the identity
 that runs `terraform apply` `Microsoft.Authorization/roleDefinitions/write` at subscription scope:
-User Access Administrator or Owner. If it holds Contributor and Role Based Access Control
-Administrator only, the apply fails creating the role definition, before any grant changes.
-`scripts/preflight.sh --principal <object id> --mode production` checks it. The plan then shows
-`azurerm_role_definition.app_secrets[0]` created, and `kv_secrets_officer` moved to
+User Access Administrator or Owner, and confirm it with
+`scripts/preflight.sh --principal <object id> --mode production` (the preflight reads role
+names, so a custom role of yours that carries the action reads as missing). Do not count on the
+apply to stop you: nothing orders the removal of the old Secrets Officer grants after the role
+definition is created, so a deployer without the right (Contributor and Role Based Access Control
+Administrator only, say) can see the apply fail on the role definition after it has already
+removed those grants. `ca-api` and `ca-workers` are then left with no secrets grant on the vault:
+their own calls to it, and the Key Vault references of any new replica, fail until an apply by a
+deployer holding the right succeeds. If that happens, grant the right and apply again.
+
+With the right in place, the plan shows `azurerm_role_definition.app_secrets[0]` created, and `kv_secrets_officer` moved to
 `kv_app_secrets` (with `migrations = "job"` on the starter server, `kv_secrets_officer_workers`
 to `kv_app_secrets_workers` too), each replaced because its role changes. The vault and the
 Crypto Officer grants are not replaced or changed. Terraform removes each Secrets Officer grant
