@@ -3011,31 +3011,44 @@ run "no_data_plane_grant_reaches_the_frontend" {
     }
   }
 
-  assert {
-    condition = (
-      one(module.frontend.user_assigned_identity_ids) == module.frontend_identity.id &&
-      !contains(module.frontend.user_assigned_identity_ids, module.apps_identity.id)
-    )
-    error_message = "The frontend must run as its own identity, not the backend apps' identity."
+  override_module {
+    target = module.workers_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"
+      principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+      client_id    = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-workers"
+    }
   }
 
   assert {
     condition = (
-      one(module.api.user_assigned_identity_ids) == module.apps_identity.id &&
-      one(module.workers[0].user_assigned_identity_ids) == module.apps_identity.id
+      one(module.frontend.user_assigned_identity_ids) == module.frontend_identity.id &&
+      !contains(module.frontend.user_assigned_identity_ids, module.apps_identity.id) &&
+      !contains(module.frontend.user_assigned_identity_ids, module.workers_identity[0].id)
     )
-    error_message = "The api and workers must keep the backend apps' identity."
+    error_message = "The frontend must run as its own identity, not a backend app's identity."
+  }
+
+  # With the vault and "password" ca-workers runs as its own identity (workers.tf).
+  assert {
+    condition = (
+      one(module.api.user_assigned_identity_ids) == module.apps_identity.id &&
+      one(module.workers[0].user_assigned_identity_ids) == module.workers_identity[0].id
+    )
+    error_message = "The api must keep the backend apps' identity, and ca-workers run as its own."
   }
 
   assert {
     condition = (
       azurerm_role_assignment.kv_app_secrets[0].principal_id == module.apps_identity.principal_id &&
       azurerm_role_assignment.sb_sender[0].principal_id == module.apps_identity.principal_id &&
-      azurerm_role_assignment.sb_receiver[0].principal_id == module.apps_identity.principal_id &&
-      azurerm_role_assignment.sb_scaler[0].principal_id == module.apps_identity.principal_id &&
+      azurerm_role_assignment.sb_receiver_workers[0].principal_id == module.workers_identity[0].principal_id &&
+      azurerm_role_assignment.sb_scaler_workers[0].principal_id == module.workers_identity[0].principal_id &&
       azurerm_role_assignment.acs_email_sender[0].principal_id == module.apps_identity.principal_id
     )
-    error_message = "Key Vault, Service Bus and ACS grants must go to the backend apps' identity."
+    error_message = "Key Vault, Service Bus and ACS grants must go to the backend apps' identity, and Service Bus Receiver and the queue's Data Owner to ca-workers' own."
   }
 
   # The point of the split: none of those reach the public app's identity. Even with the
@@ -3046,9 +3059,12 @@ run "no_data_plane_grant_reaches_the_frontend" {
     condition = (
       azurerm_role_assignment.kv_app_secrets[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.sb_sender[0].principal_id != module.frontend_identity.principal_id &&
-      azurerm_role_assignment.sb_receiver[0].principal_id != module.frontend_identity.principal_id &&
-      azurerm_role_assignment.sb_scaler[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.sb_sender_workers[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.sb_receiver_workers[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.sb_scaler_workers[0].principal_id != module.frontend_identity.principal_id &&
       azurerm_role_assignment.acs_email_sender[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.acs_email_sender_workers[0].principal_id != module.frontend_identity.principal_id &&
+      azurerm_role_assignment.kv_app_secrets_workers[0].principal_id != module.frontend_identity.principal_id &&
       toset(keys(azurerm_role_assignment.kv_secrets_user_frontend)) == toset(["bff-shared-secret"]) &&
       alltrue([
         for k, ra in azurerm_role_assignment.kv_secrets_user_frontend :
@@ -9286,8 +9302,8 @@ run "migrations_default_to_start_and_create_no_migrate_job" {
     error_message = "With migrations left at \"start\" ca-api and ca-workers must carry no MASTERLY_MIGRATIONS, so they migrate at start as on main."
   }
 
-  # Nor does "start" create the workers' identity, its grant copies, its Redis policies or the
-  # per-app DSNs: both apps keep id-<prefix>-apps and the shared database-url, as on main.
+  # Nor does "start" on "entra" create the workers' identity, its grant copies, its Redis policies
+  # or the per-app DSNs: both apps keep id-<prefix>-apps and the shared database-url, as on main.
   assert {
     condition = (
       !local.workers_own_identity &&
@@ -9319,10 +9335,38 @@ run "migrations_default_to_start_and_create_no_migrate_job" {
   }
 }
 
-# The same with every feature a workers grant copies switched on (Service Bus with the queue
-# scaler, ACS email, Entra Redis on each offering): the shared grants exist, their workers copies
-# do not, because the copies are gated on migrations = "job" on the starter server, not on the
-# feature alone.
+# ca-workers' identity follows the vault and its DSN the app roles (workers.tf). They part on
+# BYO-DB, the one shape with the identity and no starter server, so the DSN local must not follow
+# the identity's: a workers DSN there would read a server that does not exist. Each run in
+# tests/workers_identity.tftest.hcl compares the grants on a shape.
+run "workers_identity_follows_the_vault_and_its_dsn_the_app_roles" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    enable_key_vault      = true
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+  }
+
+  assert {
+    condition = (
+      local.workers_own_identity &&
+      !local.workers_own_dsn &&
+      !issensitive(local.workers_own_identity) &&
+      length(module.workers_identity) == 1 &&
+      length(module.postgres_connection_urls_workers) == 0 &&
+      local.workers_database_secret_name == "database-url" &&
+      local.workers_database_direct_secret_name == "database-direct-url"
+    )
+    error_message = "On BYO-DB with the vault ca-workers must run as its own identity and read the shared database-url, with no workers DSN planned."
+  }
+}
+
+# migrations_default_to_start_and_create_no_migrate_job again, with every feature a workers grant
+# copies switched on (Service Bus with the queue scaler, ACS email, Entra Redis on each offering):
+# the shared grants exist, their workers copies do not, because ca-workers stays on the apps
+# identity with "start" on "entra", whatever features are on.
 run "migrations_start_creates_no_workers_grant_with_every_feature_on" {
   command = plan
 

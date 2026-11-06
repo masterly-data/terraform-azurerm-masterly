@@ -172,9 +172,9 @@ group, the Container App names (the values the app repos' release workflows use 
 images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
 `apps_identity_client_id` / `frontend_identity_principal_id` / `migrate_identity_principal_id` /
 `workers_identity_principal_id` for out-of-band role grants. The install runs on two app
-identities, and with `migrations = "job"` on a **third**, the migrate job's, and on the starter
-server a **fourth**, `ca-workers`' own (see below), so an out-of-band `AcrPull` grant has to reach
-each of them.
+identities, with `migrations = "job"` on a **third**, the migrate job's, and wherever `ca-workers`
+runs as its own identity on a **fourth** (see [The migrate job](#the-migrate-job)), so an
+out-of-band `AcrPull` grant has to reach each of them.
 
 `api_internal_fqdn` keeps its name so existing configurations still plan, but the name is older
 than `api_ingress_external`: it holds the API's internal hostname only while the API is
@@ -254,10 +254,10 @@ check, and a rebuilt app, both go by.
 | `rg-masterly-aca`, `rg-masterly-data` | Customer-naming resource groups (`rg-masterly-<purpose>`) |
 | VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
-| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, and `ca-workers` unless it has its own, below): image pull, plus every data-plane grant the install makes — the module's **app secrets role** on the vault (read, write and delete secrets: `getSecret`, `setSecret`, `delete` and `readMetadata`; unlike the built-in Key Vault Secrets Officer it replaces, no purge, backup, restore or recover), Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. With `migrations = "job"` on the starter server it is **no** Postgres administrator and holds Service Bus send only: receive and the jobs queue's Data Owner are `id-masterly-workers`' (ADR 0120). Later install identity work (ADR 0020) |
+| `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, and `ca-workers` unless it has its own, below): image pull, plus every data-plane grant the install makes — the module's **app secrets role** on the vault (read, write and delete secrets: `getSecret`, `setSecret`, `delete` and `readMetadata`; unlike the built-in Key Vault Secrets Officer it replaces, no purge, backup, restore or recover), Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Wherever `ca-workers` runs as its own identity it holds Service Bus send only: receive and the jobs queue's Data Owner are `id-masterly-workers`'. With `migrations = "job"` on the starter server it is also **no** Postgres administrator (ADR 0120). Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
 | `id-masterly-migrate` UAMI (+ optional AcrPull) — **only with `migrations = "job"`** | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus **Key Vault Secrets User** on each of its vault-backed secrets and the per-Environment BYO-DB DSN secrets explicitly named in `migrate_byo_database_secret_names`; no vault copy or grant for `external_database_admin_url`. On `database_auth = "entra"`, the starter server's **only** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
-| `id-masterly-workers` UAMI (+ optional AcrPull) — **only with `migrations = "job"` on the starter server** | **`ca-workers`' own identity**: it runs, pulls, scales and resolves its Key Vault references as it, and signs in to Postgres as `masterly_workers` (on `"entra"`, the role the migrate job binds to this identity). It holds the backend grants `ca-workers` needs — the app secrets role and Crypto Officer on the vault, AcrPull (through `acr_id`), ACS Email Owner, Service Bus send + receive, Data Owner on the jobs queue when `ca-workers` scales on it, and its own Redis data access policy on `"entra"`. It is no Postgres administrator. `id-masterly-apps` keeps the others but gives up Service Bus receive and the jobs queue's Data Owner to it, and its Entra administrator to `id-masterly-migrate`. See [The migrate job](#the-migrate-job) |
+| `id-masterly-workers` UAMI (+ optional AcrPull) — **wherever `ca-workers` exists and the install has a Key Vault, except `migrations = "start"` with `database_auth = "entra"` on the starter server** | **`ca-workers`' own identity**: it runs, pulls, scales and resolves its Key Vault references as it. With `migrations = "job"` on the starter server it also signs in to Postgres as `masterly_workers` (on `"entra"`, the role the migrate job binds to this identity); elsewhere it reads the shared `database-url`. It holds the backend grants `ca-workers` needs — the app secrets role and Crypto Officer on the vault, AcrPull (through `acr_id`), ACS Email Owner, Service Bus send + receive, Data Owner on the jobs queue when `ca-workers` scales on it, and its own Redis data access policy on `redis_auth = "entra"`. It is no Postgres administrator. `id-masterly-apps` keeps the others but gives up Service Bus receive and the jobs queue's Data Owner to it, and under `"job"` on the starter server its Entra administrator to `id-masterly-migrate`. See [The migrate job](#the-migrate-job) |
 | `caj-migrate` Container Apps job — **only with `migrations = "job"`** | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
 | `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
@@ -304,12 +304,12 @@ The three modes:
    image bundle instead of the import). The plan refuses this mode without a
    `registry_location` other than Masterly's.
 
-In both identity modes, `acr_id` grants `AcrPull` to both app identities and, with
-`migrations = "job"`, to the migrate job's and (on the starter server) `ca-workers`' own. If you
-leave it null and grant out of band, grant each: `apps_identity_principal_id`,
-`frontend_identity_principal_id` and, with the job, `migrate_identity_principal_id` and
-`workers_identity_principal_id` (null on BYO-DB). Miss the second and the frontend cannot pull;
-miss the third and the migrate job cannot pull, so no migration runs; miss the fourth and
+In both identity modes, `acr_id` grants `AcrPull` to both app identities and, when they exist, to
+the migrate job's and `ca-workers`' own. If you leave it null and grant out of band, grant each:
+`apps_identity_principal_id`, `frontend_identity_principal_id` and, with the job,
+`migrate_identity_principal_id`, and `workers_identity_principal_id` wherever it is not null (see
+[which identity `ca-workers` runs as](#the-migrate-job)). Miss the second and the frontend cannot
+pull; miss the third and the migrate job cannot pull, so no migration runs; miss the fourth and
 `ca-workers` cannot pull its new revision. `workers_identity_principal_id` is known only once the
 identity exists: create it first (`terraform apply -target='module.masterly.module.workers_identity'`,
 with your own module name), grant it `AcrPull`, then apply the rest.
@@ -527,7 +527,7 @@ by `database_auth` and `redis_auth`:
 | | `"entra"` — Azure's recommendation | `"password"` / `"key"` — a departure |
 |---|---|---|
 | Postgres | Microsoft Entra authentication on, password authentication off. The apps' identity (`id-masterly-apps`) is the server's Microsoft Entra administrator; with `migrations = "job"` the migrate job's (`id-masterly-migrate`, [below](#the-migrate-job)) is instead, and the only one; each connection string names its own identity's role with no password. With `migrations = "job"` on the starter server, `ca-api` and `ca-workers` instead sign in as the DML-only roles `masterly_api` and `masterly_workers`, bound to `id-masterly-apps` and `id-masterly-workers` | The `masterly_admin` login, with its password in the connection string, for the apps and the migrate job alike. With `migrations = "job"`, `ca-api` and `ca-workers` instead sign in as `masterly_api` and `masterly_workers`, each with its own generated password |
-| Redis | Access keys off. The apps' identity holds a data access policy: the default policy on Azure Managed Redis, *Data Contributor* on Azure Cache for Redis. With `migrations = "job"` on the starter server, `id-masterly-workers` holds its own (`masterly-workers` on Azure Cache for Redis). The URL carries no key | The access key, in the URL |
+| Redis | Access keys off. The apps' identity holds a data access policy: the default policy on Azure Managed Redis, *Data Contributor* on Azure Cache for Redis. Wherever `ca-workers` runs as its own identity, `id-masterly-workers` holds its own (`masterly-workers` on Azure Cache for Redis). The URL carries no key | The access key, in the URL |
 | The apps | `MASTERLY_DATABASE_AUTH=entra` / `MASTERLY_REDIS_AUTH=entra` and `AZURE_CLIENT_ID`, on `ca-api` and `ca-workers`. Needs **api images `v0.133.7` or later** | Nothing added |
 
 When an input is unset, the module picks for you, and it never changes what an existing
@@ -663,6 +663,27 @@ secret: never in env, an ACA value secret or an output. Neither app carries the 
 `ca-workers` needs (see [What the module creates](#what-the-module-creates)). These grants, its
 Redis policy and the `workers-*` URL secrets exist only while `enable_workers` is on.
 
+**Which identity `ca-workers` runs as.** Its Azure identity follows the vault, so a grant made for
+it alone never reaches `ca-api`. Its database role follows the app roles above, which only `"job"`
+on the starter server has. `ca-api` runs as `id-<prefix>-apps` on every shape:
+
+| Install shape | `ca-workers` runs as | Its `AZURE_CLIENT_ID` | Its database URL |
+|---|---|---|---|
+| `"job"` on the starter server, `"entra"` or `"password"` | `id-<prefix>-workers` | That identity's | `workers-database-url`, as `masterly_workers` |
+| `"start"` on `"password"`, with `enable_key_vault` | `id-<prefix>-workers` | That identity's | The shared `database-url`, through that identity |
+| BYO-DB, `"start"` or `"job"`, with `enable_key_vault` | `id-<prefix>-workers` | That identity's | The shared `database-url`, through that identity |
+| `"start"` on `"entra"` on the starter server | `id-<prefix>-apps`, unchanged | `id-<prefix>-apps`' | The shared `database-url`, whose user is that identity |
+| `enable_key_vault = false` | `id-<prefix>-apps`, unchanged | `id-<prefix>-apps`', where the app sets one | The shared `database-url`, as a value secret |
+| `enable_workers = false` | No `ca-workers`; `ca-api` runs the loop | — | — |
+
+`"start"` on `"entra"` is unchanged because the shared URL's user there is the `id-<prefix>-apps`
+role, and its token is minted for `AZURE_CLIENT_ID`. On every shape where `ca-workers` runs as
+`id-<prefix>-workers`, that identity holds the backend grants it needs, and `id-<prefix>-apps` holds
+no Service Bus Data Receiver and no jobs-queue Data Owner, which go with the move.
+`workers_identity_principal_id` is set on exactly those shapes. On `"start"` and on BYO-DB
+`id-<prefix>-workers` has no database role: it is an Azure identity only, and the shared URL's own
+credential is what signs in to Postgres.
+
 **What `id-<prefix>-apps` gives up** (ADR 0120 §6). With `"job"` on the starter server, `ca-api`'s
 identity is no Postgres administrator and holds Service Bus send only. The module creates no
 Entra administrator for it (on `"entra"`, `id-<prefix>-migrate` is the server's only one), and no
@@ -673,7 +694,8 @@ and the queue's Data Owner go only where `ca-workers` runs as its own identity, 
 still receives as `id-<prefix>-apps` loses them. Terraform removes the three only after it has
 created the migrate administrator and updated `ca-api` and `ca-workers`: both apps depend on them,
 and Terraform destroys a resource only after the resources that depend on it have been updated.
-With `"start"`, or `"job"` on BYO-DB, the apps identity keeps all three.
+Outside `"job"` on the starter server the apps identity keeps its administrator (on `"entra"`), and
+gives up the Receiver and the queue's Data Owner wherever `ca-workers` runs as its own identity.
 
 Beyond that, the move is additive. `id-<prefix>-apps` keeps its other grants, and the shared
 `database-url` (and `database-direct-url`) stays in the vault, so the revisions running before the
@@ -695,7 +717,7 @@ runs `"job"` on the starter server on this version (see the upgrade note below).
 and the apps signing in as them, are a minor release under ADR 0062: new resources, secrets, job env and one output (`workers_identity_principal_id`), no new
 input, nothing renamed or removed. Removing the apps identity's administrator, Receiver and scaler
 grant under `"job"` is a later minor release under ADR 0062 too: no input or output changes.
-Nothing changes while `migrations` stays `"start"` or on BYO-DB.
+No app changes database role while `migrations` stays `"start"` or on BYO-DB.
 
 **BYO-DB.** `external_database_admin_url` (sensitive, optional) is a DSN to your database for a
 role allowed to migrate and create databases. It stays in the ACA job's own secret even with
@@ -715,8 +737,34 @@ needs an updated list and apply; remove obsolete names when no longer used. Allo
 before provisioning, retrying a failed provisioning run or starting the CD migration gate. An
 unlisted connection cannot be migrated, even though the schedule continues to run.
 
-**Upgrading to this version, and turning the job on.** Upgrading changes nothing while
-`migrations` stays `"start"`. `"job"` needs an api image from a backend release later than
+**Upgrading to this version: `ca-workers` moves to `id-<prefix>-workers`.** A minor release under
+ADR 0062: no input or output is added, renamed or removed, though
+`workers_identity_principal_id` is now set on more shapes. On an install with the vault and
+`ca-workers`, on `"start"` with `"password"` or on BYO-DB, upgrading creates `id-<prefix>-workers`
+and its grants, moves `ca-workers` to that identity in a new revision, then removes the apps
+identity's Service Bus Data Receiver and jobs-queue Data Owner. There is no input to defer it.
+`"start"` on `"entra"`, an install with `enable_key_vault = false` and one with
+`enable_workers = false` plan no change from it, and neither does `"job"` on the starter server,
+which already runs this way.
+
+- **`ca-workers`' old revision cannot sign in as before.** Identities belong to the app, not to a
+  revision, so the update takes `id-<prefix>-apps` away from every revision of `ca-workers`.
+  `ca-workers` has no probe, so its new revision replaces the old one at once; a stopping replica
+  gets `workers_termination_grace_period_seconds` to finish its jobs.
+- **With `acr_id` null, grant `AcrPull` to `workers_identity_principal_id` before applying**, or
+  `ca-workers` cannot pull its new revision and stalls. The identity must exist first: follow the
+  steps at the end of [Getting the images](#getting-the-images-adr-0067).
+- **Allow for role propagation.** The new identity gets the app secrets role just before
+  `ca-workers` is updated, and Azure RBAC propagation can delay its first Key Vault reference.
+  The module adds no wait, as on the `"job"` path. If the new revision has not started once the
+  apply is done, give the assignment time to propagate, then restart the revision.
+- **Terraform orders the removals.** `ca-workers` depends on its new grants, and on the
+  Receiver and scaler grant it replaces, so the new grants exist before its update and the old ones
+  go after it. Terraform waits for the update, not for the new revision to be running: until that
+  revision runs, no replica takes jobs, and jobs wait for it.
+
+**Turning the job on.** Upgrading changes nothing about the job while `migrations` stays `"start"`.
+`"job"` needs an api image from a backend release later than
 v0.135.0 that has the migrate entry point (`masterly_app.apps.migrate`), honours
 `MASTERLY_MIGRATIONS=job`, picks up pending provisioning runs on each migrate run, and serialises
 overlapping runs. On the starter server it must also create the app roles `masterly_api` and
@@ -1192,8 +1240,8 @@ environment, raise it with us rather than editing a vendored copy.
 - **On the Service Bus binding** (`enable_service_bus = true`) the module adds an
   `azure-servicebus` scale rule on the jobs queue the workers receive from, with a target of 5
   messages per replica, between `workers_min_replicas` and `workers_max_replicas`. The rule
-  authenticates as the identity `ca-workers` runs as (the apps' managed identity, or
-  `id-<prefix>-workers` with `migrations = "job"` on the starter server), which the module grants
+  authenticates as the identity `ca-workers` runs as (`id-<prefix>-workers`, or the apps' managed
+  identity with `migrations = "start"` on `"entra"` or without the vault), which the module grants
   **Azure Service Bus Data Owner** on the jobs queue alone, to let the scaler read the queue's message count. With the
   rule in place, `workers_min_replicas = 0` is a usable setting on this binding: the rule is what
   starts a worker when jobs arrive.

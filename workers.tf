@@ -71,11 +71,22 @@ locals {
   # claim, so one replica per message would add replicas faster than the work needs them.
   workers_scale_message_count = 5
 
-  # Whether ca-workers runs as its own identity (id-<prefix>-workers, main.tf): with migrations =
-  # "job" on the starter server, where the migrate job binds masterly_workers to it, and only when
-  # ca-workers exists. Every `*_workers` grant, Redis policy and the workers' DSN secrets count on
-  # it, so an install without ca-workers gets none of them.
-  workers_own_identity = local.migrate_app_roles && var.enable_workers
+  # Whether ca-workers runs as its own identity (id-<prefix>-workers, main.tf): wherever it exists
+  # and the install has a Key Vault, so on "password", on BYO-DB and on migrations = "job", which
+  # requires the vault. migrations = "start" with database_auth = "entra" on the starter server
+  # stays on the apps identity: the shared DSN's user there is that identity's name, and its token
+  # is minted for AZURE_CLIENT_ID. Every `*_workers` grant and Redis policy counts on this, so an
+  # install without ca-workers gets none of them. nonsensitive() on database_entra alone, the
+  # same narrow unmarking as main.tf's presence tests: whether a DSN was supplied is not the secret,
+  # and a marked value here would hide which identity ca-workers runs as from every plan.
+  workers_own_identity = var.enable_workers && var.enable_key_vault && (local.migrate_app_roles || !nonsensitive(local.database_entra))
+
+  # Whether ca-workers signs in as its own database role, masterly_workers, with its own DSN
+  # secrets: only where the migrate job creates that role (migrate_app_roles) and ca-workers exists.
+  # Separate from the identity above, because that role and its URLs need the starter server,
+  # which BYO-DB does not have: elsewhere ca-workers reads the shared database-url, through its own
+  # identity where it has one (backend_vault_secret_refs, keyvault.tf).
+  workers_own_dsn = local.migrate_app_roles && var.enable_workers
 
   # The identity ca-workers runs as, pulls with, resolves its vault references with and scales
   # with: its own when workers_own_identity, the apps identity otherwise, as before.
@@ -90,8 +101,8 @@ locals {
 #
 # The apps identity holds it only while ca-workers runs as that identity: with
 # local.workers_own_identity the scale rule uses sb_scaler_workers below, and ca-api never needs
-# Data Owner (ADR 0120). module.workers depends on this grant, so on an install moving to
-# migrations = "job" Terraform removes it only after updating ca-workers.
+# Data Owner (ADR 0120). module.workers depends on this grant, so on an install where ca-workers
+# moves to its own identity Terraform removes it only after updating ca-workers.
 resource "azurerm_role_assignment" "sb_scaler" {
   count = local.workers_scale_on_queue && !local.workers_own_identity ? 1 : 0
 
@@ -161,8 +172,9 @@ module "workers" {
   # CA bundle mount (MAS-446): SMTP/webhook/stream-push delivery runs here, so ca-workers
   # needs the same trusted CA the api does, at the same path. The exceptions: the BFF shared
   # secret authenticates the frontend's calls to the api, and ca-workers serves no request, so
-  # it gets the backend_* set, which is the api's without it (main.tf); and with its own
-  # identity its AZURE_CLIENT_ID and its DSNs are its own (workers_env, workers-database-url).
+  # it gets the backend_* set, which is the api's without it (main.tf); with its own identity
+  # its AZURE_CLIENT_ID is its own (workers_env), and with its own role so are its DSNs
+  # (workers-database-url).
   env                = local.workers_env
   secrets            = local.backend_value_secrets
   secret_refs        = local.backend_vault_secret_refs
@@ -183,9 +195,10 @@ module "workers" {
     azurerm_private_dns_zone_virtual_network_link.key_vault,
     azurerm_role_assignment.kv_app_secrets,
     azurerm_role_assignment.sb_sender,
-    # On an install moving to migrations = "job", these three edges also make Terraform remove
-    # the apps identity's Receiver, scaler grant and Entra administrator only after this app's
-    # update: keep them.
+    # On an install where ca-workers moves to its own identity, the first two edges also make
+    # Terraform remove the apps identity's Receiver and scaler grant only after this app's update,
+    # and on one moving to migrations = "job" the third does the same for its Entra
+    # administrator: keep them.
     azurerm_role_assignment.sb_receiver,
     azurerm_role_assignment.sb_scaler,
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,

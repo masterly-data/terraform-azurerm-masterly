@@ -1080,12 +1080,13 @@ run "migrate_app_roles_narrow_the_apps_service_bus_grants_on_entra" {
   }
 }
 
-# "start" and "job" on BYO-DB keep the shared Service Bus grants on the apps identity, as on main.
-run "shared_service_bus_grants_stay_with_start" {
+# "start" on "entra" keeps the shared Service Bus grants on the apps identity, as on main.
+run "shared_service_bus_grants_stay_with_start_on_entra" {
   command = plan
 
   variables {
     migrations         = "start"
+    database_auth      = "entra"
     enable_service_bus = true
     servicebus_sku     = "Standard"
   }
@@ -1107,11 +1108,49 @@ run "shared_service_bus_grants_stay_with_start" {
       length(azurerm_role_assignment.sb_sender_workers) + length(azurerm_role_assignment.sb_receiver_workers) +
       length(azurerm_role_assignment.sb_scaler_workers) == 0
     )
-    error_message = "With migrations = \"start\" the apps identity must keep Service Bus Sender, Receiver and the queue's Data Owner, and no workers grant may exist."
+    error_message = "With migrations = \"start\" on entra the apps identity must keep Service Bus Sender, Receiver and the queue's Data Owner, and no workers grant may exist."
   }
 }
 
-run "shared_service_bus_grants_stay_on_byo_database" {
+# "start" on "password" (the file's default) and BYO-DB: ca-workers runs as its own identity, which
+# takes the Receiver and the queue's Data Owner from the apps identity, though no app role exists.
+run "service_bus_grants_move_to_the_workers_identity_with_start_on_password" {
+  command = plan
+
+  variables {
+    migrations         = "start"
+    enable_service_bus = true
+    servicebus_sku     = "Standard"
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  assert {
+    condition = (
+      local.workers_scale_on_queue &&
+      length(azurerm_role_assignment.sb_sender) == 1 &&
+      azurerm_role_assignment.sb_sender[0].principal_id == module.apps_identity.principal_id &&
+      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 0 &&
+      alltrue([
+        for group in [azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers, azurerm_role_assignment.sb_scaler_workers] :
+        length(group) == 1 && group[0].principal_id == module.workers_identity[0].principal_id
+      ]) &&
+      azurerm_role_assignment.sb_receiver_workers[0].role_definition_name == "Azure Service Bus Data Receiver" &&
+      azurerm_role_assignment.sb_scaler_workers[0].role_definition_name == "Azure Service Bus Data Owner"
+    )
+    error_message = "With migrations = \"start\" on password the apps identity must hold Service Bus Sender alone, and id-<prefix>-workers Sender, Receiver and the queue's Data Owner."
+  }
+}
+
+run "service_bus_grants_move_to_the_workers_identity_on_byo_database" {
   command = plan
 
   variables {
@@ -1125,19 +1164,25 @@ run "shared_service_bus_grants_stay_on_byo_database" {
     outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
   }
 
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
   assert {
     condition = (
       local.workers_scale_on_queue &&
+      length(azurerm_role_assignment.sb_sender) == 1 &&
+      azurerm_role_assignment.sb_sender[0].principal_id == module.apps_identity.principal_id &&
+      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 0 &&
       alltrue([
-        for group in [azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_scaler] :
-        length(group) == 1 && group[0].principal_id == module.apps_identity.principal_id
+        for group in [azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers, azurerm_role_assignment.sb_scaler_workers] :
+        length(group) == 1 && group[0].principal_id == module.workers_identity[0].principal_id
       ]) &&
-      azurerm_role_assignment.sb_receiver[0].role_definition_name == "Azure Service Bus Data Receiver" &&
-      azurerm_role_assignment.sb_scaler[0].role_definition_name == "Azure Service Bus Data Owner" &&
-      length(azurerm_role_assignment.sb_sender_workers) + length(azurerm_role_assignment.sb_receiver_workers) +
-      length(azurerm_role_assignment.sb_scaler_workers) == 0
+      azurerm_role_assignment.sb_receiver_workers[0].role_definition_name == "Azure Service Bus Data Receiver" &&
+      azurerm_role_assignment.sb_scaler_workers[0].role_definition_name == "Azure Service Bus Data Owner"
     )
-    error_message = "With migrations = \"job\" on BYO-DB the apps identity must keep Service Bus Sender, Receiver and the queue's Data Owner, and no workers grant may exist."
+    error_message = "With migrations = \"job\" on BYO-DB the apps identity must hold Service Bus Sender alone, and id-<prefix>-workers Sender, Receiver and the queue's Data Owner."
   }
 }
 
@@ -1154,33 +1199,37 @@ run "migrate_app_roles_absent_with_start" {
     outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
   }
 
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
   assert {
     condition = (
-      length(module.workers_identity) + length(random_password.migrate_api_role) + length(random_password.migrate_workers_role) +
+      length(random_password.migrate_api_role) + length(random_password.migrate_workers_role) +
       length(azurerm_key_vault_secret.migrate_api_role_password) + length(azurerm_key_vault_secret.migrate_workers_role_password) +
       length(azurerm_role_assignment.kv_secrets_user_migrate_api_role_password) + length(azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password) +
       length(azurerm_container_app_job.migrate) == 0 &&
       !anytrue([for k in keys(local.migrate_env) : startswith(k, "MASTERLY_MIGRATE_")]) &&
       !anytrue([for name in concat(module.api.env_names, module.workers[0].env_names, module.frontend.env_names) : startswith(name, "MASTERLY_MIGRATE_")])
     )
-    error_message = "With migrations = \"start\" there must be no workers identity, app-role password, vault secret, grant or MASTERLY_MIGRATE_* env."
+    error_message = "With migrations = \"start\" there must be no app-role password, vault secret, grant or MASTERLY_MIGRATE_* env."
   }
 
-  # Both apps as on main: the apps identity, the shared DSN and grants, no per-app DSN.
+  # On "password" ca-workers runs as its own identity, with the shared DSN and no per-app DSN;
+  # ca-api as on main.
   assert {
     condition = (
-      length(azurerm_role_assignment.acr_pull_workers) + length(azurerm_role_assignment.kv_app_secrets_workers) +
-      length(azurerm_role_assignment.kv_crypto_officer_workers) + length(azurerm_role_assignment.sb_sender_workers) +
-      length(azurerm_role_assignment.sb_receiver_workers) + length(azurerm_role_assignment.sb_scaler_workers) +
-      length(azurerm_role_assignment.acs_email_sender_workers) + length(azurerm_managed_redis_access_policy_assignment.workers) +
-      length(azurerm_redis_cache_access_policy_assignment.workers) +
+      length(module.workers_identity) == 1 &&
+      length(azurerm_role_assignment.kv_app_secrets_workers) + length(azurerm_role_assignment.kv_crypto_officer_workers) == 2 &&
       length(module.postgres_connection_urls_api) + length(module.postgres_connection_urls_workers) == 0 &&
-      output.workers_identity_principal_id == null &&
-      module.workers[0].user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
+      output.workers_identity_principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id]) &&
       module.api.user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
-      module.workers[0].secret_ref_identity_ids == tolist([module.apps_identity.id]) &&
+      module.workers[0].secret_ref_identity_ids == tolist([module.workers_identity[0].id]) &&
       module.workers[0].env_names == module.api.env_names &&
-      local.workers_env["AZURE_CLIENT_ID"] == "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc" &&
+      local.workers_env["AZURE_CLIENT_ID"] == "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc" &&
+      local.api_env["AZURE_CLIENT_ID"] == "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc" &&
       module.api.vault_backed_secret_names == tolist(["bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
       module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
       local.api_env_secret_refs["MASTERLY_DATABASE_URL"] == "database-url" &&
@@ -1188,7 +1237,7 @@ run "migrate_app_roles_absent_with_start" {
       !anytrue([for name in keys(azurerm_key_vault_secret.install) : startswith(name, "api-") || startswith(name, "workers-")]) &&
       length(azurerm_role_assignment.kv_app_secrets) == 1 && length(azurerm_role_assignment.kv_crypto_officer) == 1
     )
-    error_message = "With migrations = \"start\" both apps must keep the apps identity, the shared database-url and the shared grants, with no workers grant or per-app DSN."
+    error_message = "With migrations = \"start\" on password ca-workers must run as id-<prefix>-workers with the shared database-url, ca-api as the apps identity, and neither with a per-app DSN."
   }
 }
 
@@ -1235,40 +1284,43 @@ run "migrate_app_roles_absent_on_byo_database" {
     outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
   }
 
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
   assert {
     condition = (
       length(azurerm_container_app_job.migrate) == 1 &&
-      length(module.workers_identity) + length(random_password.migrate_api_role) + length(random_password.migrate_workers_role) +
+      length(random_password.migrate_api_role) + length(random_password.migrate_workers_role) +
       length(azurerm_key_vault_secret.migrate_api_role_password) + length(azurerm_key_vault_secret.migrate_workers_role_password) +
       length(azurerm_role_assignment.kv_secrets_user_migrate_api_role_password) + length(azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password) == 0 &&
       !anytrue([for k in keys(local.migrate_env) : startswith(k, "MASTERLY_MIGRATE_")]) &&
       !anytrue([for e in azurerm_container_app_job.migrate[0].template[0].container[0].env : startswith(e.name, "MASTERLY_MIGRATE_")]) &&
       toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url"])
     )
-    error_message = "On BYO-DB there must be no workers identity, app-role password, vault secret, grant or MASTERLY_MIGRATE_* env on the job."
+    error_message = "On BYO-DB there must be no app-role password, vault secret, grant or MASTERLY_MIGRATE_* env on the job."
   }
 
-  # Both apps as on main: the apps identity, the shared DSN and grants, no per-app DSN.
+  # ca-workers runs as its own identity, with the shared DSN and no per-app DSN; ca-api as on main.
   assert {
     condition = (
-      length(azurerm_role_assignment.acr_pull_workers) + length(azurerm_role_assignment.kv_app_secrets_workers) +
-      length(azurerm_role_assignment.kv_crypto_officer_workers) + length(azurerm_role_assignment.sb_sender_workers) +
-      length(azurerm_role_assignment.sb_receiver_workers) + length(azurerm_role_assignment.sb_scaler_workers) +
-      length(azurerm_role_assignment.acs_email_sender_workers) + length(azurerm_managed_redis_access_policy_assignment.workers) +
-      length(azurerm_redis_cache_access_policy_assignment.workers) +
+      length(module.workers_identity) == 1 &&
+      length(azurerm_role_assignment.kv_app_secrets_workers) + length(azurerm_role_assignment.kv_crypto_officer_workers) == 2 &&
       length(module.postgres_connection_urls_api) + length(module.postgres_connection_urls_workers) == 0 &&
-      output.workers_identity_principal_id == null &&
-      module.workers[0].user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
+      output.workers_identity_principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id]) &&
       module.api.user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
-      module.workers[0].secret_ref_identity_ids == tolist([module.apps_identity.id]) &&
+      module.workers[0].secret_ref_identity_ids == tolist([module.workers_identity[0].id]) &&
       module.workers[0].env_names == module.api.env_names &&
-      local.workers_env["AZURE_CLIENT_ID"] == "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc" &&
+      local.workers_env["AZURE_CLIENT_ID"] == "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc" &&
+      local.api_env["AZURE_CLIENT_ID"] == "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc" &&
       module.api.vault_backed_secret_names == tolist(["bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
       module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
       !anytrue([for name in keys(azurerm_key_vault_secret.install) : startswith(name, "api-") || startswith(name, "workers-")]) &&
       length(azurerm_role_assignment.kv_app_secrets) == 1 && length(azurerm_role_assignment.kv_crypto_officer) == 1
     )
-    error_message = "On BYO-DB both apps must keep the apps identity, the shared database-url and the shared grants, with no workers grant or per-app DSN."
+    error_message = "On BYO-DB ca-workers must run as id-<prefix>-workers with the shared database-url, ca-api as the apps identity, and neither with a per-app DSN."
   }
 }
 
