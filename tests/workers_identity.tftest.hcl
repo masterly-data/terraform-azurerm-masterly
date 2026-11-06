@@ -106,7 +106,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
     error_message = "A role assignment was added or removed: name it in this file's grant lists."
   }
 
-  # Threat: privilege creep. Every (scope, role) pair id-<prefix>-workers holds is also held by
+  # Threat: privilege creep. Every (scope, role name, role id) id-<prefix>-workers holds is also held by
   # the apps identity, among the role assignments and the Redis access policies, or is one of the
   # two the apps identity held before "job" and gives up to it: Service Bus Data Receiver on the
   # namespace and Data Owner on the jobs queue (ADR 0120).
