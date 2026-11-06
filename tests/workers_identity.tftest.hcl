@@ -21,6 +21,15 @@ mock_provider "azurerm" {
       default_database = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.Cache/redisEnterprise/redis-masterly-test/databases/default" }
     }
   }
+
+  # The app secrets role gets an id of its own, so the privilege-creep comparison below tells a
+  # grant of it from a grant of any other role definition, which keeps the mock's shared id.
+  override_resource {
+    target = azurerm_role_definition.app_secrets
+    values = {
+      role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000001"
+    }
+  }
 }
 mock_provider "random" {}
 mock_provider "azapi" {}
@@ -180,6 +189,8 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
   assert {
     condition = (
       azurerm_role_assignment.kv_app_secrets_workers[0].scope == azurerm_key_vault.this[0].id &&
+      endswith(azurerm_role_definition.app_secrets[0].role_definition_resource_id, "/a99a5ec1-0000-4000-8000-000000000001") &&
+      azurerm_role_assignment.kv_app_secrets_workers[0].role_definition_id == azurerm_role_definition.app_secrets[0].role_definition_resource_id &&
       azurerm_role_assignment.kv_crypto_officer_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.acr_pull_workers[0].scope == var.acr_id &&
       azurerm_role_assignment.acs_email_sender_workers[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Communication/communicationServices/acs-masterly" &&

@@ -9,6 +9,15 @@
 
 mock_provider "azurerm" {
   source = "./tests/mocks/migrate"
+
+  # The role gets an id of its own, so a grant of any other role definition, which keeps the mock's
+  # shared id, does not count as a grant of it.
+  override_resource {
+    target = azurerm_role_definition.app_secrets
+    values = {
+      role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000001"
+    }
+  }
 }
 mock_provider "random" {
   mock_resource "random_string" {
@@ -118,13 +127,39 @@ run "app_secrets_role_reads_writes_and_deletes_secrets_and_nothing_more" {
       length(azurerm_role_assignment.kv_app_secrets_workers) == 0 &&
       azurerm_role_assignment.kv_app_secrets[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.kv_app_secrets[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      endswith(azurerm_role_definition.app_secrets[0].role_definition_resource_id, "/a99a5ec1-0000-4000-8000-000000000001") &&
       azurerm_role_assignment.kv_app_secrets[0].role_definition_id == azurerm_role_definition.app_secrets[0].role_definition_resource_id &&
-      azurerm_role_assignment.kv_app_secrets[0].role_definition_name != "Key Vault Secrets Officer" &&
       alltrue([for ref in values(local.api_vault_secret_refs) : ref.identity_id == module.apps_identity.id]) &&
       alltrue([for ref in values(local.backend_vault_secret_refs) : ref.identity_id == module.apps_identity.id]) &&
       length(local.api_vault_secret_refs) > 0 && length(local.backend_vault_secret_refs) > 0
     )
     error_message = "With a shared identity, ca-api's identity must hold the app secrets role on the vault, and every api and backend vault reference must resolve as it."
+  }
+
+  # Threat: the role reaches the public front door or the schema owner, or Secrets Officer is still
+  # granted to an app identity on the vault, by name or by its built-in id, among the vault grants.
+  assert {
+    condition = (
+      length([
+        for ra in concat(
+          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
+          azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
+          azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
+          values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
+          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+        ) : ra if ra.role_definition_id == azurerm_role_definition.app_secrets[0].role_definition_resource_id
+      ]) == 1 &&
+      length([
+        for ra in concat(
+          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
+          azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+          values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
+          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+        ) : ra if(ra.role_definition_name == "Key Vault Secrets Officer" || endswith(lower(ra.role_definition_id), "/b86a8fe4-44ce-4948-aee5-eccb2c155cd7")) && contains(["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "ffffffff-ffff-ffff-ffff-ffffffffffff", "dddddddd-dddd-dddd-dddd-dddddddddddd"], ra.principal_id)
+      ]) == 0
+    )
+    error_message = "With a shared identity, only ca-api's identity may hold the app secrets role, and no app identity may hold Key Vault Secrets Officer on the vault."
   }
 
   # The Crypto Officer grant stays as it was.
@@ -207,7 +242,7 @@ run "app_secrets_role_on_ca_workers_own_identity" {
           azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
-        ) : ra if ra.role_definition_name == "Key Vault Secrets Officer" && contains(["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "ffffffff-ffff-ffff-ffff-ffffffffffff", "dddddddd-dddd-dddd-dddd-dddddddddddd"], ra.principal_id)
+        ) : ra if(ra.role_definition_name == "Key Vault Secrets Officer" || endswith(lower(ra.role_definition_id), "/b86a8fe4-44ce-4948-aee5-eccb2c155cd7")) && contains(["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "ffffffff-ffff-ffff-ffff-ffffffffffff", "dddddddd-dddd-dddd-dddd-dddddddddddd"], ra.principal_id)
       ]) == 0
     )
     error_message = "Only ca-api's and ca-workers' identities may hold the app secrets role, and no app identity may hold Key Vault Secrets Officer on the vault."
