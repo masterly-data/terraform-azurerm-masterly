@@ -71,6 +71,28 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - **The README recommends an exact module version** (`version = "0.23.0"`) instead of a
   `~>` range, as the install-root guidance already did: Terraform does not lock module
   versions, so a range lets every fresh `terraform init` take a newer release.
+- **`ca-api`'s and `ca-workers`' identities no longer hold Key Vault Secrets Officer on the
+  install vault.** A minor release under ADR 0062: no input or output is added, renamed or
+  removed, but the deploying identity needs a new right (below). Secrets Officer's `secrets/*`
+  let a compromised app purge, back up, restore and recover every secret in the vault, the BYO-DB
+  connection strings included. With `enable_key_vault` the module now defines its own role,
+  `azurerm_role_definition.app_secrets`, named `Masterly app secrets (<name_prefix>-<suffix>)` so
+  two installs in one tenant never collide, defined on and assignable only within the data
+  resource group, with exactly four data actions on secrets: `getSecret/action`,
+  `setSecret/action`, `delete` and `readMetadata/action`. That is what the apps use: resolving
+  their Key Vault references and sealing their own material (ADR 0066). The grants move to it
+  under new names, `azurerm_role_assignment.kv_app_secrets` and `kv_app_secrets_workers`, with
+  `moved` blocks from `kv_secrets_officer` and `kv_secrets_officer_workers`. Key Vault Crypto
+  Officer, the deployer's own Secrets Officer grant and the vault are unchanged. An app can still
+  read and overwrite every secret in the vault, as it must to work; after this change it cannot
+  recover a secret it deleted.
+- **`scripts/preflight.sh` checks the deployer can define roles.** Role Based Access Control
+  Administrator can assign roles but lacks `Microsoft.Authorization/roleDefinitions/write`, so
+  preflight passed a deployer whose apply would then fail on the new role definition. It now
+  FAILs that deployer in `--mode production`, which forces the vault, and WARNs in `--mode demo`,
+  naming `enable_key_vault`. Owner, or Contributor with User Access Administrator, passes. The
+  check reads role names, so a custom role carrying the action reads as missing; the message
+  names the action. `tests/preflight_test.sh` tests it against a fake `az`.
 
 The identity defaults above (`oidc_tenant_id`, `oidc_audience`, `breakglass_owner_email`) need no
 migration, with one case to check. The OIDC defaults change nothing for an existing
@@ -79,6 +101,21 @@ install: `identity_binding = "oidc"` refused an unset `oidc_audience`, `oidc_aut
 but not `breakglass_owner_email` had break-glass off, and the next apply arms it** for
 `initial_owner_email`: the plan shows `MASTERLY_BREAKGLASS_OWNER_EMAIL` added to `ca-api` and
 `ca-workers`. If that is not what you want, remove the hash.
+
+**Upgrading an install with `enable_key_vault = true`.** Before you upgrade, grant the identity
+that runs `terraform apply` `Microsoft.Authorization/roleDefinitions/write` at subscription scope:
+User Access Administrator or Owner. If it holds Contributor and Role Based Access Control
+Administrator only, the apply fails creating the role definition, before any grant changes.
+`scripts/preflight.sh --principal <object id> --mode production` checks it. The plan then shows
+`azurerm_role_definition.app_secrets[0]` created, and `kv_secrets_officer` moved to
+`kv_app_secrets` (with `migrations = "job"` on the starter server, `kv_secrets_officer_workers`
+to `kv_app_secrets_workers` too), each replaced because its role changes. The vault and the
+Crypto Officer grants are not replaced or changed. Terraform removes each Secrets Officer grant
+and creates its replacement in the same step, and updates `ca-api` and `ca-workers` only after
+it. An app that reaches the vault in between, or before Azure has propagated the new grant
+(usually seconds, sometimes minutes), can be refused: apply in a quiet window, and restart a
+revision that failed to resolve a secret. On an install with `enable_key_vault = false` the plan
+shows no change from this release.
 
 ## [0.23.0] - 2026-11-05
 

@@ -227,20 +227,19 @@ resource "azurerm_role_definition" "app_secrets" {
 }
 
 # The grant, scoped to this vault only. It was Key Vault Secrets Officer under the name
-# kv_secrets_officer; the moved block keeps the address, so an upgrade replaces the grant in
-# place (a role change forces a new assignment) and create_before_destroy makes the new one
-# exist before the old one goes. The apps depend on this address, so their update runs after
-# the new grant is created and before the old one is destroyed.
+# kv_secrets_officer; the moved block keeps the address, so an upgrade replaces this one grant
+# (a role change forces a new assignment) rather than adding a grant beside an orphaned one that
+# nothing orders. Terraform removes the Secrets Officer grant and creates this one in the same
+# step, and ca-api and ca-workers depend on this address, so neither app is updated (and
+# restarted) before the new grant exists. A running app that reaches the vault in the seconds
+# between the two, or before Azure has propagated the new grant, can be refused; the CHANGELOG's
+# upgrade note says so.
 resource "azurerm_role_assignment" "kv_app_secrets" {
   count = var.enable_key_vault ? 1 : 0
 
   scope              = azurerm_key_vault.this[0].id
   role_definition_id = azurerm_role_definition.app_secrets[0].role_definition_resource_id
   principal_id       = module.apps_identity.principal_id
-
-  lifecycle {
-    create_before_destroy = true
-  }
 }
 
 moved {
@@ -293,10 +292,6 @@ resource "azurerm_role_assignment" "kv_app_secrets_workers" {
   scope              = azurerm_key_vault.this[0].id
   role_definition_id = azurerm_role_definition.app_secrets[0].role_definition_resource_id
   principal_id       = module.workers_identity[0].principal_id
-
-  lifecycle {
-    create_before_destroy = true
-  }
 }
 
 moved {

@@ -1784,8 +1784,8 @@ module "api" {
     # With registry_private_endpoint, the first image pull already takes the private path.
     azurerm_private_endpoint.registry,
     azurerm_private_dns_zone_virtual_network_link.registry,
-    # Created before this app's update, and the Secrets Officer grant it replaces destroyed
-    # only after it (create_before_destroy, keyvault.tf).
+    # The app secrets grant exists before this app's update; on an upgrade it replaces the
+    # Secrets Officer grant at the same address (keyvault.tf).
     azurerm_role_assignment.kv_app_secrets,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,

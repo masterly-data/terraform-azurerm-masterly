@@ -240,10 +240,11 @@ run "no_app_secrets_role_without_the_vault" {
 }
 
 # Threat: an upgrade leaves an app without its grant. Both grants keep the address the Secrets
-# Officer grant had (moved), and each is created before the old one is destroyed. A plain role
-# swap at new addresses would give Terraform no order between the old grant's destroy and the
-# new one's create.
-run "app_secrets_grants_replace_secrets_officer_new_before_old" {
+# Officer grant had (moved), so an upgrade replaces each grant at one address rather than adding a
+# new grant beside a removed block, whose orphaned destroy nothing would order. Both apps depend on
+# those addresses, so neither is updated before its new grant exists. create_before_destroy is not
+# used: on these grants it puts the app modules in a dependency cycle.
+run "app_secrets_grants_keep_their_addresses_and_the_apps_depend_on_them" {
   command = plan
 
   variables {
@@ -255,10 +256,11 @@ run "app_secrets_grants_replace_secrets_officer_new_before_old" {
     condition = (
       can(regex("moved \\{\\s*from = azurerm_role_assignment\\.kv_secrets_officer\\s+to   = azurerm_role_assignment\\.kv_app_secrets\\s*\\}", file("${path.module}/keyvault.tf"))) &&
       can(regex("moved \\{\\s*from = azurerm_role_assignment\\.kv_secrets_officer_workers\\s+to   = azurerm_role_assignment\\.kv_app_secrets_workers\\s*\\}", file("${path.module}/keyvault.tf"))) &&
-      can(regex("resource \"azurerm_role_assignment\" \"kv_app_secrets\" \\{[^}]*lifecycle \\{\\s*create_before_destroy = true\\s*\\}", file("${path.module}/keyvault.tf"))) &&
-      can(regex("resource \"azurerm_role_assignment\" \"kv_app_secrets_workers\" \\{[^}]*lifecycle \\{\\s*create_before_destroy = true\\s*\\}", file("${path.module}/keyvault.tf"))) &&
-      !can(regex("resource \"azurerm_role_assignment\" \"kv_secrets_officer(_workers)?\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])))
+      !can(regex("resource \"azurerm_role_assignment\" \"kv_secrets_officer(_workers)?\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) &&
+      strcontains(regex("(?s)\\nmodule \"api\" \\{.*?\\n\\}\\n", file("${path.module}/main.tf")), "azurerm_role_assignment.kv_app_secrets,") &&
+      strcontains(regex("(?s)\\nmodule \"workers\" \\{.*?\\n\\}\\n", file("${path.module}/workers.tf")), "azurerm_role_assignment.kv_app_secrets,") &&
+      strcontains(regex("(?s)\\nmodule \"workers\" \\{.*?\\n\\}\\n", file("${path.module}/workers.tf")), "azurerm_role_assignment.kv_app_secrets_workers,")
     )
-    error_message = "kv_app_secrets and kv_app_secrets_workers must be moved from the Secrets Officer grants' addresses and carry create_before_destroy, with no block left at the old addresses."
+    error_message = "kv_app_secrets and kv_app_secrets_workers must be moved from the Secrets Officer grants' addresses, with no block left at the old addresses, and module.api and module.workers must depend on them."
   }
 }
