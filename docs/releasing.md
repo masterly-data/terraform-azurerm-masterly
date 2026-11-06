@@ -125,13 +125,20 @@ applied from the candidate:
    `ca-workers` in place, and removes the apps identity's Service Bus Data Receiver and jobs-queue
    Data Owner. It replaces no app, shows no identity or env change on `ca-api`, and shows
    `ca-workers`' new identity in plain text rather than as a sensitive value.
-2. **The new revision starts.** It resolves its Key Vault references as `id-<prefix>-workers` and
+2. **The old grants go after `ca-workers`' update.** Before the tag, confirm from the apply log
+   that `module.masterly.module.workers[0].azurerm_container_app.this` reached "Modifications
+   complete" before `module.masterly.azurerm_role_assignment.sb_receiver[0]` and
+   `module.masterly.azurerm_role_assignment.sb_scaler[0]` started "Destroying". The README and changelog rely on
+   the released module's `ca-workers` `depends_on` edges on those two grants (`workers.tf:189-190`),
+   which Terraform records in state; this is the check that it destroys them only after updating
+   their recorded dependent.
+3. **The new revision starts.** It resolves its Key Vault references as `id-<prefix>-workers` and
    reads `database-url`. Note how long role propagation took, and whether the revision needed a
    restart: the README's upgrade note says the module adds no wait.
-3. **The pipeline keeps running.** A job queued before the apply and one queued after it both run
+4. **The pipeline keeps running.** A job queued before the apply and one queued after it both run
    as the new identity, and on the Service Bus binding the scaler still reads the queue. Email
    and Redis work as the new identity.
-4. **The shapes that do not move plan no change from this.** The same candidate against an install
+5. **The shapes that do not move plan no change from this.** The same candidate against an install
    on `"start"` with `database_auth = "entra"` shows no identity, grant or env change.
 
 ## What makes the workflow the only path

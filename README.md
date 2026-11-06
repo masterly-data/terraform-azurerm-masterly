@@ -758,10 +758,14 @@ which already runs this way.
   `ca-workers` is updated, and Azure RBAC propagation can delay its first Key Vault reference.
   The module adds no wait, as on the `"job"` path. If the new revision has not started once the
   apply is done, give the assignment time to propagate, then restart the revision.
-- **Terraform orders the removals.** `ca-workers` depends on its new grants, and on the
-  Receiver and scaler grant it replaces, so the new grants exist before its update and the old ones
-  go after it. Terraform waits for the update, not for the new revision to be running: until that
-  revision runs, no replica takes jobs, and jobs wait for it.
+- **Terraform orders the removals.** `ca-workers` depends on its new grants, so they exist before
+  its update. In the released module it also depends on the Receiver and scaler grants it replaces
+  (`depends_on` naming `azurerm_role_assignment.sb_receiver` and `sb_scaler`, `workers.tf:189-190`).
+  Terraform records that dependency in state, and destroys a removed resource only after the
+  resources recorded as depending on it have been updated, so the two grants go after
+  `ca-workers`' update. This release keeps both edges. Terraform waits for the update, not for
+  the new revision to be running: until that revision runs, no replica takes jobs, and jobs wait
+  for it.
 
 **Turning the job on.** Upgrading changes nothing about the job while `migrations` stays `"start"`.
 `"job"` needs an api image from a backend release later than

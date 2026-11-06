@@ -61,8 +61,11 @@ inventing one now would be exactly the retyped-value failure the manifest exists
     grant `AcrPull` to `workers_identity_principal_id` before applying**, or `ca-workers` cannot
     pull its new revision. Azure RBAC propagation can delay the new identity's first Key Vault
     reference; the module adds no wait, as on the `"job"` path. Terraform creates the new grants
-    before the update and removes the old ones after it; no `depends_on` changed. The README's
-    upgrade note under "The migrate job" has the details.
+    before the update and removes the old ones after it: in the released module `ca-workers`
+    `depends_on` `sb_receiver` and `sb_scaler` (`workers.tf:189-190`), Terraform records that
+    dependency in state, and it destroys a removed resource only after its recorded dependents are
+    updated. No `depends_on` changed. The README's upgrade note under "The migrate job" has the
+    details.
 - **With `migrations = "job"` on the starter server, `id-<prefix>-apps` is no longer a Postgres
   Entra administrator, and holds Service Bus Data Sender alone (ADR 0120 §6).** A minor release
   under ADR 0062: no input or output is added, renamed or removed. Under `"job"` on the starter
