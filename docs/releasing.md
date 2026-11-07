@@ -116,6 +116,31 @@ install, planned and applied from that candidate:
    through the BFF succeeds with the api ungated, and the frontend's gate still redirects an
    anonymous browser to Entra sign-in.
 
+**`ca-workers` on its own identity with the vault** (in Unreleased in the
+[changelog](../CHANGELOG.md)). On a live install with the vault and `ca-workers` on, on
+`migrations = "start"` with `database_auth = "password"`, and separately on BYO-DB, planned and
+applied from the candidate:
+
+1. **The plan moves only `ca-workers`.** It creates `id-<prefix>-workers` and its grants, updates
+   `ca-workers` in place, and removes the apps identity's Service Bus Data Receiver and jobs-queue
+   Data Owner. It replaces no app, shows no identity or env change on `ca-api`, and shows
+   `ca-workers`' new identity in plain text rather than as a sensitive value.
+2. **The old grants go after `ca-workers`' update.** Before the tag, confirm from the apply log
+   that `module.masterly.module.workers[0].azurerm_container_app.this` reached "Modifications
+   complete" before `module.masterly.azurerm_role_assignment.sb_receiver[0]` and
+   `module.masterly.azurerm_role_assignment.sb_scaler[0]` started "Destroying". The README and changelog rely on
+   the released module's `ca-workers` `depends_on` edges on those two grants (`workers.tf:189-190`),
+   which Terraform records in state; this is the check that it destroys them only after updating
+   their recorded dependent.
+3. **The new revision starts.** It resolves its Key Vault references as `id-<prefix>-workers` and
+   reads `database-url`. Note how long role propagation took, and whether the revision needed a
+   restart: the README's upgrade note says the module adds no wait.
+4. **The pipeline keeps running.** A job queued before the apply and one queued after it both run
+   as the new identity, and on the Service Bus binding the scaler still reads the queue. Email
+   and Redis work as the new identity.
+5. **The shapes that do not move plan no change from this.** The same candidate against an install
+   on `"start"` with `database_auth = "entra"` shows no identity, grant or env change.
+
 ## What makes the workflow the only path
 
 On its own, the workflow is the documented path, not an enforced one: GitHub still accepts a `v*`

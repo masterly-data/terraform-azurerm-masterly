@@ -36,6 +36,36 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- **`ca-workers` runs as its own identity, `id-<prefix>-workers`, wherever it exists and the install
+  has a Key Vault, on either `migrations` value and on BYO-DB, except `"start"` with
+  `database_auth = "entra"` on the starter server.** A minor release under ADR 0062: no input or
+  output is added, renamed or removed. A grant made for `ca-workers` alone now never reaches
+  `ca-api`, which runs as `id-<prefix>-apps` on every shape. The change separates two things that
+  shared one condition: the Azure identity follows the vault, and the `masterly_workers` DSN stays
+  with the app roles (`"job"` on the starter server).
+  - **Moves:** `"start"` with `database_auth = "password"`, and BYO-DB on `"start"` and `"job"`.
+    `ca-workers` gets a new revision on `id-<prefix>-workers`, with that identity's
+    `AZURE_CLIENT_ID`, and keeps reading the shared `database-url` (and `database-direct-url`
+    with `postgres_pgbouncer`) through it. `id-<prefix>-workers` gets every `*_workers` grant the
+    install's features call for: the app secrets role and Crypto Officer on the vault, AcrPull
+    (through `acr_id`), Service Bus Data Sender and Receiver and Data Owner on the jobs queue (with
+    `enable_service_bus`), ACS Email Owner (with `email_acs_enabled`) and its Redis data access
+    policy (on `redis_auth = "entra"`). `id-<prefix>-apps` loses Service Bus Data Receiver and
+    jobs-queue Data Owner. `workers_identity_principal_id` is now set on these shapes.
+  - **Does not move:** `"start"` with `database_auth = "entra"` on the starter server, because the
+    shared DSN's user is the `id-<prefix>-apps` role and its token is minted for
+    `AZURE_CLIENT_ID`; `enable_key_vault = false`; and `enable_workers = false`. These plan no
+    change. `"job"` on the starter server already ran this way.
+  - **Upgrade:** `ca-workers` moves to `id-<prefix>-workers` in a new revision, and its old revision
+    cannot sign in as before: identities belong to the app, not to a revision. **With `acr_id` null,
+    grant `AcrPull` to `workers_identity_principal_id` before applying**, or `ca-workers` cannot
+    pull its new revision. Azure RBAC propagation can delay the new identity's first Key Vault
+    reference; the module adds no wait, as on the `"job"` path. Terraform creates the new grants
+    before the update and removes the old ones after it: in the released module `ca-workers`
+    `depends_on` `sb_receiver` and `sb_scaler` (`workers.tf:189-190`), Terraform records that
+    dependency in state, and it destroys a removed resource only after its recorded dependents are
+    updated. No `depends_on` changed. The README's upgrade note under "The migrate job" has the
+    details.
 - **With `migrations = "job"` on the starter server, `id-<prefix>-apps` is no longer a Postgres
   Entra administrator, and holds Service Bus Data Sender alone (ADR 0120 §6).** A minor release
   under ADR 0062: no input or output is added, renamed or removed. Under `"job"` on the starter
@@ -48,7 +78,8 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   `ca-workers` already receives and scales as `id-<prefix>-workers`, which keeps its Sender,
   Receiver and jobs-queue Data Owner. `ca-api` keeps Sender. The Receiver goes only where
   `ca-workers` runs as its own identity, so no deployment that still receives as
-  `id-<prefix>-apps` loses it. With `migrations = "start"`, or `"job"` on BYO-DB, nothing changes.
+  `id-<prefix>-apps` loses it. With `migrations = "start"`, or `"job"` on BYO-DB, the administrator
+  stays, and the entry above says where the Receiver and queue Data Owner move.
   The shared `database-url` / `database-direct-url` vault secrets and `ca-api`'s Container App
   secret for them stay as in 0.23.0.
 

@@ -660,17 +660,19 @@ module "migrate_identity" {
   tags                = local.tags
 }
 
-# ca-workers' own identity, and the principal of its database role, masterly_workers, which the
-# migrate job creates on database_auth = "entra" from this identity's object id (migrate.tf).
-# ca-workers runs as it (workers.tf) and it holds the backend grants ca-workers needs (each
-# `*_workers` grant), and is no Postgres administrator. Two of them the apps identity no longer
-# holds once this one exists: Service Bus Data Receiver and the jobs queue's Data Owner.
-# Only with migrations = "job" on the starter server; otherwise ca-workers runs as the apps identity.
-# Without ca-workers (enable_workers = false) the identity still exists for the migrate job's role,
-# but holds no grant and no DSN secret (local.workers_own_identity, workers.tf).
+# ca-workers' own identity, and with migrations = "job" on the starter server the principal of its
+# database role, masterly_workers, which the migrate job creates on database_auth = "entra" from
+# this identity's object id (migrate.tf). ca-workers runs as it (workers.tf) and it holds the backend
+# grants ca-workers needs (each `*_workers` grant), and is no Postgres administrator. Two of them
+# the apps identity no longer holds once ca-workers runs as this one: Service Bus Data Receiver and
+# the jobs queue's Data Owner.
+# Wherever ca-workers exists and the install has a Key Vault, except migrations = "start" with
+# database_auth = "entra" on the starter server (local.workers_own_identity, workers.tf); otherwise
+# ca-workers runs as the apps identity. With the app roles but without ca-workers (enable_workers =
+# false) the identity still exists for the migrate job's role, but holds no grant and no DSN secret.
 module "workers_identity" {
   source = "./modules/user-assigned-identity"
-  count  = local.migrate_app_roles ? 1 : 0
+  count  = local.migrate_app_roles || local.workers_own_identity ? 1 : 0
 
   name                = "id-${var.name_prefix}-workers"
   resource_group_name = azurerm_resource_group.aca.name
@@ -1087,10 +1089,10 @@ resource "azurerm_servicebus_queue" "jobs" {
 
 # The apps' managed identity sends (publish), and receives (the worker loop) only while
 # ca-workers runs as it: the two least-privilege data-plane roles rather than Data Owner. When
-# ca-workers runs as its own identity (local.workers_own_identity, migrations = "job" on the
-# starter server), that identity holds the Receiver below and ca-api keeps Sender alone (ADR
-# 0120). ca-api and ca-workers depend on sb_receiver, so on an install moving to "job" Terraform
-# removes it only after updating both apps.
+# ca-workers runs as its own identity (local.workers_own_identity, workers.tf), that identity
+# holds the Receiver below and ca-api keeps Sender alone (ADR 0120). ca-api and ca-workers depend
+# on sb_receiver, so on an install where ca-workers moves to its own identity Terraform removes it
+# only after updating both apps.
 resource "azurerm_role_assignment" "sb_sender" {
   count = var.enable_service_bus ? 1 : 0
 
@@ -1264,7 +1266,7 @@ module "postgres_connection_urls_api" {
 
 module "postgres_connection_urls_workers" {
   source = "./modules/postgres-connection-urls"
-  count  = local.workers_own_identity ? 1 : 0
+  count  = local.workers_own_dsn ? 1 : 0
 
   server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
   auth_mode   = local.database_auth_mode
@@ -1286,8 +1288,8 @@ locals {
   # its own with the app roles, the shared install-level one otherwise, as before.
   api_database_secret_name            = local.migrate_app_roles ? "api-database-url" : "database-url"
   api_database_direct_secret_name     = local.migrate_app_roles ? "api-database-direct-url" : "database-direct-url"
-  workers_database_secret_name        = local.workers_own_identity ? "workers-database-url" : "database-url"
-  workers_database_direct_secret_name = local.workers_own_identity ? "workers-database-direct-url" : "database-direct-url"
+  workers_database_secret_name        = local.workers_own_dsn ? "workers-database-url" : "database-url"
+  workers_database_direct_secret_name = local.workers_own_dsn ? "workers-database-direct-url" : "database-direct-url"
 
   # The shared DSN secrets no app's env names with the app roles. They stay in the vault
   # (install_secret_names, keyvault.tf), because the revisions running before an upgrade to
@@ -1461,9 +1463,10 @@ locals {
     local.migrate_job ? { MASTERLY_MIGRATIONS = "job" } : {},
   )
 
-  # ca-workers reads the api's env contract (workers.tf). With the app roles it runs as its own
-  # identity, so its AZURE_CLIENT_ID, which the Key Vault, Service Bus and Entra settings above
-  # set to the apps identity's, is that identity's instead. Merged last, so it is the only value.
+  # ca-workers reads the api's env contract (workers.tf). Where it runs as its own identity
+  # (local.workers_own_identity, workers.tf), its AZURE_CLIENT_ID, which the Key Vault, Service Bus
+  # and Entra settings above set to the apps identity's, is that identity's instead. Merged last,
+  # so it is the only value.
   workers_env = merge(
     local.api_env,
     local.workers_own_identity ? { AZURE_CLIENT_ID = module.workers_identity[0].client_id } : {},
@@ -1790,9 +1793,9 @@ module "api" {
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
     # On "entra" the api authenticates as its identity at boot, so the database role and the
-    # Redis access policy must exist before a revision starts. On an install moving to
-    # migrations = "job", the same edges make Terraform destroy the apps administrator and
-    # sb_receiver only after this app's update: keep them.
+    # Redis access policy must exist before a revision starts. On an install where ca-workers
+    # moves to its own identity, the same edges make Terraform destroy sb_receiver only after this
+    # app's update, and on one moving to migrations = "job" the apps administrator too: keep them.
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,
     azurerm_managed_redis_access_policy_assignment.apps,
     azurerm_redis_cache_access_policy_assignment.apps,
