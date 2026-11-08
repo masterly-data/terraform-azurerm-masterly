@@ -1,8 +1,9 @@
 # Releasing the module
 
 How a version of `masterly-data/masterly/azurerm` is released, what stands between a commit and
-the public registry, and what does not yet. The step-by-step for the release commit itself is
-"Cutting a release" in the [README](../README.md#cutting-a-release); this page covers the tag.
+the public registry, and the repository settings that make the workflow the only path. The
+step-by-step for the release commit itself is "Cutting a release" in the
+[README](../README.md#cutting-a-release); this page covers the tag.
 
 ## Why the tag is the step that matters
 
@@ -143,13 +144,16 @@ applied from the candidate:
 
 ## What makes the workflow the only path
 
-On its own, the workflow is the documented path, not an enforced one: GitHub still accepts a `v*`
-tag pushed from anyone's checkout, and that tag publishes. Three repository settings close that.
-They are applied by a maintainer, because a workflow cannot grant itself the right to be the only
-thing that tags.
+On its own, the workflow is the documented path, not an enforced one: without further settings,
+GitHub accepts a `v*` tag pushed from anyone's checkout, and that tag publishes. Three repository
+settings close that. They are applied by a maintainer, because a workflow cannot grant itself the
+right to be the only thing that tags.
 
-**Status: not applied yet** (MAS-274). Until the line above changes, a hand-pushed tag still
-publishes. Change it in the same commit that records the settings being applied.
+**Status: applied 2026-11-05** (MAS-4139; the workflow itself is MAS-274). The GitHub App
+`masterly-module-release` (app ID 5629013), the `release` Environment and the ruleset
+`release-tags` (id 26623122) are in place, and the App is the ruleset's only bypass actor. A `v*`
+tag can now be created, moved or deleted only by that App, through `cut-release`. GitHub refuses a
+hand-pushed one.
 
 ### 1. A release identity — a GitHub App
 
@@ -160,7 +164,8 @@ starts `ci.yml`'s tag build, which publishes the GitHub Release page.
 
 - Created under the organization, installable on that account only.
 - Webhook inactive; no events subscribed.
-- Repository permissions: **Contents: read and write**. Nothing else.
+- Repository permissions: **Contents: read and write**. Nothing else is added. Metadata: read is
+  GitHub's mandatory default for every App, not an added permission.
 - Installed on this repository only.
 
 ### 2. The `release` Environment
@@ -174,13 +179,15 @@ The workflow's `tag` job runs in an Environment named `release`. Configure it wi
 - **Required reviewer** (recommended): a release then waits for one approval after every check
   has passed and before the tag is created.
 
-Until `RELEASE_APP_CLIENT_ID` is set, the workflow creates the tag with its `GITHUB_TOKEN`, warns
-that it did, and starts the tag build explicitly. Every check above still runs first.
+`RELEASE_APP_CLIENT_ID` is set, so the workflow creates the tag as the App. Every check above still
+runs first. If the variable is ever unset, the workflow falls back to its `GITHUB_TOKEN`, warns
+that it did, and starts the tag build explicitly; the `release-tags` ruleset now refuses that
+tag, so the fallback no longer publishes anything.
 
 ### 3. The tag ruleset
 
 A repository ruleset on tags, with the App as its only bypass. `<APP_ID>` is the App's numeric
-ID (not its client ID):
+ID (not its client ID); for `masterly-module-release` it is 5629013:
 
 ```json
 {

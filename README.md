@@ -2194,11 +2194,11 @@ build passes, CI publishes the tag's GitHub Release with that version's changelo
 body (`scripts/release_notes.py`). The registry has already published the version by then, so the
 tag build reports; it does not refuse.
 
-**What is not enforced yet.** GitHub still accepts a `v*` tag pushed by hand, and such a tag
-publishes without passing through `cut-release`. Closing that takes a tag ruleset that only the
-workflow's release identity may bypass, which is a repository setting rather than anything in
-this tree; [docs/releasing.md](docs/releasing.md) records the exact settings and whether they are
-in place. Until they are, `cut-release` is the documented path, not the only possible one.
+**What makes `cut-release` the only path.** Since 2026-11-05 the `release-tags` ruleset refuses
+creating, moving or deleting a `v*` tag by anyone except the release GitHub App
+`masterly-module-release`, which `cut-release` uses. A tag pushed by hand is refused, so it cannot
+publish. The ruleset is a repository setting rather than anything in this tree;
+[docs/releasing.md](docs/releasing.md) records the exact settings.
 
 ## Installing a Canary or Beta build
 
