@@ -9982,6 +9982,29 @@ run "custom_domain_accepts_a_redirect_uri_on_its_hostname" {
   }
 }
 
+# The host is compared without its port: an explicit :443 on the hostname still plans.
+run "custom_domain_accepts_a_redirect_uri_on_its_hostname_with_a_port" {
+  command = plan
+
+  variables {
+    identity_binding   = "oidc"
+    oidc_tenant_id     = "11111111-2222-3333-4444-555555555555"
+    oidc_client_id     = "bff-client-id"
+    oidc_client_secret = "s3cret"
+    oidc_redirect_uri  = "https://masterly.example.com:443/api/auth/callback"
+    frontend_custom_domain = {
+      hostname                        = "masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+  }
+
+  assert {
+    condition     = local.frontend_env.MASTERLY_OIDC_REDIRECT_URI == "https://masterly.example.com/api/auth/callback"
+    error_message = "A matching oidc_redirect_uri with a port must plan, and the frontend must get the derived callback."
+  }
+}
+
 # Threat: the redirect and the bound hostname disagree, so sign-in breaks or the authorization
 # code goes to a host the install does not serve.
 run "custom_domain_refuses_a_redirect_uri_on_another_host" {
@@ -9993,6 +10016,48 @@ run "custom_domain_refuses_a_redirect_uri_on_another_host" {
     oidc_client_id     = "bff-client-id"
     oidc_client_secret = "s3cret"
     oidc_redirect_uri  = "https://ca-frontend.example.swedencentral.azurecontainerapps.io/api/auth/callback"
+    frontend_custom_domain = {
+      hostname                        = "masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+  }
+
+  expect_failures = [var.oidc_redirect_uri]
+}
+
+# Threat: user information in the authority hides the real host. In https://x@evil.example/ the
+# host is evil.example; any @ in the authority is refused.
+run "custom_domain_refuses_a_redirect_uri_with_user_information" {
+  command = plan
+
+  variables {
+    identity_binding   = "oidc"
+    oidc_tenant_id     = "11111111-2222-3333-4444-555555555555"
+    oidc_client_id     = "bff-client-id"
+    oidc_client_secret = "s3cret"
+    oidc_redirect_uri  = "https://x@evil.example/api/auth/callback"
+    frontend_custom_domain = {
+      hostname                        = "masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+  }
+
+  expect_failures = [var.oidc_redirect_uri]
+}
+
+# Threat: the hostname written as user information before the real host. The host of
+# https://masterly.example.com:443@other.example/ is other.example; the redirect is refused.
+run "custom_domain_refuses_a_redirect_uri_hiding_another_host_behind_user_information" {
+  command = plan
+
+  variables {
+    identity_binding   = "oidc"
+    oidc_tenant_id     = "11111111-2222-3333-4444-555555555555"
+    oidc_client_id     = "bff-client-id"
+    oidc_client_secret = "s3cret"
+    oidc_redirect_uri  = "https://masterly.example.com:443@other.example/api/auth/callback"
     frontend_custom_domain = {
       hostname                        = "masterly.example.com"
       certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com"

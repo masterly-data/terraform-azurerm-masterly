@@ -352,14 +352,17 @@ variable "oidc_redirect_uri" {
   description = "The BFF callback the IdP redirects to: https://<frontend host>/api/auth/callback. With frontend_custom_domain set, leave it null: the module derives https://<hostname>/api/auth/callback, which you register at your IdP before the first apply, and a production install is one apply; a value set alongside the custom domain must name the same host, and the derived value is the one the frontend gets. Without a custom domain the frontend FQDN is an output of the first apply, so a production install is two applies, both with identity_binding=oidc: apply 1 carries a placeholder (e.g. https://redirect-not-yet-known.invalid/api/auth/callback — read only during sign-in, never at boot), then read frontend_url, register https://<frontend host>/api/auth/callback at your IdP, set it here and apply again. Do not bring production up on the dev identity binding and switch afterwards: that second apply changes identity and the production posture at once, on a running install. See examples/production."
 
   # The redirect and the bound hostname cannot disagree: a callback to a host the install does
-  # not serve breaks sign-in, or sends the authorization code somewhere else.
+  # not serve breaks sign-in, or sends the authorization code somewhere else. The whole authority
+  # is read: user information (anything before an @) is refused, since in
+  # https://<hostname>:443@other.example/ the host is other.example, not <hostname>.
   validation {
     condition = var.oidc_redirect_uri == null ? true : (
       var.frontend_custom_domain == null ? true : (
-        lower(try(regex("^https://([^/:?#]+)", var.oidc_redirect_uri)[0], "")) == var.frontend_custom_domain.hostname
+        !strcontains(try(regex("^https://([^/?#]*)", var.oidc_redirect_uri)[0], "@"), "@") &&
+        lower(replace(try(regex("^https://([^/?#]*)", var.oidc_redirect_uri)[0], ""), "/:[0-9]*$/", "")) == var.frontend_custom_domain.hostname
       )
     )
-    error_message = "oidc_redirect_uri must be an https:// URL on frontend_custom_domain.hostname when both are set; leave oidc_redirect_uri null and the module derives https://<hostname>/api/auth/callback."
+    error_message = "oidc_redirect_uri must be an https:// URL on frontend_custom_domain.hostname, with no user information (@) in its authority, when both are set; leave oidc_redirect_uri null and the module derives https://<hostname>/api/auth/callback."
   }
 }
 
