@@ -44,6 +44,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   naming builds the registry did not have. It reads with the pull-only ACR token
   `pull-ci-cut-release` (scope map `pull-product-images`) from the `release` Environment, and
   fails when that is not configured. No change to the module itself (split from MAS-4213).
+- **A `v*` tag can now be created, moved or deleted only through `cut-release`.** Since 2026-11-05
+  the `release-tags` ruleset refuses a hand-pushed `v*` tag; its only bypass actor is the GitHub
+  App `masterly-module-release`, whose key lives only in the `release` Environment (`main` only).
+  A repository setting, so no input or output changes and no module code changes (MAS-4139).
 - **`ca-workers` runs as its own identity, `id-<prefix>-workers`, wherever it exists and the install
   has a Key Vault, on either `migrations` value and on BYO-DB, except `"start"` with
   `database_auth = "entra"` on the starter server.** A minor release under ADR 0062: no input or

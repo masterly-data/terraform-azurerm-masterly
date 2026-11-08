@@ -2205,7 +2205,8 @@ else: it cannot push or delete, and cannot read `license-issuer`, `telemetry-rec
 `web-chat`. The token is held by the `release` Environment only, never as a repository or
 organization secret: its name in the Environment variable `RELEASE_ACR_TOKEN_NAME`, its password
 in the Environment secret `RELEASE_ACR_TOKEN_PASSWORD`. When either is unset the job fails naming
-it, and no tag is created: the check is never skipped. To run it yourself, against `main`'s
+it, and no tag is created: the check is never skipped. Before anything reads the credential, the
+job refuses a run dispatched from any ref other than `main`. To run it yourself, against `main`'s
 manifest or a candidate's (the password is read without echo and never put on a command line):
 
 ```bash
@@ -2219,11 +2220,11 @@ build passes, CI publishes the tag's GitHub Release with that version's changelo
 body (`scripts/release_notes.py`). The registry has already published the version by then, so the
 tag build reports; it does not refuse.
 
-**What is not enforced yet.** GitHub still accepts a `v*` tag pushed by hand, and such a tag
-publishes without passing through `cut-release`. Closing that takes a tag ruleset that only the
-workflow's release identity may bypass, which is a repository setting rather than anything in
-this tree; [docs/releasing.md](docs/releasing.md) records the exact settings and whether they are
-in place. Until they are, `cut-release` is the documented path, not the only possible one.
+**What makes `cut-release` the only path.** Since 2026-11-05 the `release-tags` ruleset refuses
+creating, moving or deleting a `v*` tag by anyone except the release GitHub App
+`masterly-module-release`, which `cut-release` uses. A tag pushed by hand is refused, so it cannot
+publish. The ruleset is a repository setting rather than anything in this tree;
+[docs/releasing.md](docs/releasing.md) records the exact settings.
 
 ## Installing a Canary or Beta build
 
