@@ -9944,6 +9944,11 @@ run "custom_domain_derives_the_oidc_redirect_uri" {
   }
 
   assert {
+    condition     = output.frontend_url == "https://masterly.example.com"
+    error_message = "With frontend_custom_domain set, frontend_url must be https://<hostname>, known at plan."
+  }
+
+  assert {
     condition = (
       length(module.frontend_certificate_identity) == 1 &&
       length(azurerm_role_assignment.frontend_certificate_reader) == 1 &&
