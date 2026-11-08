@@ -17,6 +17,7 @@ One setting on the environment covers every app in it.
 | `resource_group_name` | string | — | RG that holds the environment. |
 | `location` | string | — | Azure region. |
 | `tags` | map(string) | `{}` | Tags on the environment. |
+| `identity_ids` | list(string) | `[]` | Self-hosted extension: user-assigned identities on the environment itself, which it uses to read certificates from Key Vault. Empty renders no `identity` block. |
 
 There is no workspace input: the provider refuses `log_analytics_workspace_id` on an
 environment whose `logs_destination` is `azure-monitor`, so the workspace is named on
@@ -29,6 +30,8 @@ the diagnostic setting instead.
 | `id` | Resource ID of the environment. The diagnostic setting's target. |
 | `default_domain` | Default domain suffix for apps in this environment. |
 | `logs_destination` | Where the environment sends its logs. Always `azure-monitor`. |
+| `identity_ids` | Self-hosted extension: the identities attached to the environment. |
+| `custom_domain_verification_id` | Self-hosted extension: the `asuid.<hostname>` TXT value Azure checks before it binds a custom domain. Sensitive, as the provider marks it. |
 
 ## Deviation from `design.md`
 

@@ -78,12 +78,18 @@ module "masterly" {
   oidc_client_id     = var.oidc_client_id
   oidc_client_secret = var.oidc_client_secret
 
+  # With a custom domain the redirect URI is https://<hostname>/api/auth/callback, derived by
+  # the module: register it at your IdP and the install is ONE apply. Create the DNS records
+  # in docs/networking.md first ("ca-frontend on your own domain").
+  frontend_custom_domain = var.frontend_custom_domain
+
   # Without a custom domain the frontend hostname is an OUTPUT of the first apply, so it
   # cannot be registered at your IdP beforehand. Leave the placeholder for apply 1, read
   # `frontend_url`, register https://<host>/api/auth/callback, then set this and apply
   # again. This value is read only during sign-in — never at boot, never by the readiness
-  # probe — so apply 1 comes up healthy in full production posture with it unset.
-  oidc_redirect_uri = var.oidc_redirect_uri
+  # probe — so apply 1 comes up healthy in full production posture with it unset. With a
+  # custom domain it is left null: the placeholder names another host, which the module refuses.
+  oidc_redirect_uri = var.frontend_custom_domain == null ? var.oidc_redirect_uri : null
 
   # --- First Owner ----------------------------------------------------------------
   # One-shot: the first sign-in with this address becomes the Organization's Owner, then
@@ -162,5 +168,11 @@ module "masterly" {
 
 output "frontend_url" {
   value       = module.masterly.frontend_url
-  description = "Register https://<this host>/api/auth/callback at your IdP, then set oidc_redirect_uri and apply again."
+  description = "With a custom domain, https://<hostname>. Without one, register https://<this host>/api/auth/callback at your IdP, then set oidc_redirect_uri and apply again."
+}
+
+output "custom_domain_verification_id" {
+  value       = module.masterly.custom_domain_verification_id
+  sensitive   = true
+  description = "The asuid.<hostname> TXT record's value (not a secret; sensitive because the provider marks it)."
 }

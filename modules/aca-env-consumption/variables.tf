@@ -40,3 +40,11 @@ variable "mutual_tls_enabled" {
   default     = true
   description = "Encrypt traffic between apps inside the environment. TRUE by default: the frontend's BFF calls the api over http://ca-api, and without this that hop is plaintext on the environment's network. Azure manages the certificates and the apps do not see them, so callers keep using http:// — the platform encrypts the hop underneath (Microsoft: \"your application usually doesn't need to care whether the traffic is encrypted or not\"). Set false only to measure it away: Microsoft documents that it may increase response latency and reduce maximum throughput under high load."
 }
+
+# SELF-HOSTED EXTENSION: identities the environment itself runs as. Not in the platform-iac
+# original, whose environments load no certificate from Key Vault.
+variable "identity_ids" {
+  type        = list(string)
+  default     = []
+  description = "User-assigned identity ids to attach to the environment itself, not to any app in it. The environment uses them to read certificates from Key Vault. Empty (the default) attaches none."
+}

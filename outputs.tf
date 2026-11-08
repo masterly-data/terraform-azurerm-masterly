@@ -1,6 +1,14 @@
 output "frontend_url" {
-  value       = "https://${module.frontend.fqdn}"
-  description = "The install's public URL (subject to the ingress IP allowlist)."
+  value       = local.frontend_custom_hostname != null ? "https://${local.frontend_custom_hostname}" : "https://${module.frontend.fqdn}"
+  description = "The install's public URL (subject to the ingress IP allowlist): https://<hostname> with frontend_custom_domain set, otherwise the frontend's Container Apps FQDN."
+}
+
+# Sensitive only because the provider marks the environment's attribute so; it is the value
+# published in DNS. Read it with `terraform output -raw custom_domain_verification_id`.
+output "custom_domain_verification_id" {
+  value       = module.aca_env.custom_domain_verification_id
+  sensitive   = true
+  description = "The value of the asuid.<hostname> TXT record Azure checks before it binds frontend_custom_domain's hostname to ca-frontend. Azure derives it from the subscription, so it can be read before the first apply as well (docs/networking.md). Marked sensitive because the provider marks it; it is not a secret."
 }
 
 # The api's address for something outside the Container App Environment — the Python SDK, a

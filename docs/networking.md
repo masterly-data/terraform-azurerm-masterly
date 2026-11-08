@@ -48,7 +48,8 @@ frontend resolves to nothing from inside the network.
 
 `oidc_redirect_uri` must be the host your users actually reach, and your identity provider
 must be able to redirect a browser there. A private host is fine — the browser resolves it,
-not the IdP — but the IdP must still have it registered.
+not the IdP — but the IdP must still have it registered. With `frontend_custom_domain` set the
+module derives it from your hostname; see [ca-frontend on your own domain](#ca-frontend-on-your-own-domain).
 
 ## 3. Hub-and-spoke — join a network you already own
 
@@ -139,6 +140,79 @@ The support claims above come from Microsoft Learn:
 (UDR and NAT Gateway), and
 [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration)
 (the required outbound set and the outbound NSG for a Consumption-only environment).
+
+## ca-frontend on your own domain
+
+`frontend_custom_domain` binds your hostname to `ca-frontend` with your certificate from your
+Key Vault, in any of the three topologies (the README's
+[ca-frontend on your own domain](../README.md#ca-frontend-on-your-own-domain-frontend_custom_domain)
+has the input and what it creates). The module creates no DNS record, gateway or Front Door:
+you create the records below, in your own DNS, and the gateway if you put one in front.
+
+### Before the first apply
+
+1. **The `asuid.<hostname>` TXT record.** Azure checks it when it binds the hostname, which is
+   during the first apply, so it must exist and resolve before you run it. Its value is the
+   Container Apps custom-domain verification id. Azure derives it from the subscription, not
+   from the environment, so you can read it before the environment exists:
+
+   ```sh
+   az rest --method post \
+     --url "https://management.azure.com/subscriptions/<subscription id>/providers/Microsoft.App/getCustomDomainVerificationId?api-version=2024-03-01"
+   ```
+
+   The response is the id, as a JSON string. After the apply the module's `custom_domain_verification_id` output carries the same value
+   (`terraform output -raw custom_domain_verification_id`; it is marked sensitive because the
+   provider marks it, and it is not a secret). For `masterly.example.com` the record is
+   `asuid.masterly.example.com TXT <that value>`.
+2. **Your IdP's redirect URI**, `https://<hostname>/api/auth/callback`, on `identity_binding =
+   "oidc"`. The module sets the same value on the frontend, so nothing changes after the apply.
+3. **Read on the certificate for the environment's identity is the module's**, but the deploying
+   identity must be allowed to create that role assignment on the vault: Owner, User Access
+   Administrator or Role Based Access Control Administrator there. The vault must use Azure RBAC
+   authorization and be reachable from the Container App Environment; the module does not change
+   your vault's network.
+
+If the first apply stops at the binding with a domain-verification error, Azure did not find a
+record it checks: the TXT record is missing or has not propagated yet, or, without a gateway,
+Azure wants the routing record below as well, which can only point at the environment once the
+apply has created it. Create or fix the record and apply again. Everything else, including the
+redirect URI, is already in place and does not change, so nothing has to be edited.
+
+### The record that routes the hostname
+
+**Without a gateway** (topology 1, or topology 2 reached directly over the VPN): point the
+hostname at the environment, with either
+
+- a **CNAME** to `ca-frontend`'s Container Apps FQDN, `ca-frontend.<environment default
+  domain>` (`az containerapp show -n ca-frontend -g rg-<name_prefix>-aca --query
+  properties.configuration.ingress.fqdn -o tsv`), or
+- an **A** record to the environment's static IP (`az containerapp env show -n
+  aca-<name_prefix> -g rg-<name_prefix>-aca --query properties.staticIp -o tsv`).
+
+Both targets exist only once the environment does, so this record follows the first apply; the
+hostname answers once it resolves. On topology 2 the record goes in the private DNS your VPN
+clients resolve, not in public DNS.
+
+**Behind an Application Gateway** (topology 2, `aca_internal_load_balancer = true`): the public
+record points at the gateway, an **A** record to its frontend public IP or a **CNAME** to its DNS
+name, and can exist before the first apply because the gateway is yours. Set the gateway up so
+that the request reaches `ca-frontend` under your hostname, because the environment picks the
+app and the certificate by it:
+
+| Gateway setting | Value |
+|---|---|
+| Listener | HTTPS on 443 for your hostname, with your certificate (the gateway can read the same Key Vault secret) |
+| Backend pool | The environment's static IP (`properties.staticIp`, above), reachable from the gateway's subnet |
+| Backend settings: protocol and port | **HTTPS**, 443. Not HTTP: `ca-frontend` takes HTTPS only, and port 80 answers with a redirect |
+| Backend settings: host name | **Keep your hostname** as the backend host: "pick host name from incoming request", or override it with your hostname itself. Never the default domain or the IP: the environment would not route the request to `ca-frontend` |
+| Backend settings: trusted certificate | Your certificate's issuer; "well-known CA certificate" when a public CA issued it, otherwise upload your private root |
+| Health probe | HTTPS, host = **your hostname**, path **`/api/healthz`** (`ca-frontend`'s liveness path), healthy on 200-399 |
+
+`ingress_allowed_cidrs` applies to the hostname as it does to the FQDN, and behind a gateway the
+address `ca-frontend` sees is the gateway's: include the gateway subnet's range in it, and do the
+per-client narrowing on the gateway. The `snet-aca` NSG admits `VirtualNetwork` on 443 on an
+internal environment, which covers a gateway in the same VNet or a peered one.
 
 ## Network security baseline
 

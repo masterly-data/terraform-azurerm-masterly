@@ -57,6 +57,7 @@ One Terraform root module: `main.tf` is the always-created core; each optional s
 | `diagnostics.tf` | The observability surface: one action group, the diagnostic settings (five data-plane, one per Container App), twelve metric alerts and four log-search alert rules (one of them per Container App) |
 | `keyvault.tf` | The opt-in durable secret store (ADR 0066): vault, private endpoint and DNS, RBAC grants, and the install's own secrets as Key Vault references |
 | `redis.tf` | The opt-in session registry (ADR 0071): both offerings (`managed` / `cache`), each private-endpoint only |
+| `custom-domain.tf` | The opt-in `frontend_custom_domain`: `ca-frontend` on the customer's hostname, with the certificate read from the customer's Key Vault by a versionless reference, as an identity attached to the environment alone (`id-<prefix>-frontend-cert`, Key Vault Secrets User on that secret) |
 | `workers.tf`, `email.tf`, `entra-auth.tf` | The opt-in `ca-workers` app, customer-owned ACS email, and how the apps authenticate to the install's own Postgres and Redis (Entra token, or password and access key) |
 | `migrate.tf` | The opt-in (`migrations = "job"`) `caj-migrate` Container Apps job (ADR 0120): schema migrations and new Environments' databases, as `id-<prefix>-migrate`, on a schedule, started at install by an azapi action the apps depend on, and by CD before each release rolls the apps (Terraform ignores its image drift, as on the apps) |
 | `variables.tf`, `outputs.tf`, `versions.tf` | The public surface. Every variable description is customer documentation |

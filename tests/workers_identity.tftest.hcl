@@ -140,7 +140,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
 
   # The list below names every azurerm_role_assignment in the module, so a new one must be added.
   assert {
-    condition     = length(regexall("resource \"azurerm_role_assignment\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) == 23
+    condition     = length(regexall("resource \"azurerm_role_assignment\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) == 24
     error_message = "A role assignment was added or removed: name it in this file's grant lists."
   }
 
@@ -158,7 +158,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
         ) : ra if ra.principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
       ]) == 7 &&
       alltrue([
@@ -170,7 +170,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
             azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
             azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
             values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-            values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+            values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
           ) : "${ra.scope}|${ra.role_definition_name}|${ra.role_definition_id}" if ra.principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
           ] : contains(concat([
             for ra in concat(
@@ -180,7 +180,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
               azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
               azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
               values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-              values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+              values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
             ) : "${ra.scope}|${ra.role_definition_name}|${ra.role_definition_id}" if ra.principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
             ], [
             "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver|(assigned by name)",
@@ -250,7 +250,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
         ) : "${ra.scope}|${ra.role_definition_name}" if ra.principal_id == "ffffffff-ffff-ffff-ffff-ffffffffffff"
         ]) == toset(concat(
         ["${var.acr_id}|AcrPull"],
@@ -266,7 +266,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
         ) : ra.role_definition_name if ra.principal_id == "dddddddd-dddd-dddd-dddd-dddddddddddd"
       ]) == toset(["AcrPull", "Key Vault Secrets User"]) &&
       toset(keys(azurerm_role_assignment.kv_secrets_user_migrate)) == toset(["migrate-database-url", "migrate-database-direct-url"]) &&
@@ -376,7 +376,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_azure_cache_for_
             azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
             azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
             values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-            values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+            values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
           ) : "${ra.scope}|${ra.role_definition_name}|${ra.role_definition_id}" if ra.principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
           ] : contains(concat([
             for ra in concat(
@@ -386,7 +386,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_azure_cache_for_
               azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
               azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
               values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-              values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+              values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
             ) : "${ra.scope}|${ra.role_definition_name}|${ra.role_definition_id}" if ra.principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
             ], [
             "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver|(assigned by name)",
@@ -591,7 +591,7 @@ run "workers_own_identity_on_password_start" {
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
         ) : { principal = ra.principal_id, grant = "${ra.scope}|${ra.role_definition_name}|${ra.role_definition_id}" }
       ]] :
       length([for h in held : h if h.principal == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]) == 7 &&
@@ -691,7 +691,7 @@ run "workers_own_identity_on_byo_database_with_start" {
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
         ) : { principal = ra.principal_id, grant = "${ra.scope}|${ra.role_definition_name}|${ra.role_definition_id}" }
       ]] :
       length([for h in held : h if h.principal == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]) == 7 &&
@@ -787,7 +787,7 @@ run "workers_own_identity_on_byo_database_with_job" {
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
-          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
+          values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader,
         ) : { principal = ra.principal_id, grant = "${ra.scope}|${ra.role_definition_name}|${ra.role_definition_id}" }
       ]] :
       length([for h in held : h if h.principal == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]) == 7 &&
