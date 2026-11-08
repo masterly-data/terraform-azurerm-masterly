@@ -116,6 +116,9 @@ module "masterly" {
   oidc_client_id     = "<bff client id>"
   oidc_client_secret = var.oidc_client_secret # from your secret store
   oidc_redirect_uri  = "https://<frontend host>/api/auth/callback"
+  # Or serve the frontend on your own hostname and drop oidc_redirect_uri: the module derives
+  # https://<hostname>/api/auth/callback from it. See "ca-frontend on your own domain".
+  # frontend_custom_domain = { hostname = "...", certificate_key_vault_secret_id = "...", key_vault_id = "..." }
 
   # License (ADR 0013): from your install bundle.
   license_token      = var.license_token # from your secret store
@@ -166,7 +169,8 @@ module "masterly" {
 }
 ```
 
-Outputs include `frontend_url`, `api_url` (the API's base URL for the Python SDK and other
+Outputs include `frontend_url` (`https://<hostname>` with `frontend_custom_domain` set),
+`custom_domain_verification_id` (the `asuid.<hostname>` TXT value), `api_url` (the API's base URL for the Python SDK and other
 clients outside the environment — null unless `api_ingress_external = true`), the apps resource
 group, the Container App names (the values the app repos' release workflows use to roll
 images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
@@ -268,6 +272,7 @@ check, and a rebuilt app, both go by.
 | Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the URL rides as a Container App secret, keyless on `redis_auth = "entra"` — [authentication](#authentication-to-the-starter-server-and-redis)). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
 | Registry private endpoint (opt-in) | `registry_private_endpoint`: a private endpoint to your registry (`acr_id`, `registry` subresource) on the private-endpoints subnet, with a `privatelink.azurecr.io` private DNS zone linked to the VNet, so the identity modes pull over the VNet. See [The registry over a private endpoint](#the-registry-over-a-private-endpoint). |
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
+| `ca-frontend` custom domain (opt-in) | `frontend_custom_domain`: `id-masterly-frontend-cert` UAMI, attached to the Container App Environment and to no app, with **Key Vault Secrets User** on your certificate's secret alone; the environment certificate, a versionless Key Vault reference read as that identity; and an SNI binding of your hostname on `ca-frontend`. See [ca-frontend on your own domain](#ca-frontend-on-your-own-domain-frontend_custom_domain). |
 
 ## Getting the images (ADR 0067)
 
@@ -396,7 +401,16 @@ Before you turn it on:
 - **`dev`** — evaluation only. The module **refuses** `dev` with an open ingress:
   set `ingress_allowed_cidrs` (an IP allowlist) or switch to `oidc`.
 
-Without a custom domain the frontend FQDN is an output of the first apply, so a production
+**With a custom domain** (`frontend_custom_domain`) a production install is **one apply**. The
+redirect URI is known before anything exists: the module derives
+`https://<hostname>/api/auth/callback` from the hostname and gives it to the frontend, so leave
+`oidc_redirect_uri` unset and register that URI at your IdP before you apply. If you do set
+`oidc_redirect_uri` alongside the custom domain it must name the same host, or the plan is refused.
+Before the apply, create the DNS records and grant the deploying identity the right to assign a
+role on the certificate's vault: see
+[ca-frontend on your own domain](#ca-frontend-on-your-own-domain-frontend_custom_domain).
+
+**Without a custom domain** the frontend FQDN is an output of the first apply, so a production
 install is two applies, **both with `identity_binding = "oidc"`** and the production posture:
 apply 1 carries a placeholder `oidc_redirect_uri` (the value is read only during sign-in, never
 at boot or by the readiness probe, so the install comes up healthy with it), then read
@@ -406,6 +420,56 @@ exactly this. Do not bring a production install up with `identity_binding = "dev
 `oidc` afterwards: that second apply would change identity and everything else production
 requires — Key Vault with purge protection, which cannot be turned off, the control-plane store,
 Redis — at once, on a running install.
+
+### ca-frontend on your own domain (`frontend_custom_domain`)
+
+Null by default, which binds no hostname and creates nothing: `ca-frontend` answers on its
+Container Apps FQDN, as before the input existed. Set it and `ca-frontend` also answers on your
+hostname, with your own certificate, both on a public environment and on an internal one
+(`aca_internal_load_balancer = true`) behind your Application Gateway:
+
+```hcl
+frontend_custom_domain = {
+  hostname                        = "masterly.example.com"
+  certificate_key_vault_secret_id = "https://kv-contoso-certs.vault.azure.net/secrets/masterly-example-com"
+  key_vault_id                    = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/kv-contoso-certs"
+}
+```
+
+- **The certificate stays in your vault.** The module takes a reference, the certificate's
+  secret id **without a version**, and no certificate, key or password: none enters Terraform
+  or its state. The Container App Environment reads the certificate from the vault itself, and
+  because the reference names no version it picks up a certificate you renew in the vault
+  without an apply. A versioned id, or a `/certificates/` URL, is refused at plan.
+- **A dedicated identity reads it.** The module creates `id-<prefix>-frontend-cert`, attaches it
+  to the Container App Environment and to no app, and grants it **Key Vault Secrets User** on
+  the certificate's secret alone, never on the vault. It is not the frontend's identity: the
+  frontend is the app an attacker reaches first, and a read on the certificate would hand them
+  your hostname's private key.
+- **The vault** must use Azure RBAC authorization, and must be reachable from the Container App
+  Environment: a vault that admits only private endpoints the environment cannot reach, or a
+  firewall that does not admit it, fails the certificate at apply. The module does not change
+  your vault's network.
+- **The deploying identity** needs the right to create that role assignment on the vault
+  (`Microsoft.Authorization/roleAssignments/write`): **Owner**, **User Access Administrator** or
+  **Role Based Access Control Administrator** on the vault or the secret. A subscription-scope
+  grant of one of those covers it when the vault is in the install's subscription. Entra role
+  assignments propagate eventually, so a first apply can fail on the certificate inside that
+  window; re-run the apply.
+- **The binding** is an SNI binding of exactly your hostname to `ca-frontend`. It changes
+  nothing else about the app: `ingress_allowed_cidrs` applies to the hostname as to the FQDN,
+  and ingress stays HTTPS-only.
+- **`frontend_url`** becomes `https://<hostname>`, and on `identity_binding = "oidc"` the
+  frontend's redirect URI is `https://<hostname>/api/auth/callback`.
+- **The TXT record comes first.** Azure checks the `asuid.<hostname>` TXT record when it binds
+  the hostname, during the first apply. Its value is the `custom_domain_verification_id` output,
+  and can be read from your subscription before that apply. The A or CNAME record that routes
+  the hostname points at your gateway, or at the environment once it exists.
+  [docs/networking.md](docs/networking.md#ca-frontend-on-your-own-domain) lists both records,
+  when each can be created, and the Application Gateway settings.
+
+Certificates managed by Container Apps are not offered: Azure cannot issue one on an internal
+environment.
 
 ### Built-in authentication in front of the frontend (`builtin_auth`)
 
@@ -2028,7 +2092,7 @@ Treat the state backend as a secrets store:
 
 ## Deliberately deferred (→ next)
 
-Custom domains · the per-install Entra identity toward Masterly's control plane (ADR 0020).
+The per-install Entra identity toward Masterly's control plane (ADR 0020).
 
 ## Versioning
 

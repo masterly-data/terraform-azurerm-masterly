@@ -13,11 +13,11 @@
 #
 # Opt-in subsystems, off by default: Key Vault (keyvault.tf), Redis (redis.tf), the
 # dedicated workers app (workers.tf), customer-owned email (email.tf), the registry's private
-# endpoint (registry.tf) and the Service Bus transport (below). mode=production requires the
-# first three. The observability surface (diagnostics.tf) is on by default in mode=production
-# and off otherwise.
+# endpoint (registry.tf), the Service Bus transport (below) and ca-frontend's custom domain with
+# a Key Vault certificate (custom-domain.tf). mode=production requires the first three. The
+# observability surface (diagnostics.tf) is on by default in mode=production and off otherwise.
 #
-# Deliberately deferred: custom domains, and the per-install Entra identity of ADR 0020.
+# Deliberately deferred: the per-install Entra identity of ADR 0020.
 # The calls the install can make to Masterly's control plane (licence refresh, usage
 # reporting) are opt-in and authenticate with the install credential from the bundle, not
 # with that identity. The README's "Deliberately deferred" section is the list of record.
@@ -586,7 +586,9 @@ module "aca_env" {
   location                       = var.location
   infrastructure_subnet_id       = local.aca_subnet_id
   internal_load_balancer_enabled = var.aca_internal_load_balancer
-  tags                           = local.tags
+  # Only the certificate identity, and only with frontend_custom_domain (custom-domain.tf).
+  identity_ids = module.frontend_certificate_identity[*].id
+  tags         = local.tags
 }
 
 # The apps' console and system logs -> the install's workspace. The environment sends its logs
@@ -1315,6 +1317,11 @@ locals {
   oidc_jwks_uri        = var.oidc_jwks_uri != null ? var.oidc_jwks_uri : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/discovery/v2.0/keys")
   oidc_audience        = var.oidc_audience != null ? var.oidc_audience : var.oidc_client_id
 
+  # With a custom domain the BFF callback is known before any apply: the hostname the install is
+  # served on, which oidc_redirect_uri may not contradict (variables.tf). Without one it is the
+  # input, set from frontend_url on the second apply.
+  oidc_redirect_uri = local.frontend_custom_hostname != null ? "https://${local.frontend_custom_hostname}/api/auth/callback" : var.oidc_redirect_uri
+
   # Break-glass admits an address that already holds the Owner role, and the first Owner is
   # initial_owner_email, so that is the default once a hash arms it. The presence test is
   # unmarked (the hash is sensitive, whether one was given is not), as for the secret names.
@@ -1809,41 +1816,12 @@ module "api" {
 
 # --- The frontend (public ingress, optionally IP-restricted) -----------------------
 
-module "frontend" {
-  source = "./modules/aca-container-app"
-
-  name                = "ca-frontend"
-  resource_group_name = azurerm_resource_group.aca.name
-  environment_id      = module.aca_env.id
-  image               = local.frontend_image
-
-  acr_login_server           = local.registry_server
-  user_assigned_identity_ids = [module.frontend_identity.id]
-
-  registry_username             = local.registry_username
-  registry_password_secret_name = local.registry_password_secret_name
-
-  ingress_external    = var.frontend_ingress_external
-  ingress_target_port = 3000
-
-  min_replicas = var.frontend_min_replicas
-  max_replicas = var.frontend_max_replicas
-
-  cpu    = local.app_resources.frontend.cpu
-  memory = local.app_resources.frontend.memory
-
-  ingress_allowed_ip_security_restrictions = [
-    for index, cidr in var.ingress_allowed_cidrs : {
-      name             = "allow-${index}"
-      ip_address_range = cidr
-      action           = "Allow"
-    }
-  ]
-
+locals {
   # On oidc the frontend is the confidential BFF client (authorization-code + PKCE): it
   # gets the client config here; the client secret travels as a Container App secret
-  # (see frontend_secret_names above), never as plain env.
-  env = merge(
+  # (see frontend_secret_names above), never as plain env. A local rather than inline on the
+  # module, so a test can read the values the frontend is given.
+  frontend_env = merge(
     {
       # By SHORT APP NAME, not by FQDN. ACA resolves `http://<app-name>` for any app in the
       # same environment through the same Envoy proxy the FQDN goes through, and it cannot
@@ -1880,11 +1858,45 @@ module "frontend" {
       {
         MASTERLY_OIDC_CLIENT_ID    = var.oidc_client_id
         MASTERLY_OIDC_AUTHORITY    = local.oidc_authority
-        MASTERLY_OIDC_REDIRECT_URI = var.oidc_redirect_uri
+        MASTERLY_OIDC_REDIRECT_URI = local.oidc_redirect_uri
       },
       var.oidc_scopes != null ? { MASTERLY_OIDC_SCOPES = var.oidc_scopes } : {},
     ) : {},
   )
+}
+
+module "frontend" {
+  source = "./modules/aca-container-app"
+
+  name                = "ca-frontend"
+  resource_group_name = azurerm_resource_group.aca.name
+  environment_id      = module.aca_env.id
+  image               = local.frontend_image
+
+  acr_login_server           = local.registry_server
+  user_assigned_identity_ids = [module.frontend_identity.id]
+
+  registry_username             = local.registry_username
+  registry_password_secret_name = local.registry_password_secret_name
+
+  ingress_external    = var.frontend_ingress_external
+  ingress_target_port = 3000
+
+  min_replicas = var.frontend_min_replicas
+  max_replicas = var.frontend_max_replicas
+
+  cpu    = local.app_resources.frontend.cpu
+  memory = local.app_resources.frontend.memory
+
+  ingress_allowed_ip_security_restrictions = [
+    for index, cidr in var.ingress_allowed_cidrs : {
+      name             = "allow-${index}"
+      ip_address_range = cidr
+      action           = "Allow"
+    }
+  ]
+
+  env = local.frontend_env
 
   secrets         = local.frontend_value_secrets
   secret_refs     = local.frontend_vault_secret_refs

@@ -24,3 +24,18 @@ output "mutual_tls_enabled" {
   value       = azurerm_container_app_environment.this.mutual_tls_enabled
   description = "Whether traffic between apps inside the environment is encrypted."
 }
+
+# SELF-HOSTED EXTENSION. Echoes the configuration rather than the resource, so a test can read it
+# at plan.
+output "identity_ids" {
+  value       = var.identity_ids
+  description = "The user-assigned identity ids attached to the environment itself. Empty unless the caller attached some."
+}
+
+# SELF-HOSTED EXTENSION. Sensitive, as the provider marks the attribute. The value is not a
+# secret: it is published in DNS, as the asuid.<hostname> TXT record.
+output "custom_domain_verification_id" {
+  value       = azurerm_container_app_environment.this.custom_domain_verification_id
+  sensitive   = true
+  description = "The value of the asuid.<hostname> TXT record Azure checks before it binds a custom domain to an app in this environment."
+}

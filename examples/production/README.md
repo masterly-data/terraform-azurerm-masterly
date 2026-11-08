@@ -35,7 +35,24 @@ Production also refuses a plan with no alert notification target. Set `alert_ema
 by this example), or pass `alert_action_group_id` to the module instead; `alerts_routed_externally`
 is the escape hatch for alerts routed outside Terraform.
 
-## Two applies, not one
+## One apply with your own domain
+
+Set `frontend_custom_domain` (your hostname, the versionless secret id of its certificate in
+your Key Vault, and that vault's resource id) and the redirect URI is known before anything
+exists: `https://<hostname>/api/auth/callback`, which the module gives the frontend.
+
+1. Register `https://<hostname>/api/auth/callback` at your IdP.
+2. Create the `asuid.<hostname>` TXT record, as
+   [docs/networking.md](../../docs/networking.md#ca-frontend-on-your-own-domain) describes
+   (it also shows how to read its value before the first apply), and behind an Application
+   Gateway the A or CNAME record to the gateway. Without a gateway the A or CNAME record points
+   at the environment, so it follows the apply.
+3. Make sure the identity that applies may create a role assignment on the certificate's vault
+   (Owner, User Access Administrator or Role Based Access Control Administrator there).
+4. Apply once. `oidc_redirect_uri` is not passed: the example leaves it null whenever
+   `frontend_custom_domain` is set.
+
+## Two applies without one
 
 Without a custom domain the frontend hostname is an **output** of the first apply, so it
 cannot be registered at your IdP beforehand.

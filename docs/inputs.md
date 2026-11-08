@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-116 inputs in 19 groups.
+117 inputs in 19 groups.
 
 ## Groups
 
@@ -21,7 +21,7 @@ each one that is missing.
 - [Licence refresh (ADR 0074)](#licence-refresh-adr-0074) (1)
 - [Outbound egress posture](#outbound-egress-posture) (2)
 - [Trusting a private CA (MAS-446)](#trusting-a-private-ca-mas-446) (1)
-- [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (29)
+- [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (30)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
 - [Diagnostics and alerts](#diagnostics-and-alerts) (12)
@@ -166,6 +166,7 @@ In `variables.tf`.
 | `public_api_url` | `string` | `null` | The api's public base URL, as an absolute https:// URL with no query string, fragment or credentials — the api Container App's external FQDN ("https://ca-api.<environment default domain>") or your own domain in front... |
 | `frontend_ingress_external` | `bool` | `true` | Whether the frontend has ingress beyond the Container App Environment itself. |
 | `aca_internal_load_balancer` | `bool` | `false` | Give the Container App Environment an internal load balancer, so it has no public endpoint and its apps answer only inside the VNet — reached over VPN or ExpressRoute. |
+| `frontend_custom_domain` | `object(...)` | `null` | Serve ca-frontend on your own hostname, with your own TLS certificate held in your own Key Vault. |
 | `vnet_address_space` | `list(string)` | `["10.20.0.0/16"]` | Address space of the install's VNet. |
 | `aca_subnet_prefix` | `string` | `null` | Explicit CIDR of the ACA runtime subnet (must be /23 or larger and inside vnet_address_space). |
 | `private_endpoints_subnet_prefix` | `string` | `null` | Explicit CIDR of the private-endpoints subnet (inside vnet_address_space, clear of the runtime subnet). |

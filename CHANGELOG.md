@@ -24,6 +24,23 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Added
 
+- **`frontend_custom_domain`: `ca-frontend` on your own hostname, with your certificate from your
+  Key Vault.** Null by default, which plans exactly as before. Set the hostname, the certificate's
+  versionless Key Vault secret id and the vault's resource id, and the module creates
+  `id-<prefix>-frontend-cert`, an identity attached to the Container App Environment and to no
+  app, with Key Vault Secrets User on that one secret; an environment certificate that references
+  the secret without a version, so the key never enters Terraform and a renewal in the vault needs
+  no apply; and an SNI binding of the hostname on `ca-frontend`, which leaves
+  `ingress_allowed_cidrs` and HTTPS-only as they were. It works on a public environment and on an
+  internal one behind your Application Gateway. With `identity_binding = "oidc"` the frontend's
+  redirect URI derives from the hostname, `https://<hostname>/api/auth/callback`, so
+  `oidc_redirect_uri` may be left unset and a production install is one apply; a
+  `oidc_redirect_uri` on another host is refused at plan, as are a hostname that is not a bare
+  lowercase FQDN and a versioned secret id. `frontend_url` returns `https://<hostname>`, and the
+  new `custom_domain_verification_id` output carries the `asuid.<hostname>` TXT value.
+  [docs/networking.md](docs/networking.md#ca-frontend-on-your-own-domain) lists the DNS records,
+  when to create them, and the Application Gateway settings; the deploying identity needs the right
+  to create a role assignment on the certificate's vault. Custom domains are no longer deferred.
 - **`oidc_tenant_id`.** For a single-tenant Microsoft Entra registration, the tenant id is now
   enough: `oidc_allowed_issuers` and `oidc_authority` default to
   `https://login.microsoftonline.com/<tenant>/v2.0`, and `oidc_jwks_uri` to

@@ -74,8 +74,18 @@ variable "oidc_client_secret" {
 
 variable "oidc_redirect_uri" {
   type        = string
-  description = "The BFF callback. Leave the placeholder for apply 1; set to https://<frontend_url host>/api/auth/callback for apply 2."
+  description = "The BFF callback, without a custom domain. Leave the placeholder for apply 1; set to https://<frontend_url host>/api/auth/callback for apply 2. Ignored with frontend_custom_domain set."
   default     = "https://redirect-not-yet-known.invalid/api/auth/callback"
+}
+
+variable "frontend_custom_domain" {
+  type = object({
+    hostname                        = string
+    certificate_key_vault_secret_id = string
+    key_vault_id                    = string
+  })
+  default     = null
+  description = "Your own hostname for the frontend, with the certificate in your Key Vault: the hostname, the certificate's versionless secret id and the vault's resource id. Set it and the install is one apply. Null serves the Container Apps FQDN, in two applies."
 }
 
 variable "initial_owner_email" {
