@@ -25,13 +25,16 @@ full commit SHA, and creates the tag only when all of these hold:
 | The commit is on `main` | `git merge-base --is-ancestor` |
 | The commit's `MANIFEST.json`, `CHANGELOG.md` and README publish exactly this version | `scripts/check_release_manifest.py --tag`, `scripts/release_notes.py`, run against the commit's own tree |
 | Every other version the commit's `MANIFEST.json` lists already has its tag, so the file at the new tag names only published versions | `scripts/check_release_manifest.py --tag --published-tags` |
+| Every default image of the stable and previous channels of the commit's `MANIFEST.json` resolves in `masterly.azurecr.io` at the digest it records (or by tag, for an entry with no digests) | `scripts/check_release_images.py`, main's copy, in the `images` job with the `release` Environment's pull-only token |
 
-`python3 scripts/release_gate.py --selftest` shows the gate refusing each of those faults, and CI
-runs it on every pull request.
+`python3 scripts/release_gate.py --selftest` shows the gate refusing each of those faults, and
+`python3 scripts/check_release_images.py --selftest` shows the image check refusing a missing
+image, a moved tag and a missing or refused credential against a fake registry. CI runs both on
+every pull request.
 
 ## Live checks before the next tag
 
-Every check above runs without Azure. `terraform test` uses mock providers, so nothing that only
+Every check above, except the `images` job's read of the registry, runs without Azure. `terraform test` uses mock providers, so nothing that only
 Azure can answer has been tested when CI is green: whether Azure accepts a resource, what a plan
 does to an install that already exists, whether a role is enough. The rule for those is to plan,
 and where needed apply, a live install against the release candidate before it is tagged.
@@ -165,14 +168,21 @@ starts `ci.yml`'s tag build, which publishes the GitHub Release page.
 
 ### 2. The `release` Environment
 
-The workflow's `tag` job runs in an Environment named `release`. Configure it with:
+The workflow's `images` and `tag` jobs run in an Environment named `release`. Configure it with:
 
 - **Deployment branches and tags:** selected branches, `main` only — so a workflow edited on
-  another branch cannot reach the App's key.
+  another branch cannot reach the App's key or the registry token. Set this before either secret.
 - **Environment secret** `RELEASE_APP_PRIVATE_KEY`: the App's private key.
 - **Environment variable** `RELEASE_APP_CLIENT_ID`: the App's client ID.
-- **Required reviewer** (recommended): a release then waits for one approval after every check
-  has passed and before the tag is created.
+- **Environment variable** `RELEASE_ACR_TOKEN_NAME` and **Environment secret**
+  `RELEASE_ACR_TOKEN_PASSWORD`: the repository-scoped ACR token `pull-ci-cut-release` on the
+  `pull-product-images` scope map, and its password. That scope map pulls `release/api` and
+  `release/frontend` only, so the token cannot push, delete, or read `license-issuer`,
+  `telemetry-receiver` or `web-chat`. Never a repository or organization secret. Until both are
+  set the `images` job fails, naming the one missing, and no tag is created.
+- **Required reviewer** (recommended): GitHub asks for approval on each job that uses the
+  Environment, so a release then waits for two approvals, one before the registry read and one
+  before the tag is created.
 
 Until `RELEASE_APP_CLIENT_ID` is set, the workflow creates the tag with its `GITHUB_TOKEN`, warns
 that it did, and starts the tag build explicitly. Every check above still runs first.

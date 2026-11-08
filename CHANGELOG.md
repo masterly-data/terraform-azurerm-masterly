@@ -36,6 +36,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- **`cut-release` refuses a tag until the release's default images resolve in the registry.** Its
+  new `images` job reads the release commit's `MANIFEST.json` and checks, in
+  `masterly.azurecr.io`, every image the stable and previous channels default to:
+  `release/<role>@<digest>`, with the entry's tag at that same digest, or `release/<role>:<tag>`
+  for an entry with no digests (`scripts/check_release_images.py`). 0.22.0 and 0.23.0 were tagged
+  naming builds the registry did not have. It reads with the pull-only ACR token
+  `pull-ci-cut-release` (scope map `pull-product-images`) from the `release` Environment, and
+  fails when that is not configured. No change to the module itself (split from MAS-4213).
 - **`ca-workers` runs as its own identity, `id-<prefix>-workers`, wherever it exists and the install
   has a Key Vault, on either `migrations` value and on BYO-DB, except `"start"` with
   `database_auth = "entra"` on the starter server.** A minor release under ADR 0062: no input or
