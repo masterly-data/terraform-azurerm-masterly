@@ -583,6 +583,23 @@ to switch the guard off entirely, loopback and the metadata endpoint included. F
 never loopback or link-local — and the application warns at every start. Migrate by replacing
 it with the ranges your targets are actually on; setting both fails the plan.
 
+### Extra Environments on a demo install
+
+On `mode = "demo"` the control plane is in memory, and its Environments are a fixture list,
+`prd-eu` and `non-prd-eu`. An Environment created in the product lasts only until `ca-api`
+restarts. List the extra Environments an evaluation or demo install runs on in
+`demo_environments` instead (`["dev-eu", "uat-eu"]`, say). The module puts them on `ca-api`, and
+on `ca-workers` with `enable_workers`, as `MASTERLY_DEMO_ENVIRONMENTS`, comma-separated, and the
+control plane seeds each one at every start, in the install's own geo (`masterly_region`), under
+an id derived from its name, so it is the same Environment after a restart. An api image from a
+backend release later than v0.136.0 reads it; an earlier image ignores it. Empty (the default),
+no app gets the variable.
+
+Each name is lowercase, starts with a letter, ends with a letter or digit, has only letters,
+digits and hyphens, and is at most 40 characters. A name listed twice, a fixture name, and the input on
+`mode = "production"` are refused at plan: a production install creates its Environments in the
+product, where they persist in the control-plane store.
+
 ### Authentication to the starter server and Redis
 
 The apps authenticate to the starter Postgres server and to Redis in one of two ways, chosen
