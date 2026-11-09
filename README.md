@@ -11,19 +11,19 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "0.23.0"
+  version = "0.24.0"
 }
 ```
 
 <!-- release-manifest:pins:begin -->
-Pin the exact version, as the examples on this page do (`version = "0.23.0"`).
+Pin the exact version, as the examples on this page do (`version = "0.24.0"`).
 Terraform does not lock module versions: `.terraform.lock.hcl` records providers only, so
 with a range every fresh `terraform init` (a new laptop, a CI runner, a clean clone) takes
 the newest release the range admits. With an exact version your configuration is the
 record of what the install runs, and an upgrade is a reviewed one-line change.
-If you do want a range, `version = "~> 0.23.0"` takes patches of 0.23 only: releases
+If you do want a range, `version = "~> 0.24.0"` takes patches of 0.24 only: releases
 that add no capability, no new input or required setting and no database migration.
-`version = "~> 0.23"` also takes every later 0.x minor.
+`version = "~> 0.24"` also takes every later 0.x minor.
 Before 1.0.0 a minor may carry a breaking change, listed under its own heading
 in the changelog, so read it before you take one.
 [Versioning](#versioning) says what each kind of release promises.
@@ -68,7 +68,7 @@ Every input, grouped by subsystem, is in [docs/inputs.md](docs/inputs.md) (gener
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "0.23.0"
+  version = "0.24.0"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -2144,6 +2144,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.24.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-11-09 |
 | `0.23.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-11-05 |
 | `0.22.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-10-29 |
 | `0.21.0` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-28 |

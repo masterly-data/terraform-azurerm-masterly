@@ -120,7 +120,7 @@ install, planned and applied from that candidate:
    through the BFF succeeds with the api ungated, and the frontend's gate still redirects an
    anonymous browser to Entra sign-in.
 
-**`ca-workers` on its own identity with the vault** (in Unreleased in the
+**`ca-workers` on its own identity with the vault** (in 0.24.0 in the
 [changelog](../CHANGELOG.md)). On a live install with the vault and `ca-workers` on, on
 `migrations = "start"` with `database_auth = "password"`, and separately on BYO-DB, planned and
 applied from the candidate:
