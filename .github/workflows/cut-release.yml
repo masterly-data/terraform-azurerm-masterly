@@ -10,6 +10,12 @@
 #           push to main concluded success (which covers every ci.yml job, including `validate`,
 #           the check main's branch ruleset requires); the tag does not exist yet; and the commit's
 #           own manifest, changelog and README publish exactly this version.
+#   images  every image the module's stable and previous channels default to for the commit's
+#           MANIFEST.json resolves in masterly.azurecr.io at the digest it records (or by tag, for
+#           an entry with no digests). Every other check here is offline, which is how 0.22.0 and
+#           0.23.0 were tagged naming builds the registry did not have. It reads with a pull-only
+#           token from the `release` Environment, runs main's copy of the script only, and reads
+#           the release commit's manifest as data. Unset, the token fails the job: never skipped.
 #   tag     creates the annotated tag on that commit through the API. Nothing is pushed from a
 #           checkout, so no credential is ever written into a working copy.
 #
@@ -34,8 +40,9 @@
 #     the intended failure: configure the App.
 #
 # Dispatch it from main only — the gate that runs is the one on the branch it is dispatched from,
-# and main is where a change to it has been reviewed. The `tag` job's `release` Environment is
-# where a maintainer restricts that to main mechanically and, if wanted, adds a required reviewer.
+# and main is where a change to it has been reviewed. The `release` Environment of the `images` and
+# `tag` jobs is where a maintainer restricts that to main mechanically and, if wanted, adds a
+# required reviewer.
 #
 # Every input reaches a shell through `env:`, never spliced into a `run:` script.
 
@@ -156,9 +163,60 @@ jobs:
             --published-tags "$RUNNER_TEMP/tags.txt"
           python3 scripts/release_notes.py "$TAG" > /dev/null
 
+  # The one job that holds the registry credential, so it runs nothing from the release commit's
+  # tree: main's checkout and main's script only, with the commit's MANIFEST.json read as data.
+  images:
+    name: The release's default images resolve in the registry
+    needs: verify
+    runs-on: ubuntu-latest
+    # The credential lives on this Environment only, never as a repository or organization secret.
+    # Restricting the Environment to main is what keeps it there; the first step is a second line.
+    environment: release
+    permissions:
+      contents: read # checkout main, and read the release commit's MANIFEST.json
+    steps:
+      - name: Dispatched from main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::dispatch this workflow from main, not $GITHUB_REF — the registry credential is read only by a run dispatched from main"
+            exit 1
+          fi
+
+      # persist-credentials: false — the registry credential is never written into a working copy,
+      # and nothing here talks to the remote. fetch-depth: 0 so the release commit is in the clone.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: The image check still refuses a missing image or a moved tag
+        run: python3 scripts/check_release_images.py --selftest
+
+      # `verify` has already refused anything that is not a full SHA on main. `git show` reads the
+      # file as data into $RUNNER_TEMP: no worktree of the release commit, so none of its code runs.
+      - name: The release commit's MANIFEST.json, read as data
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          git show "$COMMIT":MANIFEST.json > "$RUNNER_TEMP/release-manifest.json"
+
+      # The password reaches main's script through its environment only — never argv, never a file.
+      # The script fails naming the variable or the secret when either is unset, masks the access
+      # token it exchanges the password for, and treats a 401 or 403 as a refused credential.
+      - name: Every default stable and previous image resolves in masterly.azurecr.io
+        env:
+          RELEASE_ACR_TOKEN_NAME: ${{ vars.RELEASE_ACR_TOKEN_NAME }}
+          RELEASE_ACR_TOKEN_PASSWORD: ${{ secrets.RELEASE_ACR_TOKEN_PASSWORD }}
+        run: python3 scripts/check_release_images.py --manifest "$RUNNER_TEMP/release-manifest.json"
+
   tag:
     name: Create the tag
-    needs: verify
+    needs: [verify, images]
     runs-on: ubuntu-latest
     # A maintainer restricts this Environment to main and may add a required reviewer; until then
     # GitHub creates it on first use with no protection rules. It is also where the App's private

@@ -53,6 +53,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- **`cut-release` refuses a tag until the release's default images resolve in the registry.** Its
+  new `images` job reads the release commit's `MANIFEST.json` and checks, in
+  `masterly.azurecr.io`, every image the stable and previous channels default to:
+  `release/<role>@<digest>`, with the entry's tag at that same digest, or `release/<role>:<tag>`
+  for an entry with no digests (`scripts/check_release_images.py`). 0.22.0 and 0.23.0 were tagged
+  naming builds the registry did not have. It reads with the pull-only ACR token
+  `pull-ci-cut-release` (scope map `pull-product-images`) from the `release` Environment, and
+  fails when that is not configured. No change to the module itself (split from MAS-4213).
 - **A `v*` tag can now be created, moved or deleted only through `cut-release`.** Since 2026-11-05
   the `release-tags` ruleset refuses a hand-pushed `v*` tag; its only bypass actor is the GitHub
   App `masterly-module-release`, whose key lives only in the `release` Environment (`main` only).

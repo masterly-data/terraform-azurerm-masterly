@@ -167,6 +167,24 @@ cannot see what a tag resolves to in the registry. That comparison is a separate
 whoever cuts the release reads each image's digest from the registry and passes them with
 `--observed-digests`, and the check refuses any digest that disagrees with what its tag
 resolves to, naming both: a tag that names another build is not the build that was tested.
+
+`cut-release` refuses a tag until every default image of the stable and previous channels
+resolves in `masterly.azurecr.io`. Its `images` job runs `scripts/check_release_images.py` on the
+release commit's manifest, read as data: for each channel's release it checks
+`release/<role>@<digest>` where the entry records `digests`, and that the tag its `images` value
+names resolves to that digest; where the entry records none, `release/<role>:<tag>`. A reference
+that does not resolve, or a tag at a digest the entry does not record, fails the job by name. It
+reads the registry with the ACR token `pull-ci-cut-release` on the `pull-product-images` scope
+map, pull-only on `release/api` and `release/frontend`, held by the `release` Environment: the
+variable `RELEASE_ACR_TOKEN_NAME` and the secret `RELEASE_ACR_TOKEN_PASSWORD`. With either unset
+the job fails, naming it. The same check by hand, with the token's password read without echo:
+
+```bash
+export RELEASE_ACR_TOKEN_NAME=pull-ci-cut-release
+read -rs RELEASE_ACR_TOKEN_PASSWORD && export RELEASE_ACR_TOKEN_PASSWORD
+python3 scripts/check_release_images.py --manifest MANIFEST.json
+```
+
 If you are verifying an install yourself, compare the digest your registry reports for each
 pinned tag with `digests`.
 

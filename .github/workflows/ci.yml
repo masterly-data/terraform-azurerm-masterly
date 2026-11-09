@@ -204,6 +204,12 @@ jobs:
       - name: The release gate still refuses an unverified commit or an existing tag
         run: python3 scripts/release_gate.py --selftest
 
+      # cut-release.yml's `images` job runs this check, with the `release` Environment's pull-only
+      # registry token, before it creates a tag. Here it runs against a fake registry only, with no
+      # credential, so a change that stops it refusing a missing image goes red on the pull request.
+      - name: The release-image check still refuses a missing image or a moved tag
+        run: python3 scripts/check_release_images.py --selftest
+
       # Standard library only — release metadata should not depend on anything resolving, and
       # this repo ships no Python dependencies to resolve.
       - name: Check the release manifest, changelog, README and script headers

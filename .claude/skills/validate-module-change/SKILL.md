@@ -17,6 +17,7 @@ python3 scripts/check_runtime_env.py --selftest
 python3 scripts/check_runtime_env.py
 python3 scripts/release_notes.py --selftest
 python3 scripts/release_gate.py --selftest
+python3 scripts/check_release_images.py --selftest   # a fake registry; cut-release does the real read
 bash tests/diagnostic_bundle_test.sh --selftest
 bash tests/diagnostic_bundle_test.sh
 shellcheck --severity=style $(git ls-files '*.sh')

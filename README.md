@@ -2253,6 +2253,32 @@ that the most recent CI run from the commit's push to `main` concluded success a
 does not exist yet, that the commit is on `main`, and that the commit's own manifest, changelog
 and README publish exactly this version.
 
+`cut-release` also refuses the tag until every default image of the stable and previous channels
+resolves in `masterly.azurecr.io`: the images an install of the release pulls when it leaves
+`api_image` and `frontend_image` null. Its `images` job reads the release commit's `MANIFEST.json`
+as data and runs `main`'s `scripts/check_release_images.py` against it. Stable is `latest`;
+previous is the newest older release with no `known_issue`. For an entry with `digests` it checks
+`release/<role>@<digest>`, and that the tag the entry names resolves to that same digest; for one
+without, `release/<role>:<tag>`. Each reference that does not resolve, or a tag at a digest the
+entry does not record, is named in the failure. 0.22.0 and 0.23.0 were tagged naming builds the
+registry did not have; this is the check that would have refused them.
+
+It reads the registry with the repository-scoped ACR token `pull-ci-cut-release` on the
+`pull-product-images` scope map, which can pull `release/api` and `release/frontend` and nothing
+else: it cannot push or delete, and cannot read `license-issuer`, `telemetry-receiver` or
+`web-chat`. The token is held by the `release` Environment only, never as a repository or
+organization secret: its name in the Environment variable `RELEASE_ACR_TOKEN_NAME`, its password
+in the Environment secret `RELEASE_ACR_TOKEN_PASSWORD`. When either is unset the job fails naming
+it, and no tag is created: the check is never skipped. Before anything reads the credential, the
+job refuses a run dispatched from any ref other than `main`. To run it yourself, against `main`'s
+manifest or a candidate's (the password is read without echo and never put on a command line):
+
+```bash
+export RELEASE_ACR_TOKEN_NAME=pull-ci-cut-release
+read -rs RELEASE_ACR_TOKEN_PASSWORD && export RELEASE_ACR_TOKEN_PASSWORD
+python3 scripts/check_release_images.py --manifest MANIFEST.json
+```
+
 CI still runs the same manifest check on the tag build with `--tag`. When every check on the tag
 build passes, CI publishes the tag's GitHub Release with that version's changelog section as its
 body (`scripts/release_notes.py`). The registry has already published the version by then, so the
