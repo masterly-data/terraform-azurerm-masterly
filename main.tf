@@ -1368,6 +1368,14 @@ locals {
     var.initial_owner_email != null ? { MASTERLY_INITIAL_OWNER_EMAIL = var.initial_owner_email } : {},
     # The durable control-plane store (Environments/memberships survive restarts).
     var.mode == "production" ? { MASTERLY_CONTROLPLANE_STORE = "postgres" } : {},
+    # Demo's in-memory control plane seeds these beside its fixtures at every start. Written
+    # only when the list is non-empty: an empty list is the absence of the setting, so an
+    # install that does not set it plans exactly as before. demo_environments is refused off
+    # mode = "demo", and the migrate job exists only on mode = "production" (migrate.tf), so
+    # the job's own env never needs it.
+    length(var.demo_environments) > 0 ? {
+      MASTERLY_DEMO_ENVIRONMENTS = join(",", var.demo_environments)
+    } : {},
   )
 
   # The egress guard's install-wide posture (SSRF; core/egress in the api image). The guard

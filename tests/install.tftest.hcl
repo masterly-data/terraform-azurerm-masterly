@@ -5606,6 +5606,231 @@ run "public_api_url_refuses_credentials" {
   expect_failures = [var.public_api_url]
 }
 
+# --- Extra Environments on the demo control plane ----------------------------------------------
+# On mode = "demo" the control plane is in memory and its Environments are a fixture list;
+# demo_environments names extra ones it seeds at start, as MASTERLY_DEMO_ENVIRONMENTS. These runs
+# pin that unset writes nothing anywhere, that a list reaches ca-api and ca-workers comma-joined
+# (through module.<app>.env_names, inside the submodule, so dropping it from either merge fails)
+# and not the frontend, and each plan-time refusal.
+
+run "demo_environments_are_absent_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+  }
+
+  # Absent, not an empty string: an empty list is the absence of the setting, so an install
+  # that does not set it plans exactly as before this input existed.
+  assert {
+    condition     = !contains(keys(local.install_env), "MASTERLY_DEMO_ENVIRONMENTS")
+    error_message = "demo_environments = [] must set nothing at all."
+  }
+
+  assert {
+    condition = (
+      !contains(module.api.env_names, "MASTERLY_DEMO_ENVIRONMENTS") &&
+      !contains(module.workers[0].env_names, "MASTERLY_DEMO_ENVIRONMENTS") &&
+      !contains(module.frontend.env_names, "MASTERLY_DEMO_ENVIRONMENTS")
+    )
+    error_message = "demo_environments unset must not put MASTERLY_DEMO_ENVIRONMENTS on any app."
+  }
+}
+
+run "demo_environments_reach_the_backend_apps" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    # The longest name the guard admits (40 characters) plans clean beside two short ones.
+    demo_environments = ["dev-eu", "uat2", "a234567890123456789012345678901234567890"]
+  }
+
+  # Comma-joined, in the order given, verbatim: the application splits on commas.
+  assert {
+    condition     = local.install_env["MASTERLY_DEMO_ENVIRONMENTS"] == "dev-eu,uat2,a234567890123456789012345678901234567890"
+    error_message = "demo_environments must reach the application as one comma-joined string, in the order given."
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_DEMO_ENVIRONMENTS"] == "dev-eu,uat2,a234567890123456789012345678901234567890"
+    error_message = "ca-api's environment must carry the joined demo_environments."
+  }
+
+  assert {
+    condition     = contains(module.api.env_names, "MASTERLY_DEMO_ENVIRONMENTS")
+    error_message = "MASTERLY_DEMO_ENVIRONMENTS must reach ca-api's container environment."
+  }
+
+  # ca-workers builds its own control plane from the same env: without the list it would not
+  # know the extra Environments, and their jobs would never be drained.
+  assert {
+    condition     = local.workers_env["MASTERLY_DEMO_ENVIRONMENTS"] == "dev-eu,uat2,a234567890123456789012345678901234567890"
+    error_message = "ca-workers' environment must carry the same joined demo_environments as ca-api."
+  }
+
+  assert {
+    condition     = contains(module.workers[0].env_names, "MASTERLY_DEMO_ENVIRONMENTS")
+    error_message = "MASTERLY_DEMO_ENVIRONMENTS must reach ca-workers' container environment."
+  }
+
+  assert {
+    condition     = !contains(module.frontend.env_names, "MASTERLY_DEMO_ENVIRONMENTS")
+    error_message = "MASTERLY_DEMO_ENVIRONMENTS is a backend setting -- the frontend must not carry it."
+  }
+
+  # The demo shape has no migrate job (migrations = "job" is refused on demo), so nothing else
+  # builds an env that would need the list.
+  assert {
+    condition     = length(azurerm_container_app_job.migrate) == 0
+    error_message = "A demo install must have no migrate job."
+  }
+}
+
+# Guard: an uppercase letter is not an Environment name.
+run "demo_environments_refuse_an_uppercase_name" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = ["dev-eu", "Test-eu"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+# Guard: a name starts with a letter.
+run "demo_environments_refuse_a_name_starting_with_a_digit" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = ["2dev"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+# Guard: a comma inside a name would split it into two once joined.
+run "demo_environments_refuse_a_comma_in_a_name" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = ["dev,eu"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+# Guard: at most 40 characters (this one is 41).
+run "demo_environments_refuse_a_name_over_40_characters" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = ["a2345678901234567890123456789012345678901"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+# Guard: a name ends in a letter or a digit. The application refuses a trailing hyphen at
+# startup, so a plan that let one through would apply an api that does not start.
+run "demo_environments_refuse_a_trailing_hyphen" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = ["story-"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+# Guard: an empty string is not a name.
+run "demo_environments_refuse_an_empty_name" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = [""]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+# Guard: each name once.
+run "demo_environments_refuse_a_duplicate" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = ["dev-eu", "uat-eu", "dev-eu"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+# Guard: the fixture names are taken.
+run "demo_environments_refuse_the_fixture_prd_eu" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = ["dev-eu", "prd-eu"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+run "demo_environments_refuse_the_fixture_non_prd_eu" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    demo_environments     = ["non-prd-eu"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
+# Guard: production creates Environments in the product, where they persist. A production plan
+# that is otherwise valid, with the migrate job (the one shape that has it), fails on this input
+# alone.
+run "demo_environments_refused_on_production" {
+  command = plan
+
+  variables {
+    migrations           = "job"
+    mode                 = "production"
+    identity_binding     = "oidc"
+    oidc_allowed_issuers = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience        = "api-client-id"
+    oidc_jwks_uri        = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id       = "bff-client-id"
+    oidc_client_secret   = "s3cret"
+    oidc_authority       = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri    = "https://app.example.com/api/auth/callback"
+    license_token        = "eyJ.fake.jwt"
+    license_public_jwk   = "{\"kty\":\"EC\"}"
+    initial_owner_email  = "owner@example.com"
+    enable_key_vault     = true
+    enable_redis         = true
+    redis_offering       = "cache"
+    enable_workers       = true
+    api_max_replicas     = 3
+
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+
+    demo_environments = ["dev-eu"]
+  }
+
+  expect_failures = [var.demo_environments]
+}
+
 # --- Trusting a private CA (MAS-446) ---------------------------------------------------------
 # The allowlist above answers WHERE the application may connect; ca_bundle_pem answers whether
 # it TRUSTS what answers there (MAS-375 made SMTP STARTTLS verify rather than accept anything).

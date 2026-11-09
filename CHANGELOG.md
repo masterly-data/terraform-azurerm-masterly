@@ -50,6 +50,18 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 - **`docs/inputs.md`**: every input of the module, grouped by the subsystem it configures, with
   its type, default and the first sentence of its description. Generated from the `.tf` files by
   `scripts/check_inputs_reference.py`; CI fails when it is out of date.
+- **`demo_environments`: extra Environments for a demo install's in-memory control plane.** On
+  `mode = "demo"` the control plane's Environments are a fixture list (`prd-eu`, `non-prd-eu`),
+  and one created in the product lasts only until `ca-api` restarts. List extra names here and the
+  module writes them, comma-separated, to `ca-api` and `ca-workers` as
+  `MASTERLY_DEMO_ENVIRONMENTS`; the control plane seeds each at every start in the install's own
+  geo, under an id derived from its name. Read by an api image from a backend release later than
+  v0.136.0; an earlier image ignores it. Empty by default, which sets nothing and plans exactly as
+  before. Refused at plan: a name that is not lowercase letters, digits and hyphens starting with
+  a letter and ending with a letter or digit, or is over 40 characters, a duplicate, a fixture
+  name, and any name on `mode = "production"`, where Environments are created in the product and
+  persist. See
+  [Extra Environments on a demo install](README.md#extra-environments-on-a-demo-install).
 
 ### Changed
 

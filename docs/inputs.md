@@ -9,12 +9,12 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-117 inputs in 19 groups.
+118 inputs in 19 groups.
 
 ## Groups
 
 - [Core](#core) (6)
-- [Install identity (ADR 0039)](#install-identity-adr-0039) (15)
+- [Install identity (ADR 0039)](#install-identity-adr-0039) (16)
 - [Identity (ADR 0024)](#identity-adr-0024) (14)
 - [Rotating the session secret](#rotating-the-session-secret) (1)
 - [Telemetry to the Masterly control plane (ADR 0034/0056)](#telemetry-to-the-masterly-control-plane-adr-00340056) (5)
@@ -55,6 +55,7 @@ In `variables.tf`.
 | `org_id` | `string` | required | Logical id of the Organization that owns this Install (ADR 0039), e.g. "org_acme". |
 | `install_id` | `string` | required | Stable slug identifying this Install within its Organization (ADR 0039), e.g. "prod" or "non-prod". |
 | `allowed_regions` | `list(string)` | `null` | Data-residency geos in which Environments may be created in this Install (ADR 0031/0039) — wired as MASTERLY_ALLOWED_REGIONS and enforced by the app at Environment creation. |
+| `demo_environments` | `list(string)` | `[]` | Extra Environments the demo-mode control plane seeds at start, by name, in this install's own geo (masterly_region), so an evaluation or demo install can declare the Environments it runs on. |
 | `location_geo` | `string` | `null` | The Masterly geo (eu \| us) whose data-residency commitment the Azure `location` satisfies. |
 | `api_image` | `string` | `null` | Fully-qualified api image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing "." or ":", or localhos... |
 | `frontend_image` | `string` | `null` | Fully-qualified frontend image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing "." or ":", or loc... |

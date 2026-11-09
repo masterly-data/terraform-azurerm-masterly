@@ -113,6 +113,38 @@ variable "allowed_regions" {
   description = "Data-residency geos in which Environments may be created in this Install (ADR 0031/0039) — wired as MASTERLY_ALLOWED_REGIONS and enforced by the app at Environment creation. Region is pinned per Environment and immutable. Leave unset: it defaults to this install's own geo, which is the only geo whose data a single data plane can hold. Setting any other geo is refused at plan."
 }
 
+variable "demo_environments" {
+  type        = list(string)
+  default     = []
+  nullable    = false
+  description = "Extra Environments the demo-mode control plane seeds at start, by name, in this install's own geo (masterly_region), so an evaluation or demo install can declare the Environments it runs on. On mode = \"demo\" the control plane is in memory and its Environments are a fixed fixture list (prd-eu and non-prd-eu): one created in the product is gone when ca-api restarts, while one named here is seeded again at every start under an id derived from its name, so it is the same Environment after a restart. Written to ca-api, and to ca-workers with enable_workers, as MASTERLY_DEMO_ENVIRONMENTS, comma-separated; read by an api image from a backend release later than v0.136.0, and ignored by an earlier one. Each name is lowercase, starts with a letter, ends with a letter or digit, has only letters, digits and hyphens, is at most 40 characters, appears once and is not a fixture name. Empty (the default) sets nothing, exactly as before this input existed. Refused on mode = \"production\": there Environments are created in the product and persist in the control-plane store."
+
+  # The names travel comma-joined in one variable, so the character set below is also what
+  # keeps a comma out of a name. It is narrower than the application's own rule
+  # (MASTERLY_DEMO_ENVIRONMENTS: lowercase letters, digits and inner hyphens, at most 63), never
+  # wider, so a name this accepts cannot stop the api from starting.
+  validation {
+    condition     = alltrue([for name in var.demo_environments : can(regex("^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$", name))])
+    error_message = "Every demo_environments entry must be an Environment name: lowercase, starting with a letter and ending with a letter or digit, only letters, digits and hyphens, at most 40 characters (for example \"dev-eu\")."
+  }
+
+  validation {
+    condition     = length(distinct(var.demo_environments)) == length(var.demo_environments)
+    error_message = "demo_environments names an Environment more than once. List each name once."
+  }
+
+  # Names are unique within the Organization, and the fixture list already holds these two.
+  validation {
+    condition     = !anytrue([for name in var.demo_environments : contains(["prd-eu", "non-prd-eu"], name)])
+    error_message = "demo_environments cannot name prd-eu or non-prd-eu: the demo control plane already has those Environments. Choose other names."
+  }
+
+  validation {
+    condition     = length(var.demo_environments) == 0 || var.mode == "demo"
+    error_message = "demo_environments requires mode = \"demo\". On mode = \"production\" Environments are created in the product and persist in the control-plane store: leave demo_environments empty and create them there."
+  }
+}
+
 variable "location_geo" {
   type        = string
   default     = null
