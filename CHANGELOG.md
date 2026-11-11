@@ -22,9 +22,11 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
-## [0.24.0] - 2026-11-09
+## [0.24.0] - 2026-11-10
 
-Released against the same image pair as 0.23.0: api `v0.135.0`, frontend `v0.143.0`.
+Released against api `v0.137.0` and frontend `v0.145.0`, the pair Masterly's own install applied.
+api `v0.137.0` is the first image that reads `MASTERLY_DEMO_ENVIRONMENTS` (`demo_environments`
+below), and it verifies licence claims version 3 (`api_claims_version`, up from 2).
 
 ### Added
 
@@ -59,8 +61,8 @@ Released against the same image pair as 0.23.0: api `v0.135.0`, frontend `v0.143
   and one created in the product lasts only until `ca-api` restarts. List extra names here and the
   module writes them, comma-separated, to `ca-api` and `ca-workers` as
   `MASTERLY_DEMO_ENVIRONMENTS`; the control plane seeds each at every start in the install's own
-  geo, under an id derived from its name. Read by an api image from a backend release later than
-  v0.136.0; an earlier image ignores it. Empty by default, which sets nothing and plans exactly as
+  geo, under an id derived from its name. Read by api `v0.137.0` and later; an earlier image
+  ignores it. Empty by default, which sets nothing and plans exactly as
   before. Refused at plan: a name that is not lowercase letters, digits and hyphens starting with
   a letter and ending with a letter or digit, or is over 40 characters, a duplicate, a fixture
   name, and any name on `mode = "production"`, where Environments are created in the product and

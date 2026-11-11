@@ -16,16 +16,16 @@
   },
   "releases": {
     "0.24.0": {
-      "date": "2026-11-09",
+      "date": "2026-11-10",
       "images": {
-        "api": "masterly.azurecr.io/release/api:v0.135.0",
-        "frontend": "masterly.azurecr.io/release/frontend:v0.143.0"
+        "api": "masterly.azurecr.io/release/api:v0.137.0",
+        "frontend": "masterly.azurecr.io/release/frontend:v0.145.0"
       },
       "digests": {
-        "api": "sha256:00b0c775ff83cd4b1d0a9c79e9290d3166f471b5576f43e4272ab0d031a9ed04",
-        "frontend": "sha256:e1e59d896125ee033a461297b9c36b57507320d7cb8c4b0897011aa7066e6a2b"
+        "api": "sha256:d27497ab948e39a5b7c18215e7acfdcbccdcbc0903b93b6f7011f674f0b229b5",
+        "frontend": "sha256:b743b9342c171c1dcca06813674c6c41c474f924c36f77b2aa8e627a121b39cb"
       },
-      "api_claims_version": 2
+      "api_claims_version": 3
     },
     "0.23.0": {
       "date": "2026-11-05",

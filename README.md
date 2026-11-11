@@ -84,8 +84,8 @@ module "masterly" {
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
   # The pair this module version was released against, from MANIFEST.json. Versioning names
   # the oldest image each app can run on, and the tags that have no published image.
-  api_image           = "masterly.azurecr.io/release/api:v0.135.0"
-  frontend_image      = "masterly.azurecr.io/release/frontend:v0.143.0"
+  api_image           = "masterly.azurecr.io/release/api:v0.137.0"
+  frontend_image      = "masterly.azurecr.io/release/frontend:v0.145.0"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -591,9 +591,8 @@ restarts. List the extra Environments an evaluation or demo install runs on in
 `demo_environments` instead (`["dev-eu", "uat-eu"]`, say). The module puts them on `ca-api`, and
 on `ca-workers` with `enable_workers`, as `MASTERLY_DEMO_ENVIRONMENTS`, comma-separated, and the
 control plane seeds each one at every start, in the install's own geo (`masterly_region`), under
-an id derived from its name, so it is the same Environment after a restart. An api image from a
-backend release later than v0.136.0 reads it; an earlier image ignores it. Empty (the default),
-no app gets the variable.
+an id derived from its name, so it is the same Environment after a restart. api `v0.137.0` and
+later read it; an earlier image ignores it. Empty (the default), no app gets the variable.
 
 Each name is lowercase, starts with a letter, ends with a letter or digit, has only letters,
 digits and hyphens, and is at most 40 characters. A name listed twice, a fixture name, and the input on
@@ -2144,7 +2143,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
-| `0.24.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-11-09 |
+| `0.24.0` | `masterly.azurecr.io/release/api:v0.137.0` | `masterly.azurecr.io/release/frontend:v0.145.0` | 2026-11-10 |
 | `0.23.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-11-05 |
 | `0.22.0` | `masterly.azurecr.io/release/api:v0.135.0` | `masterly.azurecr.io/release/frontend:v0.143.0` | 2026-10-29 |
 | `0.21.0` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-28 |
