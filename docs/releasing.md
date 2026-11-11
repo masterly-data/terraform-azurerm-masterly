@@ -46,6 +46,13 @@ passes, delete its entry in the commit that records the result; when it fails, t
 fixed or reverted on `main` first, and the candidate is cut again. Nothing in the workflow above
 reads this list, so whoever runs `cut-release` reads it first.
 
+**Released with checks open: 0.24.0 (owner decision, 2026-11-10).** The owner chose to release
+0.24.0 with every entry below still open and to track them after the tag, rather than hold the
+release: customers were installing images under a scan exception until a new version was
+published. The decision and the tracking are on MAS-4312. This is a recorded exception for that
+version, not a change to the rule: the next version is not tagged while an entry is open unless
+the owner records the same kind of decision for it.
+
 ### Open
 
 **The `ca-workers` sizing and scaling inputs** (MAS-1296; in 0.18.0 in the
@@ -144,6 +151,22 @@ applied from the candidate:
    and Redis work as the new identity.
 5. **The shapes that do not move plan no change from this.** The same candidate against an install
    on `"start"` with `database_auth = "entra"` shows no identity, grant or env change.
+
+**Removing the apps' Postgres Entra administrator** (MAS-4061; in 0.24.0 in the
+[changelog](../CHANGELOG.md)). The changelog and the README's "The migrate job" promised this was
+confirmed before 0.24.0 was released; it was never listed here, and it was not done. On a live
+install on `database_auth = "entra"` with `migrations = "job"`, upgraded from 0.23.x in the order
+the README gives, and separately on one moving from `"start"` straight to `"job"`:
+
+1. **The plan removes only what the changelog names.** The administrator, `sb_receiver` and
+   `sb_scaler` are destroyed, and nothing is replaced.
+2. **What happens to the `id-<prefix>-apps` role.** Record what Azure does to that database
+   role, which still owns the objects, when its administrator is removed.
+3. **Both apps keep serving.** `ca-api` and `ca-workers`, signed in as `masterly_api` and
+   `masterly_workers`, keep their database access through and after the apply.
+
+When it passes, replace the "has not yet been confirmed" sentences in the README's "The migrate
+job" and in the 0.24.0 changelog entry with what the run showed.
 
 ## What makes the workflow the only path
 

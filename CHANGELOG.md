@@ -138,8 +138,9 @@ below), and it verifies licence claims version 3 (`api_claims_version`, up from 
   a migrate job execution has Succeeded and that both apps run as `masterly_api` /
   `masterly_workers`, then upgrade to this version. An install moving from `"start"` straight to
   `"job"` on this version does all of it in one apply; the README's upgrade note under "The
-  migrate job" has the details, and what Azure does to the `id-<prefix>-apps` role when its
-  administrator is removed is confirmed on a live install before this version is released.
+  migrate job" has the details. What Azure does to the `id-<prefix>-apps` role when its
+  administrator is removed has not yet been confirmed on a live install; this version was
+  released with that check still owed, and it is listed in `docs/releasing.md`.
 - **`oidc_audience` defaults to `oidc_client_id`.** The backend verifies the ID token the BFF
   obtained, whose audience is that same client id, so this is the value almost every install
   sets. An explicit value still wins.
