@@ -1280,7 +1280,7 @@ then has no public endpoint, and the rule admits only `VirtualNetwork`. Setting
 accept requests from.
 
 The IaC scan reports this as Trivy AZU-0047, and `.trivyignore.yaml` records it as an
-accepted departure for `main.tf`. No Azure Policy built-in definition has been identified
+accepted departure for `network.tf`. No Azure Policy built-in definition has been identified
 that evaluates this rule.
 
 ## Scaling

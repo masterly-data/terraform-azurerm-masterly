@@ -121,7 +121,7 @@ if [[ -n "$API_URL" && -z "${MASTERLY_API_TOKEN:-}" ]]; then
   exit 2
 fi
 
-# --- Names the module fixes per install (main.tf, workers.tf) -------------------------
+# --- Names the module fixes per install (main.tf, environment.tf, workers.tf) -------------------------
 RG_ACA="rg-${NAME_PREFIX}-aca"
 RG_DATA="rg-${NAME_PREFIX}-data"
 ACA_ENV="aca-${NAME_PREFIX}"

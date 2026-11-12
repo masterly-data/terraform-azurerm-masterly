@@ -1463,7 +1463,7 @@ run "migrate_job_preserves_the_existing_install" {
   # is Optional+Computed, so pin the requested expression rather than a fabricated mock value.
   assert {
     condition = (
-      jsonencode({ for pair in regexall("(?m)^  (name|resource_group_name|location|infrastructure_subnet_id|internal_load_balancer_enabled)\\s*=\\s*([^\\n]+)", regex("(?s)module \"aca_env\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0]) : pair[0] => trimspace(pair[1]) }) == jsonencode({
+      jsonencode({ for pair in regexall("(?m)^  (name|resource_group_name|location|infrastructure_subnet_id|internal_load_balancer_enabled)\\s*=\\s*([^\\n]+)", regex("(?s)module \"aca_env\" \\{(.*?)\\n\\}", file("${path.module}/environment.tf"))[0]) : pair[0] => trimspace(pair[1]) }) == jsonencode({
         name                           = "\"aca-$${var.name_prefix}\""
         resource_group_name            = "azurerm_resource_group.aca.name"
         location                       = "var.location"
