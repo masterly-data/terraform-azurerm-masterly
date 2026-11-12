@@ -386,7 +386,7 @@ resource "azurerm_monitor_diagnostic_setting" "service_bus" {
 #
 # Metrics only. The apps' console and system logs already reach this workspace through the
 # diagnostic setting on the Container Apps environment (azurerm_monitor_diagnostic_setting.aca_env
-# in main.tf), which covers every app in it, so a log category here would at best be a second
+# in environment.tf), which covers every app in it, so a log category here would at best be a second
 # copy the customer pays for twice.
 resource "azurerm_monitor_diagnostic_setting" "app" {
   for_each = local.app_metrics_apps
@@ -615,7 +615,7 @@ resource "azurerm_monitor_metric_alert" "app_5xx" {
 # Monitor platform metrics, which every Container App, Postgres server and Service Bus
 # namespace publishes without one; the latency rule reads the console log that the diagnostic
 # setting on the Container Apps environment (azurerm_monitor_diagnostic_setting.aca_env in
-# main.tf) sends to the install's workspace in every mode. It reads the resource-specific
+# environment.tf) sends to the install's workspace in every mode. It reads the resource-specific
 # ContainerAppConsoleLogs table, which that setting writes.
 #
 # Each metric name is taken from Learn's supported-metrics reference for its resource type.
@@ -1052,7 +1052,7 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 #
 #  * The platform's own words — still rejected, and the measurement that rejected them stands.
 #    ContainerAppSystemLogs, which the diagnostic setting on the Container Apps environment
-#    (azurerm_monitor_diagnostic_setting.aca_env in main.tf) populates in every install, does
+#    (azurerm_monitor_diagnostic_setting.aca_env in environment.tf) populates in every install, does
 #    carry the failure (`Reason == "ProbeFailed"`, e.g. "Container ca-api failed readiness
 #    probe"). It caught exactly this shape on Masterly's own reference install on 2026-09-07.
 #    But replaying a sustained-window rule over 30 days of that workspace fires on roughly a

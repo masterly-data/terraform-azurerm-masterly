@@ -14,5 +14,5 @@
 #     statement: README "Where this module departs from Azure's recommended baseline" -> "<heading>"
 misconfigurations:
   - id: AZU-0047
-    paths: [main.tf]
+    paths: [network.tf]
     statement: README "Where this module departs from Azure's recommended baseline" -> "The runtime subnet's network security group admits the Internet on ports 80 and 443 in a public environment"

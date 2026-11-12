@@ -22,6 +22,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Changed
+
+- Internal refactor: the network, the environment, the identities and the auth boundary's secrets and locals move out of `main.tf` into `network.tf`, `environment.tf`, `identity.tf` and `auth.tf`. No input, output or resource address changes, so an install plans no change.
+
 ## [0.24.0] - 2026-11-10
 
 Released against api `v0.137.0` and frontend `v0.145.0`, the pair Masterly's own install applied.
