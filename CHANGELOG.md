@@ -24,6 +24,11 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
+- `MANIFEST.json` and its release check accept the per-role release images `migrate`,
+  `worker_core` and `worker_integration` beside `api` and `frontend`, as
+  `<registry>/release/<role>:<tag>` with `digests.<role>` (an addition within `schema_version` 1,
+  documented in `docs/release-manifest.md`). The check now refuses any other `images` key, a
+  per-role image with no `digests`, and an image value carrying `@sha256:`.
 - Internal refactor: the network, the environment, the identities and the auth boundary's secrets and locals move out of `main.tf` into `network.tf`, `environment.tf`, `identity.tf` and `auth.tf`. No input, output or resource address changes, so an install plans no change.
 
 ## [0.24.0] - 2026-11-10
