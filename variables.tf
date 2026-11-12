@@ -711,7 +711,7 @@ variable "postgres_server_parameters" {
   description = "Postgres server parameters to set on the starter Flexible Server, as name => value (for example { max_connections = \"400\" }). Applied beside the three log parameters the module sets itself. Refused: log_error_verbosity, log_parameter_max_length_on_error and log_parameter_max_length (they keep values out of the server's error log), and any entry at all when external_database_url is set (the server is then not the module's). A static parameter, max_connections among them, takes effect only after a server restart; the azurerm provider restarts the server on apply unless the root configuration turns restart_server_on_configuration_value_change off. When max_connections is set here, the connections alert measures against it (alert_postgres_max_connections still wins)."
 
   # The keys the module owns: keep this list equal to the keys of local.postgres_log_parameters
-  # in main.tf (a variable validation cannot read locals). The ADR 0080 log redaction must not be
+  # in postgres.tf (a variable validation cannot read locals). The ADR 0080 log redaction must not be
   # weakened from here.
   validation {
     condition     = length(setintersection([for k in keys(var.postgres_server_parameters) : lower(k)], ["log_error_verbosity", "log_parameter_max_length_on_error", "log_parameter_max_length"])) == 0
@@ -751,7 +751,7 @@ variable "postgres_pgbouncer" {
     error_message = "postgres_pgbouncer = true is refused with external_database_url: the module provisions no Postgres server then, so there is no built-in PgBouncer to turn on. Run your own pooler in front of your database."
   }
 
-  # Keep this list equal to the keys of local.postgres_pgbouncer_parameters in main.tf.
+  # Keep this list equal to the keys of local.postgres_pgbouncer_parameters in postgres.tf.
   validation {
     condition     = !var.postgres_pgbouncer || length(setintersection([for k in keys(var.postgres_server_parameters) : lower(k)], ["pgbouncer.enabled", "pgbouncer.pool_mode", "pgbouncer.max_prepared_statements"])) == 0
     error_message = "postgres_pgbouncer = true is refused when postgres_server_parameters sets pgbouncer.enabled, pgbouncer.pool_mode or pgbouncer.max_prepared_statements: the module owns these keys when the pooler is on. Remove them from postgres_server_parameters."

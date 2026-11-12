@@ -22,6 +22,10 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Changed
+
+- Internal refactor: `main.tf` is split into one file per concern (network, environment, identity, Postgres, Service Bus, api and frontend). No input, output or resource address changes, so an install plans no change.
+
 ## [0.24.0] - 2026-11-10
 
 Released against api `v0.137.0` and frontend `v0.145.0`, the pair Masterly's own install applied.

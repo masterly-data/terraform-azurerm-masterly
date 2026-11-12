@@ -334,7 +334,7 @@ run "production_mode_full_wiring_plans" {
   #    Masterly's own control plane. Reword it and the rule matches nothing, forever, silently.
   #  * both app names, so a rename cannot leave the filter pointing at an app that is gone.
   #  * the minute-bucket count and its threshold — what makes the rule sustained rather than
-  #    edge-triggered, and what keeps a cold start (485s of legitimate probe failure, main.tf)
+  #    edge-triggered, and what keeps a cold start (485s of legitimate probe failure, app-api.tf)
   #    under the bar.
   #  * the empty-datatable anchor, which reads as redundant next to `isfuzzy` and is not: a
   #    fuzzy union whose only operand is a missing table still fails with SEM0104, so deleting
@@ -5295,7 +5295,7 @@ run "private_egress_override_reaches_the_backend_apps" {
   }
 
   # And not the frontend, which is a different image that reads no such setting. Its env is
-  # built separately in main.tf; this pins that the override does not drift into it.
+  # built separately in app-api.tf; this pins that the override does not drift into it.
   assert {
     condition     = !contains(module.frontend.env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
     error_message = "The egress override is a backend setting -- the frontend must not carry it."

@@ -19,8 +19,9 @@ output description is customer documentation.
    the image references) has no `default`; never add one to make a test or an example pass.
 3. **Add a `validation` block** for every input a customer can get wrong, with an `error_message`
    that says what to change.
-4. **Wire it in** to the right file (`main.tf` core, or the subsystem's own `.tf`). If the variable
-   feeds an app's `env` or `env_secret_refs` (in `main.tf`, `email.tf`, `entra-auth.tf`,
+4. **Wire it in** to the right file (`main.tf` for the shared core, or the concern's own `.tf`:
+   `network.tf`, `identity.tf`, `postgres.tf`, `servicebus.tf`). If the variable
+   feeds an app's `env` or `env_secret_refs` (in `app-api.tf`, `app-frontend.tf`, `email.tf`, `entra-auth.tf`,
    `keyvault.tf`, `redis.tf` or `workers.tf`), regenerate the manifest with
    `python3 scripts/check_runtime_env.py --write` and commit `RUNTIME_ENV.json`; CI fails until you do.
 5. **Declare an output** in `outputs.tf` with a customer-facing `description` (what the value is, and

@@ -170,7 +170,7 @@ locals {
     local.redis_entra ? { MASTERLY_REDIS_AUTH = "entra" } : {},
     # The identity the token is minted for (DefaultAzureCredential). The same key and value the
     # Key Vault and Service Bus bindings set, so the merge is safe. ca-workers overrides it with
-    # its own identity's when it has one (workers_env, main.tf).
+    # its own identity's when it has one (workers_env, app-api.tf).
     local.database_entra || local.redis_entra ? { AZURE_CLIENT_ID = module.apps_identity.client_id } : {},
   )
 }
@@ -187,7 +187,7 @@ locals {
 # administrator, and ca-api and ca-workers connect as the DML-only roles it creates
 # (masterly_api, masterly_workers). On an install moving to "job", Terraform destroys this
 # administrator only after it has updated ca-api and ca-workers, because both depend on it
-# (main.tf, workers.tf); the README's "The migrate job" gives the order for an existing install.
+# (app-api.tf, workers.tf); the README's "The migrate job" gives the order for an existing install.
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "apps" {
   count = local.database_entra && !local.migrate_app_roles ? 1 : 0
 
@@ -261,7 +261,7 @@ resource "azurerm_redis_cache_access_policy_assignment" "workers" {
 
 # The posture, assertable in `terraform test`. Names only; the URLs stay secrets.
 output "database_auth" {
-  # Whether a DSN was supplied is not the secret; the same narrow unmarking as main.tf's
+  # Whether a DSN was supplied is not the secret; the same narrow unmarking as app-api.tf's
   # presence tests.
   value       = nonsensitive(local.provision_postgres) ? local.database_auth : null
   description = "How the apps authenticate to the starter Postgres server: \"entra\" or \"password\". Null with external_database_url (BYO-DB), where the DSN you supply is the credential."

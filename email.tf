@@ -40,7 +40,7 @@ module "acs_email" {
 }
 
 locals {
-  # Merged into the api's env in main.tf: the app's acs_endpoint/acs_sender settings.
+  # Merged into the api's env in app-api.tf: the app's acs_endpoint/acs_sender settings.
   acs_email_env = var.email_acs_enabled ? {
     MASTERLY_ACS_ENDPOINT = module.acs_email[0].endpoint
     MASTERLY_ACS_SENDER   = module.acs_email[0].sender_address

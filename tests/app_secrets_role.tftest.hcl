@@ -292,7 +292,7 @@ run "app_secrets_grants_keep_their_addresses_and_the_apps_depend_on_them" {
       can(regex("moved \\{\\s*from = azurerm_role_assignment\\.kv_secrets_officer\\s+to   = azurerm_role_assignment\\.kv_app_secrets\\s*\\}", file("${path.module}/keyvault.tf"))) &&
       can(regex("moved \\{\\s*from = azurerm_role_assignment\\.kv_secrets_officer_workers\\s+to   = azurerm_role_assignment\\.kv_app_secrets_workers\\s*\\}", file("${path.module}/keyvault.tf"))) &&
       !can(regex("resource \"azurerm_role_assignment\" \"kv_secrets_officer(_workers)?\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) &&
-      strcontains(regex("(?s)\\nmodule \"api\" \\{.*?\\n\\}\\n", file("${path.module}/main.tf")), "azurerm_role_assignment.kv_app_secrets,") &&
+      strcontains(regex("(?s)\\nmodule \"api\" \\{.*?\\n\\}\\n", file("${path.module}/app-api.tf")), "azurerm_role_assignment.kv_app_secrets,") &&
       strcontains(regex("(?s)\\nmodule \"workers\" \\{.*?\\n\\}\\n", file("${path.module}/workers.tf")), "azurerm_role_assignment.kv_app_secrets,") &&
       strcontains(regex("(?s)\\nmodule \"workers\" \\{.*?\\n\\}\\n", file("${path.module}/workers.tf")), "azurerm_role_assignment.kv_app_secrets_workers,")
     )

@@ -8,7 +8,7 @@ the contract it reads; this file is what lets those repositories check that the 
 module sets are names their code reads and their runbooks name, without parsing Terraform.
 
 It is GENERATED from the `.tf` files at the module root and never written by hand. The env a
-container receives is assembled from locals spread over several files — `main.tf`, `email.tf`,
+container receives is assembled from locals spread over several files — `app-api.tf`, `app-frontend.tf`, `email.tf`,
 `entra-auth.tf`, `keyvault.tf`, `redis.tf`, `workers.tf` — and merged into each app's `env` and
 `env_secret_refs`, so the one honest source is the files themselves. This script resolves that
 graph: it reads each `module "<app>"` block that instantiates `./modules/aca-container-app`,

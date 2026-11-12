@@ -1,4 +1,4 @@
-# ca-workers' own identity (main.tf workers_identity, workers.tf workers_own_identity) on each
+# ca-workers' own identity (identity.tf workers_identity, workers.tf workers_own_identity) on each
 # install shape where it runs as it: "job" on the starter server on both database_auth values,
 # "start" on "password", and BYO-DB on both migrations values. The grants it holds, compared
 # with the apps identity's (which gives up Service Bus Receiver and the jobs queue's Data Owner to
@@ -853,8 +853,8 @@ run "workers_depends_on_every_grant_it_replaces" {
   # The identity follows the vault; the migrate job's need for it, and the DSN, follow the app roles.
   assert {
     condition = (
-      strcontains(regex("(?s)module \"workers_identity\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0], "count  = local.migrate_app_roles || local.workers_own_identity ? 1 : 0") &&
-      strcontains(regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0], "count  = local.workers_own_dsn ? 1 : 0") &&
+      strcontains(regex("(?s)module \"workers_identity\" \\{(.*?)\\n\\}", file("${path.module}/identity.tf"))[0], "count  = local.migrate_app_roles || local.workers_own_identity ? 1 : 0") &&
+      strcontains(regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0], "count  = local.workers_own_dsn ? 1 : 0") &&
       strcontains(file("${path.module}/workers.tf"), "workers_own_dsn = local.migrate_app_roles && var.enable_workers") &&
       startswith(regex("workers_own_identity = (.*)", file("${path.module}/workers.tf"))[0], "var.enable_workers && var.enable_key_vault && ")
     )

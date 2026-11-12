@@ -287,7 +287,7 @@ resource "azurerm_monitor_diagnostic_setting" "postgres" {
   log_analytics_workspace_id = module.logs.id
 
   # The server's own log, which the diagnostic bundle reads (AzureDiagnostics, Category ==
-  # "PostgreSQLLogs"); main.tf sets what that log may carry. The session, Query Store, table
+  # "PostgreSQLLogs"); postgres.tf sets what that log may carry. The session, Query Store, table
   # and transaction categories are not sent: Query Store runtime carries query text, and
   # nothing in this module or the bundle reads any of them.
   enabled_log {
@@ -386,7 +386,7 @@ resource "azurerm_monitor_diagnostic_setting" "service_bus" {
 #
 # Metrics only. The apps' console and system logs already reach this workspace through the
 # diagnostic setting on the Container Apps environment (azurerm_monitor_diagnostic_setting.aca_env
-# in main.tf), which covers every app in it, so a log category here would at best be a second
+# in environment.tf), which covers every app in it, so a log category here would at best be a second
 # copy the customer pays for twice.
 resource "azurerm_monitor_diagnostic_setting" "app" {
   for_each = local.app_metrics_apps
@@ -615,7 +615,7 @@ resource "azurerm_monitor_metric_alert" "app_5xx" {
 # Monitor platform metrics, which every Container App, Postgres server and Service Bus
 # namespace publishes without one; the latency rule reads the console log that the diagnostic
 # setting on the Container Apps environment (azurerm_monitor_diagnostic_setting.aca_env in
-# main.tf) sends to the install's workspace in every mode. It reads the resource-specific
+# environment.tf) sends to the install's workspace in every mode. It reads the resource-specific
 # ContainerAppConsoleLogs table, which that setting writes.
 #
 # Each metric name is taken from Learn's supported-metrics reference for its resource type.
@@ -726,7 +726,7 @@ resource "azurerm_monitor_metric_alert" "postgres_iops" {
 
 # Dead-lettered job messages. On the servicebus binding each message tells a worker that an
 # Environment has queued work. A message that fails delivery max_delivery_count times (10,
-# main.tf) is moved to the queue's dead-letter sub-queue instead of being dropped, and it is no
+# servicebus.tf) is moved to the queue's dead-letter sub-queue instead of being dropped, and it is no
 # longer delivered. The jobs themselves stay in the Environment's own database, but the signal
 # that should have woken a worker for them is gone, so repeated dead-lettering is how work can
 # wait with nothing reporting it. Severity 1 for that reason: this is not headroom running out,
@@ -1052,7 +1052,7 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 #
 #  * The platform's own words — still rejected, and the measurement that rejected them stands.
 #    ContainerAppSystemLogs, which the diagnostic setting on the Container Apps environment
-#    (azurerm_monitor_diagnostic_setting.aca_env in main.tf) populates in every install, does
+#    (azurerm_monitor_diagnostic_setting.aca_env in environment.tf) populates in every install, does
 #    carry the failure (`Reason == "ProbeFailed"`, e.g. "Container ca-api failed readiness
 #    probe"). It caught exactly this shape on Masterly's own reference install on 2026-09-07.
 #    But replaying a sustained-window rule over 30 days of that workspace fires on roughly a
@@ -1108,14 +1108,14 @@ resource "azurerm_monitor_metric_alert" "app_unavailable" {
 # Reading the LINE, not the probe. What the query counts is distinct MINUTES in which a failing
 # probe was logged, not lines: `dcount(bin(TimeGenerated, 1m))`. That is what keeps the rule
 # free of the probe-rate dependency that disqualified the ContainerAppSystemLogs alternative
-# above. The module fixes both apps' readiness interval at 10 seconds (main.tf), so a failing
+# above. The module fixes both apps' readiness interval at 10 seconds (app-api.tf, app-frontend.tf), so a failing
 # minute carries about six lines — but the rule would read the same at 30 or 60 seconds, and it
 # degrades gracefully rather than silently if that ever changes: a longer interval makes the
 # rule slower to fire, never blind to a wedge. tests/install.tftest.hcl pins the interval at or
 # below 60 seconds so the premise stays a checked one rather than a remembered one.
 #
 # Thirty of the last sixty minutes, and the threshold is set by what a healthy install does, not
-# by taste. A cold start legitimately fails readiness for a while: main.tf budgets 5 + 48 x 10 =
+# by taste. A cold start legitimately fails readiness for a while: app-api.tf budgets 5 + 48 x 10 =
 # 485 seconds of continuous failure per replica attempt before ACA pulls it, sized past a
 # customer's first image pull onto a cold node, and the frontend's probe waits on the api's. So
 # an install coming up writes this line for minutes at a time while nothing is wrong. Requiring
