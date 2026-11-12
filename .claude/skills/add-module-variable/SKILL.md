@@ -33,9 +33,10 @@ output description is customer documentation.
    branches and the optional subsystems; a condition with no run block is a branch nothing exercises.
 7. **Update the README** (the module surface reference) and `examples/production/` when the variable
    belongs in a production-posture install.
-8. **Write the CHANGELOG entry** under `Unreleased`. A rename, removal, retyping or tightening of a
-   variable, or a removed or renamed output, is a breaking change: the entry must carry a migration
-   note.
+8. **Add a changelog fragment**, `changelog.d/<short-name>.md` (format in `changelog.d/README.md`);
+   `Unreleased` stays empty and the release commit folds the fragment. A rename, removal, retyping
+   or tightening of a variable, or a removed or renamed output, is a breaking change: the fragment
+   must carry a migration note.
 9. **Validate** with the `validate-module-change` skill.
 10. In the PR, say whether the change has been planned against a real subscription. `terraform test`
     uses mock providers and cannot show that Azure accepts it.

@@ -2225,8 +2225,12 @@ The release-cut pull request, in one commit:
 2. Record the candidate's image digests in the entry's `digests` (`api` and `frontend`, each
    `sha256:…`), read from the registry rather than copied from prose.
    [docs/release-manifest.md](docs/release-manifest.md) documents the field.
-3. Rename the changelog's `Unreleased` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a fresh
-   `Unreleased`.
+3. Run `python3 scripts/fold_changelog.py X.Y.Z YYYY-MM-DD`. It folds every fragment in
+   `changelog.d/` into a `## [X.Y.Z] - YYYY-MM-DD` section directly below the empty
+   `## [Unreleased]`, merges the subsections in a fixed order, and deletes the fragments it
+   folded, so they leave in this same commit. It refuses an unknown heading or text outside a
+   subsection, names the file, and writes nothing. `changelog.d/README.md` says what a fragment
+   is. The tag build refuses a tree that still has a fragment.
 4. Run `python3 scripts/check_release_manifest.py --write` to bring this README into line, and
    `python3 scripts/check_release_manifest.py` to check the result. CI runs the same check, and
    it checks the digests' shape only, because it makes no network call. To check that each
@@ -2238,10 +2242,11 @@ The release-cut pull request, in one commit:
 
 If the candidate fails its tests, it is not patched. The fix merges to `main`, and the version's
 manifest entry and changelog section are updated in the same pull request: new images and
-digests where the code changed, and the new date, and the changelog entries that merged under
-`Unreleased` since the previous candidate move into the version's section. That later commit is
-the next candidate. A
-version is not published until it is tagged, so its entry can still change until then.
+digests where the code changed, and the new date. The fragments that merged since the previous
+candidate are folded by running `scripts/fold_changelog.py X.Y.Z YYYY-MM-DD` again, which merges
+them into the version's existing section and sets its date. That later commit is the next
+candidate. A version is not published until it is tagged, so its entry can still change until
+then.
 
 More than one cut can be untagged at a time, but a version is only tagged once every other
 version its commit's manifest lists is already tagged, so the file at every tag lists only

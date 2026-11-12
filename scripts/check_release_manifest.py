@@ -104,6 +104,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = Path(os.environ.get("RELEASE_MANIFEST_PATH", REPO_ROOT / "MANIFEST.json"))
 CHANGELOG_PATH = Path(os.environ.get("RELEASE_CHANGELOG_PATH", REPO_ROOT / "CHANGELOG.md"))
 README_PATH = Path(os.environ.get("RELEASE_README_PATH", REPO_ROOT / "README.md"))
+# Where a change's changelog fragment lives until the release-preparation commit folds it.
+CHANGELOG_DIR = Path(os.environ.get("RELEASE_CHANGELOG_DIR", REPO_ROOT / "changelog.d"))
+FRAGMENT_PLACEHOLDERS = {"README.md", ".gitkeep"}
 # The tree whose shipped scripts are scanned for a hand-typed version (see check_script_banners).
 MODULE_ROOT = Path(os.environ.get("RELEASE_MODULE_ROOT", REPO_ROOT))
 
@@ -606,10 +609,27 @@ def check_changelog(manifest: dict) -> None:
     except FileNotFoundError:
         raise CheckFailed(f"{CHANGELOG_PATH} is missing") from None
 
-    if not re.search(r"^##\s*\[?Unreleased\]?", changelog, re.MULTILINE | re.IGNORECASE):
+    lines = changelog.split("\n")
+    unreleased = [
+        index for index, line in enumerate(lines)
+        if re.match(r"^##\s*\[?Unreleased\]?", line, re.IGNORECASE)
+    ]
+    if not unreleased:
         raise CheckFailed(
-            f"{CHANGELOG_PATH} has no 'Unreleased' section. Changes are authored there and the "
-            f"heading is renamed at release-cut (ADR 0062) — without it there is nowhere to write."
+            f"{CHANGELOG_PATH} has no 'Unreleased' section. The heading stays, empty, so the "
+            f"fold (scripts/fold_changelog.py) has a place to put a release below."
+        )
+    body: list[str] = []
+    for line in lines[unreleased[0] + 1:]:
+        if re.match(r"^## ", line) or re.match(r"^\[[^\]]+\]:\s", line):
+            break
+        body.append(line)
+    if any(line.strip() for line in body):
+        raise CheckFailed(
+            f"{CHANGELOG_PATH.name} has an entry under 'Unreleased'. A change adds a fragment, "
+            f"changelog.d/<short-name>.md, and the release-preparation commit folds the "
+            f"fragments into the version's section (scripts/fold_changelog.py). Move the entry "
+            f"into a fragment: two changes that both edit this section conflict."
         )
 
     dated = {
@@ -857,6 +877,30 @@ def check_tag(manifest: dict, tag: str) -> None:
             f"commit it tags — not in a follow-up. Add the {version} entry to "
             f"{MANIFEST_PATH.name} and {CHANGELOG_PATH.name}, re-tag, and push again."
         )
+    check_no_fragments(tag)
+
+
+def leftover_fragments() -> list[str]:
+    """Names of the files in changelog.d/ that are fragments (not the README or .gitkeep)."""
+    if not CHANGELOG_DIR.is_dir():
+        return []
+    return sorted(
+        path.name for path in CHANGELOG_DIR.iterdir()
+        if path.name not in FRAGMENT_PLACEHOLDERS
+    )
+
+
+def check_no_fragments(tag: str) -> None:
+    """A tagged tree has folded its changelog fragments: none may be left in changelog.d/."""
+    leftover = leftover_fragments()
+    if leftover:
+        names = ", ".join(f"{CHANGELOG_DIR.name}/{name}" for name in leftover)
+        raise CheckFailed(
+            f"tag {tag} was pushed on a tree that still has changelog fragments: {names}. A "
+            f"fragment not folded into {CHANGELOG_PATH.name} is a change the version ships and "
+            f"its notes do not list. Run scripts/fold_changelog.py in the release-preparation "
+            f"commit, which deletes the fragments, and tag that commit."
+        )
 
 
 def check_published_tags(manifest: dict, tag: str, tags_path: Path) -> None:
@@ -1023,12 +1067,13 @@ echo fixture
 
 
 def _stage(root: Path, manifest, changelog, readme, scripts=None, observed=None,
-           tags=None, tags_file=None) -> dict:
+           tags=None, tags_file=None, fragments=None) -> dict:
     """Write one synthetic module tree and return the environment that points the script at it.
 
     `observed` is written to `observed.json` beside the tree, for `--observed-digests`. `tags`
     makes the tree a git repository carrying exactly those tags, so a scenario can show what the
-    check does when a version's tag does not exist yet.
+    check does when a version's tag does not exist yet. `fragments` maps file names to bodies
+    written into the tree's `changelog.d/`.
     """
     manifest_path = root / "MANIFEST.json"
     changelog_path = root / "CHANGELOG.md"
@@ -1068,6 +1113,12 @@ def _stage(root: Path, manifest, changelog, readme, scripts=None, observed=None,
     env["RELEASE_MANIFEST_PATH"] = str(manifest_path)
     env["RELEASE_CHANGELOG_PATH"] = str(changelog_path)
     env["RELEASE_README_PATH"] = str(readme_path)
+    # Always the staged directory, so a scenario never reads this repo's own fragments.
+    fragments_dir = root / "changelog.d"
+    fragments_dir.mkdir(exist_ok=True)
+    for name, body in (fragments or {}).items():
+        (fragments_dir / name).write_text(body, encoding="utf-8")
+    env["RELEASE_CHANGELOG_DIR"] = str(fragments_dir)
     return env
 
 
@@ -1704,6 +1755,32 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
             "a well-formed release passes on its own tag",
             base, log, ok, ["--tag", f"v{newest}"], 0, newest,
         ),
+        # Changelog fragments: a change adds one; only the release-preparation commit folds them.
+        (
+            "fragments in changelog.d/ with an empty Unreleased pass on a pull request",
+            base, log, ok, [], 0, base["module"],
+            {"fragments": {"MAS-1.md": "### Added\n\n- A change.\n", "README.md": "How.\n"}},
+        ),
+        (
+            "an entry written under Unreleased is refused",
+            base, log.replace("## [Unreleased]\n", "## [Unreleased]\n\n### Added\n\n- A change.\n", 1),
+            ok, [], 1, "changelog.d/",
+        ),
+        (
+            "a tag on a tree with an unfolded fragment is refused",
+            base, log, ok, ["--tag", f"v{newest}"], 1, "changelog.d/MAS-1.md",
+            {"fragments": {"MAS-1.md": "### Added\n\n- A change.\n"}},
+        ),
+        (
+            "a tag names every leftover fragment",
+            base, log, ok, ["--tag", f"v{newest}"], 1, "changelog.d/MAS-2.md",
+            {"fragments": {"MAS-1.md": "### Added\n\n- A.\n", "MAS-2.md": "### Fixed\n\n- B.\n"}},
+        ),
+        (
+            "a tag passes when only the changelog.d placeholders remain",
+            base, log, ok, ["--tag", f"v{newest}"], 0, newest,
+            {"fragments": {"README.md": "How.\n", ".gitkeep": ""}},
+        ),
         # Criterion: the manifest is MISSING.
         ("the manifest is missing", None, log, ok, [], 1, "is missing"),
         (
@@ -1873,6 +1950,21 @@ def selftest() -> int:
             if verdict != "ok":
                 failures.append(f"{name}: {verdict}")
             print(f"  {'PASS' if verdict == 'ok' else 'FAIL'}  {name}")
+
+        # The fold is the other half of the fragment rule, and CI runs this selftest.
+        fold = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parent / "fold_changelog.py"),
+             "--selftest"],
+            capture_output=True,
+            text=True,
+        )
+        scenarios.append(("the changelog fold's own selftest passes",))
+        print(f"  {'PASS' if fold.returncode == 0 else 'FAIL'}  the changelog fold's own selftest")
+        if fold.returncode != 0:
+            failures.append(
+                f"the changelog fold's own selftest: exit {fold.returncode}:\n"
+                f"{fold.stdout}{fold.stderr}"
+            )
 
     total = len(scenarios)
     if failures:

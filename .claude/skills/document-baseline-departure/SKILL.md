@@ -20,6 +20,7 @@ A departure that the README does not document blocks review (see `REVIEW.md`).
    naming the README heading from step 2. The file's header gives the exact shape. Never add a blanket
    skip, a severity filter, a bare path or an inline `trivy:ignore` / `tfsec:ignore` comment; run
    `bash scripts/iac_scan.sh --check` to confirm the entry is accepted.
-5. Add a CHANGELOG entry under `Unreleased`.
+5. Add a changelog fragment, `changelog.d/<short-name>.md` (format in `changelog.d/README.md`);
+   `Unreleased` stays empty and the release commit folds the fragment.
 6. Write in plain, factual, customer-readable language: this repository is public. No internal
    shorthand and no speculation about customers.

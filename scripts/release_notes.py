@@ -200,6 +200,42 @@ def _selftest_scenarios() -> list[tuple]:
     ]
 
 
+def _folded_scenario() -> str | None:
+    """None if a changelog written by scripts/fold_changelog.py yields exactly the folded section."""
+    changelog = "# Changelog (fixture)\n\n## [Unreleased]\n\n## [1.0.0] - 2031-01-01\n\n" \
+        "### Added\n\n- The first release.\n\n[Unreleased]: https://example.invalid/\n"
+    fragments = {
+        "b.md": "### Fixed\n\n- A fix, see [the guide](docs/guide.md).\n",
+        "a.md": "### Documentation\n\n- A doc.\n\n### Added\n\n- A feature.\n",
+    }
+    expected = ("### Added\n\n- A feature.\n\n### Fixed\n\n- A fix, see "
+                "[the guide](docs/guide.md).\n\n### Documentation\n\n- A doc.\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+        (root / "changelog.d").mkdir()
+        for name, body in fragments.items():
+            (root / "changelog.d" / name).write_text(body, encoding="utf-8")
+        env = dict(os.environ, RELEASE_CHANGELOG_PATH=str(root / "CHANGELOG.md"),
+                   RELEASE_CHANGELOG_DIR=str(root / "changelog.d"))
+        fold = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parent / "fold_changelog.py"),
+             "1.1.0", "2031-02-01"],
+            env=env, capture_output=True, text=True,
+        )
+        if fold.returncode != 0:
+            return f"the fold failed:\n{fold.stdout}{fold.stderr}"
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "v1.1.0"],
+            env=env, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return f"exit {result.returncode}:\n{result.stderr}"
+        if result.stdout != expected:
+            return f"printed {result.stdout!r}, expected {expected!r}"
+    return None
+
+
 def selftest() -> int:
     scenarios = _selftest_scenarios()
     failures: list[str] = []
@@ -227,6 +263,13 @@ def selftest() -> int:
             if verdict != "ok":
                 failures.append(f"{name}: {verdict}")
             print(f"  {'PASS' if verdict == 'ok' else 'FAIL'}  {name}")
+
+    folded = _folded_scenario()
+    scenarios.append(("folded",))
+    if folded:
+        failures.append(f"a changelog produced by the fold prints exactly its section: {folded}")
+    print(f"  {'PASS' if not folded else 'FAIL'}  "
+          f"a changelog produced by the fold prints exactly the folded version's section")
 
     if failures:
         print(
