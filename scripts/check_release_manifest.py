@@ -141,6 +141,12 @@ FLOORS_END_MARKER = "<!-- release-manifest:floors:end -->"
 # Which manifest image a README `<name>_image` line takes its value from.
 IMAGE_INPUTS = {"api_image": "api", "frontend_image": "frontend"}
 
+# The closed set of image keys a release entry's `images` may carry. api and frontend are required;
+# the per-role images are optional, and an entry naming any of them records `digests`, because a
+# per-role image is pinned by digest and never by a movable tag alone.
+PER_ROLE_IMAGES = ("migrate", "worker_core", "worker_integration")
+IMAGE_ROLES = (*IMAGE_INPUTS.values(), *PER_ROLE_IMAGES)
+
 # The path every release image is published under: `<registry>/release/<image>:<tag>`.
 RELEASE_PATH = "release"
 
@@ -198,10 +204,25 @@ def load_manifest() -> dict:
         images = entry.get("images")
         if not isinstance(images, dict):
             raise CheckFailed(f"{where} has no 'images' object")
-        for name in IMAGE_INPUTS.values():
+        for name in images:
+            if name not in IMAGE_ROLES:
+                raise CheckFailed(
+                    f"{where}: 'images' names {name!r}, which is not an image role. The allowed "
+                    f"set is {', '.join(IMAGE_ROLES)}; any other key is a misspelt or invented "
+                    f"role that code iterating 'images' could later pull."
+                )
+        for name in IMAGE_ROLES:
+            if name not in images and name not in IMAGE_INPUTS.values():
+                continue
             value = images.get(name)
             if not isinstance(value, str):
                 raise CheckFailed(f"{where} names no {name!r} image")
+            if "@sha256:" in value:
+                raise CheckFailed(
+                    f"{where}: the {name!r} image is {value!r}, which has a digest inside it. "
+                    f"The digest belongs in 'digests.{name}', and the image value is "
+                    f"<registry>/{RELEASE_PATH}/{name}:<tag>."
+                )
             parsed = IMAGE_RE.match(value)
             if not parsed:
                 raise CheckFailed(f"{where}: {value!r} is not registry/repository:tag")
@@ -210,6 +231,14 @@ def load_manifest() -> dict:
                     f"{where}: the {name!r} image is {value!r}, whose repository is not {name!r}. "
                     f"A pair swapped in the manifest is worse than no manifest."
                 )
+        named_per_role = [name for name in PER_ROLE_IMAGES if name in images]
+        if named_per_role and "digests" not in entry:
+            raise CheckFailed(
+                f"{where} names the {' and '.join(repr(n) for n in named_per_role)} image but "
+                f"records no 'digests'. A per-role image is a tag alone otherwise, and a tag can "
+                f"be moved to another build; record 'digests.<role>' for every image, copied from "
+                f"the backend release record."
+            )
         if "digests" in entry:
             check_digest_shape(where, images, entry["digests"])
         if "api_claims_version" in entry:
@@ -1390,8 +1419,10 @@ def _digest_scenarios() -> list[tuple]:
         ),
         (
             "an entry naming a third image needs a digest for it too",
-            _with_extra_image(good, "worker", "registry.example.invalid/release/worker:v1.1.0"),
-            log, ok, [], 1, "has no 'worker' digest",
+            _with_extra_image(
+                good, "worker_core", "registry.example.invalid/release/worker_core:v1.1.0"
+            ),
+            log, ok, [], 1, "has no 'worker_core' digest",
         ),
         (
             "a digest that is not sha256 hex is refused",
@@ -1407,6 +1438,101 @@ def _digest_scenarios() -> list[tuple]:
             "one digest given for both images is refused",
             _with_digests({"api": OTHER_DIGEST, "frontend": OTHER_DIGEST}), log, ok, [], 1,
             "have the same digest",
+        ),
+    ]
+
+
+def _role_scenarios() -> list[tuple]:
+    """The closed image role set: api and frontend, plus the optional per-role images."""
+    newest = FIXTURE_MANIFEST["latest"]
+    registry = "registry.example.invalid"
+    log = FIXTURE_CHANGELOG
+    ok = render_readme(FIXTURE_MANIFEST, FIXTURE_README_SKELETON)
+    role_digests = {
+        "migrate": "sha256:" + "d" * 64,
+        "worker_core": "sha256:" + "e" * 64,
+        "worker_integration": "sha256:" + "f" * 64,
+    }
+
+    def with_roles(images: dict, digests: dict | None) -> dict:
+        manifest = copy.deepcopy(FIXTURE_MANIFEST)
+        entry = manifest["releases"][newest]
+        entry["images"].update(images)
+        if digests is not None:
+            entry["digests"] = digests
+        return manifest
+
+    def tagged(*roles: str) -> dict:
+        return {role: f"{registry}/{RELEASE_PATH}/{role}:v1.1.0" for role in roles}
+
+    all_digests = {**FIXTURE_DIGESTS, **role_digests}
+    worker_core_digests = {**FIXTURE_DIGESTS, "worker_core": role_digests["worker_core"]}
+    return [
+        (
+            "an entry naming all five roles with a distinct digest each passes",
+            with_roles(tagged(*PER_ROLE_IMAGES), all_digests), log, ok, [], 0, newest,
+        ),
+        (
+            "an entry naming an image key outside the role set is refused, naming the set",
+            with_roles(tagged("worker"), {**FIXTURE_DIGESTS, "worker": OTHER_DIGEST}),
+            log, ok, [], 1, f"The allowed set is {', '.join(IMAGE_ROLES)}",
+        ),
+        *[
+            (
+                f"a tag-only {role} image with no digests is refused",
+                with_roles(tagged(role), None), log, ok, [], 1, "image but records no 'digests'",
+            )
+            for role in PER_ROLE_IMAGES
+        ],
+        (
+            "a per-role image under the build repository is refused",
+            with_roles(
+                {"worker_core": f"{registry}/worker_core:v1.1.0"}, worker_core_digests
+            ),
+            log, ok, [], 1, "its repository should be 'release/worker_core'",
+        ),
+        (
+            "a per-role image under candidate/ is refused",
+            with_roles(
+                {"worker_core": f"{registry}/candidate/worker_core:v1.1.0"}, worker_core_digests
+            ),
+            log, ok, [], 1, "its repository should be 'release/worker_core'",
+        ),
+        (
+            "a per-role image with the digest inside its value is refused, pointing to digests",
+            with_roles(
+                {
+                    "worker_core": f"{registry}/{RELEASE_PATH}/worker_core"
+                    f"@{role_digests['worker_core']}"
+                },
+                worker_core_digests,
+            ),
+            log, ok, [], 1, "The digest belongs in 'digests.worker_core'",
+        ),
+        (
+            "a per-role image with a tag and a digest inside its value is refused",
+            with_roles(
+                {
+                    "worker_core": f"{registry}/{RELEASE_PATH}/worker_core:v1.1.0"
+                    f"@{role_digests['worker_core']}"
+                },
+                worker_core_digests,
+            ),
+            log, ok, [], 1, "The digest belongs in 'digests.worker_core'",
+        ),
+        (
+            "a per-role digest equal to another image's digest is refused",
+            with_roles(
+                tagged("worker_core"), {**FIXTURE_DIGESTS, "worker_core": FIXTURE_DIGESTS["api"]}
+            ),
+            log, ok, [], 1, "the 'api' and 'worker_core' images have the same digest",
+        ),
+        (
+            "a per-role image whose repository is another role is refused",
+            with_roles(
+                {"worker_core": f"{registry}/{RELEASE_PATH}/migrate:v1.1.0"}, worker_core_digests
+            ),
+            log, ok, [], 1, "whose repository is not 'worker_core'",
         ),
     ]
 
@@ -1671,6 +1797,7 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
         *_bump_scenarios(),
         # The release candidate's digests (ADR 0106), and the release cut that merges untagged.
         *_digest_scenarios(),
+        *_role_scenarios(),
         # The api image's licence claims version, which the module reads at plan time.
         *_claims_version_scenarios(),
         # Each image's floor and the tags with no published image, and the README prose of them.

@@ -89,12 +89,16 @@ your own source is the defect this manifest exists to kill.
 | `releases` | object | yes | Releases, keyed by module version. Never empty. A key is published once its `vX.Y.Z` tag exists; on `main`, the newest keys may be cut but not tagged yet. |
 | `releases["X.Y.Z"]` | object | yes | One release. The key is a bare semver — `1.2.3`, **not** `v1.2.3`. |
 | `releases["X.Y.Z"].date` | string | yes | The release date, `YYYY-MM-DD`: the day the release was cut. The tag follows the merged release commit, so it may be dated later. |
-| `releases["X.Y.Z"].images` | object | yes | The image pair the release was tested against. |
+| `releases["X.Y.Z"].images` | object | yes | The images the release was tested against: `api` and `frontend`, and optionally the per-role images. No other key is accepted by the release check. |
 | `releases["X.Y.Z"].images.api` | string | yes | `registry/repository:tag`, with the repository `release/api`: `masterly.azurecr.io/release/api:vX.Y.Z`. See "The image path". |
 | `releases["X.Y.Z"].images.frontend` | string | yes | Same form, with the repository `release/frontend`. |
+| `releases["X.Y.Z"].images.migrate` | string | no | Same form, with the repository `release/migrate`. An entry naming it records `digests`. See "The per-role images". |
+| `releases["X.Y.Z"].images.worker_core` | string | no | Same form, with the repository `release/worker_core`. An entry naming it records `digests`. |
+| `releases["X.Y.Z"].images.worker_integration` | string | no | Same form, with the repository `release/worker_integration`. An entry naming it records `digests`. |
 | `releases["X.Y.Z"].digests` | object | no | The image digests of the release candidate. Absent from releases cut before the field existed. See "The digests". |
 | `releases["X.Y.Z"].digests.api` | string | with `digests` | `sha256:` and 64 lowercase hex characters: the `api` build the release candidate was tested with. |
 | `releases["X.Y.Z"].digests.frontend` | string | with `digests` | Same form, for the `frontend` image. |
+| `releases["X.Y.Z"].digests.<role>` | string | with the per-role image | Same form, for `migrate`, `worker_core` or `worker_integration`, copied from the backend release record. |
 | `releases["X.Y.Z"].api_claims_version` | integer | see "The api claims version" | The licence claims version the release's `api` image verifies, `0` or more. May be absent from releases cut before the field existed; read an absent value as `0`. |
 | `releases["X.Y.Z"].known_issue` | string | no | Present when the release was later found faulty, as plain text for people: what is wrong and which release to move to. Do not parse it. See "The known issue". |
 | `image_floors` | object | no | The oldest image of each app an install can run, and the image tags with no published image, keyed by image name (`api`, `frontend`). Added within `schema_version` 1; absent from the file at tags cut before it existed. See "The image floors". |
@@ -131,7 +135,8 @@ it is not measuring a fault.
 
 Every image a release names is published under the `release/` path of its registry, as
 `<registry>/release/<image>:<tag>`: `masterly.azurecr.io/release/api:vX.Y.Z` and
-`masterly.azurecr.io/release/frontend:vX.Y.Z`. That is also the repository the module's own
+`masterly.azurecr.io/release/frontend:vX.Y.Z`, and likewise `release/migrate`,
+`release/worker_core` and `release/worker_integration` for a per-role image. That is also the repository the module's own
 default image references pull, so the pair an entry names and the pair an install that sets no
 `api_image` or `frontend_image` pulls are the same repositories. A mirror holds the images under
 the same `release/api` and `release/frontend` repositories; only the registry host differs.
@@ -148,6 +153,25 @@ image an entry names is the same build, read from another repository. The file a
 before the move still names the path that was current when that tag was cut. See
 "Compatibility".
 
+## The per-role images
+
+Beside `api` and `frontend`, an entry may name three per-role images the backend release
+publishes: `migrate`, `worker_core` and `worker_integration`. The role set is closed. `api` and
+`frontend` are required, the three per-role images are optional, and the release check refuses any
+other key in `images`, naming the allowed set, so a misspelt or invented role cannot slip in.
+
+A per-role image takes the same form as the others, `images.<role> =
+<registry>/release/<role>:<tag>`, for example `masterly.azurecr.io/release/worker_core:vX.Y.Z`,
+and its build is recorded in `digests.<role>`. An entry that names any per-role image records
+`digests`, and so records one for every image it names: a per-role image recorded by tag alone is a
+movable reference. Its digest does not go inside the image value; a value carrying `@sha256:` is
+refused. A per-role image under the build repository (`<registry>/worker_core:<tag>`) or under
+`candidate/` is refused as well, because only the `release/` path holds signed, attested images.
+
+Both the tag and the digest are copied from the backend release record, never retyped. The check
+is offline, so it proves their shape and that no two images share a digest, not that the tag
+resolves to that digest.
+
 ## The digests
 
 `digests` was added within `schema_version` 1, as the compatibility rules below allow: a new key
@@ -161,8 +185,8 @@ the tag is still what an install pins, and the digest is the build that tag was 
 When an entry has `digests`, it has one for every image it names, and no other. Older releases
 have none, and no `digests` will be added to them after the fact.
 
-What the release check proves about digests on every pull request is their shape: both present,
-each a `sha256:` digest, and not the same digest for two images. It makes no network call, so it
+What the release check proves about digests on every pull request is their shape: one present for
+every image the entry names, each a `sha256:` digest, and not the same digest for two images. It makes no network call, so it
 cannot see what a tag resolves to in the registry. That comparison is a separate, explicit step:
 whoever cuts the release reads each image's digest from the registry and passes them with
 `--observed-digests`, and the check refuses any digest that disagrees with what its tag
@@ -175,7 +199,8 @@ release commit's manifest, read as data: for each channel's release it checks
 names resolves to that digest; where the entry records none, `release/<role>:<tag>`. A reference
 that does not resolve, or a tag at a digest the entry does not record, fails the job by name. It
 reads the registry with the ACR token `pull-ci-cut-release` on the `pull-product-images` scope
-map, pull-only on `release/api` and `release/frontend`, held by the `release` Environment: the
+map, pull-only on `release/api` and `release/frontend` (it does not yet read the per-role
+images), held by the `release` Environment: the
 variable `RELEASE_ACR_TOKEN_NAME` and the secret `RELEASE_ACR_TOKEN_PASSWORD`. With either unset
 the job fails, naming it. The same check by hand, with the token's password read without echo:
 
@@ -246,7 +271,7 @@ published, on `main` only: the file at the release's own tag does not carry it.
 and its meaning. `latest` stays a key of `releases` and stays the highest version present.
 `releases` stays an object keyed by bare semver. Image values stay parseable as
 `registry/repository:tag`, and the repository of each is `release/<image>` (`release/api`,
-`release/frontend`), bar the never-published exception in "The image path".
+`release/frontend`, and `release/<role>` for a per-role image), bar the never-published exception in "The image path".
 
 **One value change, 2026-10-31.** The image values of every entry on `main` moved from
 `masterly.azurecr.io/<image>:<tag>` to `masterly.azurecr.io/release/<image>:<tag>`, with the
@@ -272,8 +297,15 @@ a `schema_version` bump.
 - new keys inside a release entry;
 - new named images alongside `api` and `frontend`, if the module ever ships another app.
 
+**The per-role images, added within `schema_version` 1.** An entry may name `migrate`,
+`worker_core` and `worker_integration` beside `api` and `frontend`, each as
+`registry/release/<role>:<tag>` with its `digests.<role>`. This is an addition within
+`schema_version` 1, the "new named images" case above: no existing field is renamed or retyped,
+and an entry that names only `api` and `frontend` stays valid. See "The per-role images".
+
 Ignore keys you do not recognise. Do not fail on them, and do not assume `images` has exactly two
-members.
+members. The producer is stricter than the consumer: the release check accepts only the five roles
+named in "The per-role images" in `images`.
 
 **Will not happen without a `schema_version` bump:** renaming, removing or retyping any field in
 the table; `releases` becoming an array; version keys growing a `v` prefix; `date` changing

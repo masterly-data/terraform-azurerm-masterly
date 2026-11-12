@@ -22,6 +22,14 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+### Changed
+
+- `MANIFEST.json` and its release check accept the per-role release images `migrate`,
+  `worker_core` and `worker_integration` beside `api` and `frontend`, as
+  `<registry>/release/<role>:<tag>` with `digests.<role>` (an addition within `schema_version` 1,
+  documented in `docs/release-manifest.md`). The check now refuses any other `images` key, a
+  per-role image with no `digests`, and an image value carrying `@sha256:`.
+
 ## [0.24.0] - 2026-11-10
 
 Released against api `v0.137.0` and frontend `v0.145.0`, the pair Masterly's own install applied.
