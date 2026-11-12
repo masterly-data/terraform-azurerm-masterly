@@ -854,7 +854,7 @@ run "workers_depends_on_every_grant_it_replaces" {
   assert {
     condition = (
       strcontains(regex("(?s)module \"workers_identity\" \\{(.*?)\\n\\}", file("${path.module}/identity.tf"))[0], "count  = local.migrate_app_roles || local.workers_own_identity ? 1 : 0") &&
-      strcontains(regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0], "count  = local.workers_own_dsn ? 1 : 0") &&
+      strcontains(regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0], "count  = local.workers_own_dsn ? 1 : 0") &&
       strcontains(file("${path.module}/workers.tf"), "workers_own_dsn = local.migrate_app_roles && var.enable_workers") &&
       startswith(regex("workers_own_identity = (.*)", file("${path.module}/workers.tf"))[0], "var.enable_workers && var.enable_key_vault && ")
     )

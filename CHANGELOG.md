@@ -24,7 +24,7 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ### Changed
 
-- Internal refactor: `main.tf` is split into one file per concern (network, environment, identity, Postgres, Service Bus, api and frontend). No input, output or resource address changes, so an install plans no change.
+- Internal refactor: the network, the environment and the identities move out of `main.tf` into `network.tf`, `environment.tf` and `identity.tf`. No input, output or resource address changes, so an install plans no change.
 
 ## [0.24.0] - 2026-11-10
 

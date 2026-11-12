@@ -10,7 +10,7 @@
 #
 # azurerm has no resource for an app's auth configuration, so it is written with azapi as the
 # child resource Azure defines for it, Microsoft.App/containerApps/authConfigs, whose only valid
-# name is "current". Its client secret is an ordinary Container App secret (app-api.tf,
+# name is "current". Its client secret is an ordinary Container App secret (main.tf,
 # secret_values), which the configuration names rather than holds. ca-api still carries that
 # secret, as it did when it was gated, so that taking this version changes neither app; nothing
 # on ca-api reads it.

@@ -188,7 +188,7 @@ resource "azurerm_container_app_job" "migrate" {
   }
 
   template {
-    # The CA bundle mount the apps get (app-api.tf, ca_bundle_secret_file_mounts): the job connects
+    # The CA bundle mount the apps get (main.tf, ca_bundle_secret_file_mounts): the job connects
     # to the same database and must trust the same CA.
     dynamic "volume" {
       for_each = local.ca_bundle_secret_file_mounts
@@ -261,7 +261,7 @@ resource "azurerm_container_app_job" "migrate" {
   }
 
   # The grants must land before the first pull and the first secret read, as on the frontend
-  # (app-frontend.tf): the job depends on its identity, not on the role assignments on it.
+  # (main.tf): the job depends on its identity, not on the role assignments on it.
   depends_on = [
     azurerm_role_assignment.acr_pull_migrate,
     azurerm_role_assignment.kv_secrets_user_migrate,

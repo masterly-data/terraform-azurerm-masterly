@@ -84,7 +84,7 @@ run "migrate_byo_database_secrets_refuse_install_secrets" {
 }
 
 # The start at apply. The action is replaced through terraform_data.migrate_image, whose input is
-# the resolved api image, and ca-api and ca-workers name it in depends_on (app-api.tf, workers.tf):
+# the resolved api image, and ca-api and ca-workers name it in depends_on (main.tf, workers.tf):
 # `terraform test` cannot read depends_on or replace_triggered_by, so these assert what the plan
 # shows and `terraform graph` shows the edges (see the pull request).
 run "migrate_job_is_started_at_apply" {
@@ -531,13 +531,13 @@ run "migrate_app_roles_on_entra_name_their_identities" {
     error_message = "ca-workers must run, pull, scale and resolve its secrets as id-<prefix>-workers alone, and ca-api as the apps identity alone, each with its own AZURE_CLIENT_ID."
   }
 
-  # The rest of the env is the api's: only AZURE_CLIENT_ID differs (workers_env, app-api.tf).
+  # The rest of the env is the api's: only AZURE_CLIENT_ID differs (workers_env, main.tf).
   assert {
     condition = (
       toset(keys(local.workers_env)) == toset(keys(local.api_env)) &&
       module.workers[0].env_names == module.api.env_names &&
-      strcontains(regex("(?s)\\n  workers_env = merge\\((.*?)\\n  \\)", file("${path.module}/app-api.tf"))[0], "local.api_env,") &&
-      length(regexall("AZURE_CLIENT_ID", regex("(?s)\\n  workers_env = merge\\((.*?)\\n  \\)", file("${path.module}/app-api.tf"))[0])) == 1
+      strcontains(regex("(?s)\\n  workers_env = merge\\((.*?)\\n  \\)", file("${path.module}/main.tf"))[0], "local.api_env,") &&
+      length(regexall("AZURE_CLIENT_ID", regex("(?s)\\n  workers_env = merge\\((.*?)\\n  \\)", file("${path.module}/main.tf"))[0])) == 1
     )
     error_message = "ca-workers' env must be the api's, with its own AZURE_CLIENT_ID the only difference."
   }
@@ -787,8 +787,8 @@ run "migrate_app_roles_on_entra_get_their_own_direct_urls_with_pgbouncer" {
   assert {
     condition = alltrue([
       for block in ["postgres_connection_urls_api", "postgres_connection_urls_workers"] :
-      strcontains(regex("(?s)module \"${block}\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0], "pooler_port = local.database_pooler_port") &&
-      strcontains(regex("(?s)module \"${block}\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0], "direct_port = local.database_direct_port")
+      strcontains(regex("(?s)module \"${block}\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0], "pooler_port = local.database_pooler_port") &&
+      strcontains(regex("(?s)module \"${block}\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0], "direct_port = local.database_direct_port")
     ])
     error_message = "Each app's URLs must use the shared pooler (6432 with PgBouncer) and direct (5432) ports."
   }
@@ -915,14 +915,14 @@ run "migrate_app_roles_on_password_read_their_vault_secrets" {
   assert {
     condition = (
       length(regexall("random_password\\.migrate_(api|workers)_role", file("${path.module}/keyvault.tf"))) == 2 &&
-      length(regexall("random_password\\.migrate_(api|workers)_role", file("${path.module}/postgres.tf"))) == 2 &&
-      length(regexall("random_password\\.migrate_api_role", regex("(?s)module \"postgres_connection_urls_api\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0])) == 1 &&
-      length(regexall("random_password\\.migrate_workers_role", regex("(?s)module \"postgres_connection_urls_api\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0])) == 0 &&
-      length(regexall("random_password\\.migrate_workers_role", regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0])) == 1 &&
-      length(regexall("random_password\\.migrate_api_role", regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0])) == 0 &&
+      length(regexall("random_password\\.migrate_(api|workers)_role", file("${path.module}/main.tf"))) == 2 &&
+      length(regexall("random_password\\.migrate_api_role", regex("(?s)module \"postgres_connection_urls_api\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0])) == 1 &&
+      length(regexall("random_password\\.migrate_workers_role", regex("(?s)module \"postgres_connection_urls_api\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0])) == 0 &&
+      length(regexall("random_password\\.migrate_workers_role", regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0])) == 1 &&
+      length(regexall("random_password\\.migrate_api_role", regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0])) == 0 &&
       alltrue([
         for f in fileset(path.module, "*.tf") :
-        length(regexall("random_password\\.migrate_(api|workers)_role", file("${path.module}/${f}"))) == 0 if !contains(["keyvault.tf", "postgres.tf"], f)
+        length(regexall("random_password\\.migrate_(api|workers)_role", file("${path.module}/${f}"))) == 0 if !contains(["keyvault.tf", "main.tf"], f)
       ]) &&
       # No output names a password, an app's URL or its composition.
       alltrue(flatten([
@@ -973,7 +973,7 @@ run "migrate_app_removals_follow_the_apps_updates" {
         "azurerm_role_assignment.sb_receiver,",
         "azapi_resource_action.migrate_start,",
       ] :
-      strcontains(replace(regex("(?s)depends_on = \\[([^\\]]*)\\]", regex("(?s)module \"api\" \\{(.*?)\\n\\}", file("${path.module}/app-api.tf"))[0])[0], "/#[^\\n]*/", ""), ref)
+      strcontains(replace(regex("(?s)depends_on = \\[([^\\]]*)\\]", regex("(?s)module \"api\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0])[0], "/#[^\\n]*/", ""), ref)
     ])
     error_message = "ca-api must depend on the apps' Entra administrator, sb_receiver and migrate_start, so their removal follows its update."
   }
@@ -1477,7 +1477,7 @@ run "migrate_job_preserves_the_existing_install" {
         infrastructure_subnet_id       = "var.infrastructure_subnet_id"
         internal_load_balancer_enabled = "var.internal_load_balancer_enabled"
       }) &&
-      jsonencode({ for pair in regexall("(?m)^  (administrator_login|delegated_subnet_id|private_dns_zone_id|create_mode|source_server_id|point_in_time_restore_time_in_utc)\\s*=\\s*([^\\n]+)", regex("(?s)resource \"azurerm_postgresql_flexible_server\" \"this\" \\{(.*?)\\n\\}", file("${path.module}/postgres.tf"))[0]) : pair[0] => trimspace(pair[1]) }) == jsonencode({
+      jsonencode({ for pair in regexall("(?m)^  (administrator_login|delegated_subnet_id|private_dns_zone_id|create_mode|source_server_id|point_in_time_restore_time_in_utc)\\s*=\\s*([^\\n]+)", regex("(?s)resource \"azurerm_postgresql_flexible_server\" \"this\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0]) : pair[0] => trimspace(pair[1]) }) == jsonencode({
         administrator_login = "local.database_entra ? null : \"masterly_admin\""
       })
     )
