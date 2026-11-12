@@ -224,12 +224,16 @@ def fold(changelog: str, fragments: list[tuple[str, dict[str, list[str]]]], vers
         block += [*preamble, ""]
     block += _render(sections)
 
-    # A re-cut lifts its old section out and puts the merged one back directly under Unreleased,
-    # so the release being prepared is always the newest section.
+    # A re-cut merges where the section already is, so the changelog's version order is kept even
+    # when a newer untagged cut sits above it. A first cut goes directly below Unreleased.
     if existing:
-        lines = lines[:existing[0]] + lines[_section_end(lines, existing[0]):]
-    top = unreleased[0]
-    below = _section_end(lines, top)
+        top = existing[0] - 1
+        below = _section_end(lines, existing[0])
+        while top >= 0 and not lines[top].strip():
+            top -= 1
+    else:
+        top = unreleased[0]
+        below = _section_end(lines, top)
     result = "\n".join([*lines[:top + 1], "", *_trim(block), "", *lines[below:]])
 
     # Nothing dropped, nothing duplicated: the new section holds each line the fragments supplied
@@ -426,6 +430,21 @@ def _scenarios() -> list[tuple[str, callable]]:
             return "the old date survived"
         return _check_fold(root, True)
 
+    def recut_older(root: Path) -> str | None:
+        newer = "## [1.2.0] - 2031-03-01\n\n### Added\n\n- Newer cut.\n\n"
+        changelog = RECUT_CHANGELOG.replace("## [1.1.0]", newer + "## [1.1.0]")
+        env = _tree(root, changelog, FRAGMENTS)
+        result = _run(env, *FOLD_ARGS)
+        if result.returncode != 0:
+            return f"exit {result.returncode}:\n{result.stdout}{result.stderr}"
+        text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        headings = [line for line in text.split("\n") if line.startswith("## [")]
+        want = ["## [Unreleased]", "## [1.2.0] - 2031-03-01", "## [1.1.0] - 2031-02-01",
+                "## [1.0.0] - 2031-01-01"]
+        if headings != want:
+            return f"section order changed: {headings}"
+        return None
+
     def detector(root: Path) -> str | None:
         # The check above must itself fail on a dropped, a duplicated and a left-behind fragment.
         env = _tree(root, FIXTURE_CHANGELOG, FRAGMENTS)
@@ -459,6 +478,7 @@ def _scenarios() -> list[tuple[str, callable]]:
         ("fragments fold below an empty Unreleased, in order, each line once, then are deleted",
          fresh),
         ("a re-cut merges into the existing section and sets its date", recut),
+        ("re-cutting an older untagged section leaves it below the newer one", recut_older),
         ("the fold's own check catches a dropped, duplicated or left-behind fragment", detector),
         _refusal("an unknown subsection heading is refused", FIXTURE_CHANGELOG,
                  {**FRAGMENTS, "d-bad.md": "### Misc\n\n- Nope.\n"}, FOLD_ARGS,
