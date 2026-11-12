@@ -911,7 +911,9 @@ An install moving from `"start"` straight to `"job"` on that version does all of
 the migrate administrator, the start action, the apps' move and then the removals. Its old
 revisions keep serving only until the administrator is removed, so plan that apply for a quiet
 period. What Azure does to the `id-<prefix>-apps` database role, which still owns the objects,
-when its administrator is removed is confirmed on a live install before that version is released.
+when its administrator is removed has not yet been confirmed on a live install: 0.24.0 was
+released with that check still owed ([docs/releasing.md](docs/releasing.md), "Live checks before
+the next tag").
 
 ### Moving an existing install to Microsoft Entra authentication
 
