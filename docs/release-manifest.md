@@ -136,10 +136,10 @@ it is not measuring a fault.
 Every image a release names is published under the `release/` path of its registry, as
 `<registry>/release/<image>:<tag>`: `masterly.azurecr.io/release/api:vX.Y.Z` and
 `masterly.azurecr.io/release/frontend:vX.Y.Z`, and likewise `release/migrate`,
-`release/worker_core` and `release/worker_integration` for a per-role image. That is also the repository the module's own
-default image references pull, so the pair an entry names and the pair an install that sets no
-`api_image` or `frontend_image` pulls are the same repositories. A mirror holds the images under
-the same `release/api` and `release/frontend` repositories; only the registry host differs.
+`release/worker_core` and `release/worker_integration` for a per-role image. That is also the
+repository the module's own default image references pull, so the pair an entry names and the pair
+an install that sets no `api_image` or `frontend_image` pulls are the same repositories. A mirror
+holds the images under the same `release/<image>` repositories; only the registry host differs.
 
 The release check refuses an entry that names an image under any other repository. The one
 exception is an entry whose image names a tag `image_floors` lists as `unpublished`: that image
@@ -177,8 +177,8 @@ resolves to that digest.
 `digests` was added within `schema_version` 1, as the compatibility rules below allow: a new key
 inside a release entry. A consumer that ignores keys it does not recognise needs no change.
 
-A release candidate is a commit of this module together with the exact `api` and `frontend`
-builds it was tested with. A tag can be moved to another build and a digest cannot, so `digests`
+A release candidate is a commit of this module together with the exact builds of every
+image it names (`api` and `frontend`, and any per-role image) it was tested with. A tag can be moved to another build and a digest cannot, so `digests`
 is how an entry says which builds those were. The image values stay `registry/repository:tag`:
 the tag is still what an install pins, and the digest is the build that tag was recorded against.
 

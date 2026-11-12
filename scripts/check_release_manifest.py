@@ -234,8 +234,8 @@ def load_manifest() -> dict:
         named_per_role = [name for name in PER_ROLE_IMAGES if name in images]
         if named_per_role and "digests" not in entry:
             raise CheckFailed(
-                f"{where} names the {' and '.join(repr(n) for n in named_per_role)} image but "
-                f"records no 'digests'. A per-role image is a tag alone otherwise, and a tag can "
+                f"{where} names the {' and '.join(repr(n) for n in named_per_role)} "
+                f"{'images' if len(named_per_role) > 1 else 'image'} but records no 'digests'. A per-role image is a tag alone otherwise, and a tag can "
                 f"be moved to another build; record 'digests.<role>' for every image, copied from "
                 f"the backend release record."
             )
@@ -582,9 +582,9 @@ def check_release_paths(manifest: dict) -> None:
             if isinstance(image, str) and IMAGE_RE.match(image)
             and IMAGE_RE.match(image).group("tag") in floors.get(name, {}).get("unpublished", [])
         ]
-        if never_published:
-            continue
         for name, image in images.items():
+            if never_published and name not in PER_ROLE_IMAGES:
+                continue
             parsed = IMAGE_RE.match(image) if isinstance(image, str) else None
             expected = f"{RELEASE_PATH}/{name}"
             if parsed and parsed.group("repo") == expected:
@@ -1287,7 +1287,21 @@ def _release_path_scenarios() -> list[tuple]:
         frontend=f"{LEGACY_REGISTRY}/frontend:{oldest_frontend_tag}",
     )
     never_published["releases"][oldest]["known_issue"] = "its api image was never published"
+    # The exemption covers api and frontend only: a per-role image in the same entry is still checked.
+    never_published_per_role = copy.deepcopy(never_published)
+    never_published_per_role["releases"][oldest]["images"]["worker_core"] = (
+        f"{LEGACY_REGISTRY}/worker_core:{oldest_api_tag}"
+    )
+    never_published_per_role["releases"][oldest]["digests"] = {
+        "api": "sha256:" + "1" * 64,
+        "frontend": "sha256:" + "2" * 64,
+        "worker_core": "sha256:" + "3" * 64,
+    }
     cases = [
+        (
+            "a never-published release still has its per-role images path-checked",
+            never_published_per_role, 1, "its repository should be 'release/worker_core'",
+        ),
         (
             f"the newest api image on the legacy path ({legacy_api}) is refused",
             _with_image(newest, "api", legacy_api), 1,
