@@ -20,7 +20,7 @@ output description is customer documentation.
 3. **Add a `validation` block** for every input a customer can get wrong, with an `error_message`
    that says what to change.
 4. **Wire it in** to the right file (`main.tf` core, or the concern's own `.tf`: `network.tf`,
-   `environment.tf` or `identity.tf`, or the subsystem's). If the variable
+   `environment.tf`, `identity.tf` or `auth.tf`, or the subsystem's). If the variable
    feeds an app's `env` or `env_secret_refs` (in `main.tf`, `email.tf`, `entra-auth.tf`,
    `keyvault.tf`, `redis.tf` or `workers.tf`), regenerate the manifest with
    `python3 scripts/check_runtime_env.py --write` and commit `RUNTIME_ENV.json`; CI fails until you do.

@@ -19,10 +19,11 @@
 #
 # This file holds the core every other file reads (the shared locals, the per-install suffix,
 # the licence check and the two resource groups), the starter Postgres server, the Service Bus
-# and the api and frontend Container Apps. The network, the environment and the identities each
-# have a file of their own: network.tf (VNet, subnets, network security groups, the Postgres
-# private DNS zone), environment.tf (the workspace and the Container Apps environment) and
-# identity.tf (the apps' identities, the registry and image defaults, AcrPull).
+# and the api and frontend Container Apps. The network, the environment, the identities and the
+# auth boundary each have a file of their own: network.tf (VNet, subnets, network security
+# groups, the Postgres private DNS zone), environment.tf (the workspace and the Container Apps
+# environment), identity.tf (the apps' identities, the registry and image defaults, AcrPull) and
+# auth.tf (the session and BFF secrets and the identity provider's endpoints).
 #
 # Deliberately deferred: the per-install Entra identity of ADR 0020.
 # The calls the install can make to Masterly's control plane (licence refresh, usage
@@ -544,113 +545,6 @@ moved {
   to   = azurerm_private_endpoint.postgres[0]
 }
 
-locals {
-  # The install-level DSN (ADR 0003): the customer's own database on BYO-DB (ADR 0065),
-  # otherwise the provisioned starter server's admin connection: the masterly_admin login and
-  # its password, or — on database_auth = "entra" — the apps' identity's Entra role with no
-  # password at all, since the api presents a token instead (entra-auth.tf).
-  #
-  # With postgres_pgbouncer the URL points at the built-in PgBouncer on 6432 (transaction pool);
-  # database_direct_url is the same server, role and database on 5432 for what a transaction
-  # pooler cannot carry (CREATE DATABASE, migrations).
-  # The starter server's URLs are composed in modules/postgres-connection-urls from these.
-  database_pooler_port = var.postgres_pgbouncer ? "6432" : "5432"
-  database_direct_port = "5432"
-  database_auth_mode   = local.database_entra ? "entra" : "password"
-  database_role        = local.database_entra ? local.database_entra_role : "masterly_admin"
-
-  database_url = var.external_database_url != null ? var.external_database_url : module.postgres_connection_urls[0].pooler_url
-
-  # Null on BYO-DB, where postgres_pgbouncer is refused and the secret is never named.
-  database_direct_url = var.external_database_url != null ? null : module.postgres_connection_urls[0].direct_url
-}
-
-module "postgres_connection_urls" {
-  source = "./modules/postgres-connection-urls"
-  count  = local.provision_postgres ? 1 : 0
-
-  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
-  auth_mode   = local.database_auth_mode
-  role        = local.database_role
-  password    = local.database_entra ? null : random_password.postgres_admin[0].result
-  pooler_port = local.database_pooler_port
-  direct_port = local.database_direct_port
-}
-
-# The migrate job's own URLs (migrate.tf): the same server and ports, with the migrate
-# identity's Entra role on "entra" and masterly_admin, as today, on "password".
-module "postgres_connection_urls_migrate" {
-  source = "./modules/postgres-connection-urls"
-  count  = local.migrate_job && local.provision_postgres ? 1 : 0
-
-  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
-  auth_mode   = local.database_auth_mode
-  role        = local.migrate_database_role
-  password    = local.database_entra ? null : random_password.postgres_admin[0].result
-  pooler_port = local.database_pooler_port
-  direct_port = local.database_direct_port
-}
-
-# The backend apps' own URLs with migrations = "job" on the starter server: each app signs in as
-# the DML-only role the migrate job creates for it (migrate.tf, ADR 0120 §6). On "entra" the role
-# is bound to the app's identity and the URL carries no password; on "password" it carries that
-# role's generated password, and reaches the app only inside its own vault secret ("job" requires
-# mode = production, which requires the vault). The roles exist only if the api image's migrate
-# role creates them, which no release up to v0.135.0 does; the README's upgrade note gates "job"
-# on such a release, and the module cannot check the image.
-module "postgres_connection_urls_api" {
-  source = "./modules/postgres-connection-urls"
-  count  = local.migrate_app_roles ? 1 : 0
-
-  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
-  auth_mode   = local.database_auth_mode
-  role        = local.migrate_api_role
-  password    = local.database_entra ? null : random_password.migrate_api_role[0].result
-  pooler_port = local.database_pooler_port
-  direct_port = local.database_direct_port
-}
-
-module "postgres_connection_urls_workers" {
-  source = "./modules/postgres-connection-urls"
-  count  = local.workers_own_dsn ? 1 : 0
-
-  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
-  auth_mode   = local.database_auth_mode
-  role        = local.migrate_workers_role
-  password    = local.database_entra ? null : random_password.migrate_workers_role[0].result
-  pooler_port = local.database_pooler_port
-  direct_port = local.database_direct_port
-}
-
-locals {
-  # Null without the app roles (the workers' also without ca-workers), where the secrets below
-  # are never named.
-  api_database_url            = one(module.postgres_connection_urls_api[*].pooler_url)
-  api_database_direct_url     = one(module.postgres_connection_urls_api[*].direct_url)
-  workers_database_url        = one(module.postgres_connection_urls_workers[*].pooler_url)
-  workers_database_direct_url = one(module.postgres_connection_urls_workers[*].direct_url)
-
-  # The secret each backend app reads its DSN (and, with postgres_pgbouncer, its direct DSN) from:
-  # its own with the app roles, the shared install-level one otherwise, as before.
-  api_database_secret_name            = local.migrate_app_roles ? "api-database-url" : "database-url"
-  api_database_direct_secret_name     = local.migrate_app_roles ? "api-database-direct-url" : "database-direct-url"
-  workers_database_secret_name        = local.workers_own_dsn ? "workers-database-url" : "database-url"
-  workers_database_direct_secret_name = local.workers_own_dsn ? "workers-database-direct-url" : "database-direct-url"
-
-  # The shared DSN secrets no app's env names with the app roles. They stay in the vault
-  # (install_secret_names, keyvault.tf), because the revisions running before an upgrade to
-  # migrations = "job" still reference them until their replacements are ready.
-  shared_database_secret_names = concat(["database-url"], var.postgres_pgbouncer ? ["database-direct-url"] : [])
-
-  # ca-api keeps their Container App secret definitions too, as vault references no env names
-  # (api_vault_secret_refs, keyvault.tf): its revision from before the upgrade still resolves
-  # them while the new one waits for the migrate job. ca-workers keeps none: identities belong to
-  # the app too, and it now runs only as id-<prefix>-workers (workers.tf), so its old revision
-  # cannot sign in as before whatever secrets stay. "job" requires the
-  # vault, so these are never value secrets.
-  api_retained_secret_names = local.migrate_app_roles && var.enable_key_vault ? local.shared_database_secret_names : []
-}
-
 # --- Async bus: Azure Service Bus (optional; ADR 0029) ---------------------------
 # Default off — the install runs the polling binding (the Postgres queue is the bus), so
 # nothing here is provisioned or billed. When enabled, a namespace + queue are created and
@@ -796,55 +690,111 @@ resource "azurerm_private_endpoint" "servicebus" {
   tags = local.tags
 }
 
-# --- Application secrets (born in the install, never in Git) ---------------------
+locals {
+  # The install-level DSN (ADR 0003): the customer's own database on BYO-DB (ADR 0065),
+  # otherwise the provisioned starter server's admin connection: the masterly_admin login and
+  # its password, or — on database_auth = "entra" — the apps' identity's Entra role with no
+  # password at all, since the api presents a token instead (entra-auth.tf).
+  #
+  # With postgres_pgbouncer the URL points at the built-in PgBouncer on 6432 (transaction pool);
+  # database_direct_url is the same server, role and database on 5432 for what a transaction
+  # pooler cannot carry (CREATE DATABASE, migrations).
+  # The starter server's URLs are composed in modules/postgres-connection-urls from these.
+  database_pooler_port = var.postgres_pgbouncer ? "6432" : "5432"
+  database_direct_port = "5432"
+  database_auth_mode   = local.database_entra ? "entra" : "password"
+  database_role        = local.database_entra ? local.database_entra_role : "masterly_admin"
 
-resource "random_password" "session_secret" {
-  length  = 48
-  special = false
+  database_url = var.external_database_url != null ? var.external_database_url : module.postgres_connection_urls[0].pooler_url
+
+  # Null on BYO-DB, where postgres_pgbouncer is refused and the secret is never named.
+  database_direct_url = var.external_database_url != null ? null : module.postgres_connection_urls[0].direct_url
 }
 
-# The BFF shared secret (MASTERLY_BFF_SHARED_SECRET), held by ca-api and ca-frontend and by no
-# other app. A break-glass sign-in made in the GUI reaches the api from the frontend's BFF, not
-# from the browser, so on its own the api sees a frontend replica's address: every GUI attempt
-# then shares one throttle window, and the audit record names the replica. With this secret on
-# both apps, the BFF states the browser's address and presents the secret to show it is this
-# install's BFF; the api believes the address only on a request that carries the matching
-# value, so a caller that does not hold it cannot choose its own address, on the internal hop
-# or on a published api (api_ingress_external). Without the same value on both apps, the
-# mechanism is off.
-#
-# The same shape as the session secret: 48 alphanumeric characters, above the 32 bytes the api
-# requires at startup. To rotate it, replace it (`terraform apply
-# -replace=random_password.bff_shared_secret`): one apply gives both apps the new value. Until
-# both run with the same value the api ignores the BFF's statement and attributes GUI attempts
-# to the frontend replica, as it did before this secret existed; nothing fails because of the
-# mismatch itself.
-resource "random_password" "bff_shared_secret" {
-  length  = 48
-  special = false
+module "postgres_connection_urls" {
+  source = "./modules/postgres-connection-urls"
+  count  = local.provision_postgres ? 1 : 0
+
+  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
+  auth_mode   = local.database_auth_mode
+  role        = local.database_role
+  password    = local.database_entra ? null : random_password.postgres_admin[0].result
+  pooler_port = local.database_pooler_port
+  direct_port = local.database_direct_port
+}
+
+# The migrate job's own URLs (migrate.tf): the same server and ports, with the migrate
+# identity's Entra role on "entra" and masterly_admin, as today, on "password".
+module "postgres_connection_urls_migrate" {
+  source = "./modules/postgres-connection-urls"
+  count  = local.migrate_job && local.provision_postgres ? 1 : 0
+
+  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
+  auth_mode   = local.database_auth_mode
+  role        = local.migrate_database_role
+  password    = local.database_entra ? null : random_password.postgres_admin[0].result
+  pooler_port = local.database_pooler_port
+  direct_port = local.database_direct_port
+}
+
+# The backend apps' own URLs with migrations = "job" on the starter server: each app signs in as
+# the DML-only role the migrate job creates for it (migrate.tf, ADR 0120 §6). On "entra" the role
+# is bound to the app's identity and the URL carries no password; on "password" it carries that
+# role's generated password, and reaches the app only inside its own vault secret ("job" requires
+# mode = production, which requires the vault). The roles exist only if the api image's migrate
+# role creates them, which no release up to v0.135.0 does; the README's upgrade note gates "job"
+# on such a release, and the module cannot check the image.
+module "postgres_connection_urls_api" {
+  source = "./modules/postgres-connection-urls"
+  count  = local.migrate_app_roles ? 1 : 0
+
+  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
+  auth_mode   = local.database_auth_mode
+  role        = local.migrate_api_role
+  password    = local.database_entra ? null : random_password.migrate_api_role[0].result
+  pooler_port = local.database_pooler_port
+  direct_port = local.database_direct_port
+}
+
+module "postgres_connection_urls_workers" {
+  source = "./modules/postgres-connection-urls"
+  count  = local.workers_own_dsn ? 1 : 0
+
+  server_fqdn = azurerm_postgresql_flexible_server.this[0].fqdn
+  auth_mode   = local.database_auth_mode
+  role        = local.migrate_workers_role
+  password    = local.database_entra ? null : random_password.migrate_workers_role[0].result
+  pooler_port = local.database_pooler_port
+  direct_port = local.database_direct_port
 }
 
 locals {
-  # The identity provider's endpoints: an explicit input wins, otherwise derived from
-  # oidc_tenant_id for a single-tenant Entra registration, otherwise null (and the oidc
-  # validation in variables.tf has already refused that combination).
-  oidc_tenant_base     = var.oidc_tenant_id == null ? null : "https://login.microsoftonline.com/${var.oidc_tenant_id}"
-  oidc_authority       = var.oidc_authority != null ? var.oidc_authority : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/v2.0")
-  oidc_allowed_issuers = var.oidc_allowed_issuers != null ? var.oidc_allowed_issuers : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/v2.0")
-  oidc_jwks_uri        = var.oidc_jwks_uri != null ? var.oidc_jwks_uri : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/discovery/v2.0/keys")
-  oidc_audience        = var.oidc_audience != null ? var.oidc_audience : var.oidc_client_id
+  # Null without the app roles (the workers' also without ca-workers), where the secrets below
+  # are never named.
+  api_database_url            = one(module.postgres_connection_urls_api[*].pooler_url)
+  api_database_direct_url     = one(module.postgres_connection_urls_api[*].direct_url)
+  workers_database_url        = one(module.postgres_connection_urls_workers[*].pooler_url)
+  workers_database_direct_url = one(module.postgres_connection_urls_workers[*].direct_url)
 
-  # With a custom domain the BFF callback is known before any apply: the hostname the install is
-  # served on, which oidc_redirect_uri may not contradict (variables.tf). Without one it is the
-  # input, set from frontend_url on the second apply.
-  oidc_redirect_uri = local.frontend_custom_hostname != null ? "https://${local.frontend_custom_hostname}/api/auth/callback" : var.oidc_redirect_uri
+  # The secret each backend app reads its DSN (and, with postgres_pgbouncer, its direct DSN) from:
+  # its own with the app roles, the shared install-level one otherwise, as before.
+  api_database_secret_name            = local.migrate_app_roles ? "api-database-url" : "database-url"
+  api_database_direct_secret_name     = local.migrate_app_roles ? "api-database-direct-url" : "database-direct-url"
+  workers_database_secret_name        = local.workers_own_dsn ? "workers-database-url" : "database-url"
+  workers_database_direct_secret_name = local.workers_own_dsn ? "workers-database-direct-url" : "database-direct-url"
 
-  # Break-glass admits an address that already holds the Owner role, and the first Owner is
-  # initial_owner_email, so that is the default once a hash arms it. The presence test is
-  # unmarked (the hash is sensitive, whether one was given is not), as for the secret names.
-  breakglass_owner_email = var.breakglass_owner_email != null ? var.breakglass_owner_email : (
-    nonsensitive(var.breakglass_secret_hash != null) ? var.initial_owner_email : null
-  )
+  # The shared DSN secrets no app's env names with the app roles. They stay in the vault
+  # (install_secret_names, keyvault.tf), because the revisions running before an upgrade to
+  # migrations = "job" still reference them until their replacements are ready.
+  shared_database_secret_names = concat(["database-url"], var.postgres_pgbouncer ? ["database-direct-url"] : [])
+
+  # ca-api keeps their Container App secret definitions too, as vault references no env names
+  # (api_vault_secret_refs, keyvault.tf): its revision from before the upgrade still resolves
+  # them while the new one waits for the migrate job. ca-workers keeps none: identities belong to
+  # the app too, and it now runs only as id-<prefix>-workers (workers.tf), so its old revision
+  # cannot sign in as before whatever secrets stay. "job" requires the
+  # vault, so these are never value secrets.
+  api_retained_secret_names = local.migrate_app_roles && var.enable_key_vault ? local.shared_database_secret_names : []
 }
 
 locals {

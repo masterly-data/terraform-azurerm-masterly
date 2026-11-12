@@ -50,14 +50,15 @@ python3 scripts/check_inputs_reference.py --write   # docs/inputs.md, from the .
 
 ## Layout
 
-One Terraform root module: `main.tf` is the always-created core, with the network, the environment and the identities in files of their own; each optional subsystem has a file.
+One Terraform root module: `main.tf` is the always-created core, with the network, the environment, the identities and the auth boundary in files of their own; each optional subsystem has a file.
 
 | Path | Contents |
 |---|---|
-| `main.tf` | The core: the shared locals, the per-install suffix, the licence-claims check, two resource groups, the `api` and `frontend` Container Apps with their application secrets, the starter Postgres flexible server with its private endpoint and the connection URLs, and the optional Service Bus namespace and queue |
+| `main.tf` | The core: the shared locals, the per-install suffix, the licence-claims check, two resource groups, the `api` and `frontend` Container Apps, the starter Postgres flexible server with its private endpoint and the connection URLs, and the optional Service Bus namespace and queue |
 | `network.tf` | The VNet and its two subnets, their network security groups and the Postgres private DNS zone |
 | `environment.tf` | The Log Analytics workspace and the ACA environment |
 | `identity.tf` | The user-assigned identities (apps, frontend, migrate with `migrations = "job"`, and workers wherever `ca-workers` runs as its own: `workers_own_identity`, `workers.tf`), the registry and image defaults and the AcrPull grants |
+| `auth.tf` | The generated session and BFF shared secrets and the identity provider's endpoint locals (`oidc_*`, `breakglass_owner_email`) |
 | `diagnostics.tf` | The observability surface: one action group, the diagnostic settings (five data-plane, one per Container App), twelve metric alerts and four log-search alert rules (one of them per Container App) |
 | `keyvault.tf` | The opt-in durable secret store (ADR 0066): vault, private endpoint and DNS, RBAC grants, and the install's own secrets as Key Vault references |
 | `redis.tf` | The opt-in session registry (ADR 0071): both offerings (`managed` / `cache`), each private-endpoint only |
