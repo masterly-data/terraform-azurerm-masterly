@@ -1324,7 +1324,7 @@ locals {
     #
     # Derived rather than a second variable, because the explicit opt-in already exists one
     # level up: identity_binding=dev is a deliberate choice AND is unrepresentable without a
-    # non-empty ingress_allowed_cidrs (see variables.tf). A separate flag would add no safety
+    # non-empty ingress_allowed_cidrs (see variables-core.tf). A separate flag would add no safety
     # this module does not already enforce, and its absence is a silent outage.
     var.identity_binding == "dev" ? { MASTERLY_ALLOW_DEV_BINDING = "true" } : {},
     # The same value the api and the workers get, for the catalog's Consume card (empty unless set).
