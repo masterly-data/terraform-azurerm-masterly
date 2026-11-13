@@ -9,9 +9,12 @@ released against — `scripts/check_release_manifest.py` fails the build if the 
 shape a program can rely on when it parses that manifest is
 [docs/release-manifest.md](docs/release-manifest.md).
 
-Write new entries under **Unreleased**. Cutting a release renames that heading to the version and
-adds the matching `MANIFEST.json` entry, in the same commit, which merges to `main` before the
-version is tagged; see "Cutting a release" in the [README](README.md#cutting-a-release).
+A change adds a fragment, `changelog.d/<short-name>.md` (see
+[changelog.d/README.md](changelog.d/README.md)), and leaves **Unreleased** empty. Cutting a release
+runs `scripts/fold_changelog.py X.Y.Z YYYY-MM-DD`, which folds the fragments into the version's
+section and deletes them, and adds the matching `MANIFEST.json` entry, in the same commit, which
+merges to `main` before the version is tagged; see "Cutting a release" in the
+[README](README.md#cutting-a-release).
 
 Releases before 0.15.0 predate this file. Their entries below were reconstructed after the fact
 from the git tag messages and the pull-request titles those tags carry, so they say what each
@@ -21,15 +24,6 @@ and the commits between it and its predecessor if you need that. They also have 
 inventing one now would be exactly the retyped-value failure the manifest exists to end.
 
 ## [Unreleased]
-
-### Changed
-
-- `MANIFEST.json` and its release check accept the per-role release images `migrate`,
-  `worker_core` and `worker_integration` beside `api` and `frontend`, as
-  `<registry>/release/<role>:<tag>` with `digests.<role>` (an addition within `schema_version` 1,
-  documented in `docs/release-manifest.md`). The check now refuses any other `images` key, a
-  per-role image with no `digests`, and an image value carrying `@sha256:`.
-- Internal refactor: the network, the environment, the identities and the auth boundary's secrets and locals move out of `main.tf` into `network.tf`, `environment.tf`, `identity.tf` and `auth.tf`. No input, output or resource address changes, so an install plans no change.
 
 ## [0.24.0] - 2026-11-10
 

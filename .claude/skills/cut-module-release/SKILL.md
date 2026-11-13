@@ -24,7 +24,10 @@ creates afterwards is release notes, not a release step.
 
 1. Follow the order in the README section "Cutting a release". The manifest, the changelog and the
    README move in **one commit, on `main`, before the tag**.
-2. Rename the `Unreleased` heading in `CHANGELOG.md` to the version and date. `ci.yml`'s `release`
+2. Run `python3 scripts/fold_changelog.py X.Y.Z YYYY-MM-DD`. It folds the fragments in `changelog.d/`
+   into the version's section below the empty `Unreleased` and deletes them in the same commit (on a
+   re-cut it merges into the existing section and sets its date). `check_release_manifest.py --tag`
+   refuses a tree that still has a fragment. `ci.yml`'s `release`
    job runs after the other jobs pass on a tag build and publishes that section as the GitHub Release
    body via `scripts/release_notes.py` (MAS-258); it fails on a missing or empty section, and a re-run
    rewrites the page rather than creating a second one. It runs after the registry has published, so
