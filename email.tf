@@ -5,7 +5,7 @@
 # — no manual entry; a per-Environment row under Notifications -> Integrations -> Email still
 # overrides them. Air-gapped installs leave this off and use SMTP.
 #
-# Kept in its own file (not main.tf / variables.tf / outputs.tf) so it composes cleanly — Terraform
+# Kept in its own file (not main.tf / variables-*.tf / outputs-*.tf) so it composes cleanly — Terraform
 # merges every *.tf in the module.
 
 variable "email_acs_enabled" {

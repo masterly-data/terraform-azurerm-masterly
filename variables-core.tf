@@ -145,6 +145,25 @@ variable "demo_environments" {
   }
 }
 
+variable "deployed_switches" {
+  type        = list(string)
+  default     = []
+  nullable    = false
+  description = "The deployment switches this install has deployed, by name, so the backend's module-activation check (run by config import and config pull) knows which optional capabilities exist here. \"assets\" is the install's Blob storage account, one container per Environment. \"media\" is the media worker pool and its libraries. \"extensions\" is the extension environment. \"replica\" is a Postgres read replica. This input only tells the backend which of these the install has deployed; it deploys nothing itself. Name only what is actually running: a module whose needs include an unlisted switch is refused at activation (422 MODULE_SWITCH_NOT_DEPLOYED), and naming a switch that is not running lets such a module activate and then fail. Written to ca-api, and to ca-workers with enable_workers, as MASTERLY_DEPLOYED_SWITCHES, comma-separated in the order given; read by api v0.136.0 and later, and ignored by an earlier image. Empty (the default) sets nothing, which the backend reads as no switch deployed, exactly as before this input existed. The backend refuses to start on a name it does not know, so only these four names are accepted and each may appear once."
+
+  # The backend's DEPLOYMENT_SWITCHES is this same list. Keep this list no wider than the
+  # backend's, so a name accepted here cannot stop ca-api from starting.
+  validation {
+    condition     = alltrue([for s in var.deployed_switches : contains(["assets", "media", "extensions", "replica"], s)])
+    error_message = "Every deployed_switches entry must be one of \"assets\", \"media\", \"extensions\" or \"replica\"; the backend refuses to start on any other name."
+  }
+
+  validation {
+    condition     = length(distinct(var.deployed_switches)) == length(var.deployed_switches)
+    error_message = "deployed_switches names a switch more than once. List each of \"assets\", \"media\", \"extensions\" and \"replica\" at most once."
+  }
+}
+
 variable "location_geo" {
   type        = string
   default     = null
@@ -155,55 +174,6 @@ variable "location_geo" {
     # is handed the null and throws. A conditional evaluates only the branch it takes.
     condition     = var.location_geo == null ? true : contains(["eu", "us"], var.location_geo)
     error_message = "location_geo must be \"eu\" or \"us\"."
-  }
-}
-
-variable "api_image" {
-  type        = string
-  default     = null
-  description = "Fully-qualified api image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing \".\" or \":\", or localhost, and the repository's last segment is api (e.g. masterly.azurecr.io/release/api). Null (the default) takes the api image MANIFEST.json records for release_channel, as <registry>/release/api@sha256:<digest> on the registry registry_location names. The licence claims-floor check reads the tag, or the digest when there is no tag or no release in MANIFEST.json records the tag; a reference whose tag and digest no release records passes unchecked. Seeds the app; CD owns the running tag thereafter."
-
-  validation {
-    condition     = var.api_image == null ? true : can(regex("^(?:[^\\s/@]*[.:][^\\s/@]*|localhost)(?:/[^\\s/:@]+)*/api(?::\\w[\\w.-]{0,127}(?:@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$", var.api_image))
-    error_message = "api_image must be registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest>, with the registry a host containing \".\" or \":\" (or \"localhost\"), the digest as 64 lowercase hex characters after \"sha256:\", and \"api\" as the repository's last segment (e.g. masterly.azurecr.io/release/api@sha256:<digest>)."
-  }
-}
-
-variable "frontend_image" {
-  type        = string
-  default     = null
-  description = "Fully-qualified frontend image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing \".\" or \":\", or localhost, and the repository's last segment is frontend (e.g. masterly.azurecr.io/release/frontend). Null (the default) takes the frontend image MANIFEST.json records for release_channel, as <registry>/release/frontend@sha256:<digest> on the registry registry_location names. Seeds the app; CD owns the running tag thereafter."
-
-  validation {
-    condition     = var.frontend_image == null ? true : can(regex("^(?:[^\\s/@]*[.:][^\\s/@]*|localhost)(?:/[^\\s/:@]+)*/frontend(?::\\w[\\w.-]{0,127}(?:@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$", var.frontend_image))
-    error_message = "frontend_image must be registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest>, with the registry a host containing \".\" or \":\" (or \"localhost\"), the digest as 64 lowercase hex characters after \"sha256:\", and \"frontend\" as the repository's last segment (e.g. masterly.azurecr.io/release/frontend@sha256:<digest>)."
-  }
-}
-
-variable "release_channel" {
-  type        = string
-  default     = "stable"
-  description = "Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. \"stable\" (the default) is the newest release, the image pair this module version was released against. \"previous\" is the newest older release with no known issue. The channel changes only the digest (or tag) of each image: the repository stays release/api and release/frontend on the registry that registry_location names. An image you set explicitly is used as given. Like api_image and frontend_image, the channel's references seed each app when it is created; CD owns the running image thereafter, so changing the channel on an existing install rolls nothing (terraform apply does not roll a running image). To roll a running install back, redeploy the previous image with az containerapp update --image, as the Upgrades section of the install documentation describes."
-
-  validation {
-    condition     = contains(["stable", "previous"], var.release_channel)
-    error_message = "release_channel must be \"stable\" or \"previous\". A Canary or Beta build is not in MANIFEST.json: set api_image and frontend_image to the references Masterly gives you instead."
-  }
-}
-
-variable "registry_location" {
-  type        = string
-  default     = null
-  description = "Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). Null (the default) is Masterly's registry, masterly.azurecr.io, when registry_credential_mode, a pull credential or acr_id is set; with none of them it renders no registry block on the apps, which then pull public images (the default image references still name masterly.azurecr.io/release/<role>). Replaces acr_login_server; set one of the two, not both. An empty string is refused: omit the input instead."
-
-  validation {
-    condition     = var.registry_location == null ? true : can(regex("^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+|localhost)(?::[0-9]{1,5})?$", var.registry_location))
-    error_message = "registry_location must be a lowercase registry host such as masterly.azurecr.io (a port is allowed), with no scheme, path or trailing slash. To pull public images with no registry block, omit it instead of setting \"\"."
-  }
-
-  validation {
-    condition     = var.registry_location == null || var.acr_login_server == null
-    error_message = "Set registry_location or the deprecated acr_login_server, not both. Move the value to registry_location and remove acr_login_server."
   }
 }
 
@@ -256,12 +226,6 @@ variable "registry_token" {
   }
 }
 
-variable "acr_login_server" {
-  type        = string
-  default     = null
-  description = "Deprecated: use registry_location. The registry the install pulls images from. Null (the default) defers to registry_location; an empty string renders no registry block on the apps (public images only), which registry_location expresses by being omitted."
-}
-
 variable "registry_username" {
   type        = string
   default     = null
@@ -271,13 +235,6 @@ variable "registry_username" {
     condition     = (var.registry_username == null) == (var.registry_password == null)
     error_message = "registry_username and registry_password must be set together (both from the install bundle) or both omitted."
   }
-}
-
-variable "registry_password" {
-  type        = string
-  default     = null
-  sensitive   = true
-  description = "Deprecated: use registry_token. The pull principal's client secret (ADR 0067), stored as the Container App secret registry-password on every app."
 }
 
 variable "acr_id" {
@@ -330,35 +287,6 @@ variable "identity_binding" {
   }
 }
 
-variable "oidc_tenant_id" {
-  type        = string
-  default     = null
-  description = "Your Microsoft Entra tenant (directory) id, when Entra is your identity provider. Set it and the three endpoints below default to that tenant's single-tenant v2.0 values: oidc_authority and oidc_allowed_issuers to https://login.microsoftonline.com/<tenant>/v2.0, oidc_jwks_uri to https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys. Any of the three you set yourself wins. Leave null for another identity provider, or for a multitenant Entra registration, and set the three explicitly."
-
-  validation {
-    condition     = var.oidc_tenant_id == null || can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.oidc_tenant_id))
-    error_message = "oidc_tenant_id must be a tenant id (a GUID such as 00000000-0000-0000-0000-000000000000), not a domain name. Find it as Directory (tenant) ID on the app registration's overview."
-  }
-}
-
-variable "oidc_allowed_issuers" {
-  type        = string
-  default     = null
-  description = "Comma-separated allowlist of acceptable token `iss` values — the trust boundary. Defaults from oidc_tenant_id when that is set. Entra v2.0: https://login.microsoftonline.com/{tenant_id}/v2.0. Normally ONE entry: this install's own issuer. Every entry is trusted install-wide, so do not add a customer tenant here to onboard them — register an org-scoped SSO connection in the product instead, which is bound to the Organizations that registered it."
-}
-
-variable "oidc_audience" {
-  type        = string
-  default     = null
-  description = "Audience the ID token must carry. Null (the default) uses oidc_client_id: the backend verifies the ID token the BFF obtained, whose audience is that same client id, so one app registration serves both. Set it only if your identity provider issues tokens for a different audience."
-}
-
-variable "oidc_jwks_uri" {
-  type        = string
-  default     = null
-  description = "The IdP's signing-key endpoint. Defaults from oidc_tenant_id when that is set. Entra multitenant: https://login.microsoftonline.com/organizations/discovery/v2.0/keys."
-}
-
 variable "oidc_client_id" {
   type        = string
   default     = null
@@ -372,93 +300,10 @@ variable "oidc_client_secret" {
   description = "OIDC client secret of the frontend BFF's confidential client. Used only server-side at token exchange; stored as a Container App secret."
 }
 
-variable "oidc_authority" {
-  type        = string
-  default     = null
-  description = "The IdP's discovery base for the BFF. Defaults from oidc_tenant_id when that is set. For example https://login.microsoftonline.com/organizations/v2.0 — /.well-known/openid-configuration is appended."
-}
-
-variable "oidc_redirect_uri" {
-  type        = string
-  default     = null
-  description = "The BFF callback the IdP redirects to: https://<frontend host>/api/auth/callback. With frontend_custom_domain set, leave it null: the module derives https://<hostname>/api/auth/callback, which you register at your IdP before the first apply, and a production install is one apply; a value set alongside the custom domain must name the same host, and the derived value is the one the frontend gets. Without a custom domain the frontend FQDN is an output of the first apply, so a production install is two applies, both with identity_binding=oidc: apply 1 carries a placeholder (e.g. https://redirect-not-yet-known.invalid/api/auth/callback — read only during sign-in, never at boot), then read frontend_url, register https://<frontend host>/api/auth/callback at your IdP, set it here and apply again. Do not bring production up on the dev identity binding and switch afterwards: that second apply changes identity and the production posture at once, on a running install. See examples/production."
-
-  # The redirect and the bound hostname cannot disagree: a callback to a host the install does
-  # not serve breaks sign-in, or sends the authorization code somewhere else. The whole authority
-  # is read: user information (anything before an @) is refused, since in
-  # https://<hostname>:443@other.example/ the host is other.example, not <hostname>.
-  validation {
-    condition = var.oidc_redirect_uri == null ? true : (
-      var.frontend_custom_domain == null ? true : (
-        !strcontains(try(regex("^https://([^/?#]*)", var.oidc_redirect_uri)[0], "@"), "@") &&
-        lower(replace(try(regex("^https://([^/?#]*)", var.oidc_redirect_uri)[0], ""), "/:[0-9]*$/", "")) == var.frontend_custom_domain.hostname
-      )
-    )
-    error_message = "oidc_redirect_uri must be an https:// URL on frontend_custom_domain.hostname, with no user information (@) in its authority, when both are set; leave oidc_redirect_uri null and the module derives https://<hostname>/api/auth/callback."
-  }
-}
-
 variable "oidc_scopes" {
   type        = string
   default     = null
   description = "Space-delimited OIDC scopes for the BFF. Null = the app default (\"openid profile email\")."
-}
-
-variable "builtin_auth" {
-  type = object({
-    tenant_id                = string
-    client_id                = string
-    api_allowed_applications = optional(list(string), [])
-    api_allowed_audiences    = optional(list(string), [])
-    frontend_excluded_paths  = optional(list(string), [])
-  })
-  default     = null
-  description = <<-EOT
-    Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on
-    ca-frontend only: a gate at the platform, in front of the application's own sign-in. Null
-    (the default) configures none, exactly as before this input existed. It is independent of
-    identity_binding: with identity_binding = "oidc" a browser signs in twice, once at the
-    platform (who may reach the frontend at all) and once in the application (which member, which
-    roles), and neither layer relies on the other.
-
-    - ca-frontend redirects an unauthenticated browser to Entra sign-in.
-    - ca-api is not gated. It is reached internally, by the frontend's server-side calls to
-      http://ca-api inside the Container Apps environment; the application authenticates its
-      callers as identity_binding sets. With api_ingress_external = true, ca-api is also
-      published to ingress_allowed_cidrs, without this gate, and a plan that sets both warns.
-
-    tenant_id: the Entra tenant users sign in from (the issuer is
-    https://login.microsoftonline.com/<tenant_id>/v2.0). client_id: the app registration the
-    platform signs users in with. Register https://<frontend host>/.auth/login/aad/callback as a
-    web redirect URI on it and enable ID token issuance; its client secret is
-    builtin_auth_client_secret. frontend_excluded_paths: paths on ca-frontend served without
-    sign-in; every path listed is reachable by anyone ingress_allowed_cidrs admits, so leave it
-    empty unless a page must be public.
-
-    api_allowed_applications and api_allowed_audiences are deprecated and ignored: they configured
-    a gate on ca-api in 0.19.0 and 0.19.1. A plan that sets either warns; remove them.
-  EOT
-
-  validation {
-    # A conditional, not `||`: Terraform before 1.12 evaluates both sides of `||`, and the
-    # right side reads attributes of a null object when the input is unset. The deprecated api
-    # entries are not checked: an ignored value cannot fail a plan.
-    condition = var.builtin_auth == null ? true : alltrue([
-      for id in [var.builtin_auth.tenant_id, var.builtin_auth.client_id] :
-      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))
-    ])
-    error_message = "builtin_auth.tenant_id and client_id must be UUIDs: the tenant's directory id and the registration's application (client) id, not an object id or a name."
-  }
-
-  validation {
-    condition     = var.builtin_auth == null ? true : alltrue([for p in var.builtin_auth.frontend_excluded_paths : startswith(p, "/")])
-    error_message = "builtin_auth.frontend_excluded_paths entries must be absolute paths starting with \"/\"."
-  }
-
-  validation {
-    condition     = var.builtin_auth == null || var.builtin_auth_client_secret != null
-    error_message = "builtin_auth requires builtin_auth_client_secret: the platform redeems the sign-in code with it."
-  }
 }
 
 variable "builtin_auth_client_secret" {
@@ -466,12 +311,6 @@ variable "builtin_auth_client_secret" {
   default     = null
   sensitive   = true
   description = "Client secret of builtin_auth.client_id's app registration. Stored as the Container App secret `microsoft-provider-authentication-secret` (a Key Vault reference with enable_key_vault), the name Azure itself gives it, on ca-frontend, whose built-in auth uses it, and on ca-api, which carried it while 0.19.0 and 0.19.1 gated the api and keeps it so that upgrading changes neither app. Rotate by adding a new secret on the registration, applying with it, then deleting the old one."
-}
-
-variable "breakglass_owner_email" {
-  type        = string
-  default     = null
-  description = "Break-glass local Owner (ADR 0024): IdP-independent emergency sign-in for an email that already holds the Owner role — recovery, not bootstrap (the endpoint answers 403 until that member exists). Armed only when both breakglass inputs are set; initial_owner_email remains the bootstrap. Null (the default) uses initial_owner_email once breakglass_secret_hash is set, which is the usual choice: that address becomes the first Owner, so it is the one break-glass can admit. Without a hash it stays unset, as before."
 }
 
 variable "breakglass_secret_hash" {
@@ -671,23 +510,6 @@ variable "external_database_admin_url" {
   validation {
     condition     = var.external_database_admin_url == null || var.migrations == "job"
     error_message = "external_database_admin_url is set but migrations is not \"job\". Only the migrate job reads external_database_admin_url, and it exists only with migrations = \"job\". Set migrations = \"job\", or leave external_database_admin_url unset."
-  }
-}
-
-variable "migrate_byo_database_secret_names" {
-  type        = set(string)
-  default     = []
-  nullable    = false
-  description = "Existing per-Environment BYO-DB connection secret names in this install's Key Vault that the migrate job may read. Default empty grants no runtime secret access. Add each sealed connection_ref's secret name and apply before provisioning; update this set when a connection gets a new secret name. Names only, never DSNs, URLs or install-* secrets. Requires migrations = \"job\"; grants Key Vault Secrets User at each secret, never at the vault."
-
-  validation {
-    condition     = length(var.migrate_byo_database_secret_names) == 0 || var.migrations == "job"
-    error_message = "migrate_byo_database_secret_names requires migrations = \"job\"; otherwise leave it empty."
-  }
-
-  validation {
-    condition     = alltrue([for name in var.migrate_byo_database_secret_names : can(regex("^[0-9A-Za-z-]{1,127}$", name)) && !can(regex("(?i)^install-", name))])
-    error_message = "migrate_byo_database_secret_names must contain only BYO-DB connection secret names (1-127 letters, digits or hyphens), never paths, URLs or reserved install-* secrets."
   }
 }
 
@@ -1013,44 +835,6 @@ variable "aca_internal_load_balancer" {
   description = "Give the Container App Environment an internal load balancer, so it has no public endpoint and its apps answer only inside the VNet — reached over VPN or ExpressRoute. THIS is the switch that makes an install private; frontend_ingress_external stays true. The environment's default domain must be resolvable privately (a private DNS zone for it, linked to the VNet); Azure does not do that for you."
 }
 
-variable "frontend_custom_domain" {
-  type = object({
-    hostname                        = string
-    certificate_key_vault_secret_id = string
-    key_vault_id                    = string
-  })
-  default     = null
-  description = "Serve ca-frontend on your own hostname, with your own TLS certificate held in your own Key Vault. Null (the default) binds no hostname and creates nothing, exactly as before this input existed. hostname: a bare lowercase FQDN such as masterly.example.com, with no scheme, port, path or wildcard. certificate_key_vault_secret_id: the certificate's secret id WITHOUT a version, https://<vault>.vault.azure.net/secrets/<certificate name>; the private key never leaves the vault and never enters Terraform, and because the reference names no version the environment picks up a renewed certificate in the vault without an apply. key_vault_id: the resource id of the vault that holds it, which must use Azure RBAC authorization and be reachable from the Container App Environment. The module creates a dedicated identity, id-<prefix>-frontend-cert, attached to the Container App Environment and to no app, and grants it Key Vault Secrets User on that one secret alone; the principal that applies must be allowed to create that role assignment on the vault (Owner, User Access Administrator or Role Based Access Control Administrator there). With identity_binding = \"oidc\" the redirect URI derives from the hostname, https://<hostname>/api/auth/callback, so oidc_redirect_uri can stay unset and a production install is one apply. The asuid.<hostname> TXT record (the custom_domain_verification_id, readable before the first apply) must exist before the apply that binds the hostname; docs/networking.md lists it, the A or CNAME record and when each can be created, and the Application Gateway settings."
-
-  # Conditionals, not `||`: before Terraform 1.12 both sides of `||` are evaluated, and the right
-  # side reads attributes of a null object when the input is unset (as builtin_auth).
-  validation {
-    condition = var.frontend_custom_domain == null ? true : (
-      can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", var.frontend_custom_domain.hostname)) &&
-      try(length(var.frontend_custom_domain.hostname) <= 253, false)
-    )
-    error_message = "frontend_custom_domain.hostname must be a bare lowercase fully qualified domain name such as masterly.example.com: no scheme, port, path, wildcard, IP address or uppercase letters, at least one dot, and labels of a-z, 0-9 and hyphens that neither start nor end with a hyphen, the last starting with a letter."
-  }
-
-  # Versionless, so the vault is where the certificate rotates. A versioned id would pin the
-  # environment to one certificate until someone re-applies, and it expires there.
-  validation {
-    condition     = var.frontend_custom_domain == null ? true : can(regex("^https://[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]\\.vault\\.(azure\\.net|azure\\.cn|usgovcloudapi\\.net)/secrets/[a-zA-Z0-9-]{1,127}$", var.frontend_custom_domain.certificate_key_vault_secret_id))
-    error_message = "frontend_custom_domain.certificate_key_vault_secret_id must be the certificate's versionless secret id, https://<vault>.vault.azure.net/secrets/<certificate name>: under /secrets/ (not /certificates/), with no version segment and no trailing slash, so a certificate renewed in the vault is picked up without an apply."
-  }
-
-  # The grant is made on key_vault_id, and the certificate is read from the vault the secret id
-  # names: refuse a pair that disagrees, rather than grant on one vault and read from another.
-  validation {
-    condition = var.frontend_custom_domain == null ? true : (
-      can(regex("^/subscriptions/[^/]+/resource[gG]roups/[^/]+/providers/Microsoft\\.KeyVault/vaults/[^/]+$", var.frontend_custom_domain.key_vault_id)) &&
-      lower(try(regex("^/subscriptions/[^/]+/resource[gG]roups/[^/]+/providers/Microsoft\\.KeyVault/vaults/([^/]+)$", var.frontend_custom_domain.key_vault_id)[0], "")) ==
-      lower(try(regex("^https://([^.]+)\\.", var.frontend_custom_domain.certificate_key_vault_secret_id)[0], "-"))
-    )
-    error_message = "frontend_custom_domain.key_vault_id must be the resource id of the vault that holds the certificate (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<name>), and <name> must be the vault certificate_key_vault_secret_id points at."
-  }
-}
-
 variable "vnet_address_space" {
   type        = list(string)
   default     = ["10.20.0.0/16"]
@@ -1118,39 +902,5 @@ variable "servicebus_private_dns_zone_id" {
   validation {
     condition     = var.servicebus_private_dns_zone_id == null || can(regex("(?i)/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.servicebus\\.windows\\.net$", var.servicebus_private_dns_zone_id))
     error_message = "servicebus_private_dns_zone_id must be the resource ID of a private DNS zone named privatelink.servicebus.windows.net. A zone of any other name does not resolve the namespace's hostname to its private endpoint, and the apps would fail to reach the bus."
-  }
-}
-
-# --- The install's Log Analytics workspace ---------------------------------------------
-# The workspace accepts Microsoft Entra ID only: its shared keys authenticate nothing, and it
-# takes no ingestion over the public network. The install's own logs and metrics reach it
-# through diagnostic settings, which deliver inside Azure Monitor and need neither. These inputs
-# choose who may query it from where, and how long it keeps what it holds.
-
-variable "log_query_public_access" {
-  type        = bool
-  default     = true
-  description = "Whether the install's Log Analytics workspace answers queries from the public network. True (the default) lets the Azure portal, the diagnostic bundle (scripts/diagnostic-bundle.sh) and your own tools query it from wherever they run. Every query is signed in with Microsoft Entra ID, because the workspace accepts no shared key: Log Analytics Reader on the workspace runs queries, which is what the diagnostic bundle needs, and Log Analytics Contributor also changes the workspace's settings. Set false to answer only queries that arrive through an Azure Monitor Private Link Scope (AMPLS). The module creates no AMPLS, because an AMPLS changes how every Azure Monitor endpoint resolves for the whole network that uses its private DNS zones, not only this workspace's, so it belongs to whoever owns that network. Before setting false: add the workspace to your AMPLS, give the AMPLS a private endpoint in a network your operators query from, with its privatelink DNS zones linked to that network, and run the diagnostic bundle from inside it. Ingestion over the public network is off whatever this says. The module does not place the workspace in a network security perimeter: an enforced perimeter decides which sources may send logs to the workspace and which may query it, including the diagnostic settings that deliver this install's logs, so its access rules have to be written for your whole estate, which only you can see. This setting, with an AMPLS you own, restricts queries without one. If you associate the workspace with a perimeter of your own, start it in transition mode and confirm the install's logs still arrive before you enforce it."
-}
-
-variable "log_retention_days" {
-  type        = number
-  default     = 30
-  description = "Days the install's Log Analytics workspace keeps what it holds, for every table except AZKVAuditLogs (which follows security_log_retention_days): the apps' console and system logs, the data-plane resources' logs and the metrics the diagnostic settings send (30-730). Azure bills retention beyond the first 31 days per GB per month. Lowering it removes data older than the new window."
-
-  validation {
-    condition     = var.log_retention_days >= 30 && var.log_retention_days <= 730
-    error_message = "log_retention_days must be between 30 and 730."
-  }
-}
-
-variable "security_log_retention_days" {
-  type        = number
-  default     = 90
-  description = "Days the install's Log Analytics workspace keeps the AZKVAuditLogs table, which holds the Key Vault audit events: every operation on the install's vault, successful or refused, with the identity that made it (30-730). It is set as the retention of that table alone, so the audit trail can be kept longer than the operational logs log_retention_days governs. The table exists in every workspace, so this is applied whether or not the install has a vault; it holds rows only when enable_key_vault and diagnostics (enable_diagnostics) are both on. Azure bills retention beyond the first 31 days per GB per month. Lowering it removes audit events older than the new window."
-
-  validation {
-    condition     = var.security_log_retention_days >= 30 && var.security_log_retention_days <= 730
-    error_message = "security_log_retention_days must be between 30 and 730."
   }
 }

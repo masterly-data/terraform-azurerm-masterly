@@ -9,21 +9,26 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-118 inputs in 19 groups.
+119 inputs in 24 groups.
 
 ## Groups
 
 - [Core](#core) (6)
-- [Install identity (ADR 0039)](#install-identity-adr-0039) (16)
-- [Identity (ADR 0024)](#identity-adr-0024) (14)
+- [Install identity (ADR 0039)](#install-identity-adr-0039) (11)
+- [Identity (ADR 0024)](#identity-adr-0024) (6)
 - [Rotating the session secret](#rotating-the-session-secret) (1)
 - [Telemetry to the Masterly control plane (ADR 0034/0056)](#telemetry-to-the-masterly-control-plane-adr-00340056) (5)
 - [Licence refresh (ADR 0074)](#licence-refresh-adr-0074) (1)
 - [Outbound egress posture](#outbound-egress-posture) (2)
 - [Trusting a private CA (MAS-446)](#trusting-a-private-ca-mas-446) (1)
-- [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (30)
+- [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (28)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
+- [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
+- [Built-in sign-in](#built-in-sign-in) (1)
+- [Custom domain](#custom-domain) (1)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
+- [Images and registry pull credential](#images-and-registry-pull-credential) (6)
+- [Key Vault database secret names](#key-vault-database-secret-names) (1)
 - [Diagnostics and alerts](#diagnostics-and-alerts) (12)
 - [Email](#email) (2)
 - [Database and Redis authentication](#database-and-redis-authentication) (2)
@@ -35,7 +40,7 @@ each one that is missing.
 
 ## Core
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -48,7 +53,7 @@ In `variables.tf`.
 
 ## Install identity (ADR 0039)
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -56,43 +61,30 @@ In `variables.tf`.
 | `install_id` | `string` | required | Stable slug identifying this Install within its Organization (ADR 0039), e.g. "prod" or "non-prod". |
 | `allowed_regions` | `list(string)` | `null` | Data-residency geos in which Environments may be created in this Install (ADR 0031/0039) — wired as MASTERLY_ALLOWED_REGIONS and enforced by the app at Environment creation. |
 | `demo_environments` | `list(string)` | `[]` | Extra Environments the demo-mode control plane seeds at start, by name, in this install's own geo (masterly_region), so an evaluation or demo install can declare the Environments it runs on. |
+| `deployed_switches` | `list(string)` | `[]` | The deployment switches this install has deployed, by name, so the backend's module-activation check (run by config import and config pull) knows which optional capabilities exist here. |
 | `location_geo` | `string` | `null` | The Masterly geo (eu \| us) whose data-residency commitment the Azure `location` satisfies. |
-| `api_image` | `string` | `null` | Fully-qualified api image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing "." or ":", or localhos... |
-| `frontend_image` | `string` | `null` | Fully-qualified frontend image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing "." or ":", or loc... |
-| `release_channel` | `string` | `"stable"` | Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. |
-| `registry_location` | `string` | `null` | Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). |
 | `registry_credential_mode` | `string` | `null` | How the apps authenticate to the registry. |
 | `registry_token` | `object(...), sensitive` | `null` | The registry pull credential from your install bundle (ADR 0067, option 1): username is the per-customer pull principal's appId and password its client secret. |
-| `acr_login_server` | `string` | `null` | Deprecated: use registry_location. |
 | `registry_username` | `string` | `null` | Deprecated: use registry_token. |
-| `registry_password` | `string, sensitive` | `null` | Deprecated: use registry_token. |
 | `acr_id` | `string` | `null` | Resource ID of the registry, for the AcrPull role assignments on the install's two app identities (backend apps + frontend) in the managed_identity and customer_registry modes; the token mode pulls with its credential... |
 | `ingress_allowed_cidrs` | `list(string)` | `[]` | CIDRs allowed to reach the frontend's public ingress. |
 
 ## Identity (ADR 0024)
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `identity_binding` | `string` | `"dev"` | Identity adapter the apps run (ADR 0024): `oidc` (customer IdP — production) or `dev` (evaluation; requires ingress_allowed_cidrs). |
-| `oidc_tenant_id` | `string` | `null` | Your Microsoft Entra tenant (directory) id, when Entra is your identity provider. |
-| `oidc_allowed_issuers` | `string` | `null` | Comma-separated allowlist of acceptable token `iss` values — the trust boundary. |
-| `oidc_audience` | `string` | `null` | Audience the ID token must carry. |
-| `oidc_jwks_uri` | `string` | `null` | The IdP's signing-key endpoint. |
 | `oidc_client_id` | `string` | `null` | OIDC client id of the frontend BFF's confidential client. |
 | `oidc_client_secret` | `string, sensitive` | `null` | OIDC client secret of the frontend BFF's confidential client. |
-| `oidc_authority` | `string` | `null` | The IdP's discovery base for the BFF. |
-| `oidc_redirect_uri` | `string` | `null` | The BFF callback the IdP redirects to: https://<frontend host>/api/auth/callback. |
 | `oidc_scopes` | `string` | `null` | Space-delimited OIDC scopes for the BFF. |
-| `builtin_auth` | `object(...)` | `null` | Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on ca-frontend only: a gate at the platform, in front of the application's own sign-in. |
 | `builtin_auth_client_secret` | `string, sensitive` | `null` | Client secret of builtin_auth.client_id's app registration. |
-| `breakglass_owner_email` | `string` | `null` | Break-glass local Owner (ADR 0024): IdP-independent emergency sign-in for an email that already holds the Owner role — recovery, not bootstrap (the endpoint answers 403 until that member exists). |
 | `breakglass_secret_hash` | `string, sensitive` | `null` | The break-glass secret in the stored form the api verifies (ADR 0024): a salted Argon2id value, never the secret itself. |
 
 ## Rotating the session secret
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -100,7 +92,7 @@ In `variables.tf`.
 
 ## Telemetry to the Masterly control plane (ADR 0034/0056)
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -112,7 +104,7 @@ In `variables.tf`.
 
 ## Licence refresh (ADR 0074)
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -120,7 +112,7 @@ In `variables.tf`.
 
 ## Outbound egress posture
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -129,7 +121,7 @@ In `variables.tf`.
 
 ## Trusting a private CA (MAS-446)
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -137,13 +129,12 @@ In `variables.tf`.
 
 ## Data plane seam (ADR 0065)
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `external_database_url` | `string, sensitive` | `null` | BYO-DB: the install-level SQLAlchemy async DSN (postgresql+asyncpg://…) of the customer's own Postgres (role needs CREATEDB — the api creates one database per Masterly Environment, ADR 0003). |
 | `external_database_admin_url` | `string, sensitive` | `null` | BYO-DB only: a second DSN to the same database, for a role allowed to run schema migrations and create databases (ADR 0065, amended). |
-| `migrate_byo_database_secret_names` | `set(string)` | `[]` | Existing per-Environment BYO-DB connection secret names in this install's Key Vault that the migrate job may read. |
 | `postgres_sku_name` | `string` | `"B_Standard_B1ms"` | Postgres Flexible Server SKU (burstable B1ms default — demo/small-install sized). |
 | `postgres_server_parameters` | `map(string)` | `{}` | Postgres server parameters to set on the starter Flexible Server, as name => value (for example { max_connections = "400" }). |
 | `postgres_pgbouncer` | `bool` | `false` | Turn on the Flexible Server's built-in PgBouncer in transaction mode (ADR 0003). |
@@ -167,14 +158,13 @@ In `variables.tf`.
 | `public_api_url` | `string` | `null` | The api's public base URL, as an absolute https:// URL with no query string, fragment or credentials — the api Container App's external FQDN ("https://ca-api.<environment default domain>") or your own domain in front... |
 | `frontend_ingress_external` | `bool` | `true` | Whether the frontend has ingress beyond the Container App Environment itself. |
 | `aca_internal_load_balancer` | `bool` | `false` | Give the Container App Environment an internal load balancer, so it has no public endpoint and its apps answer only inside the VNet — reached over VPN or ExpressRoute. |
-| `frontend_custom_domain` | `object(...)` | `null` | Serve ca-frontend on your own hostname, with your own TLS certificate held in your own Key Vault. |
 | `vnet_address_space` | `list(string)` | `["10.20.0.0/16"]` | Address space of the install's VNet. |
 | `aca_subnet_prefix` | `string` | `null` | Explicit CIDR of the ACA runtime subnet (must be /23 or larger and inside vnet_address_space). |
 | `private_endpoints_subnet_prefix` | `string` | `null` | Explicit CIDR of the private-endpoints subnet (inside vnet_address_space, clear of the runtime subnet). |
 
 ## Async bus (ADR 0029)
 
-In `variables.tf`.
+In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -182,15 +172,66 @@ In `variables.tf`.
 | `servicebus_sku` | `string` | `null` | Service Bus namespace SKU: Basic, Standard or Premium. |
 | `servicebus_private_dns_zone_id` | `string` | `null` | Resource ID of an existing privatelink.servicebus.windows.net private DNS zone (hub-and-spoke landing zones that centralize private DNS and deny zone creation in spokes). |
 
+## OIDC sign-in and break-glass
+
+In `variables-auth.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `oidc_tenant_id` | `string` | `null` | Your Microsoft Entra tenant (directory) id, when Entra is your identity provider. |
+| `oidc_allowed_issuers` | `string` | `null` | Comma-separated allowlist of acceptable token `iss` values — the trust boundary. |
+| `oidc_audience` | `string` | `null` | Audience the ID token must carry. |
+| `oidc_jwks_uri` | `string` | `null` | The IdP's signing-key endpoint. |
+| `oidc_authority` | `string` | `null` | The IdP's discovery base for the BFF. |
+| `oidc_redirect_uri` | `string` | `null` | The BFF callback the IdP redirects to: https://<frontend host>/api/auth/callback. |
+| `breakglass_owner_email` | `string` | `null` | Break-glass local Owner (ADR 0024): IdP-independent emergency sign-in for an email that already holds the Owner role — recovery, not bootstrap (the endpoint answers 403 until that member exists). |
+
+## Built-in sign-in
+
+In `variables-builtin-auth.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `builtin_auth` | `object(...)` | `null` | Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on ca-frontend only: a gate at the platform, in front of the application's own sign-in. |
+
+## Custom domain
+
+In `variables-custom-domain.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `frontend_custom_domain` | `object(...)` | `null` | Serve ca-frontend on your own hostname, with your own TLS certificate held in your own Key Vault. |
+
 ## The install's Log Analytics workspace
 
-In `variables.tf`.
+In `variables-environment.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `log_query_public_access` | `bool` | `true` | Whether the install's Log Analytics workspace answers queries from the public network. |
 | `log_retention_days` | `number` | `30` | Days the install's Log Analytics workspace keeps what it holds, for every table except AZKVAuditLogs (which follows security_log_retention_days): the apps' console and system logs, the data-plane resources' logs and t... |
 | `security_log_retention_days` | `number` | `90` | Days the install's Log Analytics workspace keeps the AZKVAuditLogs table, which holds the Key Vault audit events: every operation on the install's vault, successful or refused, with the identity that made it (30-730). |
+
+## Images and registry pull credential
+
+In `variables-identity.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `api_image` | `string` | `null` | Fully-qualified api image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing "." or ":", or localhos... |
+| `frontend_image` | `string` | `null` | Fully-qualified frontend image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing "." or ":", or loc... |
+| `release_channel` | `string` | `"stable"` | Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. |
+| `registry_location` | `string` | `null` | Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). |
+| `acr_login_server` | `string` | `null` | Deprecated: use registry_location. |
+| `registry_password` | `string, sensitive` | `null` | Deprecated: use registry_token. |
+
+## Key Vault database secret names
+
+In `variables-keyvault.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `migrate_byo_database_secret_names` | `set(string)` | `[]` | Existing per-Environment BYO-DB connection secret names in this install's Key Vault that the migrate job may read. |
 
 ## Diagnostics and alerts
 

@@ -68,6 +68,31 @@ digits and hyphens, and is at most 40 characters. A name listed twice, a fixture
 `mode = "production"` are refused at plan: a production install creates its Environments in the
 product, where they persist in the control-plane store.
 
+### Deployment switches
+
+The backend reads `MASTERLY_DEPLOYED_SWITCHES`, a comma list over `assets`, `media`,
+`extensions` and `replica`, to know which optional capabilities this install has deployed. Declare
+them in `deployed_switches` so the value survives the next apply instead of being removed:
+
+```hcl
+deployed_switches = ["assets", "replica"]
+```
+
+- `assets`: the install's Blob storage account, one container per Environment.
+- `media`: the media worker pool and its libraries.
+- `extensions`: the extension environment.
+- `replica`: a Postgres read replica.
+
+The module puts them on `ca-api`, and on `ca-workers` with `enable_workers`, comma-separated in
+the order given. api `v0.136.0` and later read it; an earlier image ignores it. Empty (the
+default) means no switch is deployed, and no app gets the variable. The input only tells the
+backend which of these the install has deployed; it deploys nothing itself. Name only what is
+actually running: a module whose needs include an unlisted switch is refused at activation (422
+`MODULE_SWITCH_NOT_DEPLOYED`), and naming a switch that is not running lets such a module activate
+and then fail. The backend refuses to start on a name it
+does not know, so a name outside the four, and a name listed twice, are refused at plan. The
+frontend never carries it.
+
 ### Authentication to the starter server and Redis
 
 The apps authenticate to the starter Postgres server and to Redis in one of two ways, chosen

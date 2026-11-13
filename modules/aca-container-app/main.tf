@@ -158,7 +158,7 @@ resource "azurerm_container_app" "this" {
         # CA trust store goes into the file first, then the secret's content is appended, so the
         # result trusts both the publicly-trusted roots the image already ships and whatever the
         # secret adds, rather than the secret's content replacing the image's trust store
-        # outright. This is what keeps ca_bundle_pem (see variables.tf, root) from being a
+        # outright. This is what keeps ca_bundle_pem (see variables-core.tf, root) from being a
         # foot-gun: without it, setting ca_bundle_pem to an internal CA would make every OTHER
         # outbound TLS call the install makes -- telemetry, licence refresh, ACS email --
         # start failing certificate verification the moment the apply landed, because

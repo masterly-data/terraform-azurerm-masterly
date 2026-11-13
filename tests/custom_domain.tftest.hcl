@@ -5,7 +5,7 @@
 # Applies, in their own file, for the reason workers_identity.tftest.hcl gives: the identity's ids,
 # the certificate's id and the apps' ids are computed, so at plan they are unknown on Terraform
 # 1.10. Every identity is overridden with a distinct principal, so a grant to the wrong one fails.
-# The guards and the derived redirect are plan runs in install.tftest.hcl.
+# The guards and the derived redirect are plan runs in frontend_custom_domain.tftest.hcl.
 
 mock_provider "azurerm" {
   source = "./tests/mocks/migrate"

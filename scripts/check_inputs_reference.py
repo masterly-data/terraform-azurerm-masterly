@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """Generate, and check, docs/inputs.md: every input of the module, grouped by subsystem.
 
-The module's 100-odd inputs live in several files: variables.tf, in sections headed
-`# --- <title> ---`, and one file per optional subsystem (keyvault.tf, redis.tf, ...). The
-Terraform Registry lists them alphabetically, which is no help in finding what a subsystem
-needs. This script writes them as one page, grouped the way the code is:
+The module's 100-odd inputs live in several files: variables-<concern>.tf (variables-core.tf
+and one per concern file such as network.tf), in sections headed `# --- <title> ---`, and one
+file per optional subsystem (keyvault.tf, redis.tf, ...). The Terraform Registry lists them
+alphabetically, which is no help in finding what a subsystem needs. This script writes them as
+one page, grouped the way the code is:
 
-  variables.tf  inputs before the first section header under "Core", then one group per header
-  <file>.tf     one group per file, titled from FILE_TITLES below
+  variables-*.tf  inputs before the first section header under the file's title, then one group
+                  per header; variables-core.tf first
+  <file>.tf       one group per file, titled from FILE_TITLES below
 
 Each row gives the input, its type (marked sensitive where it is), its default (or "required"),
 and the first sentence of its description. The description stays the source of truth.
 
   --write      rewrite docs/inputs.md
   (no flag)    fail when docs/inputs.md differs from what --write would produce, or when a
-               root .tf file declares inputs and has no title in FILE_TITLES,
-               or when a README.md table row whose first cell is a backticked declared input
+               root variables-*.tf or other .tf file declares inputs and has no title in
+               FILE_TITLES, when two groups share a title, or when a README.md table row's
+               first cell is a backticked declared input
   --selftest   prove the check can fail
 
 Standard library only, like the other release scripts.
@@ -32,8 +35,16 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = Path("docs/inputs.md")
 
 # A root .tf file that declares inputs needs a title here; the check refuses one that has none,
-# so a new subsystem cannot land without a place on the page.
+# so a new subsystem cannot land without a place on the page. For a variables-<concern>.tf file
+# the title heads the inputs before its first `# --- <title> ---` header.
 FILE_TITLES = {
+    "variables-core.tf": "Core",
+    "variables-auth.tf": "OIDC sign-in and break-glass",
+    "variables-builtin-auth.tf": "Built-in sign-in",
+    "variables-custom-domain.tf": "Custom domain",
+    "variables-environment.tf": "Container App Environment",
+    "variables-identity.tf": "Images and registry pull credential",
+    "variables-keyvault.tf": "Key Vault database secret names",
     "keyvault.tf": "Key Vault",
     "redis.tf": "Redis",
     "workers.tf": "Workers",
@@ -105,13 +116,19 @@ def describe(name: str, body: str) -> dict:
 def collect(root: Path) -> tuple[list[tuple[str, str, list[dict]]], list[str]]:
     groups: list[tuple[str, str, list[dict]]] = []
     problems: list[str] = []
-    vt = root / "variables.tf"
-    if vt.is_file():
-        # Walk variables.tf in order, switching group at each section header.
-        title = "Core"
+    # variables-core.tf leads the page; the other variables-<concern>.tf files follow in name order.
+    var_files = sorted(root.glob("variables-*.tf"), key=lambda f: (f.name != "variables-core.tf", f.name))
+    for vf in var_files:
+        if vf.name not in FILE_TITLES:
+            problems.append(
+                f"{vf.name} has no title in FILE_TITLES in scripts/check_inputs_reference.py"
+            )
+            continue
+        # Walk the file in order, switching group at each section header.
+        title = FILE_TITLES[vf.name]
         buf: list[str] = []
         sections: list[tuple[str, str]] = []
-        for line in vt.read_text().split("\n"):
+        for line in vf.read_text().split("\n"):
             m = SECTION_RE.match(line)
             if m:
                 sections.append((title, "\n".join(buf)))
@@ -122,9 +139,9 @@ def collect(root: Path) -> tuple[list[tuple[str, str, list[dict]]], list[str]]:
         for title, text in sections:
             rows = [describe(m.group("n"), m.group("b")) for m in VAR_RE.finditer(text)]
             if rows:
-                groups.append((title, "variables.tf", rows))
+                groups.append((title, vf.name, rows))
     for f in sorted(root.glob("*.tf")):
-        if f.name == "variables.tf":
+        if f.name.startswith("variables-"):
             continue
         rows = [describe(m.group("n"), m.group("b")) for m in VAR_RE.finditer(f.read_text())]
         if not rows:
@@ -136,6 +153,11 @@ def collect(root: Path) -> tuple[list[tuple[str, str, list[dict]]], list[str]]:
             )
             continue
         groups.append((FILE_TITLES[f.name], f.name, rows))
+    seen: set[str] = set()
+    for title, fname, _ in groups:
+        if title in seen:
+            problems.append(f"two groups are titled {title!r} (the second is in {fname}): the page needs distinct titles")
+        seen.add(title)
     return groups, problems
 
 
@@ -195,12 +217,19 @@ def readme_input_rows(root: Path, names: set[str]) -> list[str]:
 def selftest() -> int:
     failures = []
     d = Path(tempfile.mkdtemp())
-    (d / "variables.tf").write_text(
+    (d / "variables-core.tf").write_text(
         'variable "mode" {\n  type        = string\n  default     = "demo"\n'
         '  description = "The posture. More text follows."\n}\n\n'
         "# --- Identity (ADR 0024) ------------------------------\n\n"
         'variable "oidc_client_id" {\n  type        = string\n'
         '  description = "Client id, e.g. a GUID. Second."\n}\n'
+    )
+    (d / "variables-auth.tf").write_text(
+        'variable "oidc_audience" {\n  type        = string\n'
+        '  description = "The audience. Third."\n}\n\n'
+        "# --- Break-glass ----------------------------------------\n\n"
+        'variable "breakglass_owner_email" {\n  type        = string\n'
+        '  description = "The owner. Fourth."\n}\n'
     )
     (d / "redis.tf").write_text(
         'variable "enable_redis" {\n  type        = bool\n  default     = false\n'
@@ -216,16 +245,24 @@ def selftest() -> int:
     expect("fresh page", run(d, False), True)
     page = (d / OUT).read_text()
     for want in ("## Core", "## Identity (ADR 0024)", "## Redis", "| `oidc_client_id` | `string` | required | Client id, e.g. a GUID. |",
-                 "`bool, sensitive`", "Turn it on."):
+                 "`bool, sensitive`", "Turn it on.", "## OIDC sign-in and break-glass", "## Break-glass",
+                 "In `variables-auth.tf`.", "| `oidc_audience` | `string` | required | The audience. |",
+                 "5 inputs in 5 groups"):
         if want not in page:
             failures.append(f"page lacks {want!r}")
-    (d / "variables.tf").write_text((d / "variables.tf").read_text().replace("The posture.", "The stance."))
+    if page.index("## Core") > page.index("## OIDC sign-in and break-glass"):
+        failures.append("variables-core.tf does not lead the page")
+    (d / "variables-core.tf").write_text((d / "variables-core.tf").read_text().replace("The posture.", "The stance."))
     expect("stale page", run(d, False), False)
     run(d, True)
     (d / "newthing.tf").write_text('variable "x" {\n  type = string\n  description = "X."\n}\n')
     expect("untitled file", run(d, False), False)
     (d / "newthing.tf").unlink()
     run(d, True)
+    expect("clean again", run(d, False), True)
+    (d / "variables-newthing.tf").write_text('variable "y" {\n  type = string\n  description = "Y."\n}\n')
+    expect("untitled variables file", run(d, False), False)
+    (d / "variables-newthing.tf").unlink()
     (d / "README.md").write_text("# Module\n\n| `mode = \"production\"` | x |\n| `other` | not an input |\n")
     expect("readme without an input row", run(d, False), True)
     (d / "README.md").write_text("# Module\n\n| Input | What |\n|---|---|\n| `enable_redis` | Turns Redis on |\n")

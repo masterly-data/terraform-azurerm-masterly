@@ -1,7 +1,7 @@
 # The release channel's choice of the default images, against a synthetic release manifest — no
 # provider, no cloud access.
 #
-# The runs in install.tftest.hcl prove the root module resolves "stable" and "previous" against its
+# The runs in registry.tftest.hcl prove the root module resolves "stable" and "previous" against its
 # real MANIFEST.json, and that only the digest differs between them. These prove what the shipped
 # manifest never reaches: a release that records no digests, so its reference is pinned by the tag
 # of the image it names; a channel that resolves to no release, which refuses the plan unless both
