@@ -623,7 +623,7 @@ Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143
   billed by its evaluation frequency. The new input `enable_app_availability_diagnostics` turns
   both off (`false`), or on outside production (`true`, which needs `enable_diagnostics = true`).
   The rule is created only for an app whose `min_replicas` is 1 or more. See
-  [App availability diagnostics](docs/diagnostics.md#app-availability-diagnostics) (ADR 0080, amendment of
+  [App availability diagnostics](README.md#app-availability-diagnostics) (ADR 0080, amendment of
   2026-10-07; MAS-372).
 
 - Container Apps sizing and scaling inputs (MAS-1296). An install that sets none of them plans no
@@ -686,7 +686,7 @@ Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143
     from 30 to 90 days, which Azure bills per GB per month beyond the first 31.
 
   A value outside 30-730 is refused at plan. See
-  [The Log Analytics workspace](docs/diagnostics.md#the-log-analytics-workspace) for the roles that query
+  [The Log Analytics workspace](README.md#the-log-analytics-workspace) for the roles that query
   the workspace, how to set up an AMPLS, and why the workspace is not placed in a network
   security perimeter.
 
