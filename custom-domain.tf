@@ -15,7 +15,7 @@ locals {
   frontend_custom_domain   = var.frontend_custom_domain != null
   frontend_custom_hostname = local.frontend_custom_domain ? var.frontend_custom_domain.hostname : null
 
-  # The certificate's secret name, the last segment of the versionless id (variables.tf has
+  # The certificate's secret name, the last segment of the versionless id (variables-custom-domain.tf has
   # checked its shape), for the role assignment's scope.
   frontend_certificate_secret_name = local.frontend_custom_domain ? element(split("/", var.frontend_custom_domain.certificate_key_vault_secret_id), 4) : null
 }
