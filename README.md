@@ -609,10 +609,18 @@ them in `deployed_switches` so the value survives the next apply instead of bein
 deployed_switches = ["assets", "replica"]
 ```
 
+- `assets`: the install's Blob storage account, one container per Environment.
+- `media`: the media worker pool and its libraries.
+- `extensions`: the extension environment.
+- `replica`: a Postgres read replica.
+
 The module puts them on `ca-api`, and on `ca-workers` with `enable_workers`, comma-separated in
 the order given. api `v0.136.0` and later read it; an earlier image ignores it. Empty (the
-default) means no switch is deployed, and no app gets the variable. The input states that a
-switch's infrastructure is there; it does not create it. The backend refuses to start on a name it
+default) means no switch is deployed, and no app gets the variable. The input only tells the
+backend which of these the install has deployed; it deploys nothing itself. Name only what is
+actually running: a module whose needs include an unlisted switch is refused at activation (422
+`MODULE_SWITCH_NOT_DEPLOYED`), and naming a switch that is not running lets such a module activate
+and then fail. The backend refuses to start on a name it
 does not know, so a name outside the four, and a name listed twice, are refused at plan. The
 frontend never carries it.
 

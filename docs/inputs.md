@@ -61,7 +61,7 @@ In `variables-core.tf`.
 | `install_id` | `string` | required | Stable slug identifying this Install within its Organization (ADR 0039), e.g. "prod" or "non-prod". |
 | `allowed_regions` | `list(string)` | `null` | Data-residency geos in which Environments may be created in this Install (ADR 0031/0039) — wired as MASTERLY_ALLOWED_REGIONS and enforced by the app at Environment creation. |
 | `demo_environments` | `list(string)` | `[]` | Extra Environments the demo-mode control plane seeds at start, by name, in this install's own geo (masterly_region), so an evaluation or demo install can declare the Environments it runs on. |
-| `deployed_switches` | `list(string)` | `[]` | The deployment switches this install has deployed, by name, so the backend's module-activation check (run by config import and config pull) knows which optional capabilities exist here: "assets", "media", "extensions"... |
+| `deployed_switches` | `list(string)` | `[]` | The deployment switches this install has deployed, by name, so the backend's module-activation check (run by config import and config pull) knows which optional capabilities exist here. |
 | `location_geo` | `string` | `null` | The Masterly geo (eu \| us) whose data-residency commitment the Azure `location` satisfies. |
 | `registry_credential_mode` | `string` | `null` | How the apps authenticate to the registry. |
 | `registry_token` | `object(...), sensitive` | `null` | The registry pull credential from your install bundle (ADR 0067, option 1): username is the per-customer pull principal's appId and password its client secret. |
