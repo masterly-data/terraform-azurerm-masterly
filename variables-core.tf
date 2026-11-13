@@ -145,6 +145,25 @@ variable "demo_environments" {
   }
 }
 
+variable "deployed_switches" {
+  type        = list(string)
+  default     = []
+  nullable    = false
+  description = "The deployment switches this install has deployed, by name, so the backend's module-activation check (run by config import and config pull) knows which optional capabilities exist here: \"assets\" (asset storage), \"media\" (media handling), \"extensions\" (extension hosting) and \"replica\" (a read replica). Declaring a switch does not create its infrastructure; it states that the infrastructure is there. Written to ca-api, and to ca-workers with enable_workers, as MASTERLY_DEPLOYED_SWITCHES, comma-separated in the order given; read by api v0.136.0 and later, and ignored by an earlier image. Empty (the default) sets nothing, which the backend reads as no switch deployed, exactly as before this input existed. The backend refuses to start on a name it does not know, so only these four names are accepted and each may appear once."
+
+  # The backend's DEPLOYMENT_SWITCHES is this same list. Keep this list no wider than the
+  # backend's, so a name accepted here cannot stop ca-api from starting.
+  validation {
+    condition     = alltrue([for s in var.deployed_switches : contains(["assets", "media", "extensions", "replica"], s)])
+    error_message = "Every deployed_switches entry must be one of \"assets\", \"media\", \"extensions\" or \"replica\"; the backend refuses to start on any other name."
+  }
+
+  validation {
+    condition     = length(distinct(var.deployed_switches)) == length(var.deployed_switches)
+    error_message = "deployed_switches names a switch more than once. List each of \"assets\", \"media\", \"extensions\" and \"replica\" at most once."
+  }
+}
+
 variable "location_geo" {
   type        = string
   default     = null

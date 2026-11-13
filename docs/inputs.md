@@ -9,12 +9,12 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-118 inputs in 24 groups.
+119 inputs in 24 groups.
 
 ## Groups
 
 - [Core](#core) (6)
-- [Install identity (ADR 0039)](#install-identity-adr-0039) (10)
+- [Install identity (ADR 0039)](#install-identity-adr-0039) (11)
 - [Identity (ADR 0024)](#identity-adr-0024) (6)
 - [Rotating the session secret](#rotating-the-session-secret) (1)
 - [Telemetry to the Masterly control plane (ADR 0034/0056)](#telemetry-to-the-masterly-control-plane-adr-00340056) (5)
@@ -61,6 +61,7 @@ In `variables-core.tf`.
 | `install_id` | `string` | required | Stable slug identifying this Install within its Organization (ADR 0039), e.g. "prod" or "non-prod". |
 | `allowed_regions` | `list(string)` | `null` | Data-residency geos in which Environments may be created in this Install (ADR 0031/0039) — wired as MASTERLY_ALLOWED_REGIONS and enforced by the app at Environment creation. |
 | `demo_environments` | `list(string)` | `[]` | Extra Environments the demo-mode control plane seeds at start, by name, in this install's own geo (masterly_region), so an evaluation or demo install can declare the Environments it runs on. |
+| `deployed_switches` | `list(string)` | `[]` | The deployment switches this install has deployed, by name, so the backend's module-activation check (run by config import and config pull) knows which optional capabilities exist here: "assets" (asset storage), "medi... |
 | `location_geo` | `string` | `null` | The Masterly geo (eu \| us) whose data-residency commitment the Azure `location` satisfies. |
 | `registry_credential_mode` | `string` | `null` | How the apps authenticate to the registry. |
 | `registry_token` | `object(...), sensitive` | `null` | The registry pull credential from your install bundle (ADR 0067, option 1): username is the per-customer pull principal's appId and password its client secret. |
