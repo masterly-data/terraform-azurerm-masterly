@@ -27,7 +27,8 @@ output description is customer documentation.
 5. **Declare an output** in `outputs.tf` with a customer-facing `description` (what the value is, and
    when it is null). An output that carries a secret is `sensitive = true`. Removing or renaming an
    output breaks every configuration that reads it, as a variable change does.
-6. **Add a `run` block** to `tests/install.tftest.hcl` for each guard, conditional resource
+6. **Add a `run` block** to the concern's `tests/<concern>.tftest.hcl` (the file named for the
+   module file the guard or resource lives in) for each guard, conditional resource
    (`count`/`for_each`) and derived value: a run that passes and an `expect_failures` run for each
    guard. The existing runs cover the variable guards, the residency preconditions, both data-plane
    branches and the optional subsystems; a condition with no run block is a branch nothing exercises.

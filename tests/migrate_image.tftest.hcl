@@ -4,8 +4,8 @@
 # access; runs in CI via `terraform test`).
 #
 # Two applies, because only state shows an ignored change: the second changes api_image and the
-# job keeps the first. It is a separate file so that the applies do not become state the runs of
-# install.tftest.hcl plan against.
+# job keeps the first. It is a separate file so that the applies do not become state the
+# per-concern plan files plan against.
 
 mock_provider "azurerm" {
   source = "./tests/mocks/migrate"
