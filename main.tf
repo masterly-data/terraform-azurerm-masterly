@@ -943,6 +943,8 @@ locals {
     # api and the workers only check the schema stamps. Unset otherwise: the image's own default,
     # migrating at start, as before.
     local.migrate_job ? { MASTERLY_MIGRATIONS = "job" } : {},
+    # The deployment switches this install has deployed, in the order given; unset when empty.
+    length(var.deployed_switches) > 0 ? { MASTERLY_DEPLOYED_SWITCHES = join(",", var.deployed_switches) } : {},
   )
 
   # ca-workers reads the api's env contract (workers.tf). Where it runs as its own identity
