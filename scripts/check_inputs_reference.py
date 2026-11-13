@@ -14,8 +14,8 @@ and the first sentence of its description. The description stays the source of t
 
   --write      rewrite docs/inputs.md
   (no flag)    fail when docs/inputs.md differs from what --write would produce, or when a
-               root .tf file declares inputs and has no title in FILE_TITLES
-               a README.md table row whose first cell is a backticked declared input
+               root .tf file declares inputs and has no title in FILE_TITLES,
+               or when a README.md table row whose first cell is a backticked declared input
   --selftest   prove the check can fail
 
 Standard library only, like the other release scripts.

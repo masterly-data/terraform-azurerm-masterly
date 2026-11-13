@@ -96,4 +96,4 @@ The first apply creates roughly 40 resources. Three worth checking before you ap
   yourself. Upgrading an install
   that already exists? Its plan stops until you set `database_auth` and `redis_auth`; see
   "Moving an existing install to Microsoft Entra authentication" in the
-  [module README](../../docs/data-plane.md#moving-an-existing-install-to-microsoft-entra-authentication).
+  [data plane docs](../../docs/data-plane.md#moving-an-existing-install-to-microsoft-entra-authentication).

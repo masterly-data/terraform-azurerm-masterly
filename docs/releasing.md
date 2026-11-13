@@ -153,10 +153,10 @@ applied from the candidate:
    on `"start"` with `database_auth = "entra"` shows no identity, grant or env change.
 
 **Removing the apps' Postgres Entra administrator** (MAS-4061; in 0.24.0 in the
-[changelog](../CHANGELOG.md)). The changelog and the README's "The migrate job" promised this was
+[changelog](../CHANGELOG.md)). The changelog and "The migrate job" in docs/data-plane.md promised this was
 confirmed before 0.24.0 was released; it was never listed here, and it was not done. On a live
 install on `database_auth = "entra"` with `migrations = "job"`, upgraded from 0.23.x in the order
-the README gives, and separately on one moving from `"start"` straight to `"job"`:
+that section gives, and separately on one moving from `"start"` straight to `"job"`:
 
 1. **The plan removes only what the changelog names.** The administrator, `sb_receiver` and
    `sb_scaler` are destroyed, and nothing is replaced.

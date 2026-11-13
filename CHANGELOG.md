@@ -310,7 +310,7 @@ Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143
   run and does not change it. On an existing `database_auth = "entra"` install the database
   objects are owned by `id-<prefix>-apps`; a second Entra administrator is not a superuser, so the
   image's migrate role must take ownership or membership of them before its first migration. See
-  "The migrate job" in the [README](docs/data-plane.md#the-migrate-job).
+  "The migrate job" in the [data plane docs](docs/data-plane.md#the-migrate-job).
 
 - **With `migrations = "job"` on the starter server, the migrate job creates DML-only database
   roles for `ca-api` and `ca-workers` (ADR 0120 §6).** A minor release under ADR 0062: new
