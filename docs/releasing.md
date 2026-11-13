@@ -66,7 +66,7 @@ on, planned and applied from the candidate:
 2. **Data Owner at queue scope is enough.** A queue backlog scales `ca-workers` above
    `workers_min_replicas` and back down once the queue drains, with the role granted on the jobs
    queue only. If the scaler cannot read the message count at that scope, the fallback is the
-   namespace, and the README, the changelog and the comment on the role assignment in
+   namespace, and docs/scaling.md, the changelog and the comment on the role assignment in
    `workers.tf` change with it.
 3. **The scaler reaches a private Premium namespace.** The same, on a Premium namespace with
    public network access disabled, which is the production shape. This is the largest open risk:
@@ -83,7 +83,7 @@ updated in place and the queue role assignment was added; item 2 in part — Azu
 role-assignment allow-list extended first). Not yet observed: the scaler scaling on a backlog,
 items 3 and 4.
 
-Afterwards, replace the "Not yet proven on a live install" paragraph in the README's
+Afterwards, replace the "Not yet proven on a live install" paragraph in docs/scaling.md's
 "How `ca-workers` scales" and the matching sentence in the changelog entry with what the run
 showed.
 
@@ -100,7 +100,7 @@ by the module-managed secret of the same name. Not yet applied. Applied from the
    that is not an Entra token, and admits a client-credentials token from a service principal in
    `api_allowed_applications`.
 3. **The frontend still reaches the api.** Signed in, the GUI's calls through the BFF succeed
-   with the api gated, which is the in-environment path the README says the gate does not see.
+   with the api gated, which is the in-environment path docs/identity.md says the gate does not see.
 4. **The replaced secret works.** Sign-in completes after the apply, with the secret supplied as
    `builtin_auth_client_secret`.
 
@@ -139,13 +139,13 @@ applied from the candidate:
 2. **The old grants go after `ca-workers`' update.** Before the tag, confirm from the apply log
    that `module.masterly.module.workers[0].azurerm_container_app.this` reached "Modifications
    complete" before `module.masterly.azurerm_role_assignment.sb_receiver[0]` and
-   `module.masterly.azurerm_role_assignment.sb_scaler[0]` started "Destroying". The README and changelog rely on
+   `module.masterly.azurerm_role_assignment.sb_scaler[0]` started "Destroying". docs/data-plane.md and the changelog rely on
    the released module's `ca-workers` `depends_on` edges on those two grants (`workers.tf:189-190`),
    which Terraform records in state; this is the check that it destroys them only after updating
    their recorded dependent.
 3. **The new revision starts.** It resolves its Key Vault references as `id-<prefix>-workers` and
    reads `database-url`. Note how long role propagation took, and whether the revision needed a
-   restart: the README's upgrade note says the module adds no wait.
+   restart: docs/data-plane.md's upgrade note says the module adds no wait.
 4. **The pipeline keeps running.** A job queued before the apply and one queued after it both run
    as the new identity, and on the Service Bus binding the scaler still reads the queue. Email
    and Redis work as the new identity.
@@ -165,7 +165,7 @@ that section gives, and separately on one moving from `"start"` straight to `"jo
 3. **Both apps keep serving.** `ca-api` and `ca-workers`, signed in as `masterly_api` and
    `masterly_workers`, keep their database access through and after the apply.
 
-When it passes, replace the "has not yet been confirmed" sentences in the README's "The migrate
+When it passes, replace the "has not yet been confirmed" sentences in docs/data-plane.md's "The migrate
 job" and in the 0.24.0 changelog entry with what the run showed.
 
 ## What makes the workflow the only path

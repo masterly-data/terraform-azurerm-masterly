@@ -66,7 +66,7 @@
 variable "database_auth" {
   type        = string
   default     = null
-  description = "How the apps authenticate to the starter Postgres server: \"entra\" (Microsoft Entra ID only — the apps' identity is the server's Entra administrator and password authentication is off; needs api images v0.133.7 or later) or \"password\" (the masterly_admin login's password in the connection URL; a departure from Azure's recommended baseline, see the README). Unset: a new server gets \"entra\" in mode = \"production\" and \"password\" otherwise; an existing server keeps what it has, and a production install whose existing server uses a password must set this explicitly. Moving an existing install to \"entra\" needs the ownership steps in the README first. Has no effect with external_database_url (BYO-DB), whose DSN is the credential."
+  description = "How the apps authenticate to the starter Postgres server: \"entra\" (Microsoft Entra ID only — the apps' identity is the server's Entra administrator and password authentication is off; needs api images v0.133.7 or later) or \"password\" (the masterly_admin login's password in the connection URL; a departure from Azure's recommended baseline, see the README). Unset: a new server gets \"entra\" in mode = \"production\" and \"password\" otherwise; an existing server keeps what it has, and a production install whose existing server uses a password must set this explicitly. Moving an existing install to \"entra\" needs the ownership steps in docs/data-plane.md first. Has no effect with external_database_url (BYO-DB), whose DSN is the credential."
 
   validation {
     # The same total shape as redis_offering's check: coalesce() keeps null out of contains(),

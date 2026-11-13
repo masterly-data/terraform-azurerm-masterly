@@ -22,7 +22,7 @@ private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its
 production where the module knows the region supports it; mind data residency — backups go to
 the paired region; see [the departures section](../README.md#geo-redundant-backup-is-on-only-in-the-regions-the-module-lists)),
 `postgres_zone_redundant_ha` (needs a non-burstable SKU), `postgres_server_parameters` (extra
-server parameters; see "Diagnostics + alerts" below),
+server parameters; see [Diagnostics + alerts](../README.md#diagnostics--alerts) in the README),
 `postgres_auto_grow` (on by default in production: Azure grows the disk before it fills, so a
 full disk does not make the server read-only; **grown storage cannot be shrunk**, and the
 module never plans `postgres_storage_mb` below the server's real size),

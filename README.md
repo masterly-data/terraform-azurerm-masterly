@@ -279,9 +279,13 @@ check, and a rebuilt app, both go by.
 Masterly issues each customer a **pull service principal** (appId + client secret, in the
 install bundle, `AcrPull` only). Five inputs say where the images come from and how the apps
 pull them: `registry_location`, `registry_credential_mode`, `registry_token`, `release_channel`
-and `registry_private_endpoint`. Their types, defaults and descriptions are in
-[docs/inputs.md](docs/inputs.md#install-identity-adr-0039) (`registry_private_endpoint` under
-[Registry private endpoint](docs/inputs.md#registry-private-endpoint)); the registry over a
+and `registry_private_endpoint`. Their types, defaults and descriptions are in docs/inputs.md:
+`registry_location` and `release_channel` under
+[Images and registry pull credential](docs/inputs.md#images-and-registry-pull-credential),
+`registry_credential_mode` and `registry_token` under
+[Install identity (ADR 0039)](docs/inputs.md#install-identity-adr-0039), and
+`registry_private_endpoint` under
+[Registry private endpoint](docs/inputs.md#registry-private-endpoint); the registry over a
 private endpoint is described in [The registry over a private endpoint](#the-registry-over-a-private-endpoint).
 
 The three modes:

@@ -144,7 +144,7 @@ The support claims above come from Microsoft Learn:
 ## ca-frontend on your own domain
 
 `frontend_custom_domain` binds your hostname to `ca-frontend` with your certificate from your
-Key Vault, in any of the three topologies (the README's
+Key Vault, in any of the three topologies (docs/identity.md's
 [ca-frontend on your own domain](identity.md#ca-frontend-on-your-own-domain-frontend_custom_domain)
 has the input and what it creates). The module creates no DNS record, gateway or Front Door:
 you create the records below, in your own DNS, and the gateway if you put one in front.
