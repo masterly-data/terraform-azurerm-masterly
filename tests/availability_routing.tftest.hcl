@@ -4,7 +4,7 @@
 # This is its own file, and an apply, because the action group's id is computed: a plan cannot
 # compare an alert's action to it, and `override_during = plan` needs Terraform 1.11 while CI
 # runs 1.10. An apply (mock state; nothing reaches Azure) makes the id known. It is a separate
-# file so that the apply does not become state the runs of install.tftest.hcl plan against.
+# file so that the apply does not become state the per-concern plan files plan against.
 
 mock_provider "azurerm" {
   mock_data "azurerm_client_config" {

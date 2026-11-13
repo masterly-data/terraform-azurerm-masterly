@@ -865,7 +865,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "api_latency" {
 
     # One row when the percentile is over the line and there was enough traffic to compute it,
     # none otherwise. The provider checks none of these three against the query; they are
-    # pinned in tests/install.tftest.hcl.
+    # pinned in tests/diagnostics.tftest.hcl.
     time_aggregation_method = "Count"
     operator                = "GreaterThan"
     threshold               = 0
@@ -1111,7 +1111,7 @@ resource "azurerm_monitor_metric_alert" "app_unavailable" {
 # above. The module fixes both apps' readiness interval at 10 seconds (main.tf), so a failing
 # minute carries about six lines — but the rule would read the same at 30 or 60 seconds, and it
 # degrades gracefully rather than silently if that ever changes: a longer interval makes the
-# rule slower to fire, never blind to a wedge. tests/install.tftest.hcl pins the interval at or
+# rule slower to fire, never blind to a wedge. tests/main.tftest.hcl pins the interval at or
 # below 60 seconds so the premise stays a checked one rather than a remembered one.
 #
 # Thirty of the last sixty minutes, and the threshold is set by what a healthy install does, not
@@ -1204,7 +1204,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
     # none. These three fields are not validated against each other or against the query by the
     # provider — LessThan here would invert the rule into one that fires whenever every app is
     # healthy, and it would plan and apply exactly as cleanly. Change them together or not at
-    # all; tests/install.tftest.hcl pins them.
+    # all; tests/main.tftest.hcl pins them.
     time_aggregation_method = "Count"
     operator                = "GreaterThan"
     threshold               = 0
@@ -1284,7 +1284,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_not_ready" {
 # A rule asking for two periods is refused on create (400), so the sustained-ness is carried by
 # the window alone. 45 minutes is the value in Azure's allowed set closest to the ~40 minutes
 # that two consecutive 30-minute evaluations used to mean, and it errs on the side of not paging
-# on an ingestion delay. tests/install.tftest.hcl pins both period counts at 1.
+# on an ingestion delay. tests/main.tftest.hcl pins both period counts at 1.
 #
 # It is also billed differently from its neighbours — a log search alert rule is charged per rule
 # by evaluation frequency, where a metric alert is charged per monitored time series.

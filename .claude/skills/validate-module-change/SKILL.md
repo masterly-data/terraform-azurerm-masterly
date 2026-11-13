@@ -62,7 +62,7 @@ This is the part most likely to be got wrong:
 - `terraform test` uses `mock_provider`. Quota, SKU availability, global name uniqueness, RBAC of the
   deploying principal, resource-provider registration and API rejection of schema-valid field
   combinations are all untested. A green run proves the module's own logic only.
-- Neither shows an in-place-versus-replace decision. `tests/install.tftest.hcl` pins the derived
+- Neither shows an in-place-versus-replace decision. `tests/network.tftest.hcl` pins the derived
   subnet layout because a change there would replace live subnets; only a plan shows that.
 
 A `plan` from a root configuration against a real subscription proves a change; it is a human action.

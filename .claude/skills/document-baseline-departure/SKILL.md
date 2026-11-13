@@ -15,7 +15,7 @@ A departure that the README does not document blocks review (see `REVIEW.md`).
    and the input that controls it.
 3. Where the departure is configurable, give the variable's description (in its
    `variables-<concern>.tf`) the same explanation, and
-   add `run` blocks in `tests/install.tftest.hcl` covering both branches.
+   add `run` blocks in the concern's `tests/<concern>.tftest.hcl` covering both branches.
 4. If the `iac-scan` job (Trivy) flags the departure, add one entry to `.trivyignore.yaml` under
    `misconfigurations`: the rule `id`, `paths` naming the real file that carries it, and a `statement`
    naming the README heading from step 2. The file's header gives the exact shape. Never add a blanket

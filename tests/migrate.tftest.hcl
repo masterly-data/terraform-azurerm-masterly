@@ -1,5 +1,5 @@
 # Migrate job regressions share a valid production posture. The install-context and
-# demo-mode guard regressions are in install.tftest.hcl; image drift applies are separate.
+# demo-mode guard regressions are in migrate_job.tftest.hcl; image drift applies are separate.
 
 mock_provider "azurerm" {
   source = "./tests/mocks/migrate"

@@ -1,6 +1,6 @@
 # The starter server's connection URLs (MAS-2365), from known inputs — no provider, no cloud access.
 #
-# The postgres_pgbouncer runs in install.tftest.hcl prove the root module gives this module the
+# The postgres_pgbouncer runs in postgres.tftest.hcl prove the root module gives this module the
 # pooler and direct ports, the role and the auth mode for each database_auth. There the server's
 # fqdn and the password are only known after apply, so these runs prove the exact strings.
 

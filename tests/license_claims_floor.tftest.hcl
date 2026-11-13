@@ -1,7 +1,7 @@
 # The licence claims-floor check (ADR 0013, amended 2026-10-06, point 5 "By a re-issued bundle"),
 # against a synthetic release manifest — no provider, no cloud access.
 #
-# The runs in install.tftest.hcl prove the root module refuses the plan when this check says so,
+# The runs in license.tftest.hcl prove the root module refuses the plan when this check says so,
 # against the module's real MANIFEST.json. These prove the check itself, which needs releases whose
 # api images verify a claims version above 0: none has been released yet, so a synthetic manifest
 # is the only way to show a licence passing against an image at or above its floor.
