@@ -29,7 +29,7 @@ resource "random_password" "bff_shared_secret" {
 locals {
   # The identity provider's endpoints: an explicit input wins, otherwise derived from
   # oidc_tenant_id for a single-tenant Entra registration, otherwise null (and the oidc
-  # validation in variables.tf has already refused that combination).
+  # validation in variables-core.tf has already refused that combination).
   oidc_tenant_base     = var.oidc_tenant_id == null ? null : "https://login.microsoftonline.com/${var.oidc_tenant_id}"
   oidc_authority       = var.oidc_authority != null ? var.oidc_authority : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/v2.0")
   oidc_allowed_issuers = var.oidc_allowed_issuers != null ? var.oidc_allowed_issuers : (local.oidc_tenant_base == null ? null : "${local.oidc_tenant_base}/v2.0")
@@ -37,7 +37,7 @@ locals {
   oidc_audience        = var.oidc_audience != null ? var.oidc_audience : var.oidc_client_id
 
   # With a custom domain the BFF callback is known before any apply: the hostname the install is
-  # served on, which oidc_redirect_uri may not contradict (variables.tf). Without one it is the
+  # served on, which oidc_redirect_uri may not contradict (variables-auth.tf). Without one it is the
   # input, set from frontend_url on the second apply.
   oidc_redirect_uri = local.frontend_custom_hostname != null ? "https://${local.frontend_custom_hostname}/api/auth/callback" : var.oidc_redirect_uri
 
