@@ -569,6 +569,105 @@ run "demo_environments_refused_on_production" {
   expect_failures = [var.demo_environments]
 }
 
+# --- Deployment switches the backend is told about ----------------------------------------------
+# deployed_switches sets MASTERLY_DEPLOYED_SWITCHES on ca-api and ca-workers. These runs pin that
+# unset writes nothing anywhere, that a list reaches both comma-joined and not the frontend, and
+# the plan-time refusal of an unknown name (the backend would not start on it) and a repeat.
+
+run "deployed_switches_are_absent_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+  }
+
+  assert {
+    condition     = !contains(keys(local.api_env), "MASTERLY_DEPLOYED_SWITCHES")
+    error_message = "deployed_switches = [] must set nothing at all."
+  }
+
+  assert {
+    condition = (
+      !contains(module.api.env_names, "MASTERLY_DEPLOYED_SWITCHES") &&
+      !contains(module.workers[0].env_names, "MASTERLY_DEPLOYED_SWITCHES") &&
+      !contains(module.frontend.env_names, "MASTERLY_DEPLOYED_SWITCHES")
+    )
+    error_message = "deployed_switches unset must not put MASTERLY_DEPLOYED_SWITCHES on any app."
+  }
+}
+
+run "deployed_switches_reach_the_backend_apps" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+    deployed_switches     = ["assets", "replica"]
+  }
+
+  assert {
+    condition     = local.api_env["MASTERLY_DEPLOYED_SWITCHES"] == "assets,replica"
+    error_message = "ca-api's environment must carry the comma-joined deployed_switches, in the order given."
+  }
+
+  assert {
+    condition     = contains(module.api.env_names, "MASTERLY_DEPLOYED_SWITCHES")
+    error_message = "MASTERLY_DEPLOYED_SWITCHES must reach ca-api's container environment."
+  }
+
+  assert {
+    condition     = local.workers_env["MASTERLY_DEPLOYED_SWITCHES"] == local.api_env["MASTERLY_DEPLOYED_SWITCHES"]
+    error_message = "ca-workers' environment must carry the same value as ca-api."
+  }
+
+  assert {
+    condition     = contains(module.workers[0].env_names, "MASTERLY_DEPLOYED_SWITCHES")
+    error_message = "MASTERLY_DEPLOYED_SWITCHES must reach ca-workers' container environment."
+  }
+
+  assert {
+    condition     = !contains(module.frontend.env_names, "MASTERLY_DEPLOYED_SWITCHES")
+    error_message = "MASTERLY_DEPLOYED_SWITCHES is a backend setting -- the frontend must not carry it."
+  }
+}
+
+# Guard: the backend refuses to start on a name it does not know.
+run "deployed_switches_refuse_an_unknown_name" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    deployed_switches     = ["assets", "bogus"]
+  }
+
+  expect_failures = [var.deployed_switches]
+}
+
+# Guard: an empty string is not a switch.
+run "deployed_switches_refuse_an_empty_name" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    deployed_switches     = [""]
+  }
+
+  expect_failures = [var.deployed_switches]
+}
+
+# Guard: each switch once.
+run "deployed_switches_refuse_a_duplicate" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    deployed_switches     = ["assets", "assets"]
+  }
+
+  expect_failures = [var.deployed_switches]
+}
+
 # --- Trusting a private CA (MAS-446) ---------------------------------------------------------
 # The allowlist above answers WHERE the application may connect; ca_bundle_pem answers whether
 # it TRUSTS what answers there (MAS-375 made SMTP STARTTLS verify rather than accept anything).
