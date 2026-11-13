@@ -15,6 +15,7 @@ and the first sentence of its description. The description stays the source of t
   --write      rewrite docs/inputs.md
   (no flag)    fail when docs/inputs.md differs from what --write would produce, or when a
                root .tf file declares inputs and has no title in FILE_TITLES
+               a README.md table row whose first cell is a backticked declared input
   --selftest   prove the check can fail
 
 Standard library only, like the other release scripts.
@@ -53,6 +54,9 @@ SENSITIVE_RE = re.compile(r"^  sensitive\s*=\s*true", re.M)
 # The end of the first sentence: a full stop, after a word character or a closing bracket or
 # quote, then whitespace. "e.g." and "i.e." are not ends.
 SENTENCE_END_RE = re.compile(r"(?<!\be\.g)(?<!\bi\.e)(?<=[\w\)\]`\"'])\.\s")
+
+# A README table row whose first cell is a backticked name.
+README_ROW_RE = re.compile(r"^\|\s*`(?P<n>[A-Za-z0-9_]+)`\s*\|")
 
 HEADER = """# Module inputs
 
@@ -165,9 +169,27 @@ def run(root: Path, write: bool) -> list[str]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
         return []
+    found = []
     if not target.is_file() or target.read_text() != text:
-        return [f"{OUT} is out of date: run python3 scripts/check_inputs_reference.py --write"]
-    return []
+        found.append(f"{OUT} is out of date: run python3 scripts/check_inputs_reference.py --write")
+    found += readme_input_rows(root, {r["name"] for _, _, rows in groups for r in rows})
+    return found
+
+
+def readme_input_rows(root: Path, names: set[str]) -> list[str]:
+    """README.md holds no input table: a row whose first cell is a declared input is a problem."""
+    readme = root / "README.md"
+    if not readme.is_file():
+        return []
+    problems = []
+    for no, line in enumerate(readme.read_text().split("\n"), 1):
+        m = README_ROW_RE.match(line)
+        if m and m.group("n") in names:
+            problems.append(
+                f"README.md:{no} has a table row for the input `{m.group('n')}`: describe it in its "
+                f"variable's description (docs/inputs.md is generated from it), not in the README"
+            )
+    return problems
 
 
 def selftest() -> int:
@@ -202,6 +224,12 @@ def selftest() -> int:
     run(d, True)
     (d / "newthing.tf").write_text('variable "x" {\n  type = string\n  description = "X."\n}\n')
     expect("untitled file", run(d, False), False)
+    (d / "newthing.tf").unlink()
+    run(d, True)
+    (d / "README.md").write_text("# Module\n\n| `mode = \"production\"` | x |\n| `other` | not an input |\n")
+    expect("readme without an input row", run(d, False), True)
+    (d / "README.md").write_text("# Module\n\n| Input | What |\n|---|---|\n| `enable_redis` | Turns Redis on |\n")
+    expect("readme input row", run(d, False), False)
 
     for f in failures:
         print(f"SELFTEST FAIL: {f}")

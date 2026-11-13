@@ -145,7 +145,7 @@ The support claims above come from Microsoft Learn:
 
 `frontend_custom_domain` binds your hostname to `ca-frontend` with your certificate from your
 Key Vault, in any of the three topologies (the README's
-[ca-frontend on your own domain](../README.md#ca-frontend-on-your-own-domain-frontend_custom_domain)
+[ca-frontend on your own domain](identity.md#ca-frontend-on-your-own-domain-frontend_custom_domain)
 has the input and what it creates). The module creates no DNS record, gateway or Front Door:
 you create the records below, in your own DNS, and the gateway if you put one in front.
 
@@ -294,3 +294,85 @@ replaced and the Container Apps environment is not touched. Read the plan for yo
 before applying: if you attached your own NSG or a user-defined route to either subnet out of
 band, the module's association replaces the first and enabling network policies starts
 applying the second to private-endpoint traffic.
+
+## Landing-zone notes
+
+The install runs in its own VNet: the ACA environment is VNet-integrated (runtime subnet,
+/23 — an ACA consumption requirement) and the provisioned Postgres is reachable **only via
+a private endpoint**; private DNS keeps the server FQDN unchanged for the apps. The
+frontend stays the single public surface, behind the optional ingress IP allowlist.
+
+Landing-zone accommodations:
+
+- A first VNet prefix of /21 or larger derives the subnets automatically; a smaller
+  allocation sets `aca_subnet_prefix` + `private_endpoints_subnet_prefix` explicitly.
+- Hub-and-spoke shops that centralize private DNS pass
+  `postgres_private_dns_zone_id` — the module then creates no zone and no VNet link
+  (linking the central zone to this VNet is the platform team's side). The same holds for
+  `key_vault_private_dns_zone_id`, `redis_private_dns_zone_id` and
+  `servicebus_private_dns_zone_id`.
+- The registry's private endpoint (`registry_private_endpoint`) always creates its own
+  `privatelink.azurecr.io` zone and VNet link; there is no zone-ID input for it. Where the hub
+  already links that zone to the VNet, leave it off and add the registry endpoint on the
+  platform side ([The registry over a private endpoint](../README.md#the-registry-over-a-private-endpoint)).
+
+> Upgrading from v0.1: `infrastructure_subnet_id` is create-time-only, so the apply
+> REPLACES the Container App Environment and the apps — their FQDNs change. The Postgres
+> server (and its data) is untouched.
+
+## The API's public address
+
+`public_api_url` tells the install the address something outside it calls the API on: an
+absolute `https://` URL with no query string, fragment or credentials — the `api_url` output, or
+your own domain in front of the API. When it is set, the module puts it on `ca-api`,
+`ca-workers` and `ca-frontend` as `MASTERLY_PUBLIC_API_URL`, with any trailing slash dropped.
+The frontend shows it in the catalog's Consume card; the API and the workers build the callback
+URL of an external pipeline step from it. Unset (the default), no app gets the variable.
+
+The module writes the value; it cannot tell whether the value works. It does when all three hold:
+
+- `api_ingress_external = true` — otherwise nothing outside the environment reaches the API;
+- `ingress_allowed_cidrs` admits whoever calls the API — for an external pipeline step, the
+  outbound addresses of the service that runs your code;
+- on an internal environment (`aca_internal_load_balancer`), "external" means reachable from the
+  VNet, so the caller must be on the VNet or a network connected to it.
+
+The `api_url` output is known only after the API is published, so on a new install either set
+your own domain from the start or apply once, then set `public_api_url` from `api_url` and apply
+again.
+
+## Transport security
+
+Everything published by the install is HTTPS-only. `ca-frontend` always redirects `http://`
+to `https://`, and `ca-api` does the same **as soon as `api_ingress_external = true`** — a
+published api trusts a bearer token and nothing else, so serving it on port 80 would put
+the whole credential on the wire for anyone in the path. An IP allowlist bounds who can
+reach an endpoint; it says nothing about what a network in between can read.
+
+While the api stays internal (the default) it keeps serving plain HTTP, because the only
+thing calling it is the frontend's BFF at `http://ca-api` — an app-name address, which is
+the one form that cannot drift, and which no TLS certificate can match. That hop is not
+left in the clear: the Container Apps environment runs with **peer-to-peer encryption**
+on, so Azure encrypts traffic between apps inside the environment with certificates it
+manages and rotates. Applications keep speaking `http://` and the platform encrypts
+underneath — this is Azure's `peerTrafficConfiguration.encryption`, and it is what makes
+the internal `allowInsecure` acceptable rather than merely convenient.
+
+Verify it on a running install:
+
+```bash
+az containerapp env show -n aca-masterly -g rg-masterly-aca \
+  --query properties.peerTrafficConfiguration.encryption.enabled
+```
+
+Check it after an out-of-band change rather than relying on `terraform plan`: the provider
+writes both of Azure's peer settings from one input but refreshes state from only one of
+them, so a console or CLI change to peer-traffic encryption alone shows up as no drift.
+
+Microsoft notes that peer-to-peer encryption may add response latency and lower maximum
+throughput under high load. The module deliberately exposes no input to turn it off: the
+hop it protects is the one carrying every authenticated request in the install, and a knob
+that quietly trades that away is worth less than the throughput it buys back. If you
+measure a real problem, open an issue with the numbers rather than reaching for `az` — an
+out-of-band change to peer-traffic encryption is invisible to `terraform plan` (above),
+which makes it exactly the kind of setting that stops being true without anyone noticing.

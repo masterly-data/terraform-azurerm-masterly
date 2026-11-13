@@ -74,8 +74,8 @@ One Terraform root module: `main.tf` is the always-created core, with the networ
 | `MANIFEST.json` | The release manifest: which image pair each published module version was released against. Fields: `schema_version` (`1` today), `module`, `latest`, and `releases` keyed by bare semver, each with a `date` and an `images` object naming `api` and `frontend`. Its published contract is `docs/release-manifest.md`: which fields are stable, which may be added without a `schema_version` bump, and what will never change silently. A change to its shape changes what other repositories and the public docs parse |
 | `RUNTIME_ENV.json` | Every env name the module sets, per app. Generated, never edited; contract `docs/runtime-env.md`. The application repositories vendor it and check their code and runbooks against it (MAS-545) |
 | `CHANGELOG.md` | Keep a Changelog. `Unreleased` stays empty: a change adds a fragment, `changelog.d/<short-name>.md`; cutting a release runs `scripts/fold_changelog.py X.Y.Z YYYY-MM-DD`, which folds the fragments into the version's section and deletes them |
-| `README.md` | The module surface reference. The customer walkthrough lives in the public docs, not here |
-| `docs/` | `inputs.md` (every input, grouped by subsystem; generated), `networking.md` (the three topologies), `release-manifest.md`, `runtime-env.md`, and `releasing.md` (what gates a tag, and the repository settings that make `cut-release` the only path) |
+| `README.md` | The module surface reference: short sections and pointers, no input tables (an input is documented in its variable `description`, and so in `docs/inputs.md`). The customer walkthrough lives in the public docs, not here |
+| `docs/` | A feature's long-form docs go in `docs/<feature>.md`, not in the README: `inputs.md` (every input, grouped by subsystem; generated), `identity.md`, `data-plane.md`, `scaling.md`, `diagnostics.md`, `networking.md` (the three topologies, landing-zone notes, the API's public address, transport security), `release-manifest.md`, `runtime-env.md`, and `releasing.md` (what gates a tag, and the repository settings that make `cut-release` the only path) |
 | `SECURITY.md` | The vulnerability-reporting policy we publish; hold to our half of it |
 
 ## Conventions
@@ -141,7 +141,7 @@ One Terraform root module: `main.tf` is the always-created core, with the networ
 - The commands above pass, including `shellcheck` and the `--selftest` runs.
 - A `run` block in `tests/install.tftest.hcl` covers every new variable guard, conditional resource
   and derived value.
-- `README.md` and `examples/production/` are updated for any change to the public surface.
+- A new input is documented in its variable `description` (and so in `docs/inputs.md`, regenerated with `--write`), and a feature's long-form docs go in `docs/<feature>.md`, not in the README. `examples/production/` is updated for any change to the public surface.
 - A fragment in `changelog.d/` records the change (`Unreleased` stays empty); a breaking variable change carries a migration note in it.
 - The PR says whether the change was planned against a real subscription.
 - A rule with nothing enforcing it is this repo's characteristic defect: when you add a rule, add the

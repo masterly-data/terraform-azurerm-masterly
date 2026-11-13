@@ -1,6 +1,6 @@
 ---
 name: add-module-variable
-description: Add or change a public input variable or output of the module, with validation, a customer-facing description, a terraform test run, README and CHANGELOG updates. Use when touching variables.tf, outputs.tf or any variable guard.
+description: Add or change a public input variable or output of the module, with validation, a customer-facing description, a terraform test run, docs and CHANGELOG updates. Use when touching variables.tf, outputs.tf or any variable guard.
 ---
 
 # Add or change a module variable or output
@@ -31,8 +31,10 @@ output description is customer documentation.
    (`count`/`for_each`) and derived value: a run that passes and an `expect_failures` run for each
    guard. The existing runs cover the variable guards, the residency preconditions, both data-plane
    branches and the optional subsystems; a condition with no run block is a branch nothing exercises.
-7. **Update the README** (the module surface reference) and `examples/production/` when the variable
-   belongs in a production-posture install.
+7. **Document the input in its `description`**, and so in `docs/inputs.md` (regenerate it with
+   `python3 scripts/check_inputs_reference.py --write`). A feature's long-form docs go in
+   `docs/<feature>.md`, not in the README, which holds no input tables. Update `examples/production/`
+   when the variable belongs in a production-posture install.
 8. **Add a changelog fragment**, `changelog.d/<short-name>.md` (format in `changelog.d/README.md`);
    `Unreleased` stays empty and the release commit folds the fragment. A rename, removal, retyping
    or tightening of a variable, or a removed or renamed output, is a breaking change: the fragment
