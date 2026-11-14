@@ -272,6 +272,8 @@ resource "azurerm_container_app_job" "migrate" {
     azurerm_private_dns_zone_virtual_network_link.registry,
     azurerm_private_endpoint.key_vault,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
+    # With egress_firewall, the first pull takes the firewall's route, as on the apps (main.tf).
+    azurerm_subnet_route_table_association.aca,
   ]
 }
 

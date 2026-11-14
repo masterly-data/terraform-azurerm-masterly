@@ -48,3 +48,12 @@ variable "identity_ids" {
   default     = []
   description = "User-assigned identity ids to attach to the environment itself, not to any app in it. The environment uses them to read certificates from Key Vault. Empty (the default) attaches none."
 }
+
+# SELF-HOSTED EXTENSION: read the environment's workload profiles back from Azure. Not in the
+# platform-iac original, which attaches no route table to its environments.
+variable "read_workload_profiles" {
+  type        = bool
+  default     = false
+  nullable    = false
+  description = "Read the environment's workload profiles from Azure into the workload_profile_names output. False (the default) reads nothing and the output is null. The root module turns it on with egress_firewall, because Azure honours a route table on the environment's subnet only for a workload-profiles environment."
+}

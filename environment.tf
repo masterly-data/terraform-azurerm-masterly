@@ -24,7 +24,9 @@ module "aca_env" {
   internal_load_balancer_enabled = var.aca_internal_load_balancer
   # Only the certificate identity, and only with frontend_custom_domain (custom-domain.tf).
   identity_ids = module.frontend_certificate_identity[*].id
-  tags         = local.tags
+  # Only with egress_firewall: the route table's precondition reads the profiles (network.tf).
+  read_workload_profiles = var.egress_firewall != null
+  tags                   = local.tags
 }
 
 # The apps' console and system logs -> the install's workspace. The environment sends its logs
