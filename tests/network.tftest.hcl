@@ -780,6 +780,33 @@ run "environment_subnet_prefix_smaller_than_27_is_rejected" {
   expect_failures = [var.front_subnet_prefix]
 }
 
+# Each prefix carries its own size guard.
+run "app_subnet_prefix_smaller_than_27_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/24"
+    app_subnet_prefix     = "10.20.33.0/28"
+    workers_subnet_prefix = "10.20.34.0/24"
+  }
+
+  expect_failures = [var.app_subnet_prefix]
+}
+
+run "workers_subnet_prefix_smaller_than_27_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/24"
+    app_subnet_prefix     = "10.20.33.0/24"
+    workers_subnet_prefix = "10.20.34.0/28"
+  }
+
+  expect_failures = [var.workers_subnet_prefix]
+}
+
 run "environment_subnet_prefix_outside_the_vnet_is_rejected" {
   command = plan
 

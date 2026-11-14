@@ -450,14 +450,19 @@ For three environment subnets, the private endpoints and an Application Gateway 
 
 | | Environment subnets | Private endpoints | Application Gateway | Total | Spoke |
 |---|---|---|---|---|---|
-| **Minimum** | 3 × /27 | /28 | /26 (Azure's minimum for v2) | 176 addresses | /24 |
+| **Minimum** | 3 × /27 | /28 | /24 (Azure's recommendation for v2) | 368 addresses | /23 |
 | **Recommended** | 3 × /24 | /24 | /24 (Azure's recommendation for v2) | 1,280 addresses | /21 |
 
+The minimum keeps the gateway at the /24 Azure recommends, because a v2 gateway scales out into
+its subnet. Azure accepts a /26 for v2, which brings the minimum down to 176 addresses and a /24
+spoke, at the cost of the gateway's headroom to scale; treat that as a reduced-capacity option,
+not the baseline.
+
 While the apps still run in the legacy environment, the spoke also holds its /23
-(`aca_subnet_id`): 688 addresses at the minimum, a /22, and 1,792 recommended, which still fits
-the /21. That /21 is the layout the module derives for itself: `snet-aca` at `.0.0/23`, the
-private endpoints at `.4.0/24`, front, app and workers at `.5.0`, `.6.0` and `.7.0/24`, and
-`.2.0/23` free for the Application Gateway.
+(`aca_subnet_id`): 880 addresses at the minimum, a /22 (688 with the /26 gateway, still a /22),
+and 1,792 recommended, which still fits the /21. That /21 is the layout the module derives for
+itself: `snet-aca` at `.0.0/23`, the private endpoints at `.4.0/24`, front, app and workers at
+`.5.0`, `.6.0` and `.7.0/24`, and `.2.0/23` free for the Application Gateway.
 
 ## Upgrading an existing install
 
