@@ -53,6 +53,7 @@ FILE_TITLES = {
     "email.tf": "Email",
     "registry.tf": "Registry private endpoint",
     "diagnostics.tf": "Diagnostics and alerts",
+    "edge.tf": "Edge proxy",
 }
 
 SECTION_RE = re.compile(r"^# --- (?P<t>.+?) -{3,}\s*$")

@@ -300,7 +300,8 @@ applying the second to private-endpoint traffic.
 The install runs in its own VNet: the ACA environment is VNet-integrated (runtime subnet,
 /23 — an ACA consumption requirement) and the provisioned Postgres is reachable **only via
 a private endpoint**; private DNS keeps the server FQDN unchanged for the apps. The
-frontend stays the single public surface, behind the optional ingress IP allowlist.
+frontend stays the single public surface, behind the optional ingress IP allowlist, unless you
+publish the api (`api_ingress_external`) or set `edge` ([The edge proxy](#the-edge-proxy-ca-edge)).
 
 Landing-zone accommodations:
 
@@ -341,10 +342,84 @@ The `api_url` output is known only after the API is published, so on a new insta
 your own domain from the start or apply once, then set `public_api_url` from `api_url` and apply
 again.
 
+## The edge proxy (ca-edge)
+
+`edge` adds `ca-edge`, the machine entry point for the Python SDK and MCP clients (ADR 0120 §2).
+It is **off by default**: with `edge` unset the module creates nothing for it and an install plans
+exactly as before. Set `edge = {}` to run it with the module's defaults; the `edge_url` output is
+its base URL.
+
+**It does no authentication yet.** It forwards the caller's `Authorization` header to `ca-api`
+unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published with
+`api_ingress_external = true`. What the edge adds is a narrower door:
+
+- **Public ingress, on the allowlist.** `ca-edge` is published (external ingress) on
+  `ingress_allowed_cidrs`, the same list the frontend uses, HTTPS-only (`http://` is redirected,
+  never served). An empty list means unrestricted in Azure, so the plan is refused when `edge`
+  is set and the list is empty. On an internal environment (`aca_internal_load_balancer`),
+  "external" means reachable from the VNet.
+- **Two routes.** `/v1` and `/mcp`, and the paths under them, go to `ca-api` by its app name
+  (`http://ca-api`, encrypted underneath by the environment, as in
+  [Transport security](#transport-security)). Every other path is answered `404` by the edge
+  itself. Routing reads the normalized path, so `/v1/../x` is `/x` and answered `404`; a path
+  with an encoded slash or backslash is refused.
+- **No identity headers.** The edge removes `x-jwt-payload`, `X-MS-CLIENT-PRINCIPAL`,
+  `-ID`, `-IDP` and `-NAME` from every request, and drops any header with an underscore in its
+  name, so a caller cannot hand `ca-api` a statement of who it is.
+- **Body size and streaming.** A request whose `Content-Length` is larger than
+  `edge.max_request_body_bytes` (10 MiB by default) is answered `413`; a body sent without a
+  `Content-Length` streams through. Nothing is buffered, and a forwarded request has no total
+  time limit, so a streamed MCP or server-sent-events response stays open; a stream with no bytes
+  either way for 300 seconds is closed.
+- **No control plane, no secrets.** Envoy's admin interface is not configured. The whole Envoy
+  configuration travels in the container's command, visible in the plan, and holds nothing secret;
+  a change to it rolls a new revision. The access log, one JSON line per request on the
+  container's output (in your workspace with diagnostics on), holds the path without its query string and no `Authorization`, cookie or other
+  credential-carrying header.
+- **Its own identity.** `ca-edge` runs as `id-<prefix>-edge`, which holds no role on Postgres,
+  Key Vault, Service Bus or Redis, and AcrPull only when its image is on the install's registry.
+
+### Where the edge's image comes from
+
+By default `ca-edge` runs the upstream `envoyproxy/envoy` image from **Docker Hub**, pinned by
+digest, and pulls it anonymously. The environment then needs outbound HTTPS to Docker Hub
+(`registry-1.docker.io`, `auth.docker.io` and the content host it redirects to,
+`production.cloudflare.docker.com`): on a network whose egress goes through a firewall, allow
+those, or mirror the image.
+
+To mirror it, copy the image, digest unchanged, to a registry the environment can reach and set
+`edge.image` to the copy, for example `myregistry.azurecr.io/envoyproxy/envoy:<tag>@sha256:<digest>`.
+The reference must carry a digest; the plan refuses one without. When the copy is on the install's
+registry (`registry_location`), `ca-edge` pulls it as `id-<prefix>-edge`: the module grants AcrPull
+when `acr_id` is set, and otherwise you grant it to `edge_identity_principal_id`. An install that
+pulls with a registry token cannot do that, because `ca-edge` holds no secret: put the mirror on a
+registry it pulls from anonymously or as its identity. Changing `edge.image` rolls `ca-edge` on the
+next apply; nothing else moves its image.
+
+### Running the edge behind an Application Gateway
+
+To give the edge your own hostname, a certificate of your own or a WAF, put an Application Gateway
+in front of it:
+
+- **Backend pool:** the `edge_url` host (`ca-edge.<environment domain>`), HTTPS on port 443, with
+  the host name picked from the backend target, so the Container Apps ingress sees its own
+  hostname.
+- **Allowlist:** add the gateway's outbound address to `ingress_allowed_cidrs` (its public IP for a
+  public environment, its subnet for an internal one), and remove the client ranges the gateway
+  now admits for you.
+- **Timeouts:** raise the backend setting's request timeout (20 seconds by default) above the
+  longest stream your MCP clients hold, or the gateway cuts what the edge keeps open.
+- **Health probe:** the edge answers `/` with `404`, so a probe on `/` that accepts `404` shows
+  the edge is up without calling `ca-api`.
+- **Logging:** keep the gateway's own access and WAF logs free of full URLs and request bodies,
+  as [If you front this install with a WAF, CDN, or gateway](../README.md#if-you-front-this-install-with-a-waf-cdn-or-gateway)
+  says.
+
 ## Transport security
 
-Everything published by the install is HTTPS-only. `ca-frontend` always redirects `http://`
-to `https://`, and `ca-api` does the same **as soon as `api_ingress_external = true`** — a
+Everything published by the install is HTTPS-only. `ca-frontend` and, with `edge` set,
+`ca-edge` always redirect `http://` to `https://`, and `ca-api` does the same **as soon as
+`api_ingress_external = true`** — a
 published api trusts a bearer token and nothing else, so serving it on port 80 would put
 the whole credential on the wire for anyone in the path. An IP allowlist bounds who can
 reach an endpoint; it says nothing about what a network in between can read.
