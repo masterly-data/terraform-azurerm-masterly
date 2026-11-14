@@ -388,8 +388,10 @@ resource "azurerm_resource_group" "aca" {
       error_message = "front_subnet_id, app_subnet_id and workers_subnet_id must be three different subnets, and none of them may be aca_subnet_id or private_endpoints_subnet_id: each environment's subnet carries its own inbound rules, and private endpoints cannot sit in a delegated subnet."
     }
 
+    # A conditional, not `||`: Terraform before 1.12 evaluates both operands of `||`, and
+    # lower(null) would then error instead of leaving the precondition above to refuse it.
     precondition {
-      condition = var.aca_subnet_id == null || alltrue([
+      condition = var.aca_subnet_id == null ? true : alltrue([
         for id in local.env_subnet_ids_given :
         lower(try(regex("^(.*)/subnets/[^/]+$", id)[0], id)) == lower(try(regex("^(.*)/subnets/[^/]+$", var.aca_subnet_id)[0], var.aca_subnet_id))
       ])
