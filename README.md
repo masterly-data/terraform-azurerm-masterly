@@ -256,7 +256,7 @@ check, and a rebuilt app, both go by.
 | Resource | Purpose |
 |---|---|
 | `rg-masterly-aca`, `rg-masterly-data` | Customer-naming resource groups (`rg-masterly-<purpose>`) |
-| VNet + runtime subnet (/23) + private-endpoints subnet | The install's network; ACA is VNet-integrated |
+| VNet + runtime subnet (/23) + private-endpoints subnet + front, app and workers environment subnets | The install's network; ACA is VNet-integrated. The environment subnets (ADR 0120) are each filtered by their own network security group; see [docs/networking.md](docs/networking.md#the-environment-subnets) |
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, and `ca-workers` unless it has its own, below): image pull, plus every data-plane grant the install makes — the module's **app secrets role** on the vault (read, write and delete secrets: `getSecret`, `setSecret`, `delete` and `readMetadata`; unlike the built-in Key Vault Secrets Officer it replaces, no purge, backup, restore or recover), Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Wherever `ca-workers` runs as its own identity it holds Service Bus send only: receive and the jobs queue's Data Owner are `id-masterly-workers`'. With `migrations = "job"` on the starter server it is also **no** Postgres administrator (ADR 0120). Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
@@ -569,6 +569,11 @@ To follow Azure's recommendation, set `aca_internal_load_balancer = true`. The e
 then has no public endpoint, and the rule admits only `VirtualNetwork`. Setting
 `ingress_allowed_cidrs` alone does not change the rule, though it does restrict who the apps
 accept requests from.
+
+The front environment's subnet (`snet-front`, docs/networking.md "The environment subnets")
+carries the same departure, for the same reason: its group's `allow-app-ingress` rule admits
+`Internet` on TCP 80, 443, 31080 and 31443 in a public environment, and `VirtualNetwork` with
+`aca_internal_load_balancer = true`. The app and workers subnets never admit either tag.
 
 The IaC scan reports this as Trivy AZU-0047, and `.trivyignore.yaml` records it as an
 accepted departure for `network.tf`. No Azure Policy built-in definition has been identified

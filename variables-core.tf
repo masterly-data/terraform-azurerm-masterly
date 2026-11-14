@@ -897,7 +897,7 @@ variable "aca_internal_load_balancer" {
 variable "vnet_address_space" {
   type        = list(string)
   default     = ["10.20.0.0/16"]
-  description = "Address space of the install's VNet. The runtime subnet (/23, required by consumption-only Container App Environments) and the private-endpoint subnet (/24) are carved from the first prefix unless explicit subnet prefixes are set."
+  description = "Address space of the install's VNet. The runtime subnet (/23, required by consumption-only Container App Environments), the private-endpoint subnet (/24) and the front, app and workers environment subnets (a /24 each) are carved from the first prefix unless explicit subnet prefixes are set (aca_subnet_prefix, private_endpoints_subnet_prefix, front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix)."
 
   # Deriving the subnets needs room to carve a /23 plus a /24 at the layout the module
   # uses; a first prefix smaller than /21 must bring explicit subnet prefixes instead.
@@ -920,6 +920,87 @@ variable "private_endpoints_subnet_prefix" {
   type        = string
   default     = null
   description = "Explicit CIDR of the private-endpoints subnet (inside vnet_address_space, clear of the runtime subnet). Null (default) derives a /24 clear of the runtime /23."
+}
+
+# --- Environment subnets (ADR 0120) -------------------------------------------------------
+# Three workload-profiles Container Apps environments, front, app and workers, each in a
+# subnet of its own beside the runtime subnet. On a network the module builds they are carved
+# from vnet_address_space; on an injected spoke they arrive as subnet ids. The validations
+# below refuse a prefix Azure would refuse at apply and a partial set. Whether the prefixes lie
+# inside the VNet and clear of every other subnet depends on the runtime and endpoint prefixes
+# the module derives, so those two checks are preconditions on the VNet (network.tf).
+
+variable "front_subnet_prefix" {
+  type        = string
+  default     = null
+  description = "Explicit CIDR of the front environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with app_subnet_prefix and workers_subnet_prefix, or none of them. Null (default) derives a /24 from the first VNet prefix when it is /21 or larger (the /24 at index 5, beside the runtime /23 and the private-endpoint /24); with a smaller VNet, or explicit runtime and private-endpoint prefixes that already cover that /24, the module creates no environment subnets. Ignored when the network is injected (aca_subnet_id): set front_subnet_id instead."
+
+  validation {
+    condition = var.front_subnet_prefix == null || try(
+      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$", var.front_subnet_prefix)) &&
+      cidrhost(var.front_subnet_prefix, 0) == split("/", var.front_subnet_prefix)[0] &&
+      tonumber(split("/", var.front_subnet_prefix)[1]) <= 27,
+      false
+    )
+    error_message = "front_subnet_prefix must be an IPv4 CIDR of /27 or larger, written as its network address (for example \"10.20.5.0/24\"): a workload-profiles Container Apps environment needs at least a /27."
+  }
+
+  # The one check of the three together, here alone: validations that refer to each other in a
+  # ring are a dependency cycle Terraform refuses.
+  validation {
+    condition     = contains([0, 3], length(compact([var.front_subnet_prefix, var.app_subnet_prefix, var.workers_subnet_prefix])))
+    error_message = "front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix go together: set all three, or none. Each is the subnet of one Container Apps environment, and an install with some of them has nowhere to run the others."
+  }
+}
+
+variable "app_subnet_prefix" {
+  type        = string
+  default     = null
+  description = "Explicit CIDR of the app environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with front_subnet_prefix and workers_subnet_prefix, or none of them. Null (default) derives the /24 at index 6 of the first VNet prefix, on the same terms as front_subnet_prefix. Its network security group admits HTTPS from the front subnet only, and the private-endpoint subnet admits it on the data-plane ports. Ignored when the network is injected (aca_subnet_id): set app_subnet_id instead."
+
+  validation {
+    condition = var.app_subnet_prefix == null || try(
+      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$", var.app_subnet_prefix)) &&
+      cidrhost(var.app_subnet_prefix, 0) == split("/", var.app_subnet_prefix)[0] &&
+      tonumber(split("/", var.app_subnet_prefix)[1]) <= 27,
+      false
+    )
+    error_message = "app_subnet_prefix must be an IPv4 CIDR of /27 or larger, written as its network address (for example \"10.20.6.0/24\"): a workload-profiles Container Apps environment needs at least a /27."
+  }
+}
+
+variable "workers_subnet_prefix" {
+  type        = string
+  default     = null
+  description = "Explicit CIDR of the workers environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with front_subnet_prefix and app_subnet_prefix, or none of them. Null (default) derives the /24 at index 7 of the first VNet prefix, on the same terms as front_subnet_prefix. Its network security group admits only the Container Apps platform's own traffic, and the private-endpoint subnet admits it on the data-plane ports. Ignored when the network is injected (aca_subnet_id): set workers_subnet_id instead."
+
+  validation {
+    condition = var.workers_subnet_prefix == null || try(
+      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$", var.workers_subnet_prefix)) &&
+      cidrhost(var.workers_subnet_prefix, 0) == split("/", var.workers_subnet_prefix)[0] &&
+      tonumber(split("/", var.workers_subnet_prefix)[1]) <= 27,
+      false
+    )
+    error_message = "workers_subnet_prefix must be an IPv4 CIDR of /27 or larger, written as its network address (for example \"10.20.7.0/24\"): a workload-profiles Container Apps environment needs at least a /27."
+  }
+}
+
+variable "front_subnet_id" {
+  type        = string
+  default     = null
+  description = "On an injected network (aca_subnet_id), the id of the front environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. Set it with app_subnet_id and workers_subnet_id, or none of them; the three must be different subnets, and none of them aca_subnet_id or private_endpoints_subnet_id. The module attaches no network security group to it: docs/networking.md gives the inbound rules it should carry."
+}
+
+variable "app_subnet_id" {
+  type        = string
+  default     = null
+  description = "On an injected network (aca_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. Set it with front_subnet_id and workers_subnet_id, or none of them. The module attaches no network security group to it: it should admit HTTPS from the front subnet only, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
+}
+
+variable "workers_subnet_id" {
+  type        = string
+  default     = null
+  description = "On an injected network (aca_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. Set it with front_subnet_id and app_subnet_id, or none of them. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
 }
 
 # --- Async bus (ADR 0029) ---------------------------------------------------------

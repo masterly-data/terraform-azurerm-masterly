@@ -81,6 +81,28 @@ run "small_vnet_with_explicit_subnets_plans" {
     condition     = azurerm_subnet.aca[0].address_prefixes[0] == "10.99.0.0/23"
     error_message = "Explicit aca_subnet_prefix must be used verbatim."
   }
+
+  # A VNet too small to derive the environment subnets from creates none of them, so an
+  # existing small-VNet install keeps planning after the upgrade. Its endpoints subnet keeps
+  # admitting snet-aca alone.
+  assert {
+    condition = (
+      length(azurerm_subnet.environment) == 0 &&
+      length(azurerm_network_security_group.environment) == 0 &&
+      length(azurerm_subnet_network_security_group_association.environment) == 0 &&
+      length(azurerm_network_security_group.private_endpoints[0].security_rule) == 2
+    )
+    error_message = "A VNet smaller than /21 with no environment subnet prefixes must create no environment subnet, NSG or association, and add no endpoints rule."
+  }
+
+  assert {
+    condition = (
+      toset(keys(output.environment_subnet_ids)) == toset(["app", "front", "workers"]) &&
+      alltrue([for v in values(output.environment_subnet_ids) : v == null]) &&
+      alltrue([for v in values(output.environment_subnet_prefixes) : v == null])
+    )
+    error_message = "With no environment subnets, their outputs must be null."
+  }
 }
 
 # --- The three network topologies the module serves without a fork -----------------------
@@ -268,6 +290,15 @@ run "injected_network_creates_no_network" {
     condition     = local.virtual_network_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke"
     error_message = "The VNet id must be derived from the injected subnet id."
   }
+
+  # Without the three environment subnet ids the injected shape plans as it did before them.
+  assert {
+    condition = (
+      length(azurerm_subnet.environment) == 0 &&
+      alltrue([for v in values(output.environment_subnet_ids) : v == null])
+    )
+    error_message = "An injected network without environment subnet ids must create no environment subnet and publish no id."
+  }
 }
 
 # ...and no network security groups either. An injected subnet belongs to the platform
@@ -291,6 +322,14 @@ run "nsgs_absent_when_network_injected" {
       length(azurerm_subnet_network_security_group_association.private_endpoints) == 0
     )
     error_message = "Injecting subnets must create no network security group and no association — the platform team owns both."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_network_security_group.environment) == 0 &&
+      length(azurerm_subnet_network_security_group_association.environment) == 0
+    )
+    error_message = "Injecting subnets must create no environment subnet NSG and no association."
   }
 }
 
@@ -602,6 +641,654 @@ run "same_subnet_twice_is_rejected" {
     ingress_allowed_cidrs       = ["203.0.113.7/32"]
     aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
     private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# --- The environment subnets: front, app and workers (ADR 0120 §4-§5, MAS-4696) -------------
+# Three workload-profiles environments, each in a subnet of its own beside snet-aca. The NSG
+# runs compare each group's WHOLE rule set, one line per rule ("name priority direction access
+# protocol source destination ports", ports sorted), because the risk is a rule that should not
+# be there as much as one that is missing: an extra allow from VirtualNetwork on the app
+# subnet, or from the front subnet on the endpoints subnet, passes any "this rule exists" check.
+
+# Default inputs: the /24s at index 5, 6 and 7 of 10.20.0.0/16, clear of snet-aca
+# (10.20.0.0/23) and snet-private-endpoints (10.20.4.0/24).
+run "environment_subnets_derived_from_the_default_vnet" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      azurerm_subnet.environment["front"].address_prefixes[0] == "10.20.5.0/24" &&
+      azurerm_subnet.environment["app"].address_prefixes[0] == "10.20.6.0/24" &&
+      azurerm_subnet.environment["workers"].address_prefixes[0] == "10.20.7.0/24" &&
+      azurerm_subnet.aca[0].address_prefixes[0] == "10.20.0.0/23" &&
+      azurerm_subnet.private_endpoints[0].address_prefixes[0] == "10.20.4.0/24"
+    )
+    error_message = "The default VNet must derive front 10.20.5.0/24, app 10.20.6.0/24 and workers 10.20.7.0/24, beside snet-aca and the endpoints subnet."
+  }
+
+  assert {
+    condition = alltrue([
+      for k in ["front", "app", "workers"] :
+      azurerm_subnet.environment[k].name == "snet-${k}" &&
+      azurerm_subnet.environment[k].delegation[0].service_delegation[0].name == "Microsoft.App/environments"
+    ])
+    error_message = "Each environment subnet must be named snet-<environment> and delegated to Microsoft.App/environments."
+  }
+
+  assert {
+    condition     = length(local.subnet_layout) == 5 && length(local.subnet_layout_overlaps) == 0
+    error_message = "None of the five subnets may overlap another."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_network_security_group.environment) == 3 &&
+      length(azurerm_subnet_network_security_group_association.environment) == 3 &&
+      alltrue([for k in ["front", "app", "workers"] : azurerm_network_security_group.environment[k].name == "nsg-${var.name_prefix}-${k}"])
+    )
+    error_message = "Each environment subnet must get its own network security group, associated."
+  }
+
+  assert {
+    condition = (
+      output.environment_subnet_prefixes["front"] == "10.20.5.0/24" &&
+      output.environment_subnet_prefixes["app"] == "10.20.6.0/24" &&
+      output.environment_subnet_prefixes["workers"] == "10.20.7.0/24"
+    )
+    error_message = "environment_subnet_prefixes must publish the three prefixes."
+  }
+}
+
+# A /21, the smallest VNet the module derives from: all five subnets inside it, none overlapping.
+run "environment_subnets_derived_in_a_21" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    vnet_address_space    = ["10.99.8.0/21"]
+  }
+
+  assert {
+    condition = (
+      azurerm_subnet.aca[0].address_prefixes[0] == "10.99.8.0/23" &&
+      azurerm_subnet.private_endpoints[0].address_prefixes[0] == "10.99.12.0/24" &&
+      azurerm_subnet.environment["front"].address_prefixes[0] == "10.99.13.0/24" &&
+      azurerm_subnet.environment["app"].address_prefixes[0] == "10.99.14.0/24" &&
+      azurerm_subnet.environment["workers"].address_prefixes[0] == "10.99.15.0/24"
+    )
+    error_message = "A /21 must hold the runtime /23, the endpoints /24 and the three environment /24s."
+  }
+
+  assert {
+    condition = (
+      length(local.subnet_layout) == 5 &&
+      length(local.subnet_layout_overlaps) == 0 &&
+      length(local.env_subnets_outside_vnet) == 0
+    )
+    error_message = "All five subnets must lie inside the /21 and none may overlap another."
+  }
+}
+
+run "explicit_environment_subnet_prefixes_are_used_verbatim" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/27"
+    app_subnet_prefix     = "10.20.33.0/25"
+    workers_subnet_prefix = "10.20.34.0/24"
+  }
+
+  assert {
+    condition = (
+      azurerm_subnet.environment["front"].address_prefixes[0] == "10.20.32.0/27" &&
+      azurerm_subnet.environment["app"].address_prefixes[0] == "10.20.33.0/25" &&
+      azurerm_subnet.environment["workers"].address_prefixes[0] == "10.20.34.0/24"
+    )
+    error_message = "Explicit environment subnet prefixes must be used verbatim."
+  }
+
+  # The app group's caller follows the front prefix wherever it is.
+  assert {
+    condition = anytrue([
+      for r in azurerm_network_security_group.environment["app"].security_rule :
+      r.source_address_prefix == "10.20.32.0/27" && r.destination_address_prefix == "10.20.33.0/25"
+      if r.name == "allow-https-from-front"
+    ])
+    error_message = "The app subnet must admit the explicit front prefix."
+  }
+}
+
+# Guard: a workload-profiles environment needs at least a /27.
+run "environment_subnet_prefix_smaller_than_27_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/28"
+    app_subnet_prefix     = "10.20.33.0/24"
+    workers_subnet_prefix = "10.20.34.0/24"
+  }
+
+  expect_failures = [var.front_subnet_prefix]
+}
+
+# Each prefix carries its own size guard.
+run "app_subnet_prefix_smaller_than_27_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/24"
+    app_subnet_prefix     = "10.20.33.0/28"
+    workers_subnet_prefix = "10.20.34.0/24"
+  }
+
+  expect_failures = [var.app_subnet_prefix]
+}
+
+run "workers_subnet_prefix_smaller_than_27_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/24"
+    app_subnet_prefix     = "10.20.33.0/24"
+    workers_subnet_prefix = "10.20.34.0/28"
+  }
+
+  expect_failures = [var.workers_subnet_prefix]
+}
+
+run "environment_subnet_prefix_outside_the_vnet_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/24"
+    app_subnet_prefix     = "10.30.33.0/24"
+    workers_subnet_prefix = "10.20.34.0/24"
+  }
+
+  expect_failures = [azurerm_virtual_network.this]
+}
+
+# Inside snet-aca's /23.
+run "environment_subnet_prefix_overlapping_the_runtime_subnet_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/24"
+    app_subnet_prefix     = "10.20.33.0/24"
+    workers_subnet_prefix = "10.20.1.0/24"
+  }
+
+  expect_failures = [azurerm_virtual_network.this]
+}
+
+# Over the endpoints subnet: the front would then sit where the data plane's callers are named.
+run "environment_subnet_prefix_overlapping_the_endpoints_subnet_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.4.0/23"
+    app_subnet_prefix     = "10.20.33.0/24"
+    workers_subnet_prefix = "10.20.34.0/24"
+  }
+
+  expect_failures = [azurerm_virtual_network.this]
+}
+
+# Two environments in one range would share one set of inbound rules.
+run "environment_subnet_prefixes_overlapping_each_other_are_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/24"
+    app_subnet_prefix     = "10.20.32.128/25"
+    workers_subnet_prefix = "10.20.34.0/24"
+  }
+
+  expect_failures = [azurerm_virtual_network.this]
+}
+
+# Guard: the three go together. Checked on front_subnet_prefix alone, whichever are set.
+run "one_environment_subnet_prefix_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_prefix   = "10.20.32.0/24"
+  }
+
+  expect_failures = [var.front_subnet_prefix]
+}
+
+run "two_environment_subnet_prefixes_are_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    app_subnet_prefix     = "10.20.33.0/24"
+    workers_subnet_prefix = "10.20.34.0/24"
+  }
+
+  expect_failures = [var.front_subnet_prefix]
+}
+
+# Explicit legacy prefixes that already cover the derived /24s: nothing is derived over them, and
+# the install plans as before. The three prefixes are how such an install adds the subnets.
+run "derived_environment_subnets_yield_to_explicit_legacy_prefixes" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs           = ["203.0.113.7/32"]
+    aca_subnet_prefix               = "10.20.6.0/23"
+    private_endpoints_subnet_prefix = "10.20.8.0/24"
+  }
+
+  assert {
+    condition = (
+      azurerm_subnet.aca[0].address_prefixes[0] == "10.20.6.0/23" &&
+      length(azurerm_subnet.environment) == 0 &&
+      length(azurerm_network_security_group.environment) == 0 &&
+      length(azurerm_network_security_group.private_endpoints[0].security_rule) == 2
+    )
+    error_message = "Derived environment subnets that would overlap explicit legacy prefixes must not be created."
+  }
+}
+
+# Threat (ADR 0120 §5): nothing reaches the app subnet but HTTPS from the front subnet and the
+# Container Apps platform's own traffic. VirtualNetwork would admit every peered network and
+# on-premises range; Internet would admit everyone.
+run "app_subnet_admits_only_the_front_subnet" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = toset([
+      for r in azurerm_network_security_group.environment["app"].security_rule : join(" ", [
+        r.name, tostring(r.priority), r.direction, r.access, r.protocol, r.source_address_prefix, r.destination_address_prefix,
+        r.destination_port_range != null ? r.destination_port_range : join(",", sort(r.destination_port_ranges)),
+      ])
+      ]) == toset([
+      "allow-https-from-front 100 Inbound Allow Tcp 10.20.5.0/24 10.20.6.0/24 31443,443",
+      "allow-container-apps-load-balancer 110 Inbound Allow Tcp AzureLoadBalancer 10.20.6.0/24 30000-32767",
+      "allow-environment-internal 120 Inbound Allow * 10.20.6.0/24 10.20.6.0/24 *",
+      "deny-all-inbound 4000 Inbound Deny * * * *",
+    ])
+    error_message = "The app subnet's NSG must hold exactly: 443 (and the edge proxy's 31443) from the front subnet, the platform rules, and deny-all-inbound."
+  }
+
+  assert {
+    condition = alltrue([
+      for r in azurerm_network_security_group.environment["app"].security_rule :
+      !contains(["Internet", "VirtualNetwork", "*"], r.source_address_prefix)
+      if r.access == "Allow"
+    ])
+    error_message = "No allow rule on the app subnet may have Internet, VirtualNetwork or any address as its source."
+  }
+}
+
+# Threat: the workers environment has no caller at all.
+run "workers_subnet_admits_only_the_platform" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = toset([
+      for r in azurerm_network_security_group.environment["workers"].security_rule : join(" ", [
+        r.name, tostring(r.priority), r.direction, r.access, r.protocol, r.source_address_prefix, r.destination_address_prefix,
+        r.destination_port_range != null ? r.destination_port_range : join(",", sort(r.destination_port_ranges)),
+      ])
+      ]) == toset([
+      "allow-container-apps-load-balancer 110 Inbound Allow Tcp AzureLoadBalancer 10.20.7.0/24 30000-32767",
+      "allow-environment-internal 120 Inbound Allow * 10.20.7.0/24 10.20.7.0/24 *",
+      "deny-all-inbound 4000 Inbound Deny * * * *",
+    ])
+    error_message = "The workers subnet's NSG must hold exactly the platform rules and deny-all-inbound."
+  }
+}
+
+# A public front is reached from the internet; ingress_allowed_cidrs is its narrower filter.
+run "front_subnet_admits_the_internet_on_a_public_environment" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = toset([
+      for r in azurerm_network_security_group.environment["front"].security_rule : join(" ", [
+        r.name, tostring(r.priority), r.direction, r.access, r.protocol, r.source_address_prefix, r.destination_address_prefix,
+        r.destination_port_range != null ? r.destination_port_range : join(",", sort(r.destination_port_ranges)),
+      ])
+      ]) == toset([
+      "allow-app-ingress 100 Inbound Allow Tcp Internet 10.20.5.0/24 31080,31443,443,80",
+      "allow-container-apps-load-balancer 110 Inbound Allow Tcp AzureLoadBalancer 10.20.5.0/24 30000-32767",
+      "allow-environment-internal 120 Inbound Allow * 10.20.5.0/24 10.20.5.0/24 *",
+      "deny-all-inbound 4000 Inbound Deny * * * *",
+    ])
+    error_message = "A public front subnet's NSG must hold exactly: 80 and 443 (and the edge proxy's 31080 and 31443) from Internet, the platform rules, and deny-all-inbound."
+  }
+}
+
+# An internal front (behind a WAF or Application Gateway, or reached over VPN) has no public
+# endpoint, so it admits VirtualNetwork instead.
+run "front_subnet_admits_the_vnet_on_an_internal_environment" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+  }
+
+  assert {
+    condition = toset([
+      for r in azurerm_network_security_group.environment["front"].security_rule : join(" ", [
+        r.name, tostring(r.priority), r.direction, r.access, r.protocol, r.source_address_prefix, r.destination_address_prefix,
+        r.destination_port_range != null ? r.destination_port_range : join(",", sort(r.destination_port_ranges)),
+      ])
+      ]) == toset([
+      "allow-app-ingress 100 Inbound Allow Tcp VirtualNetwork 10.20.5.0/24 31080,31443,443,80",
+      "allow-container-apps-load-balancer 110 Inbound Allow Tcp AzureLoadBalancer 10.20.5.0/24 30000-32767",
+      "allow-environment-internal 120 Inbound Allow * 10.20.5.0/24 10.20.5.0/24 *",
+      "deny-all-inbound 4000 Inbound Deny * * * *",
+    ])
+    error_message = "An internal front subnet's NSG must hold exactly: 80 and 443 (and the edge proxy's 31080 and 31443) from VirtualNetwork, the platform rules, and deny-all-inbound."
+  }
+}
+
+# Threat (ADR 0120 §5): the front subnet cannot open a connection to any private endpoint. The
+# endpoints subnet admits the app and workers subnets on the data-plane ports, keeps snet-aca's
+# rule while the apps still run there, and nothing whose source covers the front prefix.
+run "endpoints_subnet_admits_app_and_workers_never_front" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = toset([
+      for r in azurerm_network_security_group.private_endpoints[0].security_rule : join(" ", [
+        r.name, tostring(r.priority), r.direction, r.access, r.protocol, r.source_address_prefix, r.destination_address_prefix,
+        r.destination_port_range != null ? r.destination_port_range : join(",", sort(r.destination_port_ranges)),
+      ])
+      ]) == toset([
+      "allow-data-plane-from-apps 100 Inbound Allow Tcp 10.20.0.0/23 10.20.4.0/24 ${join(",", sort(local.private_endpoint_ports))}",
+      "allow-data-plane-from-app-subnet 110 Inbound Allow Tcp 10.20.6.0/24 10.20.4.0/24 ${join(",", sort(local.private_endpoint_ports))}",
+      "allow-data-plane-from-workers-subnet 120 Inbound Allow Tcp 10.20.7.0/24 10.20.4.0/24 ${join(",", sort(local.private_endpoint_ports))}",
+      "deny-all-inbound 4000 Inbound Deny * * * *",
+    ])
+    error_message = "The endpoints subnet's NSG must hold exactly: the data-plane ports from snet-aca, the app subnet and the workers subnet, and deny-all-inbound."
+  }
+
+  # Spelled out on its own: no allow rule's source is a service tag, any address, or a range
+  # that contains the front prefix (10.20.5.0/24).
+  assert {
+    condition = alltrue([
+      for r in azurerm_network_security_group.private_endpoints[0].security_rule :
+      !contains(["Internet", "VirtualNetwork", "*"], r.source_address_prefix) &&
+      !try(
+        tonumber(split("/", r.source_address_prefix)[1]) <= 24 &&
+        cidrhost("10.20.5.0/${split("/", r.source_address_prefix)[1]}", 0) == cidrhost(r.source_address_prefix, 0),
+        true
+      )
+      if r.access == "Allow"
+    ])
+    error_message = "No allow rule on the endpoints subnet may have a source that covers the front subnet."
+  }
+}
+
+# Upgrade: the existing network keeps its addresses, names and prefixes, and snet-aca's group
+# its rules. Everything the environment subnets bring is a new address; nothing here needs a
+# moved block, and no resource below is replaced.
+run "upgrade_keeps_the_legacy_network_on_default_inputs" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet.aca) == 1 && azurerm_subnet.aca[0].name == "snet-aca" &&
+      azurerm_subnet.aca[0].address_prefixes[0] == "10.20.0.0/23" &&
+      length(azurerm_subnet.private_endpoints) == 1 && azurerm_subnet.private_endpoints[0].name == "snet-private-endpoints" &&
+      azurerm_subnet.private_endpoints[0].address_prefixes[0] == "10.20.4.0/24" &&
+      length(azurerm_network_security_group.aca) == 1 && azurerm_network_security_group.aca[0].name == "nsg-${var.name_prefix}-aca" &&
+      length(azurerm_network_security_group.private_endpoints) == 1 && azurerm_network_security_group.private_endpoints[0].name == "nsg-${var.name_prefix}-private-endpoints" &&
+      length(azurerm_subnet_network_security_group_association.aca) == 1 &&
+      length(azurerm_subnet_network_security_group_association.private_endpoints) == 1
+    )
+    error_message = "snet-aca, snet-private-endpoints, their NSGs and associations must keep their addresses, names and prefixes."
+  }
+
+  assert {
+    condition = toset([
+      for r in azurerm_network_security_group.aca[0].security_rule : join(" ", [
+        r.name, tostring(r.priority), r.direction, r.access, r.protocol, r.source_address_prefix, r.destination_address_prefix,
+        r.destination_port_range != null ? r.destination_port_range : join(",", sort(r.destination_port_ranges)),
+      ])
+      ]) == toset([
+      "allow-app-ingress 100 Inbound Allow Tcp Internet 10.20.0.0/23 443,80",
+      "allow-container-apps-load-balancer 110 Inbound Allow Tcp AzureLoadBalancer 10.20.0.0/23 30000-32767",
+      "allow-environment-internal 120 Inbound Allow * 10.20.0.0/23 10.20.0.0/23 *",
+      "deny-all-inbound 4000 Inbound Deny * * * *",
+    ])
+    error_message = "snet-aca's NSG rules must be unchanged."
+  }
+}
+
+run "upgrade_keeps_the_legacy_network_on_explicit_prefixes" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs           = ["203.0.113.7/32"]
+    aca_subnet_prefix               = "10.20.8.0/23"
+    private_endpoints_subnet_prefix = "10.20.10.0/24"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet.aca) == 1 && azurerm_subnet.aca[0].name == "snet-aca" &&
+      azurerm_subnet.aca[0].address_prefixes[0] == "10.20.8.0/23" &&
+      length(azurerm_subnet.private_endpoints) == 1 && azurerm_subnet.private_endpoints[0].name == "snet-private-endpoints" &&
+      azurerm_subnet.private_endpoints[0].address_prefixes[0] == "10.20.10.0/24" &&
+      length(azurerm_network_security_group.aca) == 1 && azurerm_network_security_group.aca[0].name == "nsg-${var.name_prefix}-aca" &&
+      length(azurerm_network_security_group.private_endpoints) == 1 &&
+      length(azurerm_subnet_network_security_group_association.aca) == 1 &&
+      length(azurerm_subnet_network_security_group_association.private_endpoints) == 1
+    )
+    error_message = "With explicit legacy prefixes, snet-aca, snet-private-endpoints, their NSGs and associations must keep their addresses, names and prefixes."
+  }
+
+  assert {
+    condition = toset([
+      for r in azurerm_network_security_group.aca[0].security_rule : join(" ", [
+        r.name, tostring(r.priority), r.direction, r.access, r.protocol, r.source_address_prefix, r.destination_address_prefix,
+        r.destination_port_range != null ? r.destination_port_range : join(",", sort(r.destination_port_ranges)),
+      ])
+      ]) == toset([
+      "allow-app-ingress 100 Inbound Allow Tcp Internet 10.20.8.0/23 443,80",
+      "allow-container-apps-load-balancer 110 Inbound Allow Tcp AzureLoadBalancer 10.20.8.0/23 30000-32767",
+      "allow-environment-internal 120 Inbound Allow * 10.20.8.0/23 10.20.8.0/23 *",
+      "deny-all-inbound 4000 Inbound Deny * * * *",
+    ])
+    error_message = "snet-aca's NSG rules must be unchanged."
+  }
+
+  # The legacy rule keeps admitting snet-aca, wherever it is.
+  assert {
+    condition = anytrue([
+      for r in azurerm_network_security_group.private_endpoints[0].security_rule :
+      r.source_address_prefix == "10.20.8.0/23" && r.destination_address_prefix == "10.20.10.0/24"
+      if r.name == "allow-data-plane-from-apps"
+    ])
+    error_message = "The endpoints subnet must keep admitting snet-aca."
+  }
+}
+
+# Topology 3 with the environment subnets: the module still creates no network at all, and
+# publishes the ids it was given.
+run "injected_environment_subnets_create_no_network" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_virtual_network.this) == 0 &&
+      length(azurerm_subnet.aca) == 0 &&
+      length(azurerm_subnet.private_endpoints) == 0 &&
+      length(azurerm_subnet.environment) == 0 &&
+      length(azurerm_network_security_group.aca) == 0 &&
+      length(azurerm_network_security_group.private_endpoints) == 0 &&
+      length(azurerm_network_security_group.environment) == 0 &&
+      length(azurerm_subnet_network_security_group_association.aca) == 0 &&
+      length(azurerm_subnet_network_security_group_association.private_endpoints) == 0 &&
+      length(azurerm_subnet_network_security_group_association.environment) == 0
+    )
+    error_message = "Injected environment subnets must create no VNet, no subnet and no network security group."
+  }
+
+  assert {
+    condition = (
+      output.environment_subnet_ids["front"] == var.front_subnet_id &&
+      output.environment_subnet_ids["app"] == var.app_subnet_id &&
+      output.environment_subnet_ids["workers"] == var.workers_subnet_id &&
+      alltrue([for v in values(output.environment_subnet_prefixes) : v == null])
+    )
+    error_message = "environment_subnet_ids must publish the injected ids, and environment_subnet_prefixes null: the module does not read the spoke."
+  }
+}
+
+# Guard: the three injected ids go together.
+run "one_injected_environment_subnet_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+run "two_injected_environment_subnets_are_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: the ids join an injected network; on a network the module builds they mean nothing.
+run "injected_environment_subnets_without_an_injected_network_are_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_subnet_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: one subnet for two environments collapses their boundaries into one. Compared without
+# regard to case, as Azure compares resource ids.
+run "injected_environment_subnet_reused_for_two_environments_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/SNET-FRONT"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+run "injected_environment_subnet_reusing_the_runtime_subnet_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# The front in the endpoints subnet would be the front reaching the data plane by construction.
+run "injected_environment_subnet_reusing_the_endpoints_subnet_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: the install's private DNS zones are linked to aca_subnet_id's network.
+run "injected_environment_subnet_in_another_vnet_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-other/subnets/snet-workers"
   }
 
   expect_failures = [azurerm_resource_group.aca]

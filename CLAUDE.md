@@ -56,7 +56,7 @@ One Terraform root module: `main.tf` is the always-created core, with the networ
 | Path | Contents |
 |---|---|
 | `main.tf` | The core: the shared locals, the per-install suffix, the licence-claims check, two resource groups, the `api` and `frontend` Container Apps, the starter Postgres flexible server with its private endpoint and the connection URLs, and the optional Service Bus namespace and queue |
-| `network.tf` | The VNet and its two subnets, their network security groups and the Postgres private DNS zone |
+| `network.tf` | The VNet and its subnets (the runtime `snet-aca`, the private endpoints', and the front, app and workers environment subnets of ADR 0120), their network security groups and the Postgres private DNS zone |
 | `environment.tf` | The Log Analytics workspace and the ACA environment |
 | `identity.tf` | The user-assigned identities (apps, frontend, migrate with `migrations = "job"`, and workers wherever `ca-workers` runs as its own: `workers_own_identity`, `workers.tf`), the registry and image defaults and the AcrPull grants |
 | `auth.tf` | The generated session and BFF shared secrets and the identity provider's endpoint locals (`oidc_*`, `breakglass_owner_email`) |

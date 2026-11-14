@@ -52,6 +52,68 @@ locals {
     cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 4)
   )
 
+  # The environment subnets (ADR 0120 §4-§5): front, app and workers, one workload-profiles
+  # Container Apps environment each, beside snet-aca and the endpoints subnet. Explicit prefixes
+  # win. With none set, a first VNet prefix of /21 or larger derives the /24s at index 5, 6 and
+  # 7, which are clear of the derived runtime /23 (index 0) and endpoints /24 (index 4). A
+  # smaller VNet, or explicit legacy prefixes that already cover those /24s, derives nothing:
+  # an existing install keeps planning, and sets the three prefixes to add the subnets.
+  env_subnet_prefix_inputs = {
+    front   = var.front_subnet_prefix
+    app     = var.app_subnet_prefix
+    workers = var.workers_subnet_prefix
+  }
+  env_subnet_prefixes_given = length(compact(values(local.env_subnet_prefix_inputs))) > 0
+  env_subnet_candidates = local.env_subnet_prefixes_given || local.vnet_prefix_bits > 21 ? local.env_subnet_prefix_inputs : {
+    front   = cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 5)
+    app     = cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 6)
+    workers = cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 7)
+  }
+
+  # Every subnet the module would carve, and which of them overlap another. Terraform has no
+  # CIDR-contains function: two prefixes overlap exactly when their network addresses agree at
+  # the shorter of their two lengths, and a prefix lies inside another when it is at least as
+  # long and agrees with it at the other's length. A malformed prefix counts as neither; the
+  # variable's own validation reports it.
+  subnet_layout = {
+    for k, p in merge(
+      { aca = local.aca_subnet_prefix, private_endpoints = local.private_endpoints_subnet_prefix },
+      local.env_subnet_candidates,
+    ) : k => p if p != null
+  }
+  subnet_layout_overlaps = toset(flatten([
+    for a, pa in local.subnet_layout : [
+      for b, pb in local.subnet_layout : a
+      if a != b && try(
+        cidrhost("${cidrhost(pa, 0)}/${min(tonumber(split("/", pa)[1]), tonumber(split("/", pb)[1]))}", 0) ==
+        cidrhost("${cidrhost(pb, 0)}/${min(tonumber(split("/", pa)[1]), tonumber(split("/", pb)[1]))}", 0),
+        false
+      )
+    ]
+  ]))
+  env_subnets_outside_vnet = toset([
+    for k, p in local.env_subnet_candidates : k
+    if p != null && !anytrue([
+      for v in var.vnet_address_space : try(
+        tonumber(split("/", p)[1]) >= tonumber(split("/", v)[1]) &&
+        cidrhost("${cidrhost(p, 0)}/${split("/", v)[1]}", 0) == cidrhost(v, 0),
+        false
+      )
+    ])
+  ])
+
+  # Created only when the module owns the network and all three prefixes are known and clear of
+  # every other subnet. Partial explicit prefixes are refused by the variables' validations,
+  # and clashing ones by the VNet's preconditions (network.tf); derived ones that would clash
+  # are simply not created.
+  create_env_subnets = (
+    !local.inject_network &&
+    length(compact(values(local.env_subnet_candidates))) == 3 &&
+    length(setintersection(local.subnet_layout_overlaps, ["front", "app", "workers"])) == 0 &&
+    length(local.env_subnets_outside_vnet) == 0
+  )
+  env_subnet_prefixes = { for k, p in local.env_subnet_candidates : k => p if local.create_env_subnets }
+
   # --- Network: create the VNet, or join one the platform team already owns -------------
   # Three topologies the module has to serve without a fork (docs/networking.md):
   #   1. public ingress behind an IP allowlist   — the default; module owns the VNet
@@ -68,6 +130,31 @@ locals {
   # /subscriptions/../virtualNetworks/<vnet>/subnets/<subnet>. Derived rather than asked
   # for, so the two can never disagree.
   virtual_network_id = local.inject_network ? regex("^(.*)/subnets/[^/]+$", var.aca_subnet_id)[0] : azurerm_virtual_network.this[0].id
+
+  # The environment subnets on an injected spoke: all three or none, beside aca_subnet_id
+  # (preconditions on azurerm_resource_group.aca). Compared case-insensitively, as Azure
+  # compares resource ids.
+  env_subnet_id_inputs = {
+    front   = var.front_subnet_id
+    app     = var.app_subnet_id
+    workers = var.workers_subnet_id
+  }
+  env_subnet_ids_given = compact(values(local.env_subnet_id_inputs))
+  injected_subnet_ids = [
+    for id in concat(compact([var.aca_subnet_id, var.private_endpoints_subnet_id]), local.env_subnet_ids_given) : lower(id)
+  ]
+
+  # What the outputs publish: the three subnets' ids and prefixes, null where the install has
+  # no such subnet or, on an injected spoke, where the module cannot know the prefix.
+  env_subnet_ids = {
+    for k in ["front", "app", "workers"] : k => (
+      local.inject_network ? local.env_subnet_id_inputs[k] :
+      local.create_env_subnets ? azurerm_subnet.environment[k].id : null
+    )
+  }
+  env_subnet_published_prefixes = {
+    for k in ["front", "app", "workers"] : k => try(local.env_subnet_prefixes[k], null)
+  }
 
   # --- Data residency: check the promise against where the resources actually land ------
   # `location` (an Azure region) and `masterly_region` (a Masterly geo, ADR 0022) were
@@ -281,6 +368,34 @@ resource "azurerm_resource_group" "aca" {
     precondition {
       condition     = var.aca_subnet_id == null || var.aca_subnet_id != var.private_endpoints_subnet_id
       error_message = "aca_subnet_id and private_endpoints_subnet_id must be different subnets: the ACA subnet is delegated to Microsoft.App/environments, and Azure refuses private endpoints in a delegated subnet."
+    }
+
+    # The environment subnets on an injected spoke (ADR 0120 §5). Each one is a trust boundary
+    # of its own, so a subnet named for two of them, or for the runtime or endpoints subnet,
+    # would collapse two boundaries into one.
+    precondition {
+      condition     = length(local.env_subnet_ids_given) == 0 || length(local.env_subnet_ids_given) == 3
+      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id go together: set all three, or none. Each is the subnet of one Container Apps environment, and an install with some of them has nowhere to run the others."
+    }
+
+    precondition {
+      condition     = length(local.env_subnet_ids_given) == 0 || var.aca_subnet_id != null
+      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id join an existing network, so they need aca_subnet_id and private_endpoints_subnet_id beside them. On a network the module builds, set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix instead."
+    }
+
+    precondition {
+      condition     = length(distinct(local.injected_subnet_ids)) == length(local.injected_subnet_ids)
+      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id must be three different subnets, and none of them may be aca_subnet_id or private_endpoints_subnet_id: each environment's subnet carries its own inbound rules, and private endpoints cannot sit in a delegated subnet."
+    }
+
+    # A conditional, not `||`: Terraform before 1.12 evaluates both operands of `||`, and
+    # lower(null) would then error instead of leaving the precondition above to refuse it.
+    precondition {
+      condition = var.aca_subnet_id == null ? true : alltrue([
+        for id in local.env_subnet_ids_given :
+        lower(try(regex("^(.*)/subnets/[^/]+$", id)[0], id)) == lower(try(regex("^(.*)/subnets/[^/]+$", var.aca_subnet_id)[0], var.aca_subnet_id))
+      ])
+      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id must be subnets of the same virtual network as aca_subnet_id: the install's private DNS zones are linked to that network, and its private endpoints answer only to callers that resolve them."
     }
 
     precondition {
