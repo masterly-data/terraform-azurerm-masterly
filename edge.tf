@@ -335,6 +335,8 @@ resource "azurerm_container_app" "edge" {
     azurerm_role_assignment.acr_pull_edge,
     azurerm_private_endpoint.registry,
     azurerm_private_dns_zone_virtual_network_link.registry,
+    # With egress_firewall, the first pull takes the firewall's route, as on the api.
+    azurerm_subnet_route_table_association.aca,
   ]
 }
 

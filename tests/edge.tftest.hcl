@@ -621,6 +621,28 @@ run "edge_has_no_admin_interface" {
   }
 }
 
+# Ordering: with egress_firewall, ca-edge's first pull from Docker Hub already takes the firewall's
+# route, as the other apps' do. `terraform test` cannot read depends_on, so this reads it: comments
+# stripped, as in tests/network.tftest.hcl.
+run "edge_follows_the_egress_firewall_association" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = strcontains(
+      replace(
+        regex("(?s)depends_on = \\[([^\\]]*)\\]", regex("(?s)resource \"azurerm_container_app\" \"edge\" \\{(.*?)\\n\\}", file("${path.module}/edge.tf"))[0])[0],
+        "/#[^\\n]*/", ""
+      ),
+      "azurerm_subnet_route_table_association.aca,"
+    )
+    error_message = "ca-edge must depend on azurerm_subnet_route_table_association.aca, so its first pull does not take Azure's default path before the firewall route is attached."
+  }
+}
+
 # --- Applies: what reaches a running edge ----------------------------------------------------
 # Plan runs against applied state: only a change Terraform does not ignore shows in the plan.
 
