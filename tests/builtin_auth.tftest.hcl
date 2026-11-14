@@ -505,6 +505,40 @@ run "builtin_auth_recovery_baseline_api" {
     ])
     error_message = "Without the recovery window, ca-api's env must be the install's own settings and nothing about built-in authentication."
   }
+
+  # The values, not only the names: the next run asserts the same map with the window open.
+  assert {
+    condition = jsonencode(local.api_env) == jsonencode({
+      MASTERLY_ALLOWED_REGIONS               = "eu"
+      MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = "7"
+      MASTERLY_IDENTITY_BINDING              = "dev"
+      MASTERLY_INSTALL_ID                    = "test"
+      MASTERLY_MODE                          = "demo"
+      MASTERLY_ORG_ID                        = "org_test"
+      MASTERLY_REGION                        = "eu"
+    })
+    error_message = "Without the recovery window, ca-api's plain env values must be the install's own settings."
+  }
+
+  # Which secret each secret-backed env variable reads, and which secrets the app carries: names
+  # only, never the material.
+  assert {
+    condition = (
+      jsonencode(local.api_env_secret_refs) == jsonencode({
+        MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret"
+        MASTERLY_DATABASE_URL      = "database-url"
+        MASTERLY_SESSION_SECRET    = "session-secret"
+      }) &&
+      jsonencode(sort(module.api.value_secret_names)) == jsonencode(sort([
+        "bff-shared-secret",
+        "database-url",
+        "microsoft-provider-authentication-secret",
+        "session-secret",
+      ])) &&
+      length(module.api.vault_backed_secret_names) == 0
+    )
+    error_message = "Without the recovery window, ca-api's secret-backed env must read the install's own secrets."
+  }
 }
 
 # The window open, behind an allowlist: ca-frontend's gate is off, and nothing else moves.
@@ -587,6 +621,37 @@ run "builtin_auth_recovery_opens_only_the_frontend_gate" {
       "MASTERLY_REGION",
     ])
     error_message = "The recovery window must leave ca-api's env as it is without it (the baseline run's names)."
+  }
+
+  assert {
+    condition = jsonencode(local.api_env) == jsonencode({
+      MASTERLY_ALLOWED_REGIONS               = "eu"
+      MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = "7"
+      MASTERLY_IDENTITY_BINDING              = "dev"
+      MASTERLY_INSTALL_ID                    = "test"
+      MASTERLY_MODE                          = "demo"
+      MASTERLY_ORG_ID                        = "org_test"
+      MASTERLY_REGION                        = "eu"
+    })
+    error_message = "The recovery window must leave ca-api's plain env values as they are without it (the baseline run's values)."
+  }
+
+  assert {
+    condition = (
+      jsonencode(local.api_env_secret_refs) == jsonencode({
+        MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret"
+        MASTERLY_DATABASE_URL      = "database-url"
+        MASTERLY_SESSION_SECRET    = "session-secret"
+      }) &&
+      jsonencode(sort(module.api.value_secret_names)) == jsonencode(sort([
+        "bff-shared-secret",
+        "database-url",
+        "microsoft-provider-authentication-secret",
+        "session-secret",
+      ])) &&
+      length(module.api.vault_backed_secret_names) == 0
+    )
+    error_message = "The recovery window must leave ca-api's secret-backed env and its secrets as they are without it (the baseline run's names)."
   }
 }
 
