@@ -116,9 +116,9 @@ resource "azurerm_subnet" "environment" {
 # Entra ID, Azure Monitor), the outbound set is long and versioned by Microsoft, and an
 # outbound deny written here would be a second, stale copy of it — the failure would be an
 # environment that provisions and then cannot start a replica. Azure's default
-# AllowInternetOutBound stays. How egress can be narrowed depends on the Container Apps
-# environment type (a route or NAT Gateway on the subnet is honoured only for workload
-# profiles), and on an injected spoke it is the platform team's (docs/networking.md, "Egress").
+# AllowInternetOutBound stays. Egress is narrowed by routing it, not by an NSG: egress_firewall
+# attaches a route table to snet-aca that sends 0.0.0.0/0 to the customer's firewall (below), and
+# on an injected spoke the hub's route table is the platform team's (docs/networking.md, "Egress").
 #
 # Created ONLY when the module owns the network. On an injected spoke (topology 3) the
 # subnets belong to the platform team, and attaching an NSG to a subnet somebody else
@@ -389,6 +389,70 @@ resource "azurerm_subnet_network_security_group_association" "environment" {
 
   subnet_id                 = azurerm_subnet.environment[each.key].id
   network_security_group_id = azurerm_network_security_group.environment[each.key].id
+}
+
+# --- Forced-tunnel egress (egress_firewall) ------------------------------------------
+# All outbound traffic from snet-aca goes to the customer's firewall, which decides what passes
+# (docs/networking.md, "Egress", lists what it must admit). Only on a network the module builds:
+# on an injected spoke the input is refused at plan (variables-core.tf), and the module creates
+# nothing here, so a route table the hub already attached to that subnet is never touched.
+#
+# snet-aca only. snet-private-endpoints has private_endpoint_network_policies = "Enabled", under
+# which a route table there would apply to private-endpoint traffic as well, sending the data
+# plane's replies through the firewall. Traffic from the apps to those endpoints needs no route:
+# it stays inside the VNet, where the VNet's system route is more specific than 0.0.0.0/0.
+
+locals {
+  # The route table in effect on snet-aca: the customer's, or the one created below. null unset.
+  egress_route_table_id = try(coalesce(var.egress_firewall.route_table_id, one(azurerm_route_table.egress[*].id)), null)
+}
+
+resource "azurerm_route_table" "egress" {
+  count = !local.inject_network && try(var.egress_firewall.next_hop_ip, null) != null ? 1 : 0
+
+  name                = "rt-${var.name_prefix}-aca"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  tags                = local.tags
+
+  # Kept on, and written out so it is not turned off as hardening. Routes a VPN or ExpressRoute
+  # gateway propagates (topology 2's clients, over a peered hub's gateway) are more specific than
+  # 0.0.0.0/0 and must keep winning over it; without them the replies to those clients would leave
+  # through the firewall, a path their requests never took, and a stateful firewall drops them.
+  bgp_route_propagation_enabled = true
+
+  route {
+    name                   = "default-to-firewall"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = var.egress_firewall.next_hop_ip
+  }
+}
+
+# A separate resource, like the NSG associations above: a subnet holds one route table, and this
+# is that one association.
+resource "azurerm_subnet_route_table_association" "aca" {
+  count = !local.inject_network && var.egress_firewall != null ? 1 : 0
+
+  subnet_id      = azurerm_subnet.aca[0].id
+  route_table_id = local.egress_route_table_id
+
+  lifecycle {
+    # Azure ignores a route on a Consumption-only environment, and egress would then stay open
+    # while it is believed forced, so the module refuses rather than attach one. What makes the
+    # environment workload-profiles is known in two halves. The Microsoft.App/environments
+    # delegation on its subnet is known at plan (ADR 0104: on a delegated subnet Azure creates a
+    # workload-profiles environment, with the Consumption profile filled in). The profiles Azure
+    # actually lists are known at plan for an existing environment and at apply for a new one,
+    # when Terraform evaluates this condition again; until then the unknown half does not refuse.
+    precondition {
+      condition = (
+        try(azurerm_subnet.aca[0].delegation[0].service_delegation[0].name, null) == "Microsoft.App/environments" &&
+        try(length(module.aca_env.workload_profile_names) > 0, true)
+      )
+      error_message = "egress_firewall needs a workload-profiles Container Apps environment: Azure ignores a route on a Consumption-only environment, so egress would stay open while it is believed forced through your firewall. The environment's subnet must be delegated to Microsoft.App/environments and Azure must list at least one workload profile on the environment (az containerapp env show --query properties.workloadProfiles). Remove egress_firewall, or move the install to a workload-profiles environment first."
+    }
+  }
 }
 
 # Private DNS so the server's public FQDN resolves to the private endpoint inside the

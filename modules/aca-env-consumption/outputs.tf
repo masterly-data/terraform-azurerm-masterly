@@ -32,6 +32,12 @@ output "identity_ids" {
   description = "The user-assigned identity ids attached to the environment itself. Empty unless the caller attached some."
 }
 
+# SELF-HOSTED EXTENSION. Unknown until apply on a new environment (main.tf says why).
+output "workload_profile_names" {
+  value       = var.read_workload_profiles ? (local.workload_profiles == null ? [] : [for profile in local.workload_profiles : profile.name]) : null
+  description = "The names of the environment's workload profiles, as Azure reports them, with read_workload_profiles on; null with it off. An empty list is a Consumption-only environment, on which Azure ignores a route table on the infrastructure subnet. Unknown at plan for an environment that does not exist yet."
+}
+
 # SELF-HOSTED EXTENSION. Sensitive, as the provider marks the attribute. The value is not a
 # secret: it is published in DNS, as the asuid.<hostname> TXT record.
 output "custom_domain_verification_id" {

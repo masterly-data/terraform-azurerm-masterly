@@ -18,6 +18,7 @@ One setting on the environment covers every app in it.
 | `location` | string | — | Azure region. |
 | `tags` | map(string) | `{}` | Tags on the environment. |
 | `identity_ids` | list(string) | `[]` | Self-hosted extension: user-assigned identities on the environment itself, which it uses to read certificates from Key Vault. Empty renders no `identity` block. |
+| `read_workload_profiles` | bool | `false` | Self-hosted extension: read the environment's workload profiles from Azure (an azapi read) into `workload_profile_names`. |
 
 There is no workspace input: the provider refuses `log_analytics_workspace_id` on an
 environment whose `logs_destination` is `azure-monitor`, so the workspace is named on
@@ -31,6 +32,7 @@ the diagnostic setting instead.
 | `default_domain` | Default domain suffix for apps in this environment. |
 | `logs_destination` | Where the environment sends its logs. Always `azure-monitor`. |
 | `identity_ids` | Self-hosted extension: the identities attached to the environment. |
+| `workload_profile_names` | Self-hosted extension: the workload profiles Azure reports, with `read_workload_profiles` on (null otherwise). Empty means Consumption-only, where Azure ignores a route table on the subnet. Unknown at plan for a new environment. |
 | `custom_domain_verification_id` | Self-hosted extension: the `asuid.<hostname>` TXT value Azure checks before it binds a custom domain. Sensitive, as the provider marks it. |
 
 ## Deviation from `design.md`

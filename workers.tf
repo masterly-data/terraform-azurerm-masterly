@@ -218,6 +218,8 @@ module "workers" {
     azurerm_private_dns_zone_virtual_network_link.servicebus,
     # MASTERLY_MIGRATIONS = job, as on the api (migrate.tf).
     azapi_resource_action.migrate_start,
+    # With egress_firewall, the first pull takes the firewall's route, as on the api (main.tf).
+    azurerm_subnet_route_table_association.aca,
   ]
 }
 

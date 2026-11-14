@@ -107,9 +107,31 @@ zone of a name, so if your hub already links `privatelink.azurecr.io` to this sp
 `registry_private_endpoint` off and have your platform team add the registry's private endpoint
 (subresource `registry`) on their side, in the hub zone.
 
-**Egress.** What you can do to outbound traffic on the ACA subnet depends on the type of
-Container Apps environment, and Azure honours a route or a NAT Gateway on that subnet for only
-one of the two types. A route Azure ignores filters nothing, so check your environment first:
+## Egress
+
+By default the install's outbound traffic takes Azure's default path: the module's NSGs carry
+inbound rules only, so Azure's `AllowInternetOutBound` applies. To send all of it through your
+own firewall instead (forced tunnelling), route the Container Apps subnet's `0.0.0.0/0` to the
+firewall. Your firewall then decides what passes, and it must admit the destinations
+[listed below](#what-your-firewall-must-admit).
+
+| Topology | How |
+|---|---|
+| 1: public ingress | Not offered: `egress_firewall` is refused at plan while `aca_internal_load_balancer = false` ([why](#forced-tunnelling-needs-an-internal-environment)). Make the environment internal and publish the frontend through your Application Gateway, which is topology 2 |
+| 2: the module builds the network, internal environment (`aca_internal_load_balancer = true`) | `egress_firewall = { next_hop_ip = "10.0.0.4" }`: the module creates `rt-<name_prefix>-aca` in `rg-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, and attaches it to `snet-aca`. Or `egress_firewall = { route_table_id = "/subscriptions/.../routeTables/<name>" }`: the module attaches your route table to `snet-aca` as it is, and creates none |
+| 3: injected subnets | Your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to the injected ACA subnet. `egress_firewall` is refused at plan there: a subnet holds one route table, and the module attaching its own would replace the hub's. The module creates no route table and no association on injected subnets, so the one the hub attached is never touched |
+
+The `egress_route` output shows the route table in effect and the next-hop address, and is null
+when `egress_firewall` is unset.
+
+**Only on a workload-profiles environment.** Azure ignores a route on a Consumption-only
+Container Apps environment, so egress would stay open while you believe it is filtered. The
+module therefore refuses `egress_firewall` unless the environment's subnet is delegated to
+`Microsoft.App/environments` and Azure lists at least one workload profile on the environment.
+Every environment the module builds meets both (ADR 0104): its subnet is delegated, and on a
+delegated subnet Azure creates a workload-profiles environment with the `Consumption` profile
+filled in. For an existing environment the module reads the profiles at plan, and for a new one
+at apply, after Azure has created it. To check an environment yourself:
 
 ```sh
 az containerapp env show \
@@ -117,37 +139,87 @@ az containerapp env show \
   --query properties.workloadProfiles
 ```
 
-The `terraform output` form needs your root configuration to re-export the module's
-`aca_environment_id` output (`output "aca_environment_id" { value = module.<name>.aca_environment_id }`).
-Without that, use `-n aca-<name_prefix> -g rg-<name_prefix>-aca` instead of `--ids`.
+A list with a profile of type `Consumption` is a workload-profiles environment; `null` or an empty
+list is Consumption-only. The `terraform output` form needs your root configuration to re-export
+the module's `aca_environment_id` output (`output "aca_environment_id" { value =
+module.<name>.aca_environment_id }`). Without that, use `-n aca-<name_prefix> -g
+rg-<name_prefix>-aca` instead of `--ids`. On an injected subnet, run the same check before your
+platform team attaches the hub's route table.
 
-| Result | Environment type | Egress options on the ACA subnet |
+**The private endpoints are unaffected.** No route goes on `snet-private-endpoints`: it has
+private endpoint network policies enabled, under which a route table there would apply to
+private-endpoint traffic as well and send the data plane's replies through the firewall. The
+apps' traffic to Postgres, Key Vault, Redis, a private Service Bus namespace and the registry's
+private endpoint stays inside the VNet, where the VNet's own route is more specific than
+`0.0.0.0/0` and wins over it. Your firewall needs no rule for any of them.
+
+**BGP route propagation stays on** in the module's route table. Routes a VPN or ExpressRoute
+gateway propagates (topology 2's clients, over a peered hub's gateway) are more specific than
+`0.0.0.0/0` and keep winning over it, so replies to those clients go back the way their requests
+came rather than through the firewall, where a stateful firewall would drop them. A route table
+of your own (`route_table_id`) needs the same.
+
+**On a running install**, the route applies as soon as the apply attaches it. Open the
+destinations below on your firewall first. **On a fresh install** the module attaches the route
+once Azure has created the environment (that is when the workload-profile check can run). It
+creates `ca-api`, `ca-frontend`, `ca-workers` and `caj-migrate` only after that, so their first
+image pull, migration run, database connection and outbound call already go through the
+firewall. Only the environment's own provisioning, before the attachment, can take Azure's
+default path. Where nothing may leave except through the firewall from the first connection,
+use injected subnets with the hub's route table already attached (topology 3).
+
+### Forced tunnelling needs an internal environment
+
+`egress_firewall` is refused at plan unless `aca_internal_load_balancer = true`. What Microsoft
+Learn documents, read on 2026-11-14:
+
+- [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration)
+  and [Control outbound traffic with user defined routes](https://learn.microsoft.com/azure/container-apps/user-defined-routes)
+  support user-defined routes on workload-profiles environments only. The locked-down shape they
+  describe is an internal environment behind an Application Gateway, with a route to the firewall
+  on the environment's subnet.
+- Learn's page on network security groups for Container Apps says that on an external
+  workload-profiles environment, inbound traffic arrives through a public IP in the
+  environment's managed resource group, not through the subnet.
+- No page documents public ingress combined with `0.0.0.0/0` to a firewall.
+
+Our reading, not Learn's: replies to internet clients must leave by the path their requests came
+in on, and nothing documented says they do once the subnet's default route points at a stateful
+firewall. The module therefore does not offer that combination. Topology 2 has no public endpoint, so the
+question does not arise there. To publish the frontend to the internet with egress forced, put
+your Application Gateway in front of the internal environment (`frontend_custom_domain`, see
+"Behind an Application Gateway" under
+[The record that routes the hostname](#the-record-that-routes-the-hostname)).
+
+### What your firewall must admit
+
+Every destination the Container Apps subnet reaches outside the VNet, with what reaches it and
+what fails when the firewall drops it. Hosts written as an input are the host of that input's
+URL.
+
+| Destination | When the install reaches it | What fails when it is blocked |
 |---|---|---|
-| `null` or an empty list | Consumption-only | **No UDR and no NAT Gateway** — Azure does not support either. Narrow egress with your own outbound NSG on the ACA subnet, built from service tags, that admits the Container Apps required outbound set (see [firewall-integration](https://learn.microsoft.com/azure/container-apps/firewall-integration)) |
-| A list with a profile of type `Consumption` | Workload profiles | A UDR to a hub firewall or NVA, or a NAT Gateway, is supported. The firewall must admit the Container Apps required outbound set |
+| The Container Apps outbound set: the FQDNs and service tags in Microsoft's [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration), including Microsoft Container Registry and Microsoft Entra ID | Always: the environment's own platform components | The environment provisions but cannot start a replica: each revision stays with no ready replica. Microsoft versions the set, so it is not copied here |
+| Microsoft Entra ID for managed identities (`login.microsoftonline.com`, service tag `AzureActiveDirectory`; part of the set above) | Always: the apps' identities get tokens for the registry (`managed_identity` and `customer_registry` modes), Key Vault references (`enable_key_vault`), and Postgres and Redis with `database_auth = "entra"` | Every pull, secret reference or database sign-in that uses an identity fails: a new revision has no ready replica, or the apps cannot open their database connection |
+| The image registry: its login server (`masterly.azurecr.io` by default, or `registry_location`) and its data endpoint (`<registry>.<region>.data.azurecr.io` with dedicated data endpoints, otherwise the registry's `*.blob.core.windows.net` storage; see [Configure rules to access an Azure container registry behind a firewall](https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules)) | Always, **unless** `registry_private_endpoint = true`, which keeps pulls on the registry's private endpoint in the VNet | The image pull fails: a new revision (a fresh install, an upgrade or a restart onto a new replica) has no ready replica, and `ContainerAppSystemLogs` records the failed pull |
+| Your identity provider's issuer and its endpoints: the discovery document under `oidc_authority`, the token endpoint it names, and the signing keys at `oidc_jwks_uri` (all `https://login.microsoftonline.com/<tenant>/...` when only `oidc_tenant_id` is set) | `identity_binding = "oidc"`: `ca-frontend`'s BFF signs users in against the authority, and `ca-api` fetches the signing keys. With `builtin_auth`, Azure's built-in authentication on `ca-frontend` reaches the same IdP | With the token endpoint or discovery document unreachable, sign-in fails with an error after the IdP redirects back. With the keys unreachable, `ca-api` cannot validate a token, so authenticated requests are refused |
+| Masterly's control plane: the host of `license_issuer_url` | `license_issuer_url` set (licence refresh) | Licence refresh fails. After seven days without a successful refresh the install is read-only: reads, exports and sign-in continue, writes are refused, until refresh succeeds again |
+| Masterly's control plane: the host of `telemetry_url` | `telemetry_url` set (fleet telemetry) | Usage reports do not reach the control plane. Licence refresh is a separate call (ADR 0074) and is not affected |
+| Azure Monitor (service tag `AzureMonitor`) | Always: the environment sends the apps' console and system logs through Azure Monitor (`logs_destination = "azure-monitor"`) | New rows stop arriving in `ContainerAppConsoleLogs` and `ContainerAppSystemLogs`, so the log-search alerts and the diagnostic bundle see nothing new while the apps keep serving |
+| Key Vault (`<vault>.vault.azure.net`) | `enable_key_vault` outside `mode = "production"`, where the vault keeps public network access. In production it is reached over its private endpoint | A revision whose secrets are Key Vault references does not start: it has no ready replica |
+| Your Key Vault holding the frontend certificate | `frontend_custom_domain` set, unless that vault has a private endpoint the environment reaches | The environment cannot read the certificate, so the binding of your hostname fails, at the first apply or at the next certificate rotation |
+| Service Bus (`<namespace>.servicebus.windows.net`, TCP 5671 and 443) | `enable_service_bus` with a public namespace: any SKU outside production, and Standard in production. A Premium namespace in production is private | The apps cannot open their Service Bus connection, so work handed over the bus does not run |
+| Azure Communication Services (`*.communication.azure.com`) | `email_acs_enabled` | Email is not sent |
+| Your own Postgres: the host and port of `external_database_url`, and of `external_database_admin_url` where it names another host | `external_database_url` set (the module provisions no server and no private endpoint) and the server is outside the VNet. A server reached over peering or a private endpoint in the VNet stays off the route | `ca-api` and `ca-workers` cannot open their database connection, so no revision becomes ready. With `migrations = "job"`, `caj-migrate` fails too, and a fresh install never completes its migrations |
+| Targets you configure in the application: webhooks, an SMTP relay, a BYO-DB Environment's database, stream push endpoints, a local AI endpoint | Each target you configure | That one feature's call fails; the rest of the install is unaffected |
 
-**Do not write a UDR for a Consumption-only environment.** Azure ignores it, and egress stays
-open while you believe it is filtered.
-
-**A firewall that drops the required set breaks the install.** On a workload-profiles
-environment, force egress through a firewall that does not admit the required outbound set
-and the environment still provisions, but it cannot start a replica. The set is long and
-Microsoft versions it, so it is not copied here; take the FQDNs, service tags and NSG rules
-from [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration).
-The install also needs to reach your identity provider and the container registry it pulls
-images from; with `registry_private_endpoint = true` the registry is reached over its private
-endpoint in the VNet instead.
-
-On a network the module builds (topologies 1 and 2) the module's NSG adds no outbound rule, so
-Azure's default `AllowInternetOutBound` applies.
-
-The support claims above come from Microsoft Learn:
+The platform claims above come from Microsoft Learn:
 [Networking in Azure Container Apps environment](https://learn.microsoft.com/azure/container-apps/networking)
 (the environment types),
 [Control outbound traffic with user defined routes](https://learn.microsoft.com/azure/container-apps/user-defined-routes)
-(UDR and NAT Gateway), and
+(routes are honoured on workload-profiles environments only), and
 [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration)
-(the required outbound set and the outbound NSG for a Consumption-only environment).
+(the required outbound set).
 
 ## ca-frontend on your own domain
 
@@ -270,11 +342,11 @@ listens on the same private endpoint as Postgres; the apps' `MASTERLY_DATABASE_U
 With injected subnets the rule is the operator's: admit 6432 before turning the input on, or
 the apps cannot reach the pooler, and remove it only after the apps have rolled back to 5432.
 
-**Outbound is untouched.** Azure's default `AllowInternetOutBound` stays. Container Apps needs
+**No outbound rules.** Azure's default `AllowInternetOutBound` stays. Container Apps needs
 a long, Microsoft-versioned egress set — image pull, Microsoft Container Registry, Entra ID,
 Azure Monitor — and a copy of it written into this module would go stale into an environment
-that provisions and then cannot start a replica. Whether and how egress can be narrowed
-depends on the environment type; see **Egress** above.
+that provisions and then cannot start a replica. Egress is narrowed by routing it through your
+firewall, not by an NSG; see [Egress](#egress) above.
 
 **The allowlist still does the narrowing.** `ingress_allowed_cidrs` is enforced by Container
 Apps ingress, and it is deliberately not what the NSG's source says: an empty list is a legal
@@ -299,6 +371,10 @@ it: `10.20.5.0/24`, `10.20.6.0/24` and `10.20.7.0/24` on the default `10.20.0.0/
 explicit `aca_subnet_prefix` and `private_endpoints_subnet_prefix` that already cover those
 /24s, gets no environment subnets until the three prefixes are set. The `environment_subnet_ids`
 and `environment_subnet_prefixes` outputs carry what was created.
+
+No app runs in these subnets yet, and `egress_firewall` still attaches its route table to
+`snet-aca` only ([Egress](#egress)): the three environment subnets get no route table in this
+version.
 
 Each subnet carries its own NSG, ending in the same deny. The platform rows are the inbound
 rules Microsoft lists for a workload-profiles environment in
