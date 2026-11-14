@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-127 inputs in 26 groups.
+128 inputs in 27 groups.
 
 ## Groups
 
@@ -32,6 +32,7 @@ each one that is missing.
 - [Images and registry pull credential](#images-and-registry-pull-credential) (6)
 - [Key Vault database secret names](#key-vault-database-secret-names) (1)
 - [Diagnostics and alerts](#diagnostics-and-alerts) (12)
+- [Edge proxy](#edge-proxy) (1)
 - [Email](#email) (2)
 - [Database and Redis authentication](#database-and-redis-authentication) (2)
 - [Key Vault](#key-vault) (7)
@@ -275,6 +276,14 @@ In `diagnostics.tf`.
 | `alert_servicebus_dead_letter_threshold` | `number` | `0` | Load alert (enable_service_bus only): fire when the job queue's dead-letter sub-queue holds more than this many messages. |
 | `alert_api_p95_ms` | `number` | `2000` | Load alert: fire when the 95th percentile of the api's own request durations over 15 minutes exceeds this many milliseconds. |
 | `alert_workers_memory_percent` | `number` | `85` | Load alert (enable_workers only): fire when a ca-workers replica's memory working set rises above this percentage of the replica's memory. |
+
+## Edge proxy
+
+In `edge.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `edge` | `object(...)` | `null` | Run ca-edge, the Envoy machine entry point for the Python SDK and MCP clients: off by default (null creates nothing), and it does no authentication yet. |
 
 ## Email
 

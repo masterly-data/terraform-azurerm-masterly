@@ -171,7 +171,9 @@ module "masterly" {
 
 Outputs include `frontend_url` (`https://<hostname>` with `frontend_custom_domain` set),
 `custom_domain_verification_id` (the `asuid.<hostname>` TXT value), `api_url` (the API's base URL for the Python SDK and other
-clients outside the environment — null unless `api_ingress_external = true`), the apps resource
+clients outside the environment — null unless `api_ingress_external = true`), `edge_url` and
+`edge_identity_principal_id` (ca-edge's base URL and identity — null unless `edge` is set, which
+it is not by default), the apps resource
 group, the Container App names (the values the app repos' release workflows use to roll
 images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
 `apps_identity_client_id` / `frontend_identity_principal_id` / `migrate_identity_principal_id` /
@@ -272,6 +274,7 @@ check, and a rebuilt app, both go by.
 | Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the URL rides as a Container App secret, keyless on `redis_auth = "entra"` — [authentication](docs/data-plane.md#authentication-to-the-starter-server-and-redis)). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
 | Registry private endpoint (opt-in) | `registry_private_endpoint`: a private endpoint to your registry (`acr_id`, `registry` subresource) on the private-endpoints subnet, with a `privatelink.azurecr.io` private DNS zone linked to the VNet, so the identity modes pull over the VNet. See [The registry over a private endpoint](#the-registry-over-a-private-endpoint). |
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
+| `ca-edge` (opt-in, public ingress, :8080) and `id-masterly-edge` UAMI | `edge`, **off by default**: the machine entry point for the Python SDK and MCP clients (ADR 0120 §2), an Envoy proxy the module configures. HTTPS-only behind `ingress_allowed_cidrs` (which must not be empty), it forwards `/v1` and `/mcp` to `ca-api` and answers every other path with 404, strips `x-jwt-payload` and `X-MS-CLIENT-PRINCIPAL*`, and refuses a declared body over `edge.max_request_body_bytes` with 413. It does **no authentication yet**: the `Authorization` header reaches `ca-api` unchanged, and `ca-api` checks it. Its identity holds AcrPull at most, and only for an image on the install's registry. See [The edge proxy](docs/networking.md#the-edge-proxy-ca-edge) |
 | `ca-frontend` custom domain (opt-in) | `frontend_custom_domain`: `id-masterly-frontend-cert` UAMI, attached to the Container App Environment and to no app, with **Key Vault Secrets User** on your certificate's secret alone; the environment certificate, a versionless Key Vault reference read as that identity; and an SNI binding of your hostname on `ca-frontend`. See [ca-frontend on your own domain](docs/identity.md#ca-frontend-on-your-own-domain-frontend_custom_domain). |
 
 ## Getting the images (ADR 0067)
@@ -963,7 +966,9 @@ logs to your Log Analytics workspace, and the application logs the **route templ
 the query string.
 
 The module provisions **no Front Door, Application Gateway, or WAF**, so there is nothing here
-to configure. If you put one in front of the install, the guarantee becomes partly yours:
+to configure. The opt-in `ca-edge` (`edge`) is an Envoy proxy, not a WAF; its access log holds
+the path without its query string and no request header that can carry a credential. If you put
+one in front of the install, the guarantee becomes partly yours:
 
 - **Do not enable full-URL or request-body logging** on the data-plane routes (`/v1/*`). A
   `POST` body carrying a search term is the thing the address rule moved it into; logging
