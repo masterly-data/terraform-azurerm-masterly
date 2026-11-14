@@ -10,7 +10,9 @@ output "in_30_minutes" {
 }
 
 # Either side of the 60-minute limit, for a later plan seconds after this one: 59 minutes is
-# still inside it, 61 minutes is past it.
+# still inside it, 61 minutes is past it. Only elapsed time moves 59 minutes further inside;
+# 61 minutes falls inside after a minute, so the run that reads it plans this module directly
+# before.
 output "in_59_minutes" {
   value       = timeadd(plantimestamp(), "59m")
   description = "This plan's time plus 59 minutes, in RFC 3339 UTC."

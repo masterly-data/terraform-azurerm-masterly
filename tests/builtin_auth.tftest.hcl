@@ -727,6 +727,16 @@ run "builtin_auth_recovery_accepts_59_minutes" {
   }
 }
 
+# 61 minutes falls back inside the window as time passes, so it is read from a plan taken
+# directly before this run, not from plan_time, which the runs above have aged by then.
+run "plan_time_for_61_minutes" {
+  command = plan
+
+  module {
+    source = "./tests/helpers/plan-time"
+  }
+}
+
 run "builtin_auth_recovery_refuses_61_minutes" {
   command = plan
 
@@ -737,7 +747,7 @@ run "builtin_auth_recovery_refuses_61_minutes" {
       client_id = "22222222-2222-2222-2222-222222222222"
     }
     builtin_auth_client_secret  = "test-only-not-a-secret"
-    builtin_auth_recovery_until = run.plan_time.in_61_minutes
+    builtin_auth_recovery_until = run.plan_time_for_61_minutes.in_61_minutes
   }
 
   expect_failures = [var.builtin_auth_recovery_until]
