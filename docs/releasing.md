@@ -83,6 +83,20 @@ updated in place and the queue role assignment was added; item 2 in part — Azu
 role-assignment allow-list extended first). Not yet observed: the scaler scaling on a backlog,
 items 3 and 4.
 
+Item 3, 2026-11-14: **Masterly's test install cannot prove it.** STG (`masterly-test-install`)
+runs `servicebus_sku = "Standard"` by owner decision of 2026-11-13 (MAS-3242): Premium is about
+$677 a month, over STG's cost ceiling (MAS-1705). A Standard namespace keeps its public endpoint,
+so the scaler is never tested against a private one there. The demo install cannot prove it
+either: it is `mode = "demo"` on a Standard namespace. Item 3 stays open, and it blocks the next
+tag unless the owner records an exception for it, as for 0.24.0. An install with
+`servicebus_sku = "Premium"`, `enable_workers` on and `mode = "production"` would prove it. Two such
+installs are planned: the first customer's production install, which takes the Premium
+recommendation, and a short-lived Premium namespace stood up for the check. That second option
+could be a release-tests fresh install, or STG moved to Premium and back. Moving STG to Premium
+replaces the namespace, its queue and its role assignments each way, so it is a planned window,
+not a toggle. Items 2 and 4 are planned on STG's clean-slate first apply, which creates the queue
+grant new and gives `ca-workers` room to scale (1 to 3 replicas).
+
 Afterwards, replace the "Not yet proven on a live install" paragraph in docs/scaling.md's
 "How `ca-workers` scales" and the matching sentence in the changelog entry with what the run
 showed.
