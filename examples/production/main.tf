@@ -144,6 +144,14 @@ module "masterly" {
   postgres_zone_redundant_ha        = true
   postgres_backup_retention_days    = 14
 
+  # --- Egress ---------------------------------------------------------------------
+  # Outbound traffic takes Azure's default path. To force all of it through your firewall,
+  # set egress_firewall = { next_hop_ip = "<firewall private IP>" } (or { route_table_id =
+  # "<your route table id>" }), after your firewall admits every destination in
+  # docs/networking.md ("Egress"). It needs aca_internal_load_balancer = true: with public
+  # ingress, as here, the module refuses it. On injected subnets the hub's route table does
+  # this instead, and the module refuses the input.
+
   # --- Scale ----------------------------------------------------------------------
   # production refuses a single-replica api: one replica is a single point of failure,
   # and > 1 requires redis so sessions survive a replica moving.
