@@ -403,3 +403,458 @@ run "builtin_auth_secret_is_a_vault_reference_in_production" {
     error_message = "The frontend's identity must be granted read on the built-in auth secret alone, like each of its other secrets."
   }
 }
+
+# --- The recovery fallback (builtin_auth_recovery_until) and the auth-configuration alert ----
+
+# Times 30, 59 and 61 minutes after this run's plan, for the runs below that need one relative
+# to the 60-minute window (tests/helpers/plan-time).
+run "plan_time" {
+  command = plan
+
+  module {
+    source = "./tests/helpers/plan-time"
+  }
+}
+
+run "builtin_auth_recovery_is_off_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition     = !local.builtin_auth_recovery_open && !local.builtin_auth_recovery_expired
+    error_message = "With builtin_auth_recovery_until unset, no recovery window may be open or reported as expired."
+  }
+
+  assert {
+    condition     = azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == true
+    error_message = "With builtin_auth_recovery_until unset, ca-frontend's gate must stay on."
+  }
+}
+
+# With builtin_auth unset, neither the gate nor its alert exists: the module plans exactly what
+# it planned before either input existed.
+run "builtin_auth_unset_creates_no_auth_config_or_alert" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.builtin_auth) == 0 &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write) == 0
+    )
+    error_message = "With builtin_auth unset, the module must create no auth configuration and no auth-configuration alert."
+  }
+}
+
+# The api as a plan without builtin_auth_recovery_until sees it: the next run asserts the same
+# values with the window open.
+run "builtin_auth_recovery_baseline_api" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  override_module {
+    target = module.frontend
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+      name                      = "ca-frontend"
+      fqdn                      = "ca-frontend.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
+    }
+  }
+
+  assert {
+    condition = (
+      module.api.ingress_external == false &&
+      module.api.ingress_allow_insecure == true &&
+      length(module.api.ingress_allowed_ip_ranges) == 0
+    )
+    error_message = "Without the recovery window, ca-api must be internal, with no ip restrictions of its own."
+  }
+
+  assert {
+    condition = nonsensitive(jsonencode(module.api.env_names)) == jsonencode([
+      "MASTERLY_ALLOWED_REGIONS",
+      "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS",
+      "MASTERLY_IDENTITY_BINDING",
+      "MASTERLY_INSTALL_ID",
+      "MASTERLY_MODE",
+      "MASTERLY_ORG_ID",
+      "MASTERLY_REGION",
+    ])
+    error_message = "Without the recovery window, ca-api's env must be the install's own settings and nothing about built-in authentication."
+  }
+}
+
+# The window open, behind an allowlist: ca-frontend's gate is off, and nothing else moves.
+# ca-api's ingress and env are the baseline run's, and no auth configuration names ca-api.
+run "builtin_auth_recovery_opens_only_the_frontend_gate" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  override_module {
+    target = module.frontend
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+      name                      = "ca-frontend"
+      fqdn                      = "ca-frontend.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
+    }
+  }
+
+  assert {
+    condition     = local.builtin_auth_recovery_open && !local.builtin_auth_recovery_expired
+    error_message = "A builtin_auth_recovery_until 30 minutes after the plan must open the recovery window."
+  }
+
+  assert {
+    condition     = azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == false
+    error_message = "With the recovery window open, ca-frontend's built-in authentication must be planned off."
+  }
+
+  # Only platform.enabled differs from the configuration without the window.
+  assert {
+    condition = (
+      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.globalValidation) == jsonencode({
+        unauthenticatedClientAction = "RedirectToLoginPage"
+        excludedPaths               = []
+        redirectToProvider          = "azureactivedirectory"
+      }) &&
+      azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.registration.clientId == "22222222-2222-2222-2222-222222222222" &&
+      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications) == jsonencode(["22222222-2222-2222-2222-222222222222"])
+    )
+    error_message = "The recovery window must change platform.enabled only; the rest of ca-frontend's configuration stays as it is without it."
+  }
+
+  assert {
+    condition = (
+      toset(keys(azapi_resource.builtin_auth)) == toset(["frontend"]) &&
+      azapi_resource.builtin_auth["frontend"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+    )
+    error_message = "The recovery window must touch ca-frontend's auth configuration only, and configure none on ca-api."
+  }
+
+  assert {
+    condition = (
+      module.api.ingress_external == false &&
+      module.api.ingress_allow_insecure == true &&
+      length(module.api.ingress_allowed_ip_ranges) == 0
+    )
+    error_message = "The recovery window must leave ca-api's ingress as it is without it: internal, with no ip restrictions of its own."
+  }
+
+  assert {
+    condition = nonsensitive(jsonencode(module.api.env_names)) == jsonencode([
+      "MASTERLY_ALLOWED_REGIONS",
+      "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS",
+      "MASTERLY_IDENTITY_BINDING",
+      "MASTERLY_INSTALL_ID",
+      "MASTERLY_MODE",
+      "MASTERLY_ORG_ID",
+      "MASTERLY_REGION",
+    ])
+    error_message = "The recovery window must leave ca-api's env as it is without it (the baseline run's names)."
+  }
+}
+
+# Threat: an open gate with no network restriction. An unrestricted, public frontend refuses
+# the window.
+run "builtin_auth_recovery_is_refused_without_a_network_restriction" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = []
+    frontend_ingress_external  = true
+    aca_internal_load_balancer = false
+    identity_binding           = "oidc"
+    oidc_allowed_issuers       = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience              = "api-client-id"
+    oidc_jwks_uri              = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id             = "bff-client-id"
+    oidc_client_secret         = "s3cret"
+    oidc_authority             = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri          = "https://app.example.com/api/auth/callback"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  expect_failures = [var.builtin_auth_recovery_until]
+}
+
+# Private ingress is a network restriction: an internal environment with no allowlist accepts
+# the window.
+run "builtin_auth_recovery_is_accepted_on_an_internal_environment" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = []
+    aca_internal_load_balancer = true
+    identity_binding           = "oidc"
+    oidc_allowed_issuers       = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience              = "api-client-id"
+    oidc_jwks_uri              = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id             = "bff-client-id"
+    oidc_client_secret         = "s3cret"
+    oidc_authority             = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri          = "https://app.example.com/api/auth/callback"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  assert {
+    condition     = azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == false
+    error_message = "On an internal environment, the recovery window must be accepted and turn ca-frontend's gate off."
+  }
+}
+
+# So is a frontend with no ingress beyond the environment.
+run "builtin_auth_recovery_is_accepted_with_private_frontend_ingress" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs     = []
+    frontend_ingress_external = false
+    identity_binding          = "oidc"
+    oidc_allowed_issuers      = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience             = "api-client-id"
+    oidc_jwks_uri             = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id            = "bff-client-id"
+    oidc_client_secret        = "s3cret"
+    oidc_authority            = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri         = "https://app.example.com/api/auth/callback"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  assert {
+    condition     = azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == false
+    error_message = "With frontend_ingress_external = false, the recovery window must be accepted and turn ca-frontend's gate off."
+  }
+}
+
+# Threat: a recovery input with no gate to turn off.
+run "builtin_auth_recovery_is_refused_without_builtin_auth" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  expect_failures = [var.builtin_auth_recovery_until]
+}
+
+# Threat: a long or indefinite window. A time beyond 60 minutes after the plan is refused, with
+# the message naming the limit (the validation's error_message in variables-builtin-auth.tf).
+run "builtin_auth_recovery_is_refused_beyond_60_minutes" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = "2099-01-01T00:00:00Z"
+  }
+
+  expect_failures = [var.builtin_auth_recovery_until]
+}
+
+# The limit itself: 59 minutes after the plan is accepted, 61 minutes is refused.
+run "builtin_auth_recovery_accepts_59_minutes" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = run.plan_time.in_59_minutes
+  }
+
+  assert {
+    condition     = azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == false
+    error_message = "A builtin_auth_recovery_until 59 minutes after the plan is within the limit and must turn ca-frontend's gate off."
+  }
+}
+
+run "builtin_auth_recovery_refuses_61_minutes" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = run.plan_time.in_61_minutes
+  }
+
+  expect_failures = [var.builtin_auth_recovery_until]
+}
+
+run "builtin_auth_recovery_refuses_a_time_that_is_not_rfc3339" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = "2026-11-14 15:30"
+  }
+
+  expect_failures = [var.builtin_auth_recovery_until]
+}
+
+# A time that has passed: the plan turns the gate back on and warns that the input is stale.
+run "builtin_auth_recovery_expired_restores_the_gate_and_warns" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_recovery_until = "2020-01-01T00:00:00Z"
+  }
+
+  assert {
+    condition     = !local.builtin_auth_recovery_open && local.builtin_auth_recovery_expired
+    error_message = "A builtin_auth_recovery_until in the past must close the window and be reported as expired."
+  }
+
+  assert {
+    condition     = azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == true
+    error_message = "Once builtin_auth_recovery_until has passed, the plan must turn ca-frontend's gate back on."
+  }
+
+  expect_failures = [check.builtin_auth_recovery_window_has_expired]
+}
+
+# Every write to ca-frontend's auth configuration alerts: one activity-log alert, whenever
+# builtin_auth is set, scoped to ca-frontend. The routing to the module's own action group
+# (alert_email, the file-wide value here) is asserted in builtin_auth_alert_routing.tftest.hcl,
+# because that group's id is known only after an apply.
+run "builtin_auth_alerts_on_frontend_auth_config_writes" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  override_module {
+    target = module.frontend
+    outputs = {
+      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+      name                      = "ca-frontend"
+      fqdn                      = "ca-frontend.example.swedencentral.azurecontainerapps.io"
+      memory                    = "1Gi"
+      ingress_external          = true
+      ingress_allow_insecure    = false
+      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
+    }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write) == 1 &&
+      azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].name == "alert-masterly-frontend-auth-config-write" &&
+      azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].resource_group_name == azurerm_resource_group.aca.name &&
+      azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].location == "global"
+    )
+    error_message = "builtin_auth must create one activity-log alert, alert-<prefix>-frontend-auth-config-write, beside the install's other app alerts."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].criteria[0].category == "Administrative" &&
+      azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].criteria[0].operation_name == "Microsoft.App/containerApps/authConfigs/write" &&
+      toset(azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].scopes) == toset(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"])
+    )
+    error_message = "The alert must fire on Microsoft.App/containerApps/authConfigs/write, an Administrative operation, on ca-frontend alone."
+  }
+}
+
+# With an action group given by id, the alert routes to it.
+run "builtin_auth_alert_routes_to_a_given_action_group" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    alert_email           = null
+    alert_action_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ops/providers/microsoft.insights/actionGroups/ag-ops"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].action) == 1 &&
+      contains([for a in azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].action : a.action_group_id], var.alert_action_group_id)
+    )
+    error_message = "With alert_action_group_id set, the auth-configuration alert must route to it."
+  }
+}
