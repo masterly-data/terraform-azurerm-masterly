@@ -306,6 +306,244 @@ run "half_injected_network_is_rejected" {
   expect_failures = [azurerm_resource_group.aca]
 }
 
+# --- Forced-tunnel egress (egress_firewall) ------------------------------------------
+
+# Default off: no route table, no association, no output, and nothing read back from the
+# environment.
+run "egress_firewall_unset_attaches_no_route_table" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = length(azurerm_route_table.egress) == 0 && length(azurerm_subnet_route_table_association.aca) == 0
+    error_message = "With egress_firewall unset the module must create no route table and no route table association."
+  }
+
+  assert {
+    condition     = output.egress_route == null && module.aca_env.workload_profile_names == null
+    error_message = "With egress_firewall unset, egress_route must be null and the environment's workload profiles must not be read."
+  }
+}
+
+# next_hop_ip: the module's route table, with one route, 0.0.0.0/0 to the firewall, on snet-aca
+# and nowhere else. The environment is new here, so its workload profiles are unknown at plan and
+# the delegated subnet alone lets the plan through: the default configuration is not refused. That
+# the association names this route table and this subnet compares computed ids, which a plan cannot
+# know; the apply run at the end of this file covers it.
+run "egress_firewall_next_hop_routes_snet_aca_to_the_firewall" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_route_table.egress) == 1 &&
+      azurerm_route_table.egress[0].name == "rt-masterly-aca" &&
+      azurerm_route_table.egress[0].resource_group_name == "rg-masterly-aca" &&
+      length(azurerm_route_table.egress[0].route) == 1 &&
+      one(azurerm_route_table.egress[0].route).address_prefix == "0.0.0.0/0" &&
+      one(azurerm_route_table.egress[0].route).next_hop_type == "VirtualAppliance" &&
+      one(azurerm_route_table.egress[0].route).next_hop_in_ip_address == "10.0.0.4"
+    )
+    error_message = "next_hop_ip must create one route table in rg-<name_prefix>-aca whose only route is 0.0.0.0/0 to that address as a virtual appliance."
+  }
+
+  # Gateway routes must keep winning over 0.0.0.0/0, or replies to VPN and ExpressRoute clients
+  # leave through the firewall (network.tf).
+  assert {
+    condition     = azurerm_route_table.egress[0].bgp_route_propagation_enabled == true
+    error_message = "The route table must keep BGP route propagation on."
+  }
+
+  # One association, the snet-aca one: the module has no other route table association, so none
+  # can reference snet-private-endpoints.
+  assert {
+    condition     = length(azurerm_subnet_route_table_association.aca) == 1
+    error_message = "egress_firewall must attach the route table to snet-aca, and only there."
+  }
+
+  assert {
+    condition     = output.egress_route != null && output.egress_route.next_hop_ip == "10.0.0.4"
+    error_message = "egress_route must carry the next-hop address the route sends 0.0.0.0/0 to."
+  }
+}
+
+# route_table_id: the customer's table, attached as it is; the module creates none. The environment
+# is pinned to what an existing install reports (Azure's Consumption profile), which is not
+# refused.
+run "egress_firewall_route_table_id_attaches_your_table" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-egress" }
+  }
+
+  override_module {
+    target = module.aca_env
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      identity_ids                   = []
+      workload_profile_names         = ["Consumption"]
+    }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_route_table.egress) == 0 &&
+      length(azurerm_subnet_route_table_association.aca) == 1 &&
+      azurerm_subnet_route_table_association.aca[0].route_table_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-egress"
+    )
+    error_message = "route_table_id must create no route table and attach the given one to snet-aca."
+  }
+
+  assert {
+    condition = (
+      output.egress_route.route_table_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-egress" &&
+      output.egress_route.next_hop_ip == null
+    )
+    error_message = "egress_route must carry the customer's route table id, and no next hop the module did not configure."
+  }
+}
+
+# Guard: a Consumption-only environment, on which Azure ignores the route. Refused rather than
+# attached, because egress would stay open while it is believed forced.
+run "egress_firewall_on_a_consumption_only_environment_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+  }
+
+  override_module {
+    target = module.aca_env
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      identity_ids                   = []
+      workload_profile_names         = []
+    }
+  }
+
+  expect_failures = [azurerm_subnet_route_table_association.aca]
+}
+
+# Guards: one source for the route, and a next hop that is one IPv4 host.
+run "egress_firewall_with_both_fields_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall = {
+      next_hop_ip    = "10.0.0.4"
+      route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-egress"
+    }
+  }
+
+  expect_failures = [var.egress_firewall]
+}
+
+run "egress_firewall_with_neither_field_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = {}
+  }
+
+  expect_failures = [var.egress_firewall]
+}
+
+run "egress_firewall_next_hop_as_a_range_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { next_hop_ip = "10.0.0.0/24" }
+  }
+
+  expect_failures = [var.egress_firewall]
+}
+
+run "egress_firewall_next_hop_as_a_hostname_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { next_hop_ip = "fw.example" }
+  }
+
+  expect_failures = [var.egress_firewall]
+}
+
+run "egress_firewall_next_hop_as_ipv6_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { next_hop_ip = "fd00::4" }
+  }
+
+  expect_failures = [var.egress_firewall]
+}
+
+run "egress_firewall_route_table_id_that_is_not_a_route_table_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca" }
+  }
+
+  expect_failures = [var.egress_firewall]
+}
+
+# Guard: injected subnets. The hub's route table on that subnet is the platform team's, and a subnet
+# holds one: the module attaching its own would replace it.
+run "egress_firewall_on_an_injected_network_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    egress_firewall             = { next_hop_ip = "10.0.0.4" }
+  }
+
+  expect_failures = [var.egress_firewall]
+}
+
+# ...and with the input unset, the module touches no route table on the injected subnets, so the
+# one the hub attached stays as it is.
+run "injected_network_attaches_no_route_table" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+  }
+
+  assert {
+    condition     = length(azurerm_route_table.egress) == 0 && length(azurerm_subnet_route_table_association.aca) == 0 && output.egress_route == null
+    error_message = "Injecting subnets must create no route table and no route table association: the hub's routing on those subnets is the platform team's."
+  }
+}
+
 # Guard: private endpoints cannot live in the delegated ACA subnet.
 run "same_subnet_twice_is_rejected" {
   command = plan
@@ -925,4 +1163,100 @@ run "workers_at_zero_floor_gets_no_replica_alert" {
   # Floor 0 below the default ceiling of 1, on the polling binding: the workers have no scale
   # rule, so they stay at 0, and the module says so.
   expect_failures = [check.workers_scale_on_the_polling_binding]
+}
+
+# ARM-shaped ids for the one run below that applies, with the two subnets and the route table
+# given distinct ones, so a route table association on the wrong subnet or naming the wrong table
+# compares unequal.
+mock_provider "azurerm" {
+  alias  = "egress"
+  source = "./tests/mocks/migrate"
+
+  override_resource {
+    target = azurerm_subnet.private_endpoints
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-private-endpoints"
+    }
+  }
+
+  override_resource {
+    target = azurerm_route_table.egress
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/routeTables/rt-masterly-aca"
+    }
+  }
+}
+
+# next_hop_ip, applied: the association joins snet-aca to the module's route table, no route table
+# association references snet-private-endpoints, and egress_route carries the table in effect. The
+# environment is not overridden: the workload-profile read in modules/aca-env-consumption runs, and
+# Azure's answer for an environment on a delegated subnet (the Consumption profile) stands in for
+# the read's result.
+run "egress_firewall_next_hop_attaches_the_route_table_to_snet_aca_only" {
+  command   = apply
+  providers = { azurerm = azurerm.egress, random = random, azapi = azapi }
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+  }
+
+  override_data {
+    target = module.aca_env.data.azapi_resource.environment
+    values = {
+      output = { properties = { workloadProfiles = [{ name = "Consumption", workloadProfileType = "Consumption" }] } }
+    }
+  }
+
+  assert {
+    condition     = length(module.aca_env.workload_profile_names) == 1 && module.aca_env.workload_profile_names[0] == "Consumption"
+    error_message = "workload_profile_names must be the names of the profiles Azure lists on the environment."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet_route_table_association.aca) == 1 &&
+      azurerm_subnet_route_table_association.aca[0].subnet_id == azurerm_subnet.aca[0].id &&
+      azurerm_subnet_route_table_association.aca[0].route_table_id == azurerm_route_table.egress[0].id
+    )
+    error_message = "The association must join snet-aca to the module's route table."
+  }
+
+  assert {
+    condition = alltrue([
+      for association in azurerm_subnet_route_table_association.aca :
+      association.subnet_id != azurerm_subnet.private_endpoints[0].id
+    ])
+    error_message = "No route table association may reference snet-private-endpoints: a route there would apply to private-endpoint traffic."
+  }
+
+  assert {
+    condition = (
+      output.egress_route.route_table_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/routeTables/rt-masterly-aca" &&
+      output.egress_route.next_hop_ip == "10.0.0.4"
+    )
+    error_message = "egress_route must carry the id of the route table in effect and the next-hop address."
+  }
+}
+
+# The same install, planned against the state the run above left, with Azure now reporting the
+# environment as Consumption-only (no workloadProfiles): the read's null becomes an empty list, and
+# the association is refused.
+run "egress_firewall_is_refused_when_azure_lists_no_workload_profile" {
+  command   = plan
+  providers = { azurerm = azurerm.egress, random = random, azapi = azapi }
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+  }
+
+  override_data {
+    target = module.aca_env.data.azapi_resource.environment
+    values = {
+      output = { properties = { workloadProfiles = null } }
+    }
+  }
+
+  expect_failures = [azurerm_subnet_route_table_association.aca]
 }

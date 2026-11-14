@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-119 inputs in 24 groups.
+120 inputs in 25 groups.
 
 ## Groups
 
@@ -20,6 +20,7 @@ each one that is missing.
 - [Telemetry to the Masterly control plane (ADR 0034/0056)](#telemetry-to-the-masterly-control-plane-adr-00340056) (5)
 - [Licence refresh (ADR 0074)](#licence-refresh-adr-0074) (1)
 - [Outbound egress posture](#outbound-egress-posture) (2)
+- [Forced-tunnel egress through your firewall](#forced-tunnel-egress-through-your-firewall) (1)
 - [Trusting a private CA (MAS-446)](#trusting-a-private-ca-mas-446) (1)
 - [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (28)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
@@ -118,6 +119,14 @@ In `variables-core.tf`.
 |---|---|---|---|
 | `allowed_private_egress_cidrs` | `list(string)` | `[]` | The PRIVATE address ranges the application may make outbound connections into, as CIDRs ("10.20.0.0/16", "fd00:1::/64"; a single host is "10.20.3.4/32"). |
 | `allow_private_egress` | `bool` | `false` | DEPRECATED — use allowed_private_egress_cidrs, which names the private ranges the application may connect into instead of admitting all of them. |
+
+## Forced-tunnel egress through your firewall
+
+In `variables-core.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `egress_firewall` | `object(...)` | `null` | Force all outbound traffic from the Container Apps subnet (snet-aca) through your firewall. |
 
 ## Trusting a private CA (MAS-446)
 

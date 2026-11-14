@@ -459,6 +459,55 @@ variable "allow_private_egress" {
   description = "DEPRECATED — use allowed_private_egress_cidrs, which names the private ranges the application may connect into instead of admitting all of them. Kept for one release: true now means an allowlist of every RFC1918 range, the CGNAT range (100.64.0.0/10) and IPv6 unique-local (fc00::/7) — it no longer admits loopback or link-local, the cloud metadata endpoint included, which it used to. The application logs a deprecation warning at every start while it is set, and refuses to start when both inputs are set. False (the default) sets nothing. Reaches ca-api and ca-workers, like its replacement."
 }
 
+# --- Forced-tunnel egress through your firewall --------------------------------------
+#
+# A route table on snet-aca whose one route sends 0.0.0.0/0 to a firewall you run, usually in
+# your hub. The module routes; your firewall decides what passes, and docs/networking.md
+# ("Egress") lists every destination it must admit and what fails when one is missing. Not the
+# same control as allowed_private_egress_cidrs above, which is the application's own list of the
+# private addresses it may connect into, enforced inside the apps.
+
+variable "egress_firewall" {
+  type = object({
+    next_hop_ip    = optional(string)
+    route_table_id = optional(string)
+  })
+  default     = null
+  description = "Force all outbound traffic from the Container Apps subnet (snet-aca) through your firewall. Set exactly one of: next_hop_ip, your firewall's private IPv4 address, and the module creates a route table in rg-<name_prefix>-aca with one route, 0.0.0.0/0 to that address as a virtual appliance; or route_table_id, the resource ID of a route table you manage, which the module attaches as it is and does not change. Either way the route table is attached to snet-aca only: snet-private-endpoints gets none, and the apps' traffic to the private endpoints stays inside the VNet. Only for a network the module builds: with aca_subnet_id set the plan is refused, because the hub's route table goes on that subnet and is attached by your platform team. Refused too when the environment is Consumption-only, on which Azure ignores the route. Your firewall must admit the destinations docs/networking.md lists under \"Egress\"; with one missing, the part of the install that needs it fails with the symptom given there. Null (the default) attaches no route table and leaves Azure's default outbound path."
+
+  validation {
+    condition = var.egress_firewall == null || (
+      (try(var.egress_firewall.next_hop_ip, null) == null) != (try(var.egress_firewall.route_table_id, null) == null)
+    )
+    error_message = "egress_firewall takes exactly one of next_hop_ip (the module creates the route table) or route_table_id (your own route table), not both and not neither: two sources for one subnet's route would leave it unclear which one is in effect."
+  }
+
+  # A host address, not a range or a name: Azure's next hop is one IPv4 address. cidrhost of the
+  # address as a /32 gives it back only for a well-formed IPv4 address.
+  validation {
+    condition = try(var.egress_firewall.next_hop_ip, null) == null || try(
+      can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$", var.egress_firewall.next_hop_ip)) &&
+      cidrhost("${var.egress_firewall.next_hop_ip}/32", 0) == var.egress_firewall.next_hop_ip &&
+      var.egress_firewall.next_hop_ip != "0.0.0.0",
+      false
+    )
+    error_message = "egress_firewall.next_hop_ip must be your firewall's IPv4 address, such as \"10.0.0.4\": one host, not a CIDR range (\"10.0.0.0/24\"), a hostname or an IPv6 address."
+  }
+
+  validation {
+    condition     = try(var.egress_firewall.route_table_id, null) == null || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/routeTables/[^/]+$", var.egress_firewall.route_table_id))
+    error_message = "egress_firewall.route_table_id must be a route table's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Network/routeTables/<name>."
+  }
+
+  # A subnet holds one route table. On an injected subnet the module attaching its own would
+  # replace the hub's routing from outside the platform team's configuration, and accepting the
+  # input while attaching nothing would be a control that is silently not there.
+  validation {
+    condition     = var.egress_firewall == null || var.aca_subnet_id == null
+    error_message = "egress_firewall is for a network the module builds. With aca_subnet_id set, the hub's route table (0.0.0.0/0 to your firewall) goes on the injected ACA subnet, attached by the platform team that owns it: a subnet holds one route table, and the module attaching its own would replace the hub's. Remove egress_firewall."
+  }
+}
+
 # --- Trusting a private CA (MAS-446) --------------------------------------------------
 #
 # The allowlist above tells the application WHICH private addresses it may reach. It says

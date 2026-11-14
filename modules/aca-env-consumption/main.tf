@@ -57,7 +57,31 @@ resource "azurerm_container_app_environment" "this" {
   lifecycle {
     # Azure materializes a default "Consumption" workload profile on VNet-integrated
     # environments after creation (API-side drift); a plan would then try to strip it.
-    # Freeze it — the module stays consumption-only for new installs either way.
+    # Freeze it — the module declares no workload profile of its own either way (the profiles
+    # Azure lists are read below, when the caller asks).
     ignore_changes = [workload_profile]
   }
+}
+
+# SELF-HOSTED EXTENSION: Azure's own record of the environment's workload profiles, read only when
+# the caller asks (the root module does with egress_firewall). Azure honours a route table on the
+# infrastructure subnet only for a workload-profiles environment, which is one whose
+# properties.workloadProfiles lists at least one profile (Consumption, which Azure adds itself to an
+# environment on a delegated subnet, included). A Consumption-only environment has none.
+#
+# Read from Azure rather than from the resource's workload_profile attribute. This module declares no
+# profile, so that attribute plans as an empty list on a new environment whatever Azure then
+# creates, and it sits under ignore_changes above. On an existing environment the read happens at
+# plan; on a new one the id is not known until apply, so neither is the list.
+data "azapi_resource" "environment" {
+  count = var.read_workload_profiles ? 1 : 0
+
+  type                   = "Microsoft.App/managedEnvironments@2025-01-01"
+  resource_id            = azurerm_container_app_environment.this.id
+  response_export_values = ["properties.workloadProfiles"]
+}
+
+locals {
+  # null when Azure lists no profile, which is what a Consumption-only environment returns.
+  workload_profiles = try(data.azapi_resource.environment[0].output.properties.workloadProfiles, null)
 }
