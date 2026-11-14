@@ -164,9 +164,12 @@ locals {
                   request_body_buffer_limit = local.edge_max_request_body_bytes
 
                   # First match wins. A declared body over the limit is refused before routing,
-                  # without buffering it (no buffer filter). The range ends at 2^53 - 1, the
-                  # largest integer JSON carries exactly. Then /v1 and /mcp (and paths under
-                  # them, not /v1x) go to ca-api, and everything else is answered here.
+                  # without buffering it (no buffer filter). The range's end is exclusive and
+                  # is the int64 maximum, quoted so it does not pass through a double on the
+                  # way to the proto. A value of 19 digits or more (10^18 and up, including
+                  # what does not fit an int64 and so never matches a range) is refused by the
+                  # second route. Then /v1 and /mcp (and paths under them, not /v1x) go to
+                  # ca-api, and everything else is answered here.
                   routes = [
                     {
                       name = "request-too-large"
@@ -174,7 +177,18 @@ locals {
                         prefix = "/"
                         headers = [{
                           name        = "content-length"
-                          range_match = { start = local.edge_max_request_body_bytes + 1, end = 9007199254740991 }
+                          range_match = { start = local.edge_max_request_body_bytes + 1, end = "9223372036854775807" }
+                        }]
+                      }
+                      direct_response = { status = 413 }
+                    },
+                    {
+                      name = "request-too-large-beyond-int64"
+                      match = {
+                        prefix = "/"
+                        headers = [{
+                          name         = "content-length"
+                          string_match = { safe_regex = { regex = "^[0-9]{19,}$" } }
                         }]
                       }
                       direct_response = { status = 413 }

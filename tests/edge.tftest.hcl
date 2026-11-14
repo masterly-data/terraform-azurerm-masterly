@@ -519,6 +519,22 @@ run "edge_refuses_oversized_bodies_and_does_not_cut_streams" {
     error_message = "A request with Content-Length above the limit (10 MiB by default) must be answered 413 by the first route."
   }
 
+  # The guard has no ceiling a declared size can climb over: the range runs to the int64
+  # maximum (exclusive, quoted so no double rounds it), and the second route refuses every value
+  # of 19 digits or more, which covers the int64 maximum itself and anything an int64 cannot hold.
+  assert {
+    condition = (
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes[0].match.headers[0].range_match.end == "9223372036854775807" &&
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes[1].direct_response.status == 413 &&
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes[1].match.prefix == "/" &&
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes[1].match.headers == [{ name = "content-length", string_match = { safe_regex = { regex = "^[0-9]{19,}$" } } }] &&
+      can(regex(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes[1].match.headers[0].string_match.safe_regex.regex, "9223372036854775807")) &&
+      can(regex(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes[1].match.headers[0].string_match.safe_regex.regex, "18446744073709551615")) &&
+      !can(regex(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes[1].match.headers[0].string_match.safe_regex.regex, "1073741824"))
+    )
+    error_message = "A Content-Length of any size above the limit must be answered 413: the range must end at the int64 maximum and the second route must refuse every value of 19 digits or more."
+  }
+
   # Nothing buffers a forwarded body or response: the router is the only HTTP filter.
   assert {
     condition = (
