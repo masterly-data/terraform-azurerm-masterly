@@ -78,22 +78,15 @@ run "edge_is_published_https_only_on_the_allowlist" {
     ingress_allowed_cidrs = ["203.0.113.7/32", "198.51.100.0/24"]
   }
 
-  override_resource {
-    target          = module.aca_env.azurerm_container_app_environment.this
-    override_during = plan
-    values = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
-    }
-  }
-
+  # The environment's id is computed, so module.aca_env's environment is asserted in the apply run
+  # edge_applied_with_one_digest (`override_during = plan` needs Terraform 1.11 while CI runs 1.10).
   assert {
     condition = (
       length(azurerm_container_app.edge) == 1 &&
       azurerm_container_app.edge[0].name == "ca-edge" &&
-      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env.id &&
       azurerm_container_app.edge[0].resource_group_name == azurerm_resource_group.aca.name
     )
-    error_message = "With edge set, ca-edge must be planned in module.aca_env's environment, in the apps' resource group."
+    error_message = "With edge set, ca-edge must be planned in the apps' resource group."
   }
 
   assert {
@@ -425,9 +418,9 @@ run "edge_routes_only_v1_and_mcp_to_ca_api" {
       alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : contains(keys(r), "direct_response") if !contains(keys(r), "route")]) &&
       length(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts) == 1 &&
       local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].domains == ["*"] &&
-      element(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes, -1).match == { prefix = "/" } &&
-      element(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes, -1).direct_response.status == 404 &&
-      !contains(keys(element(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes, -1)), "route")
+      reverse(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes)[0].match == { prefix = "/" } &&
+      reverse(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes)[0].direct_response.status == 404 &&
+      !contains(keys(reverse(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes)[0]), "route")
     )
     error_message = "Any path other than /v1 and /mcp must be answered 404 by a direct_response, never reach the cluster."
   }
@@ -606,6 +599,14 @@ run "edge_applied_with_one_digest" {
   assert {
     condition     = azurerm_container_app.edge[0].template[0].container[0].image == "docker.io/envoyproxy/envoy:v1.36.0@sha256:1111111111111111111111111111111111111111111111111111111111111111"
     error_message = "ca-edge must be created with edge.image."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env.id &&
+      azurerm_container_app.edge[0].resource_group_name == azurerm_resource_group.aca.name
+    )
+    error_message = "ca-edge must be created in module.aca_env's environment, in the apps' resource group."
   }
 }
 
