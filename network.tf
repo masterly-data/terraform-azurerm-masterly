@@ -33,6 +33,23 @@ resource "azurerm_virtual_network" "this" {
   location            = var.location
   address_space       = var.vnet_address_space
   tags                = local.tags
+
+  # Explicit environment subnet prefixes (front_subnet_prefix, app_subnet_prefix and
+  # workers_subnet_prefix) must fit the network the module builds. Checked here rather than in
+  # the variables because both checks read the runtime and endpoint prefixes the module
+  # derives. Derived environment prefixes are never refused: those that would clash are not
+  # created (main.tf).
+  lifecycle {
+    precondition {
+      condition     = !local.env_subnet_prefixes_given || length(local.env_subnets_outside_vnet) == 0
+      error_message = "The environment subnet prefixes must lie inside vnet_address_space; outside it: ${join(", ", sort(local.env_subnets_outside_vnet))}."
+    }
+
+    precondition {
+      condition     = !local.env_subnet_prefixes_given || length(setintersection(local.subnet_layout_overlaps, ["front", "app", "workers"])) == 0
+      error_message = "The environment subnet prefixes must not overlap each other, the runtime subnet (aca_subnet_prefix) or the private-endpoint subnet (private_endpoints_subnet_prefix); overlapping: ${join(", ", sort(local.subnet_layout_overlaps))}. Each environment's subnet carries its own inbound rules, so no two subnets may share an address."
+    }
+  }
 }
 
 # Consumption-only Container App Environments require /23 or larger, and Azure now
@@ -63,6 +80,28 @@ resource "azurerm_subnet" "private_endpoints" {
   virtual_network_name              = azurerm_virtual_network.this[0].name
   address_prefixes                  = [local.private_endpoints_subnet_prefix] # clear of the runtime subnet
   private_endpoint_network_policies = "Enabled"                               # so the NSG below applies to private-endpoint traffic
+}
+
+# The environment subnets of ADR 0120 §4: front, app and workers, one workload-profiles
+# Container Apps environment each. They sit beside snet-aca rather than replacing it, so the
+# apps can move across while the runtime subnet still serves them; snet-aca, its NSG and the
+# endpoints subnet keep their addresses and plan no change. A workload-profiles environment
+# accepts a /27 or larger and, like snet-aca, needs the delegation. Prefixes: main.tf.
+resource "azurerm_subnet" "environment" {
+  for_each = local.env_subnet_prefixes
+
+  name                 = "snet-${each.key}"
+  resource_group_name  = azurerm_resource_group.aca.name
+  virtual_network_name = azurerm_virtual_network.this[0].name
+  address_prefixes     = [each.value]
+
+  delegation {
+    name = "aca-environments"
+    service_delegation {
+      name    = "Microsoft.App/environments"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+    }
+  }
 }
 
 # --- Network security groups on the module's own subnets --------------------------
@@ -195,6 +234,125 @@ resource "azurerm_network_security_group" "private_endpoints" {
     description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the runtime subnet only."
   }
 
+  # ADR 0120 §5: the app and workers environments reach the data plane on the same ports. The
+  # front environment never does: it is the one that faces the callers, and when it is
+  # external, the internet. The rule above stays while the apps still run in snet-aca.
+  dynamic "security_rule" {
+    for_each = { for k in ["app", "workers"] : k => local.env_subnet_prefixes[k] if contains(keys(local.env_subnet_prefixes), k) }
+
+    content {
+      name                       = "allow-data-plane-from-${security_rule.key}-subnet"
+      priority                   = security_rule.key == "app" ? 110 : 120
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = local.private_endpoints_subnet_prefix
+      destination_port_ranges    = local.private_endpoint_ports
+      description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the ${security_rule.key} environment's subnet."
+    }
+  }
+
+  security_rule {
+    name                       = "deny-all-inbound"
+    priority                   = 4000
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_address_prefix      = "*"
+    source_port_range          = "*"
+    destination_address_prefix = "*"
+    destination_port_range     = "*"
+    description                = "Everything not admitted above."
+  }
+}
+
+# --- The environment subnets' inbound rules (ADR 0120 §5) ----------------------------------
+# Each environment admits its own callers, the Container Apps platform's traffic, and nothing
+# else; every group ends in the same explicit deny as the two above, for the same reason.
+#
+#   front    80 and 443 from the internet, or from VirtualNetwork when the environment has an
+#            internal load balancer. External, its only narrower filter is the apps' own
+#            ingress allowlist (ingress_allowed_cidrs), as for snet-aca above.
+#   app      443 from the front subnet only. Never VirtualNetwork, which would admit every
+#            peered network and on-premises range besides the front.
+#   workers  no caller at all.
+#
+# The callers' rule names the edge proxy's own ports, 31080 and 31443, beside 80 and 443, and
+# the platform rules are the workload-profiles set: Azure Load Balancer probes on 30000-32767
+# and traffic within the subnet. Microsoft's "Securing a virtual network in Azure Container
+# Apps" (https://learn.microsoft.com/azure/container-apps/firewall-integration) lists both;
+# without them the deny takes the environment offline.
+locals {
+  env_subnet_callers = {
+    front = [{
+      name        = "allow-app-ingress"
+      source      = var.aca_internal_load_balancer ? "VirtualNetwork" : "Internet"
+      ports       = ["80", "443", "31080", "31443"]
+      description = "Reach the front environment's apps; ingress_allowed_cidrs narrows it further at the Container Apps edge."
+    }]
+    app = [{
+      name        = "allow-https-from-front"
+      source      = try(local.env_subnet_prefixes["front"], null)
+      ports       = ["443", "31443"]
+      description = "HTTPS from the front environment's subnet only."
+    }]
+    workers = []
+  }
+}
+
+resource "azurerm_network_security_group" "environment" {
+  for_each = local.env_subnet_prefixes
+
+  name                = "nsg-${var.name_prefix}-${each.key}"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = var.location
+  tags                = local.tags
+
+  dynamic "security_rule" {
+    for_each = local.env_subnet_callers[each.key]
+
+    content {
+      name                       = security_rule.value.name
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_address_prefix      = security_rule.value.source
+      source_port_range          = "*"
+      destination_address_prefix = each.value
+      destination_port_ranges    = security_rule.value.ports
+      description                = security_rule.value.description
+    }
+  }
+
+  security_rule {
+    name                       = "allow-container-apps-load-balancer"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_address_prefix      = "AzureLoadBalancer"
+    source_port_range          = "*"
+    destination_address_prefix = each.value
+    destination_port_range     = "30000-32767"
+    description                = "Azure Container Apps platform requirement for a workload-profiles environment."
+  }
+
+  security_rule {
+    name                       = "allow-environment-internal"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_address_prefix      = each.value
+    source_port_range          = "*"
+    destination_address_prefix = each.value
+    destination_port_range     = "*"
+    description                = "Azure Container Apps platform requirement: traffic within the environment's subnet."
+  }
+
   security_rule {
     name                       = "deny-all-inbound"
     priority                   = 4000
@@ -224,6 +382,13 @@ resource "azurerm_subnet_network_security_group_association" "private_endpoints"
 
   subnet_id                 = azurerm_subnet.private_endpoints[0].id
   network_security_group_id = azurerm_network_security_group.private_endpoints[0].id
+}
+
+resource "azurerm_subnet_network_security_group_association" "environment" {
+  for_each = local.env_subnet_prefixes
+
+  subnet_id                 = azurerm_subnet.environment[each.key].id
+  network_security_group_id = azurerm_network_security_group.environment[each.key].id
 }
 
 # Private DNS so the server's public FQDN resolves to the private endpoint inside the

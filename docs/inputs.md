@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-119 inputs in 24 groups.
+125 inputs in 25 groups.
 
 ## Groups
 
@@ -22,6 +22,7 @@ each one that is missing.
 - [Outbound egress posture](#outbound-egress-posture) (2)
 - [Trusting a private CA (MAS-446)](#trusting-a-private-ca-mas-446) (1)
 - [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (28)
+- [Environment subnets (ADR 0120)](#environment-subnets-adr-0120) (6)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
 - [Built-in sign-in](#built-in-sign-in) (1)
@@ -161,6 +162,19 @@ In `variables-core.tf`.
 | `vnet_address_space` | `list(string)` | `["10.20.0.0/16"]` | Address space of the install's VNet. |
 | `aca_subnet_prefix` | `string` | `null` | Explicit CIDR of the ACA runtime subnet (must be /23 or larger and inside vnet_address_space). |
 | `private_endpoints_subnet_prefix` | `string` | `null` | Explicit CIDR of the private-endpoints subnet (inside vnet_address_space, clear of the runtime subnet). |
+
+## Environment subnets (ADR 0120)
+
+In `variables-core.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `front_subnet_prefix` | `string` | `null` | Explicit CIDR of the front environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `app_subnet_prefix` | `string` | `null` | Explicit CIDR of the app environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `workers_subnet_prefix` | `string` | `null` | Explicit CIDR of the workers environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `front_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the front environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+| `app_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+| `workers_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
 
 ## Async bus (ADR 0029)
 
