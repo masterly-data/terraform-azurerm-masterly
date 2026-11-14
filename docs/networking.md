@@ -17,7 +17,9 @@ landing-zone shape.
 
 ## 1. Public ingress behind an allowlist
 
-The default. The module creates a VNet from `vnet_address_space`, two subnets, private
+The default. The module creates a VNet from `vnet_address_space`, the runtime subnet
+`snet-aca`, the private-endpoint subnet, the three environment subnets `snet-front`, `snet-app`
+and `snet-workers` (see [The environment subnets](#the-environment-subnets)), private
 endpoints for Postgres, Key Vault, and Redis, and the private DNS zones those need. With
 `registry_private_endpoint = true` (the `managed_identity` and `customer_registry` registry
 modes, with `acr_id` set) it adds one more: a private endpoint to your registry's `registry`
@@ -77,6 +79,12 @@ from the subnet id, so the two can never disagree.
   private endpoints, so these cannot be the same subnet; the module refuses that at plan too.
   Leave private endpoint network policies **enabled** on it if you want the NSG rules below to
   apply to the endpoints — disabled, they are there and inert.
+- `front_subnet_id`, `app_subnet_id` and `workers_subnet_id` (optional; all three or none) —
+  the [environment subnets](#the-environment-subnets): each **/27 or larger**, delegated to
+  `Microsoft.App/environments`, in the **same VNet** as `aca_subnet_id`, and three subnets of
+  their own: none of them may be another of them, `aca_subnet_id` or
+  `private_endpoints_subnet_id`. The module refuses each of those at plan. It cannot check a
+  subnet's size without reading your spoke, so the size is yours to get right.
 
 **Centralised private DNS.** If your hub owns the privatelink zones, inject them and the module
 creates neither the zone nor the VNet link — linking the hub zone to this spoke is your
@@ -309,7 +317,13 @@ that opens by itself.
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
 | 100 | Allow | `snet-aca` | TCP 443, 5432, 6380, 10000 | Key Vault and the registry's private endpoint (443), Postgres, Azure Cache for Redis, Azure Managed Redis |
+| 110 | Allow | `snet-app` | the same ports | The app environment (present with the [environment subnets](#the-environment-subnets)) |
+| 120 | Allow | `snet-workers` | the same ports | The workers environment (likewise) |
 | 4000 | Deny | any | any | Everything not admitted above |
+
+`snet-front` is never a source here: the front environment is the one that faces your users,
+and the internet when it is external, so it cannot open a connection to any private endpoint.
+The `snet-aca` rule stays for as long as the apps run there.
 
 The module sets `private_endpoint_network_policies = "Enabled"` on that subnet, without which
 an NSG on a private-endpoint subnet does not apply to private-endpoint traffic at all. Note
@@ -340,6 +354,72 @@ configuration meaning *unrestricted*, and an NSG rule cannot express an empty so
 would have to become a deny, turning a documented default into an outage. The NSG is a second
 layer under the allowlist, not a replacement for it.
 
+### The environment subnets
+
+The install is moving from one Consumption-only environment in `snet-aca` to three
+workload-profiles Container Apps environments, each in a subnet of its own (ADR 0120): **front**
+(the frontend, the one environment callers reach), **app** (the api, reached only from the
+front) and **workers** (no inbound caller). The subnets sit beside `snet-aca`, which keeps
+serving the apps until they move; a later module version moves them and retires `snet-aca`.
+
+On a network the module builds, `front_subnet_prefix`, `app_subnet_prefix` and
+`workers_subnet_prefix` set the three ranges, all three or none, each /27 or larger, inside
+`vnet_address_space` and clear of every other subnet; the plan refuses anything else. With none
+set and a first VNet prefix of /21 or larger, the module takes the /24s at index 5, 6 and 7 of
+it: `10.20.5.0/24`, `10.20.6.0/24` and `10.20.7.0/24` on the default `10.20.0.0/16`, beside
+`snet-aca` (`10.20.0.0/23`) and the private-endpoint subnet (`10.20.4.0/24`). A smaller VNet, or
+explicit `aca_subnet_prefix` and `private_endpoints_subnet_prefix` that already cover those
+/24s, gets no environment subnets until the three prefixes are set. The `environment_subnet_ids`
+and `environment_subnet_prefixes` outputs carry what was created.
+
+No app runs in these subnets yet, and `egress_firewall` still attaches its route table to
+`snet-aca` only ([Egress](#egress)): the three environment subnets get no route table in this
+version.
+
+Each subnet carries its own NSG, ending in the same deny. The platform rows are the inbound
+rules Microsoft lists for a workload-profiles environment in
+[Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration);
+31080 and 31443 are the ports the environment's edge proxy answers HTTP and HTTPS on, behind
+its load balancer.
+
+**`snet-front`**:
+
+| Priority | Access | Source | Protocol / ports | Why |
+|---|---|---|---|---|
+| 100 | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443, 31080, 31443 | Reach the front environment's apps |
+| 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement |
+| 120 | Allow | `snet-front` | any | Container Apps platform requirement: traffic within the subnet |
+| 4000 | Deny | any | any | Everything not admitted above |
+
+**`snet-app`**:
+
+| Priority | Access | Source | Protocol / ports | Why |
+|---|---|---|---|---|
+| 100 | Allow | `snet-front` | TCP 443, 31443 | HTTPS from the front environment, and from nothing else |
+| 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement |
+| 120 | Allow | `snet-app` | any | Container Apps platform requirement: traffic within the subnet |
+| 4000 | Deny | any | any | Everything not admitted above |
+
+**`snet-workers`**:
+
+| Priority | Access | Source | Protocol / ports | Why |
+|---|---|---|---|---|
+| 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement |
+| 120 | Allow | `snet-workers` | any | Container Apps platform requirement: traffic within the subnet |
+| 4000 | Deny | any | any | Everything not admitted above |
+
+No allow rule on `snet-app` or `snet-workers` names `VirtualNetwork` or `Internet`.
+`VirtualNetwork` would admit every peered network and every on-premises range behind a
+gateway, not only the front.
+
+**An external front's only inbound filter is `ingress_allowed_cidrs`.** The front subnet's NSG
+admits the `Internet` tag when the environment is public, for the same reason `snet-aca`'s does:
+an NSG rule cannot express the empty allowlist that means *unrestricted*. So on a public install
+the apps' IP restrictions, `ingress_allowed_cidrs`, are the whole of who may reach the front, and
+an empty list admits everyone. To filter at the network instead, put the front behind a WAF or an
+Application Gateway with `aca_internal_load_balancer = true`: the rule then admits
+`VirtualNetwork` only.
+
 ### Topology 3: what your own subnets should carry
 
 On an injected spoke the module creates no NSG and associates none. A subnet holds exactly one,
@@ -348,6 +428,41 @@ configuration. The tables above are the baseline those subnets are expected to m
 rows of them are not optional: without the `AzureLoadBalancer` and intra-subnet rules the
 Container Apps environment provisions and then serves nothing, and without `snet-aca` reaching
 your endpoints subnet on the data-plane ports the apps cannot open a database connection.
+
+With `front_subnet_id`, `app_subnet_id` and `workers_subnet_id` set, those three subnets are
+yours too, and the baseline each should carry is the tables in
+[The environment subnets](#the-environment-subnets), with your own ranges in place of ours:
+
+- **front**: inbound TCP 80, 443, 31080 and 31443 from whoever reaches the front, which is
+  `VirtualNetwork` or your Application Gateway's subnet on an internal environment and `Internet`
+  on a public one; `AzureLoadBalancer` on TCP 30000-32767; any traffic within the subnet; deny
+  everything else.
+- **app**: inbound TCP 443 and 31443 from the front subnet's range only; `AzureLoadBalancer` on
+  TCP 30000-32767; any traffic within the subnet; deny everything else. Never `VirtualNetwork`.
+- **workers**: `AzureLoadBalancer` on TCP 30000-32767; any traffic within the subnet; deny
+  everything else.
+- **your endpoints subnet**: add the app and workers subnets' ranges as sources on the
+  data-plane ports, beside `snet-aca`'s, and never the front subnet's.
+
+**How big a spoke.** Each environment subnet takes /27 at the least. A workload-profiles
+environment uses one address per node and per replica, so a /24 each leaves room to scale.
+For three environment subnets, the private endpoints and an Application Gateway v2 subnet:
+
+| | Environment subnets | Private endpoints | Application Gateway | Total | Spoke |
+|---|---|---|---|---|---|
+| **Minimum** | 3 × /27 | /28 | /24 (Azure's recommendation for v2) | 368 addresses | /23 |
+| **Recommended** | 3 × /24 | /24 | /24 (Azure's recommendation for v2) | 1,280 addresses | /21 |
+
+The minimum keeps the gateway at the /24 Azure recommends, because a v2 gateway scales out into
+its subnet. Azure accepts a /26 for v2, which brings the minimum down to 176 addresses and a /24
+spoke, at the cost of the gateway's headroom to scale; treat that as a reduced-capacity option,
+not the baseline.
+
+While the apps still run in the legacy environment, the spoke also holds its /23
+(`aca_subnet_id`): 880 addresses at the minimum, a /22 (688 with the /26 gateway, still a /22),
+and 1,792 recommended, which still fits the /21. That /21 is the layout the module derives for
+itself: `snet-aca` at `.0.0/23`, the private endpoints at `.4.0/24`, front, app and workers at
+`.5.0`, `.6.0` and `.7.0/24`, and `.2.0/23` free for the Application Gateway.
 
 ## Upgrading an existing install
 
@@ -367,6 +482,24 @@ before applying: if you attached your own NSG or a user-defined route to either 
 band, the module's association replaces the first and enabling network policies starts
 applying the second to private-endpoint traffic.
 
+The environment subnets arrive additively too. On an install that builds its own network from
+a /21 or larger, the plan creates `snet-front`, `snet-app` and `snet-workers`, their three NSGs
+and three associations, and updates `nsg-<name_prefix>-private-endpoints` in place with the two
+rules for the app and workers subnets. `snet-aca`, its NSG and its rules, the private-endpoint
+subnet and both associations keep their addresses, names and prefixes: nothing needs a `moved`
+block, nothing is replaced, and the apps in `snet-aca` keep their path to the data plane. Two
+things to check in the plan first:
+
+- If you created subnets of your own in the VNet out of band, the derived ranges
+  (`.5.0/24`, `.6.0/24` and `.7.0/24` of the first prefix) may already be taken, and the apply
+  then fails at Azure. Set `front_subnet_prefix`, `app_subnet_prefix` and
+  `workers_subnet_prefix` to free ranges instead.
+- With explicit `aca_subnet_prefix` and `private_endpoints_subnet_prefix` that cover those
+  ranges, or a VNet smaller than /21, the plan creates no environment subnets and changes
+  nothing; set the three prefixes when you want them.
+
+An injected install changes nothing until you set the three subnet ids.
+
 ## Landing-zone notes
 
 The install runs in its own VNet: the ACA environment is VNet-integrated (runtime subnet,
@@ -378,7 +511,9 @@ publish the api (`api_ingress_external`) or set `edge` ([The edge proxy](#the-ed
 Landing-zone accommodations:
 
 - A first VNet prefix of /21 or larger derives the subnets automatically; a smaller
-  allocation sets `aca_subnet_prefix` + `private_endpoints_subnet_prefix` explicitly.
+  allocation sets `aca_subnet_prefix` + `private_endpoints_subnet_prefix` explicitly, and
+  `front_subnet_prefix`, `app_subnet_prefix` + `workers_subnet_prefix` for the
+  [environment subnets](#the-environment-subnets).
 - Hub-and-spoke shops that centralize private DNS pass
   `postgres_private_dns_zone_id` — the module then creates no zone and no VNet link
   (linking the central zone to this VNet is the platform team's side). The same holds for
@@ -444,10 +579,13 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
   time limit, so a streamed MCP or server-sent-events response stays open; a stream with no bytes
   either way for 300 seconds is closed.
 - **No control plane, no secrets.** Envoy's admin interface is not configured. The whole Envoy
-  configuration travels in the container's command, visible in the plan, and holds nothing secret;
-  a change to it rolls a new revision. The access log, one JSON line per request on the
-  container's output (in your workspace with diagnostics on), holds the path without its query string and no `Authorization`, cookie or other
-  credential-carrying header.
+  configuration travels in the container's arguments (`args`), visible in the plan, and holds
+  nothing secret; a change to it rolls a new revision. Because it is passed as arguments, the
+  image's entrypoint still runs and starts Envoy as the image's unprivileged `envoy` user, not
+  root; the listener is on port 8080. A mirror set in `edge.image` must keep that entrypoint. The
+  access log, one JSON line per request on the container's output (in your workspace with
+  diagnostics on), holds the path without its query string and no `Authorization`, cookie or
+  other credential-carrying header.
 - **Its own identity.** `ca-edge` runs as `id-<prefix>-edge`, which holds no role on Postgres,
   Key Vault, Service Bus or Redis, and AcrPull only when its image is on the install's registry.
 

@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-121 inputs in 26 groups.
+128 inputs in 27 groups.
 
 ## Groups
 
@@ -23,9 +23,10 @@ each one that is missing.
 - [Forced-tunnel egress through your firewall](#forced-tunnel-egress-through-your-firewall) (1)
 - [Trusting a private CA (MAS-446)](#trusting-a-private-ca-mas-446) (1)
 - [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (28)
+- [Environment subnets (ADR 0120)](#environment-subnets-adr-0120) (6)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
-- [Built-in sign-in](#built-in-sign-in) (1)
+- [Built-in sign-in](#built-in-sign-in) (2)
 - [Custom domain](#custom-domain) (1)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
 - [Images and registry pull credential](#images-and-registry-pull-credential) (6)
@@ -172,6 +173,19 @@ In `variables-core.tf`.
 | `aca_subnet_prefix` | `string` | `null` | Explicit CIDR of the ACA runtime subnet (must be /23 or larger and inside vnet_address_space). |
 | `private_endpoints_subnet_prefix` | `string` | `null` | Explicit CIDR of the private-endpoints subnet (inside vnet_address_space, clear of the runtime subnet). |
 
+## Environment subnets (ADR 0120)
+
+In `variables-core.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `front_subnet_prefix` | `string` | `null` | Explicit CIDR of the front environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `app_subnet_prefix` | `string` | `null` | Explicit CIDR of the app environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `workers_subnet_prefix` | `string` | `null` | Explicit CIDR of the workers environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `front_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the front environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+| `app_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+| `workers_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+
 ## Async bus (ADR 0029)
 
 In `variables-core.tf`.
@@ -203,6 +217,7 @@ In `variables-builtin-auth.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `builtin_auth` | `object(...)` | `null` | Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on ca-frontend only: a gate at the platform, in front of the application's own sign-in. |
+| `builtin_auth_recovery_until` | `string` | `null` | The recovery fallback for builtin_auth: an RFC 3339 UTC time (for example 2026-11-14T15:30:00Z) until which ca-frontend's built-in authentication is turned off, so that a browser reaches the application's own sign-in... |
 
 ## Custom domain
 

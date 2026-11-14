@@ -51,7 +51,8 @@ locals {
   edge_image_on_registry = local.edge_enabled && local.registry_server != "" && lower(split("/", local.edge_image)[0]) == lower(local.registry_server)
 
   # The port the listener binds and ingress targets. The admin interface is not configured at all,
-  # so nothing else listens.
+  # so nothing else listens. Unprivileged (1024 or above): Envoy runs as the image's envoy user,
+  # not root, and could not bind a lower port.
   edge_port = 8080
 
   # Requests declaring a body larger than this get 413 at the edge, before ca-api sees them.
@@ -86,7 +87,7 @@ locals {
     timeout = "0s"
   }
 
-  # The whole Envoy bootstrap, passed to the container on its command line (below). Nothing in it is
+  # The whole Envoy bootstrap, passed to Envoy in the container's args (below). Nothing in it is
   # secret, and nothing in it may be: it is visible in the plan and on the app's revision.
   edge_envoy_config = {
     static_resources = {
@@ -303,9 +304,11 @@ resource "azurerm_container_app" "edge" {
       cpu    = 0.25
       memory = "0.5Gi"
 
-      # The bootstrap travels in the command, which is part of the revision template: a change to
-      # the configuration rolls a new revision, as a change of image does.
-      command = ["envoy", "--config-yaml", jsonencode(local.edge_envoy_config)]
+      # The bootstrap travels in args, which are part of the revision template: a change to the
+      # configuration rolls a new revision, as a change of image does. args, not command: a command
+      # would replace the image's entrypoint (/docker-entrypoint.sh), which drops from root to the
+      # unprivileged envoy user before starting Envoy, and the public proxy would run as root.
+      args = ["envoy", "--config-yaml", jsonencode(local.edge_envoy_config)]
     }
   }
 

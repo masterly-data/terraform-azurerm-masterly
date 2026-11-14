@@ -9,7 +9,7 @@
 # file at once (tests/README.md). A run's own `variables` block overrides the file's.
 #
 # The Envoy configuration is asserted from local.edge_envoy_config, the object the container's
-# command carries. The last two pairs of runs apply against tests/mocks/migrate (ARM-shaped ids, so
+# args carry. The last two pairs of runs apply against tests/mocks/migrate (ARM-shaped ids, so
 # a plan against the applied state validates), under the alias "applied", and so come last.
 
 mock_provider "azurerm" {
@@ -563,13 +563,46 @@ run "edge_logs_and_plan_carry_no_credential" {
   assert {
     condition = (
       !issensitive(local.edge_envoy_config) &&
-      !issensitive(azurerm_container_app.edge[0].template[0].container[0].command) &&
-      azurerm_container_app.edge[0].template[0].container[0].command == tolist(["envoy", "--config-yaml", jsonencode(local.edge_envoy_config)]) &&
+      !issensitive(azurerm_container_app.edge[0].template[0].container[0].args) &&
+      azurerm_container_app.edge[0].template[0].container[0].args == tolist(["envoy", "--config-yaml", jsonencode(local.edge_envoy_config)]) &&
+      length(coalesce(azurerm_container_app.edge[0].template[0].container[0].command, [])) == 0 &&
       length(azurerm_container_app.edge[0].secret) == 0 &&
       length(azurerm_container_app.edge[0].template[0].container[0].env) == 0 &&
       length(azurerm_container_app.edge[0].template[0].init_container) == 0
     )
-    error_message = "The bootstrap and ca-edge's command must hold no secret value, and ca-edge must declare no secrets, env or init container."
+    error_message = "The bootstrap and ca-edge's args and command must hold no secret value, and ca-edge must declare no secrets, env or init container."
+  }
+}
+
+# Threat: a public-facing proxy running as root. The bootstrap goes in args, not command, so the
+# image's entrypoint (/docker-entrypoint.sh) runs and drops from root to the envoy user; a command
+# would replace the entrypoint and Envoy would run as root.
+run "edge_runs_through_the_image_entrypoint" {
+  command = plan
+
+  variables {
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app.edge[0].template[0].container[0].args == tolist(["envoy", "--config-yaml", jsonencode(local.edge_envoy_config)]) &&
+      length(coalesce(azurerm_container_app.edge[0].template[0].container[0].command, [])) == 0
+    )
+    error_message = "ca-edge must pass the bootstrap in args (envoy --config-yaml <bootstrap>) and set no command, so the image's entrypoint runs and drops Envoy from root to the envoy user."
+  }
+
+  # The entrypoint drops privileges unless ENVOY_UID is set to 0, and the envoy user can bind only
+  # an unprivileged port.
+  assert {
+    condition = (
+      length(azurerm_container_app.edge[0].template[0].container[0].env) == 0 &&
+      local.edge_port >= 1024 &&
+      local.edge_envoy_config.static_resources.listeners[0].address.socket_address.port_value == local.edge_port &&
+      azurerm_container_app.edge[0].ingress[0].target_port == local.edge_port
+    )
+    error_message = "ca-edge must set no ENVOY_UID (no env at all), and its listener and ingress target must be an unprivileged port (1024 or above)."
   }
 }
 
@@ -667,13 +700,13 @@ run "edge_applied_with_the_default_configuration" {
   }
 
   assert {
-    condition     = strcontains(azurerm_container_app.edge[0].template[0].container[0].command[2], "\"start\":10485761")
+    condition     = strcontains(azurerm_container_app.edge[0].template[0].container[0].args[2], "\"start\":10485761")
     error_message = "ca-edge must be created with the default body limit in its bootstrap."
   }
 }
 
-# A change to the rendered configuration changes the revision template's command, so it rolls.
-run "edge_configuration_change_is_planned_onto_the_command" {
+# A change to the rendered configuration changes the revision template's args, so it rolls.
+run "edge_configuration_change_is_planned_onto_the_args" {
   command = plan
 
   providers = {
@@ -693,10 +726,10 @@ run "edge_configuration_change_is_planned_onto_the_command" {
 
   assert {
     condition = (
-      azurerm_container_app.edge[0].template[0].container[0].command[2] == jsonencode(local.edge_envoy_config) &&
-      strcontains(azurerm_container_app.edge[0].template[0].container[0].command[2], "\"start\":1048577") &&
-      !strcontains(azurerm_container_app.edge[0].template[0].container[0].command[2], "\"start\":10485761")
+      azurerm_container_app.edge[0].template[0].container[0].args[2] == jsonencode(local.edge_envoy_config) &&
+      strcontains(azurerm_container_app.edge[0].template[0].container[0].args[2], "\"start\":1048577") &&
+      !strcontains(azurerm_container_app.edge[0].template[0].container[0].args[2], "\"start\":10485761")
     )
-    error_message = "A change to the rendered Envoy configuration must be planned onto ca-edge's container command, which is part of the revision template."
+    error_message = "A change to the rendered Envoy configuration must be planned onto ca-edge's container args, which are part of the revision template."
   }
 }
