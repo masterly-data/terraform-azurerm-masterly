@@ -22,7 +22,7 @@ variable "edge" {
     condition = var.edge == null ? true : (
       var.edge.image == null ? true : can(regex("^(?:[^\\s/@]*[.:][^\\s/@]*|localhost)(?:/[^\\s/:@]+)+(?::\\w[\\w.-]{0,127})?@sha256:[0-9a-f]{64}$", var.edge.image))
     )
-    error_message = "edge.image must be a full image reference pinned by digest, registry/repository[:tag]@sha256:<64 lowercase hex>, for example docker.io/envoyproxy/envoy:v1.36.0@sha256:<digest>. A tag alone can be moved to different content after review; the digest cannot."
+    error_message = "edge.image must be a full image reference pinned by digest, registry/repository[:tag]@sha256:<64 lowercase hex>, for example docker.io/envoyproxy/envoy:v1.40.2@sha256:<digest>. A tag alone can be moved to different content after review; the digest cannot."
   }
 
   validation {
@@ -38,9 +38,12 @@ variable "edge" {
 locals {
   edge_enabled = var.edge != null
 
-  # The upstream Envoy image, pinned by digest. A change here, or to edge.image, rolls a new
-  # ca-edge revision on the next apply: the image is not in the app's ignore_changes.
-  edge_default_image = "docker.io/envoyproxy/envoy:v1.36.0@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  # The upstream Envoy image, pinned by digest: v1.40.2 (released 2026-10-27), the multi-arch index
+  # digest read from Docker Hub on 2026-11-14. Bump tag and digest together, from the registry
+  # (docker buildx imagetools inspect docker.io/envoyproxy/envoy:<tag>), and keep within Envoy's
+  # 12-month support window. A change here, or to edge.image, rolls a new ca-edge revision on the
+  # next apply: the image is not in the app's ignore_changes.
+  edge_default_image = "docker.io/envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb"
   edge_image         = local.edge_enabled ? coalesce(var.edge.image, local.edge_default_image) : local.edge_default_image
 
   # Logs in to the install's registry, as its own identity, only when the image is there. Any other
@@ -155,7 +158,9 @@ locals {
                   domains = ["*"]
 
                   # Bounds what Envoy holds for a retry; the request body itself streams through.
-                  per_request_buffer_limit_bytes = local.edge_max_request_body_bytes
+                  # request_body_buffer_limit replaces per_request_buffer_limit_bytes, deprecated
+                  # since Envoy 1.36.
+                  request_body_buffer_limit = local.edge_max_request_body_bytes
 
                   # First match wins. A declared body over the limit is refused before routing,
                   # without buffering it (no buffer filter). The range ends at 2^53 - 1, the

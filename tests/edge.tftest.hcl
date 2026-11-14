@@ -155,13 +155,26 @@ run "edge_default_image_is_pinned_by_digest" {
     )
     error_message = "ca-edge's default image must be a reference pinned by @sha256 digest."
   }
+
+  # The shape alone admits a placeholder such as 64 zeros, which plans cleanly and never pulls.
+  # A real sha256 digest spreads over the hex alphabet: one with fewer than 8 distinct characters
+  # was typed, not read from the registry.
+  assert {
+    condition     = length(distinct(regexall("[0-9a-f]", split("@sha256:", local.edge_default_image)[1]))) >= 8
+    error_message = "ca-edge's default image digest looks like a placeholder (too few distinct hex characters): pin the digest read from the registry."
+  }
+
+  assert {
+    condition     = startswith(local.edge_default_image, "docker.io/envoyproxy/envoy:v")
+    error_message = "ca-edge's default image must be the upstream envoyproxy/envoy on Docker Hub, with its release tag beside the digest."
+  }
 }
 
 run "edge_image_without_a_digest_is_refused" {
   command = plan
 
   variables {
-    edge                  = { image = "docker.io/envoyproxy/envoy:v1.36.0" }
+    edge                  = { image = "docker.io/envoyproxy/envoy:v1.40.2" }
     ingress_allowed_cidrs = ["203.0.113.7/32"]
   }
 
@@ -348,7 +361,7 @@ run "edge_image_on_the_install_registry_gets_acr_pull" {
   command = plan
 
   variables {
-    edge                  = { image = "masterly.azurecr.io/mirror/envoy:v1.36.0@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
+    edge                  = { image = "masterly.azurecr.io/mirror/envoy:v1.40.2@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     acr_login_server      = null
     acr_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
@@ -384,7 +397,7 @@ run "edge_image_on_a_token_registry_is_refused" {
   command = plan
 
   variables {
-    edge                  = { image = "masterly.azurecr.io/mirror/envoy:v1.36.0@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
+    edge                  = { image = "masterly.azurecr.io/mirror/envoy:v1.40.2@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     acr_login_server      = null
     registry_token        = { username = "00000000-0000-0000-0000-000000000001", password = "test-only" }
@@ -588,7 +601,7 @@ run "edge_applied_with_one_digest" {
   }
 
   variables {
-    edge                  = { image = "docker.io/envoyproxy/envoy:v1.36.0@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
+    edge                  = { image = "docker.io/envoyproxy/envoy:v1.40.2@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
     ingress_allowed_cidrs = ["203.0.113.7/32"]
   }
 
@@ -597,7 +610,7 @@ run "edge_applied_with_one_digest" {
   }
 
   assert {
-    condition     = azurerm_container_app.edge[0].template[0].container[0].image == "docker.io/envoyproxy/envoy:v1.36.0@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    condition     = azurerm_container_app.edge[0].template[0].container[0].image == "docker.io/envoyproxy/envoy:v1.40.2@sha256:1111111111111111111111111111111111111111111111111111111111111111"
     error_message = "ca-edge must be created with edge.image."
   }
 
@@ -621,7 +634,7 @@ run "edge_new_digest_is_planned_onto_the_app" {
   }
 
   variables {
-    edge                  = { image = "docker.io/envoyproxy/envoy:v1.36.0@sha256:2222222222222222222222222222222222222222222222222222222222222222" }
+    edge                  = { image = "docker.io/envoyproxy/envoy:v1.40.2@sha256:2222222222222222222222222222222222222222222222222222222222222222" }
     ingress_allowed_cidrs = ["203.0.113.7/32"]
   }
 
@@ -630,7 +643,7 @@ run "edge_new_digest_is_planned_onto_the_app" {
   }
 
   assert {
-    condition     = azurerm_container_app.edge[0].template[0].container[0].image == "docker.io/envoyproxy/envoy:v1.36.0@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    condition     = azurerm_container_app.edge[0].template[0].container[0].image == "docker.io/envoyproxy/envoy:v1.40.2@sha256:2222222222222222222222222222222222222222222222222222222222222222"
     error_message = "A changed edge.image must be planned onto ca-edge: its image must not be in ignore_changes, as the CD-owned apps' images are."
   }
 }

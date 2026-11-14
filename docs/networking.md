@@ -381,8 +381,8 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
 
 ### Where the edge's image comes from
 
-By default `ca-edge` runs the upstream `envoyproxy/envoy` image from **Docker Hub**, pinned by
-digest, and pulls it anonymously. The environment then needs outbound HTTPS to Docker Hub
+By default `ca-edge` runs the upstream `envoyproxy/envoy` image from **Docker Hub** (v1.40.2,
+pinned by digest), and pulls it anonymously. The environment then needs outbound HTTPS to Docker Hub
 (`registry-1.docker.io`, `auth.docker.io` and the content host it redirects to,
 `production.cloudflare.docker.com`): on a network whose egress goes through a firewall, allow
 those, or mirror the image.
