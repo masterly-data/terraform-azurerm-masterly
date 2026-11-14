@@ -1,0 +1,3 @@
+### Documentation
+
+- The README's long-form feature docs moved to their own files: Identity to `docs/identity.md`, Data plane to `docs/data-plane.md`, Scaling to `docs/scaling.md`, and Networking (the landing-zone notes, the API's public address and transport security) into `docs/networking.md`. The README keeps each `##` heading with a pointer, and the departures from Azure's recommended baseline stay in it. The Diagnostics + alerts section stays in the README for now. The README holds no input table: `docs/inputs.md` is the input reference, and `scripts/check_inputs_reference.py` now fails on a README table row for a declared input.

@@ -401,7 +401,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
     # server still on its password is never flipped by a default, and never kept on it silently.
     precondition {
       condition     = !(var.mode == "production" && var.database_auth == null && local.recorded_database_auth == "password")
-      error_message = "This install's Postgres server authenticates with the masterly_admin password, and database_auth is unset. In mode = \"production\" this module now defaults to Microsoft Entra ID authentication, but it will not switch a running server on its own: every object in its databases is owned by masterly_admin, and the apps cannot use them as their Entra identity until ownership has moved. Choose explicitly. Set database_auth = \"password\" to keep the password (nothing changes; it is a documented departure from Azure's recommended baseline), or follow \"Moving an existing install to Microsoft Entra authentication\" in the module README and then set database_auth = \"entra\"."
+      error_message = "This install's Postgres server authenticates with the masterly_admin password, and database_auth is unset. In mode = \"production\" this module now defaults to Microsoft Entra ID authentication, but it will not switch a running server on its own: every object in its databases is owned by masterly_admin, and the apps cannot use them as their Entra identity until ownership has moved. Choose explicitly. Set database_auth = \"password\" to keep the password (nothing changes; it is a documented departure from Azure's recommended baseline), or follow \"Moving an existing install to Microsoft Entra authentication\" in the module's docs/data-plane.md and then set database_auth = \"entra\"."
     }
 
     # Both of these are ASSIGNED BY AZURE at creation and absent from this configuration, so
@@ -742,7 +742,7 @@ module "postgres_connection_urls_migrate" {
 # is bound to the app's identity and the URL carries no password; on "password" it carries that
 # role's generated password, and reaches the app only inside its own vault secret ("job" requires
 # mode = production, which requires the vault). The roles exist only if the api image's migrate
-# role creates them, which no release up to v0.135.0 does; the README's upgrade note gates "job"
+# role creates them, which no release up to v0.135.0 does; docs/data-plane.md's upgrade note gates "job"
 # on such a release, and the module cannot check the image.
 module "postgres_connection_urls_api" {
   source = "./modules/postgres-connection-urls"

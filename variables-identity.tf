@@ -36,7 +36,7 @@ variable "release_channel" {
 variable "registry_location" {
   type        = string
   default     = null
-  description = "Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). Null (the default) is Masterly's registry, masterly.azurecr.io, when registry_credential_mode, a pull credential or acr_id is set; with none of them it renders no registry block on the apps, which then pull public images (the default image references still name masterly.azurecr.io/release/<role>). Replaces acr_login_server; set one of the two, not both."
+  description = "Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). Null (the default) is Masterly's registry, masterly.azurecr.io, when registry_credential_mode, a pull credential or acr_id is set; with none of them it renders no registry block on the apps, which then pull public images (the default image references still name masterly.azurecr.io/release/<role>). Replaces acr_login_server; set one of the two, not both. An empty string is refused: omit the input instead."
 
   validation {
     condition     = var.registry_location == null ? true : can(regex("^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+|localhost)(?::[0-9]{1,5})?$", var.registry_location))

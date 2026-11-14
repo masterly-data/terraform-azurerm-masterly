@@ -70,7 +70,7 @@ below), and it verifies licence claims version 3 (`api_claims_version`, up from 
   a letter and ending with a letter or digit, or is over 40 characters, a duplicate, a fixture
   name, and any name on `mode = "production"`, where Environments are created in the product and
   persist. See
-  [Extra Environments on a demo install](README.md#extra-environments-on-a-demo-install).
+  [Extra Environments on a demo install](docs/data-plane.md#extra-environments-on-a-demo-install).
 
 ### Changed
 
@@ -310,7 +310,7 @@ Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143
   run and does not change it. On an existing `database_auth = "entra"` install the database
   objects are owned by `id-<prefix>-apps`; a second Entra administrator is not a superuser, so the
   image's migrate role must take ownership or membership of them before its first migration. See
-  "The migrate job" in the [README](README.md#the-migrate-job).
+  "The migrate job" in the [data plane docs](docs/data-plane.md#the-migrate-job).
 
 - **With `migrations = "job"` on the starter server, the migrate job creates DML-only database
   roles for `ca-api` and `ca-workers` (ADR 0120 §6).** A minor release under ADR 0062: new
@@ -654,7 +654,7 @@ Released against the same image pair as 0.22.0: api `v0.135.0`, frontend `v0.143
   `MASTERLY_PUBLIC_API_URL`, with trailing slashes dropped; unset (the default), no app gets it,
   so an install that does not set it plans as before. Until now the frontend's value had to be
   set by hand and the next `terraform apply` removed it. The input's description and
-  [The API's public address](README.md#the-apis-public-address) name the three conditions under
+  [The API's public address](docs/networking.md#the-apis-public-address) name the three conditions under
   which the value works (MAS-1148).
 
 - `MANIFEST.json` release entries may carry `digests`: the `api` and `frontend` image digests of

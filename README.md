@@ -177,7 +177,7 @@ images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and
 `apps_identity_client_id` / `frontend_identity_principal_id` / `migrate_identity_principal_id` /
 `workers_identity_principal_id` for out-of-band role grants. The install runs on two app
 identities, with `migrations = "job"` on a **third**, the migrate job's, and wherever `ca-workers`
-runs as its own identity on a **fourth** (see [The migrate job](#the-migrate-job)), so an
+runs as its own identity on a **fourth** (see [The migrate job](docs/data-plane.md#the-migrate-job)), so an
 out-of-band `AcrPull` grant has to reach each of them.
 
 `api_internal_fqdn` keeps its name so existing configurations still plan, but the name is older
@@ -260,33 +260,33 @@ check, and a rebuilt app, both go by.
 | Log Analytics + ACA environment (`aca-masterly`) | The runtime |
 | `id-masterly-apps` UAMI (+ optional AcrPull) | The **backend** apps' identity (`ca-api`, and `ca-workers` unless it has its own, below): image pull, plus every data-plane grant the install makes — the module's **app secrets role** on the vault (read, write and delete secrets: `getSecret`, `setSecret`, `delete` and `readMetadata`; unlike the built-in Key Vault Secrets Officer it replaces, no purge, backup, restore or recover), Key Vault Crypto Officer (the erasure keys of ADR 0081 — see [Erasure keys belong in your secret backup](#erasure-keys-belong-in-your-secret-backup)), Service Bus send + receive, ACS Email Owner, and on `database_auth` / `redis_auth` = `"entra"` the starter server's Microsoft Entra administrator and the Redis data access policy. Wherever `ca-workers` runs as its own identity it holds Service Bus send only: receive and the jobs queue's Data Owner are `id-masterly-workers`'. With `migrations = "job"` on the starter server it is also **no** Postgres administrator (ADR 0120). Later install identity work (ADR 0020) |
 | `id-masterly-frontend` UAMI (+ optional AcrPull) | The **frontend's** identity. Image pull, plus, with `enable_key_vault`, **Key Vault Secrets User** (read) on each of its own secrets only — the BFF shared secret, and the registry password and OIDC client secret when set — never on the vault, and nothing else: `ca-frontend` is the only internet-facing app, so it does not carry the backend's grants |
-| `id-masterly-migrate` UAMI (+ optional AcrPull) — **only with `migrations = "job"`** | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus **Key Vault Secrets User** on each of its vault-backed secrets and the per-Environment BYO-DB DSN secrets explicitly named in `migrate_byo_database_secret_names`; no vault copy or grant for `external_database_admin_url`. On `database_auth = "entra"`, the starter server's **only** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](#the-migrate-job) |
-| `id-masterly-workers` UAMI (+ optional AcrPull) — **wherever `ca-workers` exists and the install has a Key Vault, except `migrations = "start"` with `database_auth = "entra"` on the starter server** | **`ca-workers`' own identity**: it runs, pulls, scales and resolves its Key Vault references as it. With `migrations = "job"` on the starter server it also signs in to Postgres as `masterly_workers` (on `"entra"`, the role the migrate job binds to this identity); elsewhere it reads the shared `database-url`. It holds the backend grants `ca-workers` needs — the app secrets role and Crypto Officer on the vault, AcrPull (through `acr_id`), ACS Email Owner, Service Bus send + receive, Data Owner on the jobs queue when `ca-workers` scales on it, and its own Redis data access policy on `redis_auth = "entra"`. It is no Postgres administrator. `id-masterly-apps` keeps the others but gives up Service Bus receive and the jobs queue's Data Owner to it, and under `"job"` on the starter server its Entra administrator to `id-masterly-migrate`. See [The migrate job](#the-migrate-job) |
+| `id-masterly-migrate` UAMI (+ optional AcrPull) — **only with `migrations = "job"`** | The **migrate job's** identity (`caj-migrate`), attached to no Container App. Image pull, plus **Key Vault Secrets User** on each of its vault-backed secrets and the per-Environment BYO-DB DSN secrets explicitly named in `migrate_byo_database_secret_names`; no vault copy or grant for `external_database_admin_url`. On `database_auth = "entra"`, the starter server's **only** Microsoft Entra administrator. No vault-scope, Officer or crypto role, no Service Bus, Redis or ACS. See [The migrate job](docs/data-plane.md#the-migrate-job) |
+| `id-masterly-workers` UAMI (+ optional AcrPull) — **wherever `ca-workers` exists and the install has a Key Vault, except `migrations = "start"` with `database_auth = "entra"` on the starter server** | **`ca-workers`' own identity**: it runs, pulls, scales and resolves its Key Vault references as it. With `migrations = "job"` on the starter server it also signs in to Postgres as `masterly_workers` (on `"entra"`, the role the migrate job binds to this identity); elsewhere it reads the shared `database-url`. It holds the backend grants `ca-workers` needs — the app secrets role and Crypto Officer on the vault, AcrPull (through `acr_id`), ACS Email Owner, Service Bus send + receive, Data Owner on the jobs queue when `ca-workers` scales on it, and its own Redis data access policy on `redis_auth = "entra"`. It is no Postgres administrator. `id-masterly-apps` keeps the others but gives up Service Bus receive and the jobs queue's Data Owner to it, and under `"job"` on the starter server its Entra administrator to `id-masterly-migrate`. See [The migrate job](docs/data-plane.md#the-migrate-job) |
 | `caj-migrate` Container Apps job — **only with `migrations = "job"`** | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
-| `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](#transport-security)) |
+| `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](docs/networking.md#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
 | Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding. In `mode = "production"`, `enable_service_bus = true` also requires **`servicebus_sku`**, which has no default there: `"Premium"` (recommended) runs the namespace private, behind a **private endpoint** with public network access disabled, at about $677 per month; `"Standard"` keeps a public endpoint. See [Where this module departs from Azure's recommended baseline](#where-this-module-departs-from-azures-recommended-baseline). |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
 | Key Vault (opt-in, ADR 0066) | The durable secret store (`enable_key_vault`): sealed BYO-DB DSNs and GitOps tokens survive restarts; RBAC-mode vault; to the apps identity on the vault, Crypto Officer and the app secrets role, an install-unique custom role (`Masterly app secrets (<prefix>-<suffix>)`, defined on and assignable only within the data resource group) that reads, writes and deletes secrets and nothing more; `MASTERLY_SECRET_STORE=keyvault` auto-wired. It is also where **the install's own secrets** live — with the vault on, the apps hold Key Vault *references*, not values (see below). Soft-delete always on; in `mode=production` purge protection is armed and the vault is reached over a **private endpoint** (`privatelink.vaultcore.azure.net`) with **default-deny** network ACLs. Required for `mode=production`. |
-| Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the URL rides as a Container App secret, keyless on `redis_auth = "entra"` — [authentication](#authentication-to-the-starter-server-and-redis)). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
+| Redis (opt-in, ADR 0066 + ADR 0071) | The multi-replica session registry (`MASTERLY_SESSION_REGISTRY=redis`; the URL rides as a Container App secret, keyless on `redis_auth = "entra"` — [authentication](docs/data-plane.md#authentication-to-the-starter-server-and-redis)). `enable_redis = true` also requires **`redis_offering`**, which has no default: `"managed"` = **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, `Balanced_B0` by default, private DNS zone `privatelink.redis.azure.net`) — creatable by any tenant, and the only choice that works if your organization has never run an Azure Cache for Redis instance; `"cache"` = **Azure Cache for Redis** (`Microsoft.Cache/redis`, Basic/Standard/Premium, zone `privatelink.redis.cache.windows.net`) — creation blocked for new customers since 1 April 2026, retired 30 September 2028, kept only so an existing instance is not destroyed. Either way: **public network access disabled**, reachable only via a **private endpoint** mirroring the starter Postgres. Unlocks `api_max_replicas > 1`. Budget tens of minutes for the first apply — Azure-side provisioning dominates. |
 | Registry private endpoint (opt-in) | `registry_private_endpoint`: a private endpoint to your registry (`acr_id`, `registry` subresource) on the private-endpoints subnet, with a `privatelink.azurecr.io` private DNS zone linked to the VNet, so the identity modes pull over the VNet. See [The registry over a private endpoint](#the-registry-over-a-private-endpoint). |
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
-| `ca-frontend` custom domain (opt-in) | `frontend_custom_domain`: `id-masterly-frontend-cert` UAMI, attached to the Container App Environment and to no app, with **Key Vault Secrets User** on your certificate's secret alone; the environment certificate, a versionless Key Vault reference read as that identity; and an SNI binding of your hostname on `ca-frontend`. See [ca-frontend on your own domain](#ca-frontend-on-your-own-domain-frontend_custom_domain). |
+| `ca-frontend` custom domain (opt-in) | `frontend_custom_domain`: `id-masterly-frontend-cert` UAMI, attached to the Container App Environment and to no app, with **Key Vault Secrets User** on your certificate's secret alone; the environment certificate, a versionless Key Vault reference read as that identity; and an SNI binding of your hostname on `ca-frontend`. See [ca-frontend on your own domain](docs/identity.md#ca-frontend-on-your-own-domain-frontend_custom_domain). |
 
 ## Getting the images (ADR 0067)
 
 Masterly issues each customer a **pull service principal** (appId + client secret, in the
 install bundle, `AcrPull` only). Five inputs say where the images come from and how the apps
-pull them:
-
-| Input | Type | Default | What it does |
-|---|---|---|---|
-| `registry_location` | `string` | `null` (see below) | The registry's login server, a bare host (an optional port, no scheme or path). Omitted, it is `masterly.azurecr.io` when `registry_credential_mode`, a credential or `acr_id` is set, and otherwise no registry block (public images). `""` is refused: omit it instead. Replaces `acr_login_server`. |
-| `registry_credential_mode` | `string` | `null` (derived, see below) | `"token"`, `"managed_identity"` or `"customer_registry"`. |
-| `registry_token` | `object({ username = string, password = string })`, sensitive | `null` | The pull credential from the bundle: the appId and its client secret. Replaces `registry_username` and `registry_password`. |
-| `release_channel` | `string` | `"stable"` | Which [`MANIFEST.json`](MANIFEST.json) release the default images resolve to: `"stable"` (the newest release) or `"previous"` (the newest older release with no known issue). |
-| `registry_private_endpoint` | `bool` | `false` | A private endpoint to the registry `acr_id` names, in the install's VNet, with a `privatelink.azurecr.io` zone. Identity modes only; see [The registry over a private endpoint](#the-registry-over-a-private-endpoint). |
+pull them: `registry_location`, `registry_credential_mode`, `registry_token`, `release_channel`
+and `registry_private_endpoint`. Their types, defaults and descriptions are in docs/inputs.md:
+`registry_location` and `release_channel` under
+[Images and registry pull credential](docs/inputs.md#images-and-registry-pull-credential),
+`registry_credential_mode` and `registry_token` under
+[Install identity (ADR 0039)](docs/inputs.md#install-identity-adr-0039), and
+`registry_private_endpoint` under
+[Registry private endpoint](docs/inputs.md#registry-private-endpoint); the registry over a
+private endpoint is described in [The registry over a private endpoint](#the-registry-over-a-private-endpoint).
 
 The three modes:
 
@@ -313,7 +313,7 @@ In both identity modes, `acr_id` grants `AcrPull` to both app identities and, wh
 the migrate job's and `ca-workers`' own. If you leave it null and grant out of band, grant each:
 `apps_identity_principal_id`, `frontend_identity_principal_id` and, with the job,
 `migrate_identity_principal_id`, and `workers_identity_principal_id` wherever it is not null (see
-[which identity `ca-workers` runs as](#the-migrate-job)). Miss the second and the frontend cannot
+[which identity `ca-workers` runs as](docs/data-plane.md#the-migrate-job)). Miss the second and the frontend cannot
 pull; miss the third and the migrate job cannot pull, so no migration runs; miss the fourth and
 `ca-workers` cannot pull its new revision. `workers_identity_principal_id` is known only once the
 identity exists: create it first (`terraform apply -target='module.masterly.module.workers_identity'`,
@@ -330,7 +330,7 @@ created, and CD owns the running image thereafter: changing `release_channel` on
 install rolls nothing (`terraform apply` does not roll a running image, see "Moving to Stable"
 below). To roll a running install back, redeploy the previous image with
 `az containerapp update --image`. With `migrations = "job"`, a release rolls the
-[migrate job](#the-migrate-job) first.
+[migrate job](docs/data-plane.md#the-migrate-job) first.
 
 **The deprecated inputs** still plan as before, with two exceptions. An install that pulls with
 a credential and also sets `acr_id` loses its two unused `AcrPull` grants, because the `token`
@@ -377,752 +377,18 @@ Before you turn it on:
 
 ## Identity (ADR 0024)
 
-`identity_binding` selects the adapter:
-
-- **`oidc`** — production: your own IdP. The backend verifies tokens against
-  `oidc_allowed_issuers`/`oidc_audience`/`oidc_jwks_uri`; the frontend BFF is the
-  confidential client (`oidc_client_id`/`oidc_client_secret`/`oidc_authority`/
-  `oidc_redirect_uri`). With Entra, `oidc_tenant_id` fills in the issuer, the signing-key
-  endpoint and the authority for a single-tenant registration; any of the three you set
-  yourself wins. `oidc_audience` defaults to `oidc_client_id`. Optional break-glass local
-  Owner via `breakglass_secret_hash` — a salted Argon2id value minted
-  inside the api image with `python -m masterly_app.core.breakglass_credential`, never the
-  secret and never a sha256 digest, which the api refuses at startup. A break-glass attempt
-  made in the GUI is throttled by the browser's address rather than the frontend's, through
-  the [BFF shared secret](#the-bff-shared-secret) the module generates. Break-glass signs in
-  as `breakglass_owner_email`, which defaults to `initial_owner_email` once a hash is set:
-  that address becomes the first Owner, and break-glass admits only an existing Owner. See
-  [Access and identity](https://masterlydata.com/docs/self-hosted/install/#access-and-identity).
-
-  `oidc_allowed_issuers` normally holds **one** entry — this install's own issuer. Every
-  issuer listed here is trusted **install-wide**, so it is not the way to onboard an
-  additional organization onto one install: register an org-scoped SSO connection in the
-  product instead, which is bound to the Organizations that registered it.
-- **`dev`** — evaluation only. The module **refuses** `dev` with an open ingress:
-  set `ingress_allowed_cidrs` (an IP allowlist) or switch to `oidc`.
-
-**With a custom domain** (`frontend_custom_domain`) a production install is **one apply**. The
-redirect URI is known before anything exists: the module derives
-`https://<hostname>/api/auth/callback` from the hostname and gives it to the frontend, so leave
-`oidc_redirect_uri` unset and register that URI at your IdP before you apply. If you do set
-`oidc_redirect_uri` alongside the custom domain it must name the same host, or the plan is refused.
-Before the apply, create the DNS records and grant the deploying identity the right to assign a
-role on the certificate's vault: see
-[ca-frontend on your own domain](#ca-frontend-on-your-own-domain-frontend_custom_domain).
-
-**Without a custom domain** the frontend FQDN is an output of the first apply, so a production
-install is two applies, **both with `identity_binding = "oidc"`** and the production posture:
-apply 1 carries a placeholder `oidc_redirect_uri` (the value is read only during sign-in, never
-at boot or by the readiness probe, so the install comes up healthy with it), then read
-`frontend_url`, register `https://<frontend host>/api/auth/callback` at your IdP, set
-`oidc_redirect_uri` to it and apply again. [`examples/production/`](examples/production/) does
-exactly this. Do not bring a production install up with `identity_binding = "dev"` and switch to
-`oidc` afterwards: that second apply would change identity and everything else production
-requires — Key Vault with purge protection, which cannot be turned off, the control-plane store,
-Redis — at once, on a running install.
-
-### ca-frontend on your own domain (`frontend_custom_domain`)
-
-Null by default, which binds no hostname and creates nothing: `ca-frontend` answers on its
-Container Apps FQDN, as before the input existed. Set it and `ca-frontend` also answers on your
-hostname, with your own certificate, both on a public environment and on an internal one
-(`aca_internal_load_balancer = true`) behind your Application Gateway:
-
-```hcl
-frontend_custom_domain = {
-  hostname                        = "masterly.example.com"
-  certificate_key_vault_secret_id = "https://kv-contoso-certs.vault.azure.net/secrets/masterly-example-com"
-  key_vault_id                    = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/kv-contoso-certs"
-}
-```
-
-- **The certificate stays in your vault.** The module takes a reference, the certificate's
-  secret id **without a version**, and no certificate, key or password: none enters Terraform
-  or its state. The Container App Environment reads the certificate from the vault itself, and
-  because the reference names no version it picks up a certificate you renew in the vault
-  without an apply. A versioned id, or a `/certificates/` URL, is refused at plan.
-- **A dedicated identity reads it.** The module creates `id-<prefix>-frontend-cert`, attaches it
-  to the Container App Environment and to no app, and grants it **Key Vault Secrets User** on
-  the certificate's secret alone, never on the vault. It is not the frontend's identity: the
-  frontend is the app an attacker reaches first, and a read on the certificate would hand them
-  your hostname's private key.
-- **The vault** must use Azure RBAC authorization, and must be reachable from the Container App
-  Environment: a vault that admits only private endpoints the environment cannot reach, or a
-  firewall that does not admit it, fails the certificate at apply. The module does not change
-  your vault's network.
-- **The deploying identity** needs the right to create that role assignment on the vault
-  (`Microsoft.Authorization/roleAssignments/write`): **Owner**, **User Access Administrator** or
-  **Role Based Access Control Administrator** on the vault or the secret. A subscription-scope
-  grant of one of those covers it when the vault is in the install's subscription. Entra role
-  assignments propagate eventually, so a first apply can fail on the certificate inside that
-  window; re-run the apply.
-- **The binding** is an SNI binding of exactly your hostname to `ca-frontend`. It changes
-  nothing else about the app: `ingress_allowed_cidrs` applies to the hostname as to the FQDN,
-  and ingress stays HTTPS-only.
-- **`frontend_url`** becomes `https://<hostname>`, and on `identity_binding = "oidc"` the
-  frontend's redirect URI is `https://<hostname>/api/auth/callback`.
-- **The TXT record comes first.** Azure checks the `asuid.<hostname>` TXT record when it binds
-  the hostname, during the first apply. Its value is the `custom_domain_verification_id` output,
-  and can be read from your subscription before that apply. The A or CNAME record that routes
-  the hostname points at your gateway, or at the environment once it exists.
-  [docs/networking.md](docs/networking.md#ca-frontend-on-your-own-domain) lists both records,
-  when each can be created, and the Application Gateway settings.
-
-Certificates managed by Container Apps are not offered: Azure cannot issue one on an internal
-environment.
-
-### Built-in authentication in front of the frontend (`builtin_auth`)
-
-`identity_binding` decides how the **application** signs a caller in. `builtin_auth` adds a
-second, independent gate at the **platform**: Container Apps built-in authentication (often
-called EasyAuth) with Microsoft Entra ID, on `ca-frontend` only. A browser without an Entra
-sign-in for your tenant is redirected to Entra sign-in before it reaches the frontend, and a user
-who passes it still has to sign in to the application, which decides the member and their
-roles. Neither layer relies on the other. Unset (the default), the module configures none.
-
-| App | Unauthenticated request | Who is admitted |
-|---|---|---|
-| `ca-frontend` | Redirected to Entra sign-in | Users of `tenant_id` signing in through `client_id`. `frontend_excluded_paths` (empty by default) are served without sign-in. |
-| `ca-api` | Not gated | The module configures no built-in auth on the api. |
-
-The module gates the frontend only. The api is reached internally: the frontend's server-side
-calls go to `ca-api` inside the Container Apps environment, and the module puts no platform gate
-on it; the application authenticates its callers as `identity_binding` sets. With
-`api_ingress_external = true` the api is also published to `ingress_allowed_cidrs`, and this gate
-does not cover it there either; a plan that sets both warns through the check
-`builtin_auth_does_not_gate_the_published_api`, on every plan while both are set.
-
-`api_allowed_applications` and `api_allowed_audiences` configured a gate on `ca-api` in 0.19.0
-and 0.19.1. They are deprecated and ignored: a plan that sets either succeeds and warns
-(`builtin_auth_api_entries_are_ignored`). Remove them from `builtin_auth`.
-
-To set it up, use an app registration in your tenant (one you already use for built-in auth is
-fine; the module takes over its configuration):
-
-1. Add `https://<frontend host>/.auth/login/aad/callback` as a **Web** redirect URI and enable
-   **ID tokens**.
-2. Add a client secret and pass it as `builtin_auth_client_secret`. The module stores it as the
-   Container App secret `microsoft-provider-authentication-secret` (a Key Vault reference with
-   `enable_key_vault`), the name Azure gives it. It is on `ca-frontend`, which uses it, and also
-   on `ca-api`, which carried it while 0.19.0 and 0.19.1 gated the api and keeps it so that
-   upgrading changes neither app.
-3. Set `builtin_auth = { tenant_id = "...", client_id = "..." }`.
-
-An install that already configured built-in auth on the frontend by hand imports that
-configuration once, in the first apply that sets `builtin_auth`, or the apply fails because it
-already exists:
-
-```hcl
-import {
-  to = module.masterly.azapi_resource.builtin_auth["frontend"]
-  id = "/subscriptions/<subscription id>/resourceGroups/<aca resource group>/providers/Microsoft.App/containerApps/ca-frontend/authConfigs/current"
-}
-```
-
-**Upgrading from 0.19.0 or 0.19.1.** Those versions also configured `ca-api`. The first plan on
-this version destroys that one resource, `module.masterly.azapi_resource.builtin_auth["api"]`
-(the api's `authConfigs/current`), and changes nothing else: the frontend's configuration, both apps
-and their secrets stay as they are. If your configuration still has the `for_each` import block
-those versions documented, with `"api"` in it, narrow it to the frontend as above or delete it
-first: an import block for `["api"]` names an instance this version no longer has, and the plan
-fails. An install that configured built-in auth on `ca-api` by hand and never imported it keeps
-that configuration; remove it in the portal (the app's **Authentication** page) if you want the
-api reached without it.
-
-The configuration is written with the `Azure/azapi` provider, because azurerm has no resource
-for it; the same provider starts the [migrate job](#the-migrate-job) at apply. The module
-requires that provider whether or not you set `builtin_auth`, so an
-air-gapped install mirrors it alongside azurerm and random.
+Who signs in, `ca-frontend` on your own domain and the built-in authentication are documented in
+[docs/identity.md](docs/identity.md).
 
 ## Data plane (ADR 0065)
 
-Self-hosted is the `self-hosted × byo-db` combination: production installs point
-`external_database_url` at their own Postgres (Azure Flexible PG, Databricks Lakebase,
-AWS Aurora PG, Cosmos for PG). The DSN is the install-level connection
-(`postgresql+asyncpg://…`; the role needs `CREATEDB` — the api creates
-`masterly_dp_<environment>` databases at first touch). Reachability of your database
-from the install's VNet is your side: peering, a private endpoint into
-`snet-private-endpoints`, or your hub. A private endpoint placed in that subnet is reached
-on the ports the subnet's network security group admits — Postgres among them; see
-[docs/networking.md](docs/networking.md#network-security-baseline).
-
-Omit `external_database_url` and the module provisions the **starter server** instead —
-private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its knobs:
-`postgres_sku_name`, `postgres_storage_mb`, `postgres_version`,
-`postgres_backup_retention_days`, `postgres_geo_redundant_backup` (on by default in
-production where the module knows the region supports it; mind data residency — backups go to
-the paired region; see [the departures section](#geo-redundant-backup-is-on-only-in-the-regions-the-module-lists)),
-`postgres_zone_redundant_ha` (needs a non-burstable SKU), `postgres_server_parameters` (extra
-server parameters; see "Diagnostics + alerts" below),
-`postgres_auto_grow` (on by default in production: Azure grows the disk before it fills, so a
-full disk does not make the server read-only; **grown storage cannot be shrunk**, and the
-module never plans `postgres_storage_mb` below the server's real size),
-`postgres_storage_tier` (the storage performance tier, P4 to P80; unset keeps Azure's default
-for the size, and the tier must suit `postgres_storage_mb`) and `postgres_pgbouncer` (the
-built-in PgBouncer in transaction mode; needs a non-burstable SKU; see
-[Connection budget](#connection-budget)). Flipping an install from starter to BYO-DB **plans the destruction of the starter
-server** — migrate your data first; the plan makes it visible.
-
-A BYO-DB database on a **private** address — reached over peering or a private endpoint — is
-refused on `mode=production` by the application's egress guard when an organization
-administrator supplies it as a [BYO-DB Environment's](https://masterlydata.com/docs/guides/manage-environments/)
-connection string, along with every other outbound target configured in the product. List
-the ranges those targets sit on in `allowed_private_egress_cidrs` (`["10.20.0.0/16"]`, say —
-the database's subnet, no wider) and the application admits a target inside them; every
-other private address stays refused, and loopback, link-local (`169.254.169.254`) and the
-unspecified address are refused whatever is listed — an entry covering one fails the plan or,
-for a wide range, refuses to start. It
-reaches `ca-api` and `ca-workers`, and an empty list (the default) sets nothing, leaving the
-application's own mode-gated posture in force. `external_database_url` itself is never
-restricted — the install's own database is operator configuration, not customer input.
-
-`allow_private_egress` is **deprecated** and goes away in a later release. It arrives already
-deprecated: it never reached a published version, and the application setting it writes used
-to switch the guard off entirely, loopback and the metadata endpoint included. For one release
-`true` means the allowlist it stood in for — every RFC1918 range, CGNAT and IPv6 unique-local,
-never loopback or link-local — and the application warns at every start. Migrate by replacing
-it with the ranges your targets are actually on; setting both fails the plan.
-
-### Extra Environments on a demo install
-
-On `mode = "demo"` the control plane is in memory, and its Environments are a fixture list,
-`prd-eu` and `non-prd-eu`. An Environment created in the product lasts only until `ca-api`
-restarts. List the extra Environments an evaluation or demo install runs on in
-`demo_environments` instead (`["dev-eu", "uat-eu"]`, say). The module puts them on `ca-api`, and
-on `ca-workers` with `enable_workers`, as `MASTERLY_DEMO_ENVIRONMENTS`, comma-separated, and the
-control plane seeds each one at every start, in the install's own geo (`masterly_region`), under
-an id derived from its name, so it is the same Environment after a restart. api `v0.137.0` and
-later read it; an earlier image ignores it. Empty (the default), no app gets the variable.
-
-Each name is lowercase, starts with a letter, ends with a letter or digit, has only letters,
-digits and hyphens, and is at most 40 characters. A name listed twice, a fixture name, and the input on
-`mode = "production"` are refused at plan: a production install creates its Environments in the
-product, where they persist in the control-plane store.
-
-### Deployment switches
-
-The backend reads `MASTERLY_DEPLOYED_SWITCHES`, a comma list over `assets`, `media`,
-`extensions` and `replica`, to know which optional capabilities this install has deployed. Declare
-them in `deployed_switches` so the value survives the next apply instead of being removed:
-
-```hcl
-deployed_switches = ["assets", "replica"]
-```
-
-- `assets`: the install's Blob storage account, one container per Environment.
-- `media`: the media worker pool and its libraries.
-- `extensions`: the extension environment.
-- `replica`: a Postgres read replica.
-
-The module puts them on `ca-api`, and on `ca-workers` with `enable_workers`, comma-separated in
-the order given. api `v0.136.0` and later read it; an earlier image ignores it. Empty (the
-default) means no switch is deployed, and no app gets the variable. The input only tells the
-backend which of these the install has deployed; it deploys nothing itself. Name only what is
-actually running: a module whose needs include an unlisted switch is refused at activation (422
-`MODULE_SWITCH_NOT_DEPLOYED`), and naming a switch that is not running lets such a module activate
-and then fail. The backend refuses to start on a name it
-does not know, so a name outside the four, and a name listed twice, are refused at plan. The
-frontend never carries it.
-
-### Authentication to the starter server and Redis
-
-The apps authenticate to the starter Postgres server and to Redis in one of two ways, chosen
-by `database_auth` and `redis_auth`:
-
-| | `"entra"` — Azure's recommendation | `"password"` / `"key"` — a departure |
-|---|---|---|
-| Postgres | Microsoft Entra authentication on, password authentication off. The apps' identity (`id-masterly-apps`) is the server's Microsoft Entra administrator; with `migrations = "job"` the migrate job's (`id-masterly-migrate`, [below](#the-migrate-job)) is instead, and the only one; each connection string names its own identity's role with no password. With `migrations = "job"` on the starter server, `ca-api` and `ca-workers` instead sign in as the DML-only roles `masterly_api` and `masterly_workers`, bound to `id-masterly-apps` and `id-masterly-workers` | The `masterly_admin` login, with its password in the connection string, for the apps and the migrate job alike. With `migrations = "job"`, `ca-api` and `ca-workers` instead sign in as `masterly_api` and `masterly_workers`, each with its own generated password |
-| Redis | Access keys off. The apps' identity holds a data access policy: the default policy on Azure Managed Redis, *Data Contributor* on Azure Cache for Redis. Wherever `ca-workers` runs as its own identity, `id-masterly-workers` holds its own (`masterly-workers` on Azure Cache for Redis). The URL carries no key | The access key, in the URL |
-| The apps | `MASTERLY_DATABASE_AUTH=entra` / `MASTERLY_REDIS_AUTH=entra` and `AZURE_CLIENT_ID`, on `ca-api` and `ca-workers`. Needs **api images `v0.133.7` or later** | Nothing added |
-
-When an input is unset, the module picks for you, and it never changes what an existing
-server or cache already uses:
-
-| | No server or cache yet | One exists |
-|---|---|---|
-| `mode = "production"` | `"entra"` | What it records. If that is a password or key, the plan stops and asks you to choose |
-| `mode = "demo"` | `"password"` / `"key"` | What it records |
-
-To know what exists, the module lists the subscription's flexible servers (and caches of the
-active `redis_offering`) at plan time and reads the `masterly-auth` tag it puts on its own. A
-server or cache created by an earlier version of this module has no such tag and is read as
-using its password or key. An explicit value always wins, and setting it skips the lookup —
-except `database_auth = "entra"`, which still reads the server's `masterly-admin-password` tag
-(below). The listing is a read at subscription scope, which the Contributor or Owner role at
-subscription scope that [Preflight](#preflight) checks for already includes.
-
-Choose `database_auth` before the apply that creates the server. A server created with
-`"entra"` has no password login at all, so moving it to `"password"` afterwards is not a
-supported change. A server that started on `"password"` can move to `"entra"`, and back.
-
-**The generated admin password.** A server that started on `"password"` keeps the generated
-`masterly_admin` password when it moves to `"entra"`: the module goes on applying the same
-value, unused while password authentication is off, and that is what lets the server move back.
-A server created on `"entra"` never has one. The server records which in its
-`masterly-admin-password` tag (`"generated"` or `"none"`).
-
-To rotate the password on a server using `"password"` — after a state exposure, say — replace
-it and apply:
-
-```bash
-terraform apply -replace='module.masterly.random_password.postgres_admin[0]'
-```
-
-(with your own module name in place of `masterly`). One apply changes the password on the
-server and in the `database-url` secret, and the apps roll a new revision onto it; connections
-the old revision opens in between are refused until it does. On a server that moved to
-`"entra"` the same command replaces a password nothing signs in with.
-
-With `external_database_url` (BYO-DB) none of this applies: the database is yours, the DSN is
-the credential, and `database_auth = "entra"` is refused at plan.
-
-### The migrate job
-
-Opt-in, with `migrations = "job"`. Schema migrations, and the database of each new Masterly
-Environment, then run in a Container Apps job, `caj-migrate`, as its own identity,
-`id-<prefix>-migrate` (ADR 0120). `ca-api` and `ca-workers` carry `MASTERLY_MIGRATIONS=job`,
-which tells the api image to check that the schema is at head instead of migrating.
-
-Job mode requires `mode = "production"`. Demo's control plane is in memory, so there is nothing
-for a separate job to migrate; keep `migrations = "start"` for demo installs. The job receives
-the API's `MASTERLY_ORG_ID`, optional `MASTERLY_ORG_NAME` and `MASTERLY_MODE`, with
-`MASTERLY_CONTROLPLANE_STORE=postgres`, to open the same install's durable control plane.
-Production's Key Vault requirement also applies.
-
-`migrations` defaults to `"start"`: the module creates no job, no migrate or workers identity, no
-app-role password, no grant and no migrate Entra administrator, sets no `MASTERLY_MIGRATIONS`, and
-`ca-api` and `ca-workers` migrate at start as before. **`"job"` needs an api image from a backend release later than
-v0.135.0.** The backend implementation reference is `masterly-application-backend` at commit
-`8d2cbd35`: `masterly_app/apps/migrate.py` is the entry point, `composition/migrate.py` composes
-the migrate role, and `core/settings.py` defines `MASTERLY_MIGRATIONS`,
-`MASTERLY_MIGRATE_API_ROLE` and `MASTERLY_MIGRATE_WORKERS_ROLE`. These prerequisites are in no
-release up to v0.135.0, which cannot run the job. Leave the default until your install runs a
-qualifying release; see the upgrade note below.
-
-The job runs `python -m masterly_app.apps.migrate` on the api image, has no ingress, and runs in
-three ways:
-
-- **At apply.** Installing with `migrations = "job"`, or enabling it on an existing install,
-  creates the job on the resolved api image (`api_image`, or the release channel's default).
-  An `azapi_resource_action` starts one execution before `ca-api` and `ca-workers` are created
-  or updated to job mode: both depend on the action. It returns when the execution starts;
-  the apps rely on the backend's schema-stamp readiness checks until migrations finish.
-  As on the apps, Terraform then ignores drift on the job's image. Changing `api_image` replaces
-  the start action and starts another execution on the job's current image; it changes neither
-  the job's nor the apps' running image.
-- **At each release, from CD.** Your CD owns the running image, on the job as on the apps (ADR
-  0086, as amended 2026-10-23: the migrate job runs the release's digest before the roles roll).
-  For each release it:
-  1. moves the job to the release's digest:
-     `az containerapp job update --name caj-migrate --resource-group rg-<prefix>-aca --image <registry>/release/api@sha256:<digest>`;
-  2. starts an execution: `az containerapp job start --name caj-migrate --resource-group rg-<prefix>-aca`;
-  3. waits until that execution's status is `Succeeded`
-     (`az containerapp job execution show --name caj-migrate --resource-group rg-<prefix>-aca --job-execution-name <name>`),
-     and stops if it fails;
-  4. only then rolls `ca-api` and `ca-workers` to the same digest (`az containerapp update --image`).
-- **On a schedule**, `migrate_job_schedule`: a five-field cron expression in UTC, default
-  `"*/5 * * * *"`. The release's migrate role is required to pick up, on each run, the
-  Environments waiting to be provisioned, once database access and any BYO-DB secret grants below
-  are ready. Five minutes keeps the polling wait short for a person who has just created an
-  Environment, at the cost of one short container start per run. Lengthen it if that wait does
-  not matter to you.
-
-Runs can overlap: a scheduled run with an apply-started or CD-started one. The release's migrate
-role is required to serialise them with a migration lock.
-
-What the job's identity gets, and why so little: on `database_auth = "entra"` it is the starter
-server's only Microsoft Entra administrator (`id-<prefix>-apps` is none under `"job"`, below),
-which makes it the install's most privileged database principal, and it wakes on a schedule. So
-it is attached to no Container App and holds only `AcrPull` (through `acr_id`; grant `migrate_identity_principal_id`
-out of band otherwise) and, with `enable_key_vault`, Key Vault Secrets User on each of the job's
-vault-backed secrets and explicitly named per-Environment BYO-DB DSNs. It has no vault-scope, Officer or
-crypto role, and no Service Bus, Redis or ACS access. The job carries its database URL (the migrate identity's role
-on `"entra"`, `masterly_admin` on `"password"`), the direct URL with `postgres_pgbouncer`, how
-to authenticate, and the CA bundle when one is set. Its secrets have their own names
-(`migrate-database-url`, `migrate-database-direct-url`), which no Container App carries.
-
-**The app roles.** On the starter server (not on BYO-DB, where the database is yours), the job
-also creates two DML-only login roles, `masterly_api` for `ca-api` and `masterly_workers` for
-`ca-workers`, and re-applies their grants on each run. It never alters a role that already exists.
-The job carries `MASTERLY_MIGRATE_API_ROLE` and `MASTERLY_MIGRATE_WORKERS_ROLE` (the names), and
-how each role signs in:
-
-- on `database_auth = "entra"`, `MASTERLY_MIGRATE_API_ROLE_OBJECT_ID` (the `id-<prefix>-apps`
-  object id) and `MASTERLY_MIGRATE_WORKERS_ROLE_OBJECT_ID` (the object id of `id-<prefix>-workers`,
-  a new user-assigned identity for `ca-workers`'s role);
-- on `"password"`, `MASTERLY_MIGRATE_API_ROLE_PASSWORD_REF` and
-  `MASTERLY_MIGRATE_WORKERS_ROLE_PASSWORD_REF`: the names of two new vault secrets,
-  `install-migrate-api-role-password` and `install-migrate-workers-role-password`, each holding a
-  generated 32-character password. The job reads them with its own identity, which gets Key Vault
-  Secrets User on each of those two secrets alone, never on the vault. They are no ACA secret on the
-  job or any app, and are not in `vault_backed_secret_names`.
-
-Each backend app signs in as its own role. `ca-api` stays on `id-<prefix>-apps` and reads
-`api-database-url` (and `api-database-direct-url` with `postgres_pgbouncer`), whose user is
-`masterly_api`. `ca-workers` runs as `id-<prefix>-workers`, with that identity's `AZURE_CLIENT_ID`,
-Key Vault references and scale rule, and reads `workers-database-url` (and
-`workers-database-direct-url`), whose user is `masterly_workers`. On `"entra"` these URLs carry no
-password; on `"password"` each carries its own role's password, and only inside its own Key Vault
-secret: never in env, an ACA value secret or an output. Neither app carries the other's URL, and
-`ca-frontend` and `caj-migrate` carry neither. `id-<prefix>-workers` holds the backend grants
-`ca-workers` needs (see [What the module creates](#what-the-module-creates)). These grants, its
-Redis policy and the `workers-*` URL secrets exist only while `enable_workers` is on.
-
-**Which identity `ca-workers` runs as.** Its Azure identity follows the vault, so a grant made for
-it alone never reaches `ca-api`. Its database role follows the app roles above, which only `"job"`
-on the starter server has. `ca-api` runs as `id-<prefix>-apps` on every shape:
-
-| Install shape | `ca-workers` runs as | Its `AZURE_CLIENT_ID` | Its database URL |
-|---|---|---|---|
-| `"job"` on the starter server, `"entra"` or `"password"` | `id-<prefix>-workers` | That identity's | `workers-database-url`, as `masterly_workers` |
-| `"start"` on `"password"`, with `enable_key_vault` | `id-<prefix>-workers` | That identity's | The shared `database-url`, through that identity |
-| BYO-DB, `"start"` or `"job"`, with `enable_key_vault` | `id-<prefix>-workers` | That identity's | The shared `database-url`, through that identity |
-| `"start"` on `"entra"` on the starter server | `id-<prefix>-apps`, unchanged | `id-<prefix>-apps`' | The shared `database-url`, whose user is that identity |
-| `enable_key_vault = false` | `id-<prefix>-apps`, unchanged | `id-<prefix>-apps`', where the app sets one | The shared `database-url`, as a value secret |
-| `enable_workers = false` | No `ca-workers`; `ca-api` runs the loop | — | — |
-
-`"start"` on `"entra"` is unchanged because the shared URL's user there is the `id-<prefix>-apps`
-role, and its token is minted for `AZURE_CLIENT_ID`. On every shape where `ca-workers` runs as
-`id-<prefix>-workers`, that identity holds the backend grants it needs, and `id-<prefix>-apps` holds
-no Service Bus Data Receiver and no jobs-queue Data Owner, which go with the move.
-`workers_identity_principal_id` is set on exactly those shapes. On `"start"` and on BYO-DB
-`id-<prefix>-workers` has no database role: it is an Azure identity only, and the shared URL's own
-credential is what signs in to Postgres.
-
-**What `id-<prefix>-apps` gives up** (ADR 0120 §6). With `"job"` on the starter server, `ca-api`'s
-identity is no Postgres administrator and holds Service Bus send only. The module creates no
-Entra administrator for it (on `"entra"`, `id-<prefix>-migrate` is the server's only one), and no
-Service Bus Data Receiver or jobs-queue Data Owner for it: `ca-workers` receives and scales as
-`id-<prefix>-workers`, which holds both. It keeps AcrPull, the app secrets role and Crypto
-Officer on the vault, Service Bus Data Sender, ACS Email Owner and its Redis data access policy. The Receiver
-and the queue's Data Owner go only where `ca-workers` runs as its own identity, so nothing that
-still receives as `id-<prefix>-apps` loses them. Terraform removes the three only after it has
-created the migrate administrator and updated `ca-api` and `ca-workers`: both apps depend on them,
-and Terraform destroys a resource only after the resources that depend on it have been updated.
-Outside `"job"` on the starter server the apps identity keeps its administrator (on `"entra"`), and
-gives up the Receiver and the queue's Data Owner wherever `ca-workers` runs as its own identity.
-
-Beyond that, the move is additive. `id-<prefix>-apps` keeps its other grants, and the shared
-`database-url` (and `database-direct-url`) stays in the vault, so the revisions running before the
-change keep working until their replacements are ready. `ca-api` also keeps its Container App
-secret for it, resolved as `id-<prefix>-apps` as before: Container App secrets belong to the app,
-not to a revision, and its old revision may restart or scale while the new one waits for the job.
-No env of the new revisions names it. `ca-workers` keeps none: its identities belong to the app
-too, so once it runs only as `id-<prefix>-workers` its old revision cannot sign in as before
-whatever secrets stay. Removing the shared secrets is later work. Both backend
-identities hold the app secrets role on the vault, so each can still read every vault secret,
-the other app's URL and the role-password secrets among them; narrowing that is later work. The
-passwords are generated once and never rotated by Terraform, because the job never changes an
-existing role's password. **No released api image creates these roles.** The backend reads these
-settings, and its migrate role creates the roles, only in a release later than v0.135.0
-(`masterly-application-backend`: the `migrate_*_role` settings at commit `cf741e0e1fda`,
-`core/settings.py`; the role creation at commit `462467d1`; neither is in a release tag yet).
-The module does not check the image; confirm both in the api release's notes before your install
-runs `"job"` on the starter server on this version (see the upgrade note below). The app roles,
-and the apps signing in as them, are a minor release under ADR 0062: new resources, secrets, job env and one output (`workers_identity_principal_id`), no new
-input, nothing renamed or removed. Removing the apps identity's administrator, Receiver and scaler
-grant under `"job"` is a later minor release under ADR 0062 too: no input or output changes.
-No app changes database role while `migrations` stays `"start"` or on BYO-DB.
-
-**BYO-DB.** `external_database_admin_url` (sensitive, optional) is a DSN to your database for a
-role allowed to migrate and create databases. It stays in the ACA job's own secret even with
-`enable_key_vault`: no copy enters the shared install vault, and it gets no Key Vault grant.
-`ca-api` and `ca-workers` keep `external_database_url`, so their role can be narrower. Unset, the
-job uses `external_database_url`, with the usual vault reference. The plan refuses the admin URL
-without `external_database_url` or `migrations = "job"`.
-
-**Per-Environment BYO-DB connections.** The job uses `MASTERLY_SECRET_STORE=keyvault` and
-`MASTERLY_KEYVAULT_URL` for the same vault as the API, with its own `AZURE_CLIENT_ID` even on
-password database auth. Set `migrate_byo_database_secret_names` (default `[]`) to the existing
-secret names from those Environments' sealed `connection_ref` values, then apply. Each gets
-Key Vault Secrets User at that secret's ARM scope; Terraform never reads its value. List only
-BYO-DB DSNs, never GitOps tokens or other runtime secrets; `install-*` names and paths are refused.
-The module does not discover runtime secrets. A new or changed connection with a new secret name
-needs an updated list and apply; remove obsolete names when no longer used. Allow RBAC propagation
-before provisioning, retrying a failed provisioning run or starting the CD migration gate. An
-unlisted connection cannot be migrated, even though the schedule continues to run.
-
-**Upgrading to this version: `ca-workers` moves to `id-<prefix>-workers`.** A minor release under
-ADR 0062: no input or output is added, renamed or removed, though
-`workers_identity_principal_id` is now set on more shapes. On an install with the vault and
-`ca-workers`, on `"start"` with `"password"` or on BYO-DB, upgrading creates `id-<prefix>-workers`
-and its grants, moves `ca-workers` to that identity in a new revision, then removes the apps
-identity's Service Bus Data Receiver and jobs-queue Data Owner. There is no input to defer it.
-`"start"` on `"entra"`, an install with `enable_key_vault = false` and one with
-`enable_workers = false` plan no change from it, and neither does `"job"` on the starter server,
-which already runs this way.
-
-- **`ca-workers`' old revision cannot sign in as before.** Identities belong to the app, not to a
-  revision, so the update takes `id-<prefix>-apps` away from every revision of `ca-workers`.
-  `ca-workers` has no probe, so its new revision replaces the old one at once; a stopping replica
-  gets `workers_termination_grace_period_seconds` to finish its jobs.
-- **With `acr_id` null, grant `AcrPull` to `workers_identity_principal_id` before applying**, or
-  `ca-workers` cannot pull its new revision and stalls. The identity must exist first: follow the
-  steps at the end of [Getting the images](#getting-the-images-adr-0067).
-- **Allow for role propagation.** The new identity gets the app secrets role just before
-  `ca-workers` is updated, and Azure RBAC propagation can delay its first Key Vault reference.
-  The module adds no wait, as on the `"job"` path. If the new revision has not started once the
-  apply is done, give the assignment time to propagate, then restart the revision.
-- **Terraform orders the removals.** `ca-workers` depends on its new grants, so they exist before
-  its update. In the released module it also depends on the Receiver and scaler grants it replaces
-  (`depends_on` naming `azurerm_role_assignment.sb_receiver` and `sb_scaler`, `workers.tf:189-190`).
-  Terraform records that dependency in state, and destroys a removed resource only after the
-  resources recorded as depending on it have been updated, so the two grants go after
-  `ca-workers`' update. This release keeps both edges. Terraform waits for the update, not for
-  the new revision to be running: until that revision runs, no replica takes jobs, and jobs wait
-  for it.
-
-**Turning the job on.** Upgrading changes nothing about the job while `migrations` stays `"start"`.
-`"job"` needs an api image from a backend release later than
-v0.135.0 that has the migrate entry point (`masterly_app.apps.migrate`), honours
-`MASTERLY_MIGRATIONS=job`, picks up pending provisioning runs on each migrate run, and serialises
-overlapping runs. On the starter server it must also create the app roles `masterly_api` and
-`masterly_workers` (see the apps' move below); no released image does yet. The module does not
-check the image for them, so confirm them in the api release's notes. With an older image the job
-fails. A qualifying image, below, is one with all of these. The order:
-
-1. **Roll a qualifying image first, with your CD**, onto `ca-api` and `ca-workers`, the way you
-   roll any release. The apply below does not change their image: it adds
-   `MASTERLY_MIGRATIONS=job` to the image they already run, as a new revision.
-2. **Apply with `migrations = "job"`**, and `api_image` set to that same image. The apply creates
-   the job on it and starts one execution before it updates `ca-api` and `ca-workers` to job mode.
-   This start is asynchronous; the apps' readiness still depends on migration completion.
-3. **From then on, roll every release through CD in the order above** (the job, wait for
-   `Succeeded`, then the apps). Keep `api_image` at the digest your install runs, as for the
-   apps: it seeds the job if it is ever recreated.
-
-**The apps' move to their own roles** (starter server only). The same apply, or the upgrade of an
-install already on `"job"`, moves `ca-api` and `ca-workers` to `masterly_api` and
-`masterly_workers` and `ca-workers` to `id-<prefix>-workers`. The shared URL stays, so the
-running revisions keep it until they are replaced; the apps identity's administrator, Receiver
-and scaler grant do not (see "Removing the apps identity's administrator" below). There is no input to defer
-the move: on this version, `"job"` on the starter server always moves both apps.
-
-- **The api image must create `masterly_api` and `masterly_workers`.** No released image does (none
-  up to v0.135.0). An image with the migrate entry point but without the role creation runs the
-  job, yet neither role ever exists: `ca-api`'s new revision never becomes ready, and `ca-workers`
-  restarts without end. The module does not check the image. Keep `migrations = "start"`, and do
-  not upgrade an install already on `"job"` to this version, until it runs a backend release whose
-  notes name the app-role creation. The readiness below assumes such an image.
-- **With `acr_id` null, grant `AcrPull` to `workers_identity_principal_id` before applying** (see
-  [Getting the images](#getting-the-images-adr-0067)), or `ca-workers` cannot pull its new
-  revision and stalls.
-- **`ca-api`'s new revision becomes ready once the job has created `masterly_api`**; until then
-  it cannot sign in and does not become ready, and on an existing install the old revision keeps
-  serving.
-- **`ca-workers` has no probe**, so its new revision replaces the old one at once and restarts
-  until the job has created `masterly_workers`. The apply starts the job but does not wait for it
-  to finish, so expect those restarts for the length of the first execution.
-
-On an existing `database_auth = "entra"` install, every object in the databases is owned by
-`id-<prefix>-apps`. An Entra administrator is not a superuser, so the first migration as
-`id-<prefix>-migrate` fails unless the image's migrate role first takes ownership or membership
-of those objects; the qualifying image is required to do that too.
-
-**Removing the apps identity's administrator** (`"entra"` on the starter server). Under `"job"`
-the module removes `id-<prefix>-apps`' Entra administrator, Service Bus Receiver and jobs-queue
-Data Owner. Terraform orders those removals after the migrate administrator and both apps'
-updates, but an updated app is not yet a ready one: once the administrator is gone, a revision
-still signing in as `id-<prefix>-apps` loses database access. On an install already on `"job"`:
-
-1. **Be on module 0.23.x with `migrations = "job"`**, on a qualifying image.
-2. **Confirm** that a `caj-migrate` execution has `Succeeded`, and that `ca-api` and `ca-workers`
-   run revisions signed in as `masterly_api` and `masterly_workers` (`ca-api` ready, `ca-workers`
-   no longer restarting).
-3. **Then upgrade** to the version that removes them; the plan shows the administrator,
-   `sb_receiver` and `sb_scaler` destroyed, and nothing else replaced.
-
-An install moving from `"start"` straight to `"job"` on that version does all of it in one apply:
-the migrate administrator, the start action, the apps' move and then the removals. Its old
-revisions keep serving only until the administrator is removed, so plan that apply for a quiet
-period. What Azure does to the `id-<prefix>-apps` database role, which still owns the objects,
-when its administrator is removed has not yet been confirmed on a live install: 0.24.0 was
-released with that check still owed ([docs/releasing.md](docs/releasing.md), "Live checks before
-the next tag").
-
-### Moving an existing install to Microsoft Entra authentication
-
-An install created before this default authenticates with the `masterly_admin` password and
-the Redis access key. In `mode = "production"`, its plan stops until you choose. Every change
-below is made in place; none of them replaces the server or the cache.
-
-1. **Keep the install as it is while you prepare.** Set `database_auth = "password"` and
-   `redis_auth = "key"`, and apply. Only the `masterly-auth` tags change.
-2. **Run api images `v0.133.7` or later** on `ca-api` and `ca-workers`. This module does not
-   change a running app's image; your deployment does. An older image cannot authenticate
-   with a token, and would lose both stores at the next step.
-3. **Redis.** Set `redis_auth = "entra"` and apply. The access policy is assigned, access keys
-   are turned off, and the apps roll a new revision with a keyless URL. Sign-ins can fail for
-   the moment between the keys going off and the new revision becoming ready; sessions
-   already in Redis are kept.
-4. **Postgres ownership.** Every table, sequence and Environment database on the server is
-   owned by `masterly_admin`, and the apps' Entra identity cannot use them until ownership has
-   moved. While password authentication is still on, connect as `masterly_admin` from a host
-   that can reach the server's private endpoint — the password is in the `database-url` secret,
-   and in your Terraform state as `random_password.postgres_admin` — and run, in the `postgres`
-   database:
-
-   ```sql
-   CREATE ROLE masterly_owner NOLOGIN;
-   GRANT masterly_owner TO masterly_admin WITH INHERIT TRUE, SET TRUE;
-   GRANT masterly_owner TO azure_pg_admin WITH INHERIT TRUE, SET TRUE;
-   REASSIGN OWNED BY masterly_admin TO masterly_owner;
-   ```
-
-   Then, in each Environment database (`SELECT datname FROM pg_database WHERE datname LIKE
-   'masterly\_dp\_%';` lists them):
-
-   ```sql
-   REASSIGN OWNED BY masterly_admin TO masterly_owner;
-   ```
-
-   Ownership now sits with `masterly_owner`, a group role. Every Microsoft Entra administrator
-   of the server is a member of `azure_pg_admin`, so the apps' identity inherits ownership the
-   moment the next step makes it one; `masterly_admin` stays a member too. Run this when nobody
-   is creating an Environment, or run the `REASSIGN` again afterwards — it is safe to repeat.
-5. **Switch.** Set `database_auth = "entra"` and apply. Microsoft Entra authentication is
-   turned on and password authentication off, the apps' identity becomes the server's Entra
-   administrator, and the apps roll a new revision whose connection string names that role.
-   The plan shows no change to the administrator password: the server keeps it, unused.
-   Check that `/readyz` answers and that you can sign in.
-
-To go back, set `database_auth = "password"` (or `redis_auth = "key"`) and apply: password
-authentication or the access key is turned back on, and `masterly_admin` still holds
-ownership through `masterly_owner`.
-
-### Trusting a private CA
-
-The allowlist above says **where** the application may connect. It says nothing about whether it
-**trusts** what answers there — a TLS handshake, STARTTLS included, verifies the peer's
-certificate, and a relay, stream push endpoint or local AI endpoint on your own network commonly
-presents one from an internal CA rather than a public one. Set `ca_bundle_pem` to your CA
-certificate(s) — just your own internal CA(s), PEM-encoded and concatenated if there is more
-than one — and the module mounts a bundle into `ca-api` and `ca-workers` and points
-`SSL_CERT_FILE` at it — OpenSSL's default-verify-paths mechanism, which every outbound TLS
-connection those two apps make reads, not only the one target that needed it. That includes
-`httpx` (stream push, telemetry, licence refresh, the AI router): it reads `SSL_CERT_FILE`
-itself when set, the same as the standard-library `ssl` module SMTP delivery uses, so one file
-covers both.
-
-**The mounted file is your bundle *added to* the image's own trust store, not a replacement for
-it.** The module writes the image's public roots
-(`/etc/ssl/certs/ca-certificates.crt`, the Debian base image's bundle) into the file first and
-your `ca_bundle_pem` content after — you do not concatenate anything yourself. Because of that,
-`ca_bundle_pem` should carry only what it says: your own internal CA(s), typically a kilobyte or
-two, never a copy of the image's bundle. Keeping it that small also matters mechanically —
-`enable_key_vault` is required in `mode=production`, and Azure's documented maximum Key Vault
-secret value is 25 KB, well under which your CA(s) sit but the ~230 KB image bundle alone would
-not.
-
-Null (the default) sets nothing: outbound TLS verifies against the image's own trust store
-exactly as it did before this input existed. The module refuses an empty or all-whitespace
-value at plan (an empty trust store, not a smaller one) and a value that does not contain a
-`-----BEGIN CERTIFICATE-----` marker (almost certainly the wrong file mounted at the wrong
-path, caught before the apply rather than after).
-
-There is no `azurerm_container_app` volume type backed by a Container App secret — only
-`AzureFile` and `EmptyDir` — so the module cannot simply declare the bundle as a file the way it
-declares `MASTERLY_DATABASE_URL` as an environment variable. What it does instead: an `EmptyDir`
-volume, mounted on both `ca-api`/`ca-workers` and on a short-lived **init container** (the app's
-own image, so nothing new is pulled) that writes the image's own CA bundle followed by your
-`ca_bundle_pem` content into it, from the Container App secret, before the real container
-starts, on every replica start. With `enable_key_vault` the secret is a versionless Key Vault
-reference like the install's other secrets, so rotating the certificate in the vault reaches it
-the same way — ACA re-resolves within 30 minutes and restarts active revisions, which reruns the
-init container too.
-
-`mode=production` refuses dev-grade defaults on the **provisioned starter server** (the
-module's plan-time-guardrail philosophy — a misconfigured production install fails in
-`terraform plan`, not in a crash loop or a 2 a.m. page). It requires a non-burstable
-`postgres_sku_name` (General Purpose `GP_*` / Memory Optimized `MO_*`),
-`postgres_zone_redundant_ha = true`, and `postgres_backup_retention_days >= 14`. These
-guards **do not apply when you bring your own database** (`external_database_url`) — your
-database's SKU, HA, and retention are yours. Production likewise requires
-`enable_workers = true` (the pipeline runs in `ca-workers`, not in-process) and
-`api_max_replicas >= 2` (no single-replica production api; `enable_redis` is already
-required, so the multi-replica session registry is available).
+The data plane's resources, how the apps authenticate to them, the migrate job and trusting a
+private CA are documented in [docs/data-plane.md](docs/data-plane.md).
 
 ## Networking
 
-The install runs in its own VNet: the ACA environment is VNet-integrated (runtime subnet,
-/23 — an ACA consumption requirement) and the provisioned Postgres is reachable **only via
-a private endpoint**; private DNS keeps the server FQDN unchanged for the apps. The
-frontend stays the single public surface, behind the optional ingress IP allowlist.
-
-Landing-zone accommodations:
-
-- A first VNet prefix of /21 or larger derives the subnets automatically; a smaller
-  allocation sets `aca_subnet_prefix` + `private_endpoints_subnet_prefix` explicitly.
-- Hub-and-spoke shops that centralize private DNS pass
-  `postgres_private_dns_zone_id` — the module then creates no zone and no VNet link
-  (linking the central zone to this VNet is the platform team's side). The same holds for
-  `key_vault_private_dns_zone_id`, `redis_private_dns_zone_id` and
-  `servicebus_private_dns_zone_id`.
-- The registry's private endpoint (`registry_private_endpoint`) always creates its own
-  `privatelink.azurecr.io` zone and VNet link; there is no zone-ID input for it. Where the hub
-  already links that zone to the VNet, leave it off and add the registry endpoint on the
-  platform side ([The registry over a private endpoint](#the-registry-over-a-private-endpoint)).
-
-> Upgrading from v0.1: `infrastructure_subnet_id` is create-time-only, so the apply
-> REPLACES the Container App Environment and the apps — their FQDNs change. The Postgres
-> server (and its data) is untouched.
-
-### The API's public address
-
-`public_api_url` tells the install the address something outside it calls the API on: an
-absolute `https://` URL with no query string, fragment or credentials — the `api_url` output, or
-your own domain in front of the API. When it is set, the module puts it on `ca-api`,
-`ca-workers` and `ca-frontend` as `MASTERLY_PUBLIC_API_URL`, with any trailing slash dropped.
-The frontend shows it in the catalog's Consume card; the API and the workers build the callback
-URL of an external pipeline step from it. Unset (the default), no app gets the variable.
-
-The module writes the value; it cannot tell whether the value works. It does when all three hold:
-
-- `api_ingress_external = true` — otherwise nothing outside the environment reaches the API;
-- `ingress_allowed_cidrs` admits whoever calls the API — for an external pipeline step, the
-  outbound addresses of the service that runs your code;
-- on an internal environment (`aca_internal_load_balancer`), "external" means reachable from the
-  VNet, so the caller must be on the VNet or a network connected to it.
-
-The `api_url` output is known only after the API is published, so on a new install either set
-your own domain from the start or apply once, then set `public_api_url` from `api_url` and apply
-again.
-
-### Transport security
-
-Everything published by the install is HTTPS-only. `ca-frontend` always redirects `http://`
-to `https://`, and `ca-api` does the same **as soon as `api_ingress_external = true`** — a
-published api trusts a bearer token and nothing else, so serving it on port 80 would put
-the whole credential on the wire for anyone in the path. An IP allowlist bounds who can
-reach an endpoint; it says nothing about what a network in between can read.
-
-While the api stays internal (the default) it keeps serving plain HTTP, because the only
-thing calling it is the frontend's BFF at `http://ca-api` — an app-name address, which is
-the one form that cannot drift, and which no TLS certificate can match. That hop is not
-left in the clear: the Container Apps environment runs with **peer-to-peer encryption**
-on, so Azure encrypts traffic between apps inside the environment with certificates it
-manages and rotates. Applications keep speaking `http://` and the platform encrypts
-underneath — this is Azure's `peerTrafficConfiguration.encryption`, and it is what makes
-the internal `allowInsecure` acceptable rather than merely convenient.
-
-Verify it on a running install:
-
-```bash
-az containerapp env show -n aca-masterly -g rg-masterly-aca \
-  --query properties.peerTrafficConfiguration.encryption.enabled
-```
-
-Check it after an out-of-band change rather than relying on `terraform plan`: the provider
-writes both of Azure's peer settings from one input but refreshes state from only one of
-them, so a console or CLI change to peer-traffic encryption alone shows up as no drift.
-
-Microsoft notes that peer-to-peer encryption may add response latency and lower maximum
-throughput under high load. The module deliberately exposes no input to turn it off: the
-hop it protects is the one carrying every authenticated request in the install, and a knob
-that quietly trades that away is worth less than the throughput it buys back. If you
-measure a real problem, open an issue with the numbers rather than reaching for `az` — an
-out-of-band change to peer-traffic encryption is invisible to `terraform plan` (above),
-which makes it exactly the kind of setting that stops being true without anyone noticing.
+The VNet, the landing-zone notes, the API's public address and transport security are documented in
+[docs/networking.md](docs/networking.md). The departures from Azure's recommended baseline stay here.
 
 ### Where this module departs from Azure's recommended baseline
 
@@ -1208,7 +474,7 @@ Definitions that flag this:
 In `mode = "production"`, a new install's starter Postgres server and Redis authenticate with
 Microsoft Entra ID only, which is Azure's recommendation: password authentication and access
 keys are off, and the apps present a token for their managed identity
-([Authentication to the starter server and Redis](#authentication-to-the-starter-server-and-redis)).
+([Authentication to the starter server and Redis](docs/data-plane.md#authentication-to-the-starter-server-and-redis)).
 Two inputs depart from that, and only on purpose:
 
 - `database_auth = "password"` keeps the starter server's `masterly_admin` login, with its
@@ -1218,7 +484,7 @@ Two inputs depart from that, and only on purpose:
 
 Why you might choose them: an install that existed before this default keeps its password and
 key until you move it
-([Moving an existing install to Microsoft Entra authentication](#moving-an-existing-install-to-microsoft-entra-authentication)),
+([Moving an existing install to Microsoft Entra authentication](docs/data-plane.md#moving-an-existing-install-to-microsoft-entra-authentication)),
 and a production plan stops until you choose, so setting these is how you keep the install as
 it is in the meantime. Either also suits an install whose api image is older than `v0.133.7`,
 which cannot authenticate with a token. What it costs: a credential that can be copied out of
@@ -1310,156 +576,8 @@ that evaluates this rule.
 
 ## Scaling
 
-`ca-api` defaults to a **single replica** — with the in-memory session registry a second
-replica would drop sessions. `enable_redis` switches sessions to the redis registry and
-unlocks `api_max_replicas > 1` (the module refuses the combination scale-out-without-Redis
-at plan time). `enable_workers` moves the async-pipeline loop to its own `ca-workers` app.
-`frontend_max_replicas` (default 3, at least `frontend_min_replicas`) caps the frontend, which
-Container Apps scales on HTTP load.
-
-**Scale-to-zero** (`api_min_replicas = 0` / `frontend_min_replicas = 0`) is the idle-cost
-posture for evaluation installs (the demo runs it): Container Apps stops the replicas when
-idle and the default HTTP scale rule wakes them on the next request. The costs: cold-start
-latency on the first request, in-memory sessions drop when the last api replica stops
-(unless `enable_redis`), and the api's in-process worker loop only polls while a replica is
-up — async jobs stall until the next request. Refused in `mode=production`. The workers
-floor (`workers_min_replicas`) stays >= 1 by design: nothing HTTP-wakes an ingress-less
-polling loop. `mode=production` refuses 0 there too.
-
-One interaction to know about: the frontend's readiness probe calls the api, so on a
-scaled-to-zero install the first wake also waits for an api replica. The probe's budget (485s
-of continuous failure) is sized past any cold start we have measured, including a first apply
-pulling the api image onto a cold node — so in practice this costs wake latency rather than an
-activation. It also means the probe traffic holds the api up while a frontend replica exists:
-the api idles down a few minutes after the frontend rather than alongside it.
-
-The trade this makes, stated plainly: **the frontend's availability is now coupled to the api.**
-If the api stays down longer than the budget, ACA pulls the frontend replicas out of rotation
-and the install answers a bare `503` at `frontend_url` instead of loading the app. That is the
-intended behaviour for a *misconfigured* install — a frontend that cannot reach its api is not
-serving anything useful, and letting it look healthy is how two wiring faults ran for hours
-undetected. But it also applies to a *healthy* install during a long backend outage, where the
-app would otherwise have loaded and shown its degraded-data-plane banner. The gate is not
-currently an input — it is fixed in the module — so if that trade is wrong for your
-environment, raise it with us rather than editing a vendored copy.
-
-### How `ca-workers` scales
-
-`ca-workers` runs between `workers_min_replicas` (default 1) and `workers_max_replicas` (default
-1). What moves it between the two depends on the bus:
-
-- **On the Service Bus binding** (`enable_service_bus = true`) the module adds an
-  `azure-servicebus` scale rule on the jobs queue the workers receive from, with a target of 5
-  messages per replica, between `workers_min_replicas` and `workers_max_replicas`. The rule
-  authenticates as the identity `ca-workers` runs as (`id-<prefix>-workers`, or the apps' managed
-  identity with `migrations = "start"` on `"entra"` or without the vault), which the module grants
-  **Azure Service Bus Data Owner** on the jobs queue alone, to let the scaler read the queue's message count. With the
-  rule in place, `workers_min_replicas = 0` is a usable setting on this binding: the rule is what
-  starts a worker when jobs arrive.
-- **Not yet proven on a live install.** Three things about the Service Bus rule rest on Azure's
-  documentation and have not yet been shown on a running install: that Data Owner at queue scope
-  is enough for the scaler (if it is not, the grant moves to the namespace); that the scaler
-  reaches a Premium namespace with public network access disabled, which is the production
-  shape; and how quickly replicas are added and removed as the queue fills and drains. They are
-  checked on a live install before the version that carries this rule is released, and this
-  section will say what that showed.
-- **On the polling binding** (the default) each Environment's queue lives in its own Postgres
-  database and there is no single queue length to scale on, so `ca-workers` stays at
-  `workers_min_replicas` whatever `workers_max_replicas` says. The module plans such a
-  configuration but warns about it. Raise `workers_min_replicas` to run more workers there.
-
-Jobs are claimed per Environment and job kind across all replicas: jobs of different kinds, or in
-different Environments, run in parallel, and two jobs of the same kind in one Environment never
-overlap. An extra replica adds throughput and never duplicates work.
-
-A stopping worker (scale-in, a new revision, a restart) claims no new job and finishes the jobs
-it is running. `workers_termination_grace_period_seconds` (default **600**, the most Container
-Apps allows; 0-600) is how long it has before it is killed. A job cut off by a kill is retried
-only after its lease expires, so a grace period long enough for your longest jobs is what keeps a
-scale-in from delaying them. The cost is on the other side: a revision swap (a new image, a
-changed setting) can wait up to that long for the old worker to stop.
-
-### CPU and memory per replica
-
-`app_resources` sizes each app's replicas, keyed by app name (`api`, `frontend`, `workers`). An
-app that is not listed keeps 0.5 vCPU / 1Gi. Container Apps accepts only the ratio 1 vCPU : 2 GiB,
-from 0.25 vCPU / 0.5Gi to 2 vCPU / 4Gi in steps of 0.25 vCPU, so either attribute alone is
-enough; set both and they must agree, or the plan is refused:
-
-```hcl
-app_resources = {
-  api     = { cpu = 1 }                   # 1 vCPU / 2Gi, what the production example sets
-  workers = { cpu = 1.5, memory = "3Gi" } # both stated: they must be in the ratio
-}
-```
-
-Changing an app's size rolls that app to a new revision on the next apply. The `workers-memory`
-alert follows the workers' size: its threshold is a share of whatever memory the replica has.
-
-### Connection budget
-
-The api creates one database per Masterly Environment (ADR 0003), and each backend process
-(`ca-api` replica, `ca-workers` replica) holds connection pools per Environment in use. Count them
-against the server's `max_connections`, which the connections alert also measures.
-
-`postgres_pgbouncer = true` turns on the Flexible Server's built-in PgBouncer in transaction mode
-(`pgbouncer.enabled = true`, `pgbouncer.pool_mode = TRANSACTION`,
-`pgbouncer.max_prepared_statements = 100`). `MASTERLY_DATABASE_URL` then points at the pooler on
-port 6432 and `MASTERLY_DATABASE_POOLER` is `transaction`. `MASTERLY_DATABASE_DIRECT_URL`
-(secret `database-direct-url`, same server, role and `postgres` database) stays on 5432 for what a
-transaction pooler cannot carry, such as creating an Environment's database. Under
-`database_auth = "entra"` neither URL carries a password. Built-in PgBouncer is not offered on
-burstable (`B_*`) SKUs, and the input is refused with `external_database_url`.
-
-**Needs an api image that carries MAS-1615** (masterly-application-backend PR #488). An older image
-ignores `MASTERLY_DATABASE_POOLER` and fails through the pooler. All three settings change in
-one apply, so roll the api image first.
-
-**Turning it off interrupts the database connection during the rollout.** When the module builds
-the network, the apply on turn-on updates the endpoints' network security group to admit 6432 and
-turns PgBouncer on before the apps roll to the :6432 URL. Setting `postgres_pgbouncer` back to
-`false` keeps that order: the network security group drops 6432 first, and only then do `ca-api`
-and `ca-workers` roll to a revision on 5432. Until the new revisions are healthy, the running ones
-cannot open new connections to the pooler. PgBouncer itself is switched off only after the apps
-have moved. Turn it off in a maintenance window. With injected subnets the 6432 rule is yours
-(see [docs/networking.md](docs/networking.md#network-security-baseline)): add it before turning
-the input on, and remove it only after the apps have rolled to 5432.
-
-Per process and Environment:
-
-- Through the pooler (6432): the session pool, 5 + 10 (pool size plus overflow) = up to 15
-  client connections. They share the pooler's server-side connections.
-- Direct (5432): the direct pool, 1 + 4 = up to 5 connections, held on the server itself.
-
-Multiply by `api` replicas (`api_max_replicas`), `ca-workers` replicas (`workers_max_replicas`) and
-the Environments in use (at most the Environment limit your license grants, `engine_max`; it is a
-license claim, not a module input):
-
-    processes          = api replicas + workers replicas
-    pooler clients     = processes x Environments x 15
-    direct on 5432     = processes x Environments x 5
-    pooler server side = (Environments + 1) x pgbouncer.default_pool_size (Azure's default: 50)
-
-The pooler clients do not count against `max_connections`, but the pooler's own server-side
-connections do. Each Environment is a separate database, so PgBouncer opens a separate server pool
-for it, plus one for the install-level `postgres` database that `MASTERLY_DATABASE_URL` names.
-Each pool holds up to `pgbouncer.default_pool_size` connections (the module does not set it; the
-default is 50, and you can change it through `postgres_server_parameters`).
-
-*Worked example, `GP_Standard_D2ds_v5`* (8 GiB, default `max_connections` 859): 3 api and 2
-workers replicas make 5 processes; with 4 Environments that is 5 x 4 x 15 = 300 pooler client
-connections and 5 x 4 x 5 = 100 direct connections. The 100 direct connections count against 859
-in full, and so do the pooler's server-side connections: up to (4 + 1) x 50 = 250. Together up to
-350 of 859. The 300 pooler clients themselves do not count, since PgBouncer multiplexes them.
-Without the pooler the same install would open 5 x 4 x (15 + 5) = 400.
-
-*Worked example, `B_Standard_B1ms`* (`max_connections` 50): there is no built-in PgBouncer, so
-every connection is a server connection. 1 api and 1 workers replica make 2 processes; with 2
-Environments that is 2 x 2 x (15 + 5) = 80, above 50. Use fewer Environments or replicas, or a
-`GP_*` SKU with `postgres_pgbouncer = true`.
-
-The connections alert keeps measuring the server's `max_connections`; it does not count pooler
-clients.
+How the apps scale, what each replica gets and the connection budget are documented in
+[docs/scaling.md](docs/scaling.md).
 
 ## Diagnostics + alerts
 
@@ -1569,11 +687,9 @@ need neither; an agent or a Logs Ingestion API client of your own that sends to 
 has to authenticate with Microsoft Entra ID and send through an Azure Monitor Private Link Scope
 (AMPLS).
 
-| Input | Default | What it sets |
-|---|---|---|
-| `log_query_public_access` | `true` | Whether the workspace answers queries from the public network. `false` leaves only queries through an AMPLS |
-| `log_retention_days` | `30` | The workspace's retention, which every table except `AZKVAuditLogs` follows (30-730) |
-| `security_log_retention_days` | `90` | The retention of `AZKVAuditLogs`, the Key Vault audit events, set on that table alone (30-730) |
+`log_query_public_access`, `log_retention_days` and `security_log_retention_days` set who can
+query the workspace and how long it keeps what it holds; they are described in
+[docs/inputs.md](docs/inputs.md#the-installs-log-analytics-workspace).
 
 Every query is signed in with Microsoft Entra ID. **Log Analytics Reader** on the workspace runs
 queries, which is what the [diagnostic bundle](#diagnostic-bundle) needs; **Log Analytics
@@ -1607,7 +723,7 @@ way as `postgres-silent`.
 
 This is controlled by `enable_app_availability_diagnostics`:
 
-| `enable_app_availability_diagnostics` | `mode = "production"` | Outside production |
+| Value of `enable_app_availability_diagnostics` | `mode = "production"` | Outside production |
 |---|---|---|
 | unset (default) | on, when diagnostics are on (the production default) | off |
 | `false` | off | off |
@@ -2420,7 +1536,7 @@ terraform providers lock \
 
 This repo ships no lock file of its own, for the same reason: it is a module, not a root
 configuration. It constrains azurerm to `~> 5.8`, random to `~> 3.6` and azapi to `~> 2.9`
-(used for [built-in authentication](#built-in-authentication-in-front-of-the-frontend-builtin_auth) and to start [the migrate job](#the-migrate-job)),
+(used for [built-in authentication](docs/identity.md#built-in-authentication-in-front-of-the-frontend-builtin_auth) and to start [the migrate job](docs/data-plane.md#the-migrate-job)),
 and leaves the exact versions to you. That
 floor is load-bearing rather than housekeeping: with no lock file here, the constraint is the
 only thing governing your `terraform init`. `versions.tf` records why it sits where it does.

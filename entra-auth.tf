@@ -29,7 +29,7 @@
 # Terraform cannot tell a new install from an upgraded one on its own, and flipping a running
 # install to Entra-only on upgrade would break it: every object in its databases is owned by the
 # password administrator, masterly_admin, which the apps' identity cannot act as until the
-# ownership steps in the README ("Moving an existing install to Microsoft Entra authentication")
+# ownership steps in docs/data-plane.md ("Moving an existing install to Microsoft Entra authentication")
 # have run. So when database_auth or redis_auth is unset, the module looks for the install's own
 # server or cache in Azure before choosing a default:
 #
@@ -66,7 +66,7 @@
 variable "database_auth" {
   type        = string
   default     = null
-  description = "How the apps authenticate to the starter Postgres server: \"entra\" (Microsoft Entra ID only — the apps' identity is the server's Entra administrator and password authentication is off; needs api images v0.133.7 or later) or \"password\" (the masterly_admin login's password in the connection URL; a departure from Azure's recommended baseline, see the README). Unset: a new server gets \"entra\" in mode = \"production\" and \"password\" otherwise; an existing server keeps what it has, and a production install whose existing server uses a password must set this explicitly. Moving an existing install to \"entra\" needs the ownership steps in the README first. Has no effect with external_database_url (BYO-DB), whose DSN is the credential."
+  description = "How the apps authenticate to the starter Postgres server: \"entra\" (Microsoft Entra ID only — the apps' identity is the server's Entra administrator and password authentication is off; needs api images v0.133.7 or later) or \"password\" (the masterly_admin login's password in the connection URL; a departure from Azure's recommended baseline, see the README). Unset: a new server gets \"entra\" in mode = \"production\" and \"password\" otherwise; an existing server keeps what it has, and a production install whose existing server uses a password must set this explicitly. Moving an existing install to \"entra\" needs the ownership steps in docs/data-plane.md first. Has no effect with external_database_url (BYO-DB), whose DSN is the credential."
 
   validation {
     # The same total shape as redis_offering's check: coalesce() keeps null out of contains(),
@@ -187,7 +187,7 @@ locals {
 # administrator, and ca-api and ca-workers connect as the DML-only roles it creates
 # (masterly_api, masterly_workers). On an install moving to "job", Terraform destroys this
 # administrator only after it has updated ca-api and ca-workers, because both depend on it
-# (main.tf, workers.tf); the README's "The migrate job" gives the order for an existing install.
+# (main.tf, workers.tf); docs/data-plane.md's "The migrate job" gives the order for an existing install.
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "apps" {
   count = local.database_entra && !local.migrate_app_roles ? 1 : 0
 
