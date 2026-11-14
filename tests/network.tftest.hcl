@@ -337,8 +337,9 @@ run "egress_firewall_next_hop_routes_snet_aca_to_the_firewall" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
   }
 
   assert {
@@ -381,8 +382,9 @@ run "egress_firewall_route_table_id_attaches_your_table" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-egress" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-egress" }
   }
 
   override_module {
@@ -390,7 +392,7 @@ run "egress_firewall_route_table_id_attaches_your_table" {
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
-      internal_load_balancer_enabled = false
+      internal_load_balancer_enabled = true
       logs_destination               = "azure-monitor"
       mutual_tls_enabled             = true
       identity_ids                   = []
@@ -422,8 +424,9 @@ run "egress_firewall_on_a_consumption_only_environment_is_rejected" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
   }
 
   override_module {
@@ -431,7 +434,7 @@ run "egress_firewall_on_a_consumption_only_environment_is_rejected" {
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
-      internal_load_balancer_enabled = false
+      internal_load_balancer_enabled = true
       logs_destination               = "azure-monitor"
       mutual_tls_enabled             = true
       identity_ids                   = []
@@ -447,7 +450,8 @@ run "egress_firewall_with_both_fields_is_rejected" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
     egress_firewall = {
       next_hop_ip    = "10.0.0.4"
       route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-egress"
@@ -461,8 +465,9 @@ run "egress_firewall_with_neither_field_is_rejected" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = {}
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = {}
   }
 
   expect_failures = [var.egress_firewall]
@@ -472,8 +477,9 @@ run "egress_firewall_next_hop_as_a_range_is_rejected" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { next_hop_ip = "10.0.0.0/24" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.0/24" }
   }
 
   expect_failures = [var.egress_firewall]
@@ -483,8 +489,9 @@ run "egress_firewall_next_hop_as_a_hostname_is_rejected" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { next_hop_ip = "fw.example" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "fw.example" }
   }
 
   expect_failures = [var.egress_firewall]
@@ -494,8 +501,9 @@ run "egress_firewall_next_hop_as_ipv6_is_rejected" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { next_hop_ip = "fd00::4" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "fd00::4" }
   }
 
   expect_failures = [var.egress_firewall]
@@ -505,8 +513,9 @@ run "egress_firewall_route_table_id_that_is_not_a_route_table_is_rejected" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca" }
   }
 
   expect_failures = [var.egress_firewall]
@@ -521,10 +530,51 @@ run "egress_firewall_on_an_injected_network_is_rejected" {
     ingress_allowed_cidrs       = ["203.0.113.7/32"]
     aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
     private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    aca_internal_load_balancer  = true
     egress_firewall             = { next_hop_ip = "10.0.0.4" }
   }
 
   expect_failures = [var.egress_firewall]
+}
+
+# Guard: public ingress (topology 1). Microsoft documents forced tunnelling only for an internal
+# environment behind an Application Gateway (docs/networking.md, "Egress"), so an external
+# environment with egress_firewall is refused. Everything else here is valid: this is the only
+# guard that fails.
+run "egress_firewall_with_public_ingress_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+  }
+
+  expect_failures = [var.egress_firewall]
+}
+
+# Ordering: on a fresh install the apps and the migrate job are created only after the route table
+# is attached, so their first pull and first outbound call already take the firewall's route.
+# `terraform test` cannot read depends_on, so this reads it: comments stripped, as in
+# tests/migrate.tftest.hcl.
+run "egress_firewall_association_precedes_the_apps_and_migrate_job" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = alltrue([
+      for block in [
+        regex("(?s)module \"api\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0],
+        regex("(?s)module \"frontend\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0],
+        regex("(?s)module \"workers\" \\{(.*?)\\n\\}", file("${path.module}/workers.tf"))[0],
+        regex("(?s)resource \"azurerm_container_app_job\" \"migrate\" \\{(.*?)\\n\\}", file("${path.module}/migrate.tf"))[0],
+      ] :
+      strcontains(replace(regex("(?s)depends_on = \\[([^\\]]*)\\]", block)[0], "/#[^\\n]*/", ""), "azurerm_subnet_route_table_association.aca,")
+    ])
+    error_message = "ca-api, ca-frontend, ca-workers and caj-migrate must depend on azurerm_subnet_route_table_association.aca, so no first pull or outbound call takes Azure's default path before the firewall route is attached."
+  }
 }
 
 # ...and with the input unset, the module touches no route table on the injected subnets, so the
@@ -1197,8 +1247,9 @@ run "egress_firewall_next_hop_attaches_the_route_table_to_snet_aca_only" {
   providers = { azurerm = azurerm.egress, random = random, azapi = azapi }
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
   }
 
   override_data {
@@ -1247,8 +1298,9 @@ run "egress_firewall_is_refused_when_azure_lists_no_workload_profile" {
   providers = { azurerm = azurerm.egress, random = random, azapi = azapi }
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    egress_firewall       = { next_hop_ip = "10.0.0.4" }
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
   }
 
   override_data {

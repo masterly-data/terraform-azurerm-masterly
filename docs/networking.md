@@ -109,7 +109,8 @@ firewall. Your firewall then decides what passes, and it must admit the destinat
 
 | Topology | How |
 |---|---|
-| 1 and 2: the module builds the network | `egress_firewall = { next_hop_ip = "10.0.0.4" }`: the module creates `rt-<name_prefix>-aca` in `rg-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, and attaches it to `snet-aca`. Or `egress_firewall = { route_table_id = "/subscriptions/.../routeTables/<name>" }`: the module attaches your route table to `snet-aca` as it is, and creates none |
+| 1: public ingress | Not offered: `egress_firewall` is refused at plan while `aca_internal_load_balancer = false` ([why](#forced-tunnelling-needs-an-internal-environment)). Make the environment internal and publish the frontend through your Application Gateway, which is topology 2 |
+| 2: the module builds the network, internal environment (`aca_internal_load_balancer = true`) | `egress_firewall = { next_hop_ip = "10.0.0.4" }`: the module creates `rt-<name_prefix>-aca` in `rg-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, and attaches it to `snet-aca`. Or `egress_firewall = { route_table_id = "/subscriptions/.../routeTables/<name>" }`: the module attaches your route table to `snet-aca` as it is, and creates none |
 | 3: injected subnets | Your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to the injected ACA subnet. `egress_firewall` is refused at plan there: a subnet holds one route table, and the module attaching its own would replace the hub's. The module creates no route table and no association on injected subnets, so the one the hub attached is never touched |
 
 The `egress_route` output shows the route table in effect and the next-hop address, and is null
@@ -150,18 +151,37 @@ gateway propagates (topology 2's clients, over a peered hub's gateway) are more 
 came rather than through the firewall, where a stateful firewall would drop them. A route table
 of your own (`route_table_id`) needs the same.
 
-**Public ingress (topology 1).** The same reasoning applies to replies to internet clients that
-reach the environment's public endpoint: they must leave by the path the request came in on.
-Check Microsoft's [Control outbound traffic with user defined routes](https://learn.microsoft.com/azure/container-apps/user-defined-routes)
-for its current guidance on public ingress alongside a `0.0.0.0/0` route to a firewall before
-you rely on that combination. Topology 2 has no public endpoint, which avoids the question.
-
 **On a running install**, the route applies as soon as the apply attaches it. Open the
 destinations below on your firewall first. **On a fresh install** the module attaches the route
-once Azure has created the environment (that is when the workload-profile check can run), so
-the environment's first outbound connections, before the attachment, can take Azure's default
-path. Where nothing may leave except through the firewall from the first connection, use
-injected subnets with the hub's route table already attached (topology 3).
+once Azure has created the environment (that is when the workload-profile check can run). It
+creates `ca-api`, `ca-frontend`, `ca-workers` and `caj-migrate` only after that, so their first
+image pull, migration run, database connection and outbound call already go through the
+firewall. Only the environment's own provisioning, before the attachment, can take Azure's
+default path. Where nothing may leave except through the firewall from the first connection,
+use injected subnets with the hub's route table already attached (topology 3).
+
+### Forced tunnelling needs an internal environment
+
+`egress_firewall` is refused at plan unless `aca_internal_load_balancer = true`. What Microsoft
+Learn documents, read on 2026-11-14:
+
+- [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration)
+  and [Control outbound traffic with user defined routes](https://learn.microsoft.com/azure/container-apps/user-defined-routes)
+  support user-defined routes on workload-profiles environments only. The locked-down shape they
+  describe is an internal environment behind an Application Gateway, with a route to the firewall
+  on the environment's subnet.
+- Learn's page on network security groups for Container Apps says that on an external
+  workload-profiles environment, inbound traffic arrives through a public IP in the
+  environment's managed resource group, not through the subnet.
+- No page documents public ingress combined with `0.0.0.0/0` to a firewall.
+
+Our reading, not Learn's: replies to internet clients must leave by the path their requests came
+in on, and nothing documented says they do once the subnet's default route points at a stateful
+firewall. The module therefore does not offer that combination. Topology 2 has no public endpoint, so the
+question does not arise there. To publish the frontend to the internet with egress forced, put
+your Application Gateway in front of the internal environment (`frontend_custom_domain`, see
+"Behind an Application Gateway" under
+[The record that routes the hostname](#the-record-that-routes-the-hostname)).
 
 ### What your firewall must admit
 
@@ -182,6 +202,7 @@ URL.
 | Your Key Vault holding the frontend certificate | `frontend_custom_domain` set, unless that vault has a private endpoint the environment reaches | The environment cannot read the certificate, so the binding of your hostname fails, at the first apply or at the next certificate rotation |
 | Service Bus (`<namespace>.servicebus.windows.net`, TCP 5671 and 443) | `enable_service_bus` with a public namespace: any SKU outside production, and Standard in production. A Premium namespace in production is private | The apps cannot open their Service Bus connection, so work handed over the bus does not run |
 | Azure Communication Services (`*.communication.azure.com`) | `email_acs_enabled` | Email is not sent |
+| Your own Postgres: the host and port of `external_database_url`, and of `external_database_admin_url` where it names another host | `external_database_url` set (the module provisions no server and no private endpoint) and the server is outside the VNet. A server reached over peering or a private endpoint in the VNet stays off the route | `ca-api` and `ca-workers` cannot open their database connection, so no revision becomes ready. With `migrations = "job"`, `caj-migrate` fails too, and a fresh install never completes its migrations |
 | Targets you configure in the application: webhooks, an SMTP relay, a BYO-DB Environment's database, stream push endpoints, a local AI endpoint | Each target you configure | That one feature's call fails; the rest of the install is unaffected |
 
 The platform claims above come from Microsoft Learn:

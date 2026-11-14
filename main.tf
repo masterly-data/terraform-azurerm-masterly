@@ -1288,6 +1288,10 @@ module "api" {
     # MASTERLY_MIGRATIONS = job: the migrate job's execution has started before a revision
     # does (migrate.tf).
     azapi_resource_action.migrate_start,
+    # With egress_firewall, the first pull and the first outbound call take the firewall's
+    # route, not Azure's default path (network.tf). Without egress_firewall the association has
+    # no instance, so nothing changes.
+    azurerm_subnet_route_table_association.aca,
   ]
 }
 
@@ -1428,5 +1432,7 @@ module "frontend" {
     azurerm_role_assignment.kv_secrets_user_frontend,
     azurerm_private_endpoint.registry,
     azurerm_private_dns_zone_virtual_network_link.registry,
+    # With egress_firewall, the first pull takes the firewall's route, as on the api.
+    azurerm_subnet_route_table_association.aca,
   ]
 }

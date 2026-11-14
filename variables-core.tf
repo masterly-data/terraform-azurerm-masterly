@@ -473,7 +473,7 @@ variable "egress_firewall" {
     route_table_id = optional(string)
   })
   default     = null
-  description = "Force all outbound traffic from the Container Apps subnet (snet-aca) through your firewall. Set exactly one of: next_hop_ip, your firewall's private IPv4 address, and the module creates a route table in rg-<name_prefix>-aca with one route, 0.0.0.0/0 to that address as a virtual appliance; or route_table_id, the resource ID of a route table you manage, which the module attaches as it is and does not change. Either way the route table is attached to snet-aca only: snet-private-endpoints gets none, and the apps' traffic to the private endpoints stays inside the VNet. Only for a network the module builds: with aca_subnet_id set the plan is refused, because the hub's route table goes on that subnet and is attached by your platform team. Refused too when the environment is Consumption-only, on which Azure ignores the route. Your firewall must admit the destinations docs/networking.md lists under \"Egress\"; with one missing, the part of the install that needs it fails with the symptom given there. Null (the default) attaches no route table and leaves Azure's default outbound path."
+  description = "Force all outbound traffic from the Container Apps subnet (snet-aca) through your firewall. Set exactly one of: next_hop_ip, your firewall's private IPv4 address, and the module creates a route table in rg-<name_prefix>-aca with one route, 0.0.0.0/0 to that address as a virtual appliance; or route_table_id, the resource ID of a route table you manage, which the module attaches as it is and does not change. Either way the route table is attached to snet-aca only: snet-private-endpoints gets none, and the apps' traffic to the private endpoints stays inside the VNet. Only for a network the module builds: with aca_subnet_id set the plan is refused, because the hub's route table goes on that subnet and is attached by your platform team. Refused unless aca_internal_load_balancer = true: Microsoft documents forced tunnelling only for an internal environment behind an Application Gateway, not alongside public ingress. Refused too when the environment is Consumption-only, on which Azure ignores the route. The container apps and the migrate job are created after the route table is attached. Your firewall must admit the destinations docs/networking.md lists under \"Egress\"; with one missing, the part of the install that needs it fails with the symptom given there. Null (the default) attaches no route table and leaves Azure's default outbound path."
 
   validation {
     condition = var.egress_firewall == null || (
@@ -505,6 +505,16 @@ variable "egress_firewall" {
   validation {
     condition     = var.egress_firewall == null || var.aca_subnet_id == null
     error_message = "egress_firewall is for a network the module builds. With aca_subnet_id set, the hub's route table (0.0.0.0/0 to your firewall) goes on the injected ACA subnet, attached by the platform team that owns it: a subnet holds one route table, and the module attaching its own would replace the hub's. Remove egress_firewall."
+  }
+
+  # Microsoft Learn (read 2026-11-14) documents forced tunnelling only for an internal
+  # environment behind Application Gateway. An external environment takes its inbound traffic
+  # on a public IP in the managed resource group, and nothing documents that public ingress
+  # alongside 0.0.0.0/0 to a firewall, so the module does not offer a combination it cannot
+  # stand behind (docs/networking.md, "Egress").
+  validation {
+    condition     = var.egress_firewall == null || var.aca_internal_load_balancer
+    error_message = "egress_firewall needs aca_internal_load_balancer = true. Microsoft documents forced tunnelling for Container Apps only as an internal environment behind an Application Gateway, with the route to your firewall on the environment's subnet. On an external environment inbound traffic arrives on a public IP in the managed resource group, and public ingress alongside 0.0.0.0/0 to a firewall is not a documented configuration. Set aca_internal_load_balancer = true and publish the frontend through your Application Gateway (frontend_custom_domain), or remove egress_firewall."
   }
 }
 
