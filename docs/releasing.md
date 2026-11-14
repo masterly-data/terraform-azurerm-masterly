@@ -127,6 +127,29 @@ install, planned and applied from that candidate:
    through the BFF succeeds with the api ungated, and the frontend's gate still redirects an
    anonymous browser to Entra sign-in.
 
+Item 5, observed on the reference install's 0.19.1 → 0.20.0 apply (masterly-demo-iac run
+40012887211, 2026-10-23, `api_ingress_external = true`, the 0.19.0 import blocks already dropped):
+**passes for built-in auth, with one unrelated change.**
+
+- The refreshing plan was `0 to add, 1 to change, 1 to destroy`. The destroy was
+  `azapi_resource.builtin_auth["api"]`, and nothing changed on `builtin_auth["frontend"]`,
+  `ca-api` or `ca-frontend`. The `builtin_auth_does_not_gate_the_published_api` warning showed,
+  as expected.
+- The one change was `azurerm_monitor_diagnostic_setting.aca_env` gaining
+  `log_analytics_destination_type = "Dedicated"`. That is not built-in auth. The same in-place
+  change recurs on later applies (run 42625331327, 2026-11-09): the setting declares it
+  (`environment.tf`), and Azure does not keep it for a Container Apps environment. So no plan of
+  an install on 0.18.0 or later shows exactly no change. That is a module defect tracked
+  separately, and it is the one deviation from "exactly one change" here.
+- After the apply, `ca-api` has no built-in auth: `az containerapp auth show -n ca-api` returns
+  `{}` (read 2026-11-14). The next apply (run 42625331327, 0.20 → 0.23) changed nothing on built-in
+  auth.
+
+Still open: item 6, a signed-in session through the BFF on an install with the frontend gate on.
+Masterly's test install cannot prove it: it configures no `builtin_auth` until the auth boundary
+is turned on there (MAS-4469). The reference install can, by signing in through its gated
+frontend and loading a page that calls the api, then recording the run and the time here.
+
 **`ca-workers` on its own identity with the vault** (in 0.24.0 in the
 [changelog](../CHANGELOG.md)). On a live install with the vault and `ca-workers` on, on
 `migrations = "start"` with `database_auth = "password"`, and separately on BYO-DB, planned and
