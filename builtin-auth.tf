@@ -14,6 +14,10 @@
 # secret_values), which the configuration names rather than holds. ca-api still carries that
 # secret, as it did when it was gated, so that taking this version changes neither app; nothing
 # on ca-api reads it.
+#
+# builtin_auth_recovery_until is the recovery fallback: it turns ca-frontend's gate off for at
+# most 60 minutes, only behind a network restriction, and the first plan after the time turns it
+# back on. The activity-log alert at the end of this file reports both writes.
 
 locals {
   builtin_auth_enabled = var.builtin_auth != null
@@ -55,6 +59,15 @@ locals {
   # ca-api published to ingress_allowed_cidrs while builtin_auth gates the frontend only. The
   # check below warns while it holds.
   builtin_auth_leaves_published_api_ungated = local.builtin_auth_enabled && var.api_ingress_external
+
+  # The recovery fallback (builtin_auth_recovery_until): ca-frontend's gate is off while the
+  # time is set and still after this plan, and on again at the first plan after it. The try()
+  # leaves a malformed time to the variable's validation.
+  builtin_auth_recovery_open = var.builtin_auth_recovery_until == null ? false : try(timecmp(plantimestamp(), var.builtin_auth_recovery_until) < 0, false)
+
+  # A recovery time that has passed: the gate is back on, and the check below warns until the
+  # input is removed.
+  builtin_auth_recovery_expired = var.builtin_auth_recovery_until == null ? false : try(timecmp(plantimestamp(), var.builtin_auth_recovery_until) >= 0, false)
 }
 
 check "builtin_auth_api_entries_are_ignored" {
@@ -71,6 +84,13 @@ check "builtin_auth_does_not_gate_the_published_api" {
   }
 }
 
+check "builtin_auth_recovery_window_has_expired" {
+  assert {
+    condition     = !local.builtin_auth_recovery_expired
+    error_message = "builtin_auth_recovery_until has passed: the recovery window has expired, and this plan turns ca-frontend's built-in authentication back on. Remove builtin_auth_recovery_until."
+  }
+}
+
 resource "azapi_resource" "builtin_auth" {
   for_each = local.builtin_auth_apps
 
@@ -81,7 +101,7 @@ resource "azapi_resource" "builtin_auth" {
   body = {
     properties = {
       platform = {
-        enabled = true
+        enabled = !local.builtin_auth_recovery_open
       }
       globalValidation = merge(
         {
@@ -105,4 +125,34 @@ resource "azapi_resource" "builtin_auth" {
       }
     }
   }
+}
+
+# Every write to ca-frontend's auth configuration, from this module or from anywhere else: the
+# recovery fallback's disable and its restore, and a change made in the portal. It exists for as
+# long as builtin_auth does, not only during a recovery window, or the write that restores the
+# gate would go unreported. An activity-log alert takes no severity; it notifies the install's
+# action group like the other alerts (diagnostics.tf). Activity-log alert rules are global
+# resources: "global" is the location Azure accepts for every region this module deploys to.
+resource "azurerm_monitor_activity_log_alert" "builtin_auth_config_write" {
+  count = local.builtin_auth_enabled ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-frontend-auth-config-write"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = "global"
+  scopes              = [module.frontend.id]
+  description         = "ca-frontend's built-in authentication configuration was written: the recovery fallback turned the gate off or back on, or the configuration was changed outside Terraform. Confirm the change was intended."
+
+  criteria {
+    category       = "Administrative"
+    operation_name = "Microsoft.App/containerApps/authConfigs/write"
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
 }
