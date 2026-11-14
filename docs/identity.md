@@ -158,6 +158,32 @@ fails. An install that configured built-in auth on `ca-api` by hand and never im
 that configuration; remove it in the portal (the app's **Authentication** page) if you want the
 api reached without it.
 
+#### Recovery fallback: turning the frontend gate off (`builtin_auth_recovery_until`)
+
+When users cannot pass the platform sign-in, for example during an Entra outage, and no other way
+in is available, `builtin_auth_recovery_until` turns `ca-frontend`'s built-in authentication off
+until a time you set, so that a browser reaches the application's own sign-in, including its
+break-glass path. Set it to an RFC 3339 UTC time, such as `2026-11-14T15:30:00Z`, and apply.
+
+- **At most 60 minutes.** A time more than 60 minutes after the plan is refused. To extend the
+  window, plan and apply again with a new time.
+- **Only behind a network restriction.** It is refused unless something besides the gate limits
+  who reaches the frontend: a non-empty `ingress_allowed_cidrs`,
+  `frontend_ingress_external = false`, or `aca_internal_load_balancer = true`. It is also refused
+  without `builtin_auth`.
+- **The frontend only.** It changes nothing on `ca-api`: its ingress, its environment and its
+  authentication stay as they are. Relaxing the api's own sign-in check during an Entra outage is
+  not set by this input.
+- **Restored at the next plan, not at the time itself.** Terraform does not run on its own: the
+  gate comes back at the first plan and apply after the time has passed. Run that apply as soon
+  as the window ends. A plan that still sets a passed time turns the gate back on and warns
+  through the check `builtin_auth_recovery_window_has_expired`; remove the input then.
+- **Alerted both ways.** With `builtin_auth` set, the module creates the activity-log alert
+  `alert-<prefix>-frontend-auth-config-write`, which fires on every write to `ca-frontend`'s auth
+  configuration and notifies the install's action group (`alert_email` or
+  `alert_action_group_id`). That is the disable and the restore, any change made outside
+  Terraform, and also an apply that changes `builtin_auth` itself; confirm each one was intended.
+
 The configuration is written with the `Azure/azapi` provider, because azurerm has no resource
 for it; the same provider starts the [migrate job](data-plane.md#the-migrate-job) at apply. The module
 requires that provider whether or not you set `builtin_auth`, so an

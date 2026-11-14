@@ -56,3 +56,51 @@ variable "builtin_auth" {
     error_message = "builtin_auth requires builtin_auth_client_secret: the platform redeems the sign-in code with it."
   }
 }
+
+variable "builtin_auth_recovery_until" {
+  type        = string
+  default     = null
+  description = <<-EOT
+    The recovery fallback for builtin_auth: an RFC 3339 UTC time (for example
+    2026-11-14T15:30:00Z) until which ca-frontend's built-in authentication is turned off, so that
+    a browser reaches the application's own sign-in (and its break-glass path) without an Entra
+    sign-in at the platform. Use it only when no other way in is available, such as an Entra
+    outage that blocks the platform sign-in. Null (the default) leaves the gate on.
+
+    - The time must be at most 60 minutes after the plan; a later time is refused.
+    - It is refused without builtin_auth, and refused without a network restriction in front of
+      ca-frontend: a non-empty ingress_allowed_cidrs, frontend_ingress_external = false, or
+      aca_internal_load_balancer = true.
+    - It turns off ca-frontend's gate only. It changes nothing on ca-api: its ingress, its
+      environment and its authentication are as without this input, and the window in which
+      ca-api's own sign-in check is relaxed during an Entra outage is not set here.
+    - Terraform cannot act at the time itself: the gate comes back at the first plan and apply
+      after the time has passed. A plan that still sets a passed time restores the gate and
+      warns; remove the input then.
+    - Every change to ca-frontend's authentication configuration, the disable and the restore
+      alike, raises the activity-log alert that builtin_auth creates.
+  EOT
+
+  validation {
+    # A conditional, not `||`, for the reason given on builtin_auth's validations.
+    condition     = var.builtin_auth_recovery_until == null ? true : can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$", var.builtin_auth_recovery_until)) && can(timecmp(var.builtin_auth_recovery_until, var.builtin_auth_recovery_until))
+    error_message = "builtin_auth_recovery_until must be an RFC 3339 time in UTC, such as 2026-11-14T15:30:00Z."
+  }
+
+  validation {
+    condition     = var.builtin_auth_recovery_until == null || var.builtin_auth != null
+    error_message = "builtin_auth_recovery_until turns off the gate builtin_auth configures, so it requires builtin_auth. Without builtin_auth there is no gate to turn off; remove builtin_auth_recovery_until."
+  }
+
+  validation {
+    condition     = var.builtin_auth_recovery_until == null || length(var.ingress_allowed_cidrs) > 0 || !var.frontend_ingress_external || var.aca_internal_load_balancer
+    error_message = "builtin_auth_recovery_until turns off ca-frontend's gate, which is refused while ca-frontend is open to the internet: set ingress_allowed_cidrs to the networks that need it, or use private ingress (frontend_ingress_external = false or aca_internal_load_balancer = true)."
+  }
+
+  validation {
+    # plantimestamp() is unknown under `terraform validate`, so this holds there and is checked
+    # at plan. The try() leaves a malformed time to the format validation above.
+    condition     = var.builtin_auth_recovery_until == null ? true : try(timecmp(var.builtin_auth_recovery_until, timeadd(plantimestamp(), "60m")) <= 0, true)
+    error_message = "builtin_auth_recovery_until must be at most 60 minutes after the plan: the gate may be off for at most 60 minutes per apply. Set a time no later than 60 minutes from now, and plan again if the window must be extended."
+  }
+}
