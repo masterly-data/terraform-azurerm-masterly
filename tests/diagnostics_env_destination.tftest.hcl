@@ -23,6 +23,20 @@ mock_provider "azurerm" {
       resources = []
     }
   }
+
+  # Teardown's pre-destroy refresh plans the untargeted subnet and VNet resources, which parse
+  # their IDs on Terraform 1.10 and 1.12: the mock's random IDs must be ARM-shaped.
+  mock_resource "azurerm_subnet" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet-test/subnets/snet-test"
+    }
+  }
+
+  mock_resource "azurerm_virtual_network" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet-test"
+    }
+  }
 }
 mock_provider "random" {}
 
