@@ -35,8 +35,8 @@ It is a separate module because `aca-env-consumption` freezes `workload_profile`
 | `internal_load_balancer_enabled` | Whether the environment answers only inside the VNet. |
 | `logs_destination` | Where the environment sends its logs. Always `azure-monitor`. |
 | `mutual_tls_enabled` | Whether traffic between apps in the environment is encrypted. |
-| `infrastructure_subnet_id` | Self-hosted extension: the subnet, echoed from the input so a test can read it at plan. |
-| `workload_profiles` | Self-hosted extension: the declared profiles, echoed so a test can read them at plan. |
+| `infrastructure_subnet_id` | Self-hosted extension: the subnet the environment resource runs in. |
+| `workload_profiles` | Self-hosted extension: the profiles the environment resource declares, each with `name` and `workload_profile_type`. |
 
 ## Usage
 

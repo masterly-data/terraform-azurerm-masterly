@@ -34,14 +34,19 @@ output "mutual_tls_enabled" {
   description = "Whether traffic between apps inside the environment is encrypted."
 }
 
-# SELF-HOSTED EXTENSION. Echoes the configuration rather than the resource, so a test can read
-# them at plan.
+# SELF-HOSTED EXTENSION. Read from the resource, not the inputs, so a test proves what the
+# environment itself declares; both are configured values, known at plan.
 output "infrastructure_subnet_id" {
-  value       = var.infrastructure_subnet_id
+  value       = azurerm_container_app_environment.this.infrastructure_subnet_id
   description = "The subnet the environment runs in."
 }
 
 output "workload_profiles" {
-  value       = local.workload_profiles
+  value = [
+    for p in azurerm_container_app_environment.this.workload_profile : {
+      name                  = p.name
+      workload_profile_type = p.workload_profile_type
+    }
+  ]
   description = "The workload profiles the environment declares, each with its name and workload_profile_type."
 }
