@@ -208,7 +208,7 @@ URL.
 | Masterly's control plane: the host of `telemetry_url` | `telemetry_url` set (fleet telemetry) | Usage reports do not reach the control plane. Licence refresh is a separate call (ADR 0074) and is not affected |
 | Azure Monitor (service tag `AzureMonitor`) | Always: the environment sends the apps' console and system logs through Azure Monitor (`logs_destination = "azure-monitor"`) | New rows stop arriving in `ContainerAppConsoleLogs` and `ContainerAppSystemLogs`, so the log-search alerts and the diagnostic bundle see nothing new while the apps keep serving |
 | Key Vault (`<vault>.vault.azure.net`) | `enable_key_vault` outside `mode = "production"`, where the vault keeps public network access. In production it is reached over its private endpoint | A revision whose secrets are Key Vault references does not start: it has no ready replica |
-| Your Key Vault holding the frontend certificate | `frontend_custom_domain` set, unless that vault has a private endpoint the environment reaches | The environment cannot read the certificate, so the binding of your hostname fails, at the first apply or at the next certificate rotation |
+| Your Key Vault holding the frontend or edge certificate | `frontend_custom_domain` or `edge_custom_domain` set, unless that vault has a private endpoint the environment reaches | The environment cannot read the certificate, so the binding of your hostname fails, at the first apply or at the next certificate rotation |
 | Service Bus (`<namespace>.servicebus.windows.net`, TCP 5671 and 443) | `enable_service_bus` with a public namespace: any SKU outside production, and Standard in production. A Premium namespace in production is private | The apps cannot open their Service Bus connection, so work handed over the bus does not run |
 | Azure Communication Services (`*.communication.azure.com`) | `email_acs_enabled` | Email is not sent |
 | Your own Postgres: the host and port of `external_database_url`, and of `external_database_admin_url` where it names another host | `external_database_url` set (the module provisions no server and no private endpoint) and the server is outside the VNet. A server reached over peering or a private endpoint in the VNet stays off the route | `ca-api` and `ca-workers` cannot open their database connection, so no revision becomes ready. With `migrations = "job"`, `caj-migrate` fails too, and a fresh install never completes its migrations |
@@ -607,14 +607,52 @@ pulls with a registry token cannot do that, because `ca-edge` holds no secret: p
 registry it pulls from anonymously or as its identity. Changing `edge.image` rolls `ca-edge` on the
 next apply; nothing else moves its image.
 
+### ca-edge on your own domain
+
+`edge_custom_domain` binds your hostname to `ca-edge` with your certificate from your Key Vault,
+so SDK and MCP clients, and your firewall rules, can name a hostname that does not change with
+the environment. It takes the same three fields as `frontend_custom_domain` and works the same
+way: a dedicated identity, `id-<prefix>-edge-cert`, attached to the Container App Environment and
+to no app, gets Key Vault Secrets User on that one secret; the environment reads the certificate
+as that identity from the versionless secret id, so a certificate renewed in the vault is picked
+up without an apply; and the binding is SNI, on `ca-edge`, without changing its ingress,
+allowlist or HTTPS-only setting. `ca-edge`'s own identity, `id-<prefix>-edge`, never reads the
+certificate. `edge_url` becomes `https://<hostname>`.
+
+It needs `edge` set (the plan refuses it otherwise), and a hostname of its own: the plan refuses
+`frontend_custom_domain`'s hostname, because each app needs its own (for example
+`masterly.example.com` for the frontend and `api.masterly.example.com` for the edge). The
+module creates no DNS record. As for the frontend, you provide:
+
+1. **Before the apply that sets it, the `asuid.<hostname>` TXT record**, for example
+   `asuid.api.masterly.example.com TXT <value>`. The value is the same verification id as for
+   the frontend, `custom_domain_verification_id` (readable before the first apply, as
+   [Before the first apply](#before-the-first-apply) shows). With both custom domains set, there
+   are two TXT records with the same value, one per hostname.
+2. **The deploying identity's right to create the role assignment** on your vault, and the vault's
+   reachability: it must use Azure RBAC authorization and be reachable from the Container App
+   Environment, or have a private endpoint it reaches (the Key Vault row in
+   [What your firewall must admit](#what-your-firewall-must-admit)).
+3. **The record that routes the hostname**, once the environment exists: a **CNAME** to
+   `ca-edge`'s Container Apps FQDN, `ca-edge.<environment default domain>` (`az containerapp show
+   -n ca-edge -g rg-<name_prefix>-aca --query properties.configuration.ingress.fqdn -o tsv`), or
+   an **A** record to the environment's static IP, as in
+   [The record that routes the hostname](#the-record-that-routes-the-hostname). Behind an
+   Application Gateway, the record points at the gateway instead.
+
+There is no redirect URI to register: the edge does no sign-in. If the apply stops at the binding
+with a domain-verification error, fix the record and apply again, as for the frontend.
+
 ### Running the edge behind an Application Gateway
 
-To give the edge your own hostname, a certificate of your own or a WAF, put an Application Gateway
-in front of it:
+`edge_custom_domain` gives the edge your own hostname and certificate without a gateway. For a WAF,
+or to terminate the hostname at a gateway you already run, put an Application Gateway in front of
+it:
 
-- **Backend pool:** the `edge_url` host (`ca-edge.<environment domain>`), HTTPS on port 443, with
-  the host name picked from the backend target, so the Container Apps ingress sees its own
-  hostname.
+- **Backend pool:** `ca-edge`'s Container Apps FQDN (`ca-edge.<environment domain>`, the `edge_url`
+  host while `edge_custom_domain` is unset), HTTPS on port 443, with the host name picked from the
+  backend target, so the Container Apps ingress sees its own hostname. With `edge_custom_domain`
+  set, keep your hostname as the backend host instead, as for the frontend's gateway above.
 - **Allowlist:** add the gateway's outbound address to `ingress_allowed_cidrs` (its public IP for a
   public environment, its subnet for an internal one), and remove the client ranges the gateway
   now admits for you.
