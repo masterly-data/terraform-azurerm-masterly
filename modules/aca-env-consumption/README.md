@@ -61,10 +61,9 @@ module "aca_env" {
 }
 
 resource "azurerm_monitor_diagnostic_setting" "aca_env" {
-  name                           = "diag-aca-cp-eu"
-  target_resource_id             = module.aca_env.id
-  log_analytics_workspace_id     = module.law.id
-  log_analytics_destination_type = "Dedicated"
+  name                       = "diag-aca-cp-eu"
+  target_resource_id         = module.aca_env.id
+  log_analytics_workspace_id = module.law.id
 
   enabled_log {
     category = "ContainerAppConsoleLogs"

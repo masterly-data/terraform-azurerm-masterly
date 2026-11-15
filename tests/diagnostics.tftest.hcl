@@ -46,6 +46,17 @@ variables {
 run "one_diagnostic_setting_targets_the_environment" {
   command = plan
 
+  # The mock provider plans an unset destination type as unknown, so the assert on it below could
+  # not be evaluated. Pinning the computed value to null for the plan means the assert sees null
+  # when the module leaves the argument unset and the configured value when it sets one.
+  override_resource {
+    target          = azurerm_monitor_diagnostic_setting.aca_env
+    override_during = plan
+    values = {
+      log_analytics_destination_type = null
+    }
+  }
+
   variables {
     identity_binding                    = "oidc"
     oidc_allowed_issuers                = "https://login.microsoftonline.com/aaa/v2.0"
@@ -123,10 +134,10 @@ run "one_diagnostic_setting_targets_the_environment" {
   assert {
     condition = (
       azurerm_monitor_diagnostic_setting.aca_env.target_resource_id == module.aca_env.id &&
-      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == "Dedicated" &&
+      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == null &&
       toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
     )
-    error_message = "The setting on the environment must send ContainerAppConsoleLogs and ContainerAppSystemLogs to the resource-specific (Dedicated) tables."
+    error_message = "The setting on the environment must send ContainerAppConsoleLogs and ContainerAppSystemLogs and leave log_analytics_destination_type unset: Azure keeps none on a Container Apps environment, so setting one shows a change on every plan."
   }
 }
 
@@ -260,6 +271,15 @@ run "log_retention_above_730_days_is_rejected" {
 run "container_logs_reach_the_workspace_with_diagnostics_off" {
   command = plan
 
+  # See the first run: an unset destination type plans as unknown unless pinned to null.
+  override_resource {
+    target          = azurerm_monitor_diagnostic_setting.aca_env
+    override_during = plan
+    values = {
+      log_analytics_destination_type = null
+    }
+  }
+
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_diagnostics    = false
@@ -269,7 +289,7 @@ run "container_logs_reach_the_workspace_with_diagnostics_off" {
     condition = (
       length(azurerm_monitor_diagnostic_setting.app) == 0 &&
       length(azurerm_monitor_diagnostic_setting.postgres) == 0 &&
-      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == "Dedicated" &&
+      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == null &&
       toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"]) &&
       module.aca_env.logs_destination == "azure-monitor"
     )

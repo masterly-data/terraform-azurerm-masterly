@@ -678,7 +678,8 @@ The Container Apps environment sends its logs through Azure Monitor
 (`logs_destination = "azure-monitor"`) rather than writing to the workspace with the
 workspace's shared key. One diagnostic setting on the environment, `diag-<name_prefix>-aca-env`,
 sends `ContainerAppConsoleLogs` and `ContainerAppSystemLogs` to the install's workspace, into the
-resource-specific tables of the same names (`log_analytics_destination_type = "Dedicated"`).
+resource-specific tables of the same names; a Container Apps environment's categories always land
+there, and Azure keeps no destination type on this resource type, so the module sets none.
 Because it is on the environment, it covers `ca-api`, `ca-frontend`, `ca-workers`, the
 `ca-bundle-init` init containers that run inside them, and any app added to the environment
 later. It is created in every mode, whatever `enable_diagnostics` says: the diagnostic bundle
