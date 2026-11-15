@@ -11,10 +11,11 @@
 #
 # This file also mocks tls and time. A timer's start and end are computed, so at plan they are
 # unknown on Terraform 1.10, and the runs that read which slot is current apply the two keys first
-# (and with them their timers), with each timer's start overridden, then plan the whole
-# configuration against that state. The mock's default times are fixed and well-formed, because B's
-# timer is worked out from A's. Every overridden time is a fixed date: an override's values cannot
-# read a run's outputs, so tests/helpers/plan-time cannot feed them.
+# (and with them their timers), then plan the whole configuration against that state. The mock's default times are fixed and well-formed, because B's
+# timer is worked out from A's. An override's values must be literals on Terraform 1.10, so they
+# cannot come from tests/helpers/plan-time: the states before and after a rotation use fixed past
+# dates, and the state during the overlap creates B's timer with the real time provider, so that
+# B starts at the apply's own time and the plan that follows falls seconds after it.
 
 mock_provider "azurerm" {
   source = "./tests/mocks/install"
@@ -29,6 +30,12 @@ mock_provider "time" {
       rotation_rfc3339 = "2026-06-30T00:00:00Z"
     }
   }
+}
+
+# The real time provider, for the one run that needs a timer started now. It takes no
+# configuration and calls nothing outside the process.
+provider "time" {
+  alias = "real"
 }
 
 variables {
@@ -198,17 +205,18 @@ run "the_replay_cache_target_is_named_in_the_descriptions" {
 
 # --- Rotation -----------------------------------------------------------------------------------
 #
-# Three states, each set by applying the two keys with their timers' starts overridden, then
-# planning the whole configuration, with the vault on, against that state. The overlap is measured
-# from the plan's own time (plantimestamp()), and an override's values cannot read a run's outputs,
-# so the starts are fixed dates chosen to sit on a known side of every plan this file makes:
+# Three states, each set by applying the two keys and their timers, then planning the whole
+# configuration, with the vault on, against that state. The overlap is measured from the plan's
+# own time (plantimestamp()), and an override's values must be literals, so:
 #
 # - Slot A started on 2026-01-01 throughout, so its overlap is long over. Its timer expires in
 #   2099, so B's expiry, worked out from A's, stays at least 45 days ahead of any plan.
-# - Slot B started 90 days before A (before a rotation), then on 2099-01-01 (during the overlap:
-#   every plan falls before that start plus 60 minutes), then 90 days after A (after the overlap).
-#   No real rotation starts in the future: that state shows only that a plan before the current
-#   key's start plus the overlap keeps _PREVIOUS, not where the 60-minute edge falls.
+# - Before a rotation, B started 90 days before A (a fixed past date).
+# - During the overlap, B's timer is replaced by the real time provider, so B starts at that
+#   apply's own time, a real past rotation, and the plan that follows falls seconds after it,
+#   well inside the 60 minutes.
+# - After the overlap, B started 90 days after A (a fixed past date), so every plan falls long
+#   after its start plus 60 minutes.
 #
 # Each later apply replaces B's timer, which replaces B's key with it. The key values are
 # placeholders, not keys: the runs assert the wiring, never key material.
@@ -226,9 +234,14 @@ run "rotation_before_a_rotation_apply" {
     enable_bff_dpop_key   = true
   }
 
+  # Each id is its start, as the real provider writes it. B's matters: the real provider replaces
+  # B's timer in the overlap run below and parses the id it finds in this state. A's matches the
+  # override that run gives A, so A's state does not change there. B's expiry is left to the
+  # mock's default, a well-formed date the module's plan overwrites from A's.
   override_resource {
     target = time_rotating.bff_dpop_key_a
     values = {
+      id               = "2026-01-01T00:00:00Z"
       rfc3339          = "2026-01-01T00:00:00Z"
       rotation_rfc3339 = "2099-12-31T00:00:00Z"
     }
@@ -237,6 +250,7 @@ run "rotation_before_a_rotation_apply" {
   override_resource {
     target = time_rotating.bff_dpop_key_b
     values = {
+      id      = "2025-10-03T00:00:00Z"
       rfc3339 = "2025-10-03T00:00:00Z"
     }
   }
@@ -296,10 +310,20 @@ run "rotation_before_a_rotation" {
   }
 }
 
-# During the overlap: B was replaced last, and the plan falls before its start plus 60 minutes, so
-# B is the current key and A, the outgoing one, is kept as _PREVIOUS.
+# During the overlap: B is replaced now, by the real time provider, and the plan that follows falls
+# seconds after its start, so B is the current key and A, the outgoing one, is kept as _PREVIOUS.
+# A keeps the fixed times it was given before a rotation, overridden here so the real provider
+# makes no call for it.
 run "rotation_during_the_overlap_apply" {
   command = apply
+
+  providers = {
+    azurerm = azurerm
+    random  = random
+    azapi   = azapi
+    tls     = tls
+    time    = time.real
+  }
 
   plan_options {
     target  = [time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b, tls_private_key.bff_dpop_key_a, tls_private_key.bff_dpop_key_b]
@@ -312,9 +336,11 @@ run "rotation_during_the_overlap_apply" {
   }
 
   override_resource {
-    target = time_rotating.bff_dpop_key_b
+    target = time_rotating.bff_dpop_key_a
     values = {
-      rfc3339 = "2099-01-01T00:00:00Z"
+      id               = "2026-01-01T00:00:00Z"
+      rfc3339          = "2026-01-01T00:00:00Z"
+      rotation_rfc3339 = "2099-12-31T00:00:00Z"
     }
   }
 
@@ -345,6 +371,15 @@ run "rotation_during_the_overlap" {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_key_vault      = true
     enable_bff_dpop_key   = true
+  }
+
+  # B's start is a real rotation, in the past, and this plan falls inside the overlap after it.
+  assert {
+    condition = (
+      timecmp(plantimestamp(), time_rotating.bff_dpop_key_b[0].rfc3339) >= 0 &&
+      timecmp(plantimestamp(), timeadd(time_rotating.bff_dpop_key_b[0].rfc3339, "${local.bff_dpop_key_overlap_minutes}m")) < 0
+    )
+    error_message = "This plan must fall after slot B's real start and within the overlap after it."
   }
 
   assert {
@@ -417,6 +452,11 @@ run "rotation_after_the_overlap" {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_key_vault      = true
     enable_bff_dpop_key   = true
+  }
+
+  assert {
+    condition     = timecmp(plantimestamp(), timeadd(time_rotating.bff_dpop_key_b[0].rfc3339, "${local.bff_dpop_key_overlap_minutes}m")) >= 0
+    error_message = "This plan must fall after the overlap that follows slot B's start."
   }
 
   assert {

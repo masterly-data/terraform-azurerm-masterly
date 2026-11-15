@@ -199,6 +199,10 @@ signed-in user, and the api binds each session to the key that proved its sign-i
   during a rotation `MASTERLY_BFF_DPOP_KEY_PREVIOUS`, the outgoing key. With the input off (the
   default) the frontend generates a key per process, so a DPoP-bound session does not survive a
   restart and cannot move between frontend replicas.
+- **Which releases read it.** The key takes effect with the first frontend release after v0.145.0,
+  and the api's session binding and DPoP replay cache arrive with the first api release after
+  v0.137.0; on earlier images the key is set but unread. The input is off by default, so installs
+  on 0.24.0's images are unaffected apart from the two new required providers.
 - **Rotation every 90 days, at an apply.** The key is held in two slots, each replaced by its own
   timer, so a new key takes over every 90 days. A timer expires on the clock, but the key is
   replaced by the first apply after that: an install nobody applies keeps its key. Each rotation
