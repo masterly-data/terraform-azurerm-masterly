@@ -40,8 +40,8 @@ environment, raise it with us rather than editing a vendored copy.
 
 ### How `ca-workers` scales
 
-`ca-workers` runs between `workers_min_replicas` (default 1) and `workers_max_replicas` (default
-1). What moves it between the two depends on the bus:
+`ca-workers` runs between `workers_min_replicas` (1 unless `capacity_profile` sets it, see
+[Capacity profiles](#capacity-profiles)) and `workers_max_replicas` (default 1). What moves it between the two depends on the bus:
 
 - **On the Service Bus binding** (`enable_service_bus = true`) the module adds an
   `azure-servicebus` scale rule on the jobs queue the workers receive from, with a target of 5
@@ -97,7 +97,8 @@ The api creates one database per Masterly Environment (ADR 0003), and each backe
 (`ca-api` replica, `ca-workers` replica) holds connection pools per Environment in use. Count them
 against the server's `max_connections`, which the connections alert also measures.
 
-`postgres_pgbouncer = true` turns on the Flexible Server's built-in PgBouncer in transaction mode
+`postgres_pgbouncer = true`, or `capacity_profile = "standard"` or `"enterprise"` with
+`postgres_pgbouncer` unset, turns on the Flexible Server's built-in PgBouncer in transaction mode
 (`pgbouncer.enabled = true`, `pgbouncer.pool_mode = TRANSACTION`,
 `pgbouncer.max_prepared_statements = 100`). `MASTERLY_DATABASE_URL` then points at the pooler on
 port 6432 and `MASTERLY_DATABASE_POOLER` is `transaction`. `MASTERLY_DATABASE_DIRECT_URL`
@@ -155,3 +156,74 @@ Environments that is 2 x 2 x (15 + 5) = 80, above 50. Use fewer Environments or 
 
 The connections alert keeps measuring the server's `max_connections`; it does not count pooler
 clients.
+
+## Capacity profiles
+
+`capacity_profile` sizes the services an install already has, all at once (ADR 0120 §4). It
+never changes the topology: it adds no app, environment or subnet, and it turns nothing on that
+the install does not run.
+
+| Profile | Postgres SKU | Built-in pooler | Zone-redundant HA | Service Bus tier | Minimum replicas api / frontend / workers |
+|---|---|---|---|---|---|
+| `small` (evaluation only) | `B_Standard_B1ms` | off | off | Standard | 1 / 1 / 1 |
+| `standard` | `GP_Standard_D2ds_v5` | on | on | Standard | 2 / 1 / 1 |
+| `enterprise` | `GP_Standard_D4ds_v5` | on | on | Premium (chosen by you, see below) | 2 / 2 / 2 |
+
+Each value resolves in this order: the input set explicitly (`postgres_sku_name`,
+`postgres_pgbouncer`, `postgres_zone_redundant_ha`, `servicebus_sku`, `api_min_replicas`,
+`frontend_min_replicas`, `workers_min_replicas`), then the profile's, then the input's earlier
+default. Leaving `capacity_profile` unset (the default) therefore changes nothing on an existing
+install: `B_Standard_B1ms`, no pooler, no HA, Service Bus Standard and minimum replicas 1 / 1 / 1,
+as before. Every guard judges the resolved value, so `mode = "production"` refuses a burstable
+SKU, HA off or a replica floor of 0 however it was reached. On the provisioned server, a burstable
+SKU set explicitly under `standard` or `enterprise` is refused in any mode until the pooler and HA
+are set off too
+(`postgres_pgbouncer = false`, `postgres_zone_redundant_ha = false`): Azure offers neither on
+burstable SKUs.
+
+- **`small` is refused in `mode = "production"`**, whatever the other inputs say.
+- **With `external_database_url`** the profile's Postgres values do not apply: there is no server
+  to size and no built-in pooler, so the apps keep the URL you supplied. The replica floors still
+  apply.
+- **A profile does not raise a maximum.** `standard` and `enterprise` set an api floor of 2, so set
+  `api_max_replicas` to at least 2, which needs `enable_redis`. `enterprise` sets a frontend floor
+  of 2 (the default `frontend_max_replicas` of 3 covers it) and, with `enable_workers`, a workers
+  floor of 2: set `workers_max_replicas` to at least 2. On the polling binding `ca-workers` stays
+  at its minimum, so set `workers_max_replicas` equal to the floor there. The plan names each
+  maximum that is below its floor.
+
+### How enterprise reaches Service Bus Premium
+
+No profile chooses a Service Bus tier. Moving an existing namespace to or from Premium replaces
+it, together with its queue and role assignments, and the module cannot tell a new namespace from
+an existing one. So with `servicebus_sku` unset, `small` and `standard` keep the earlier default,
+Standard, and `enterprise` with `enable_service_bus = true` is refused at plan until you choose:
+`servicebus_sku = "Premium"`, enterprise's tier, for a new namespace, or `"Standard"` to keep an
+existing Standard namespace unchanged. `mode = "production"` requires `servicebus_sku` with Service
+Bus on whatever the profile.
+
+### Changing the profile on an existing install
+
+- **The Postgres server is updated in place, never replaced.** A profile reaches only the SKU,
+  HA and the pooler parameters; it never reaches the server's name, version, administrator login,
+  zone or geo-redundant backup, any of which would replace the server and its databases.
+- **A SKU change or turning on HA restarts the server.** Both are in-place updates, but Azure
+  restarts the server to apply them, so plan the change in a maintenance window.
+- **The pooler needs an api image that carries MAS-1615.** Moving to `standard` or `enterprise`
+  turns on the built-in PgBouncer unless `postgres_pgbouncer = false` is set, and the apps roll to
+  the pooler on 6432 in the same apply (see [Connection budget](#connection-budget)). Roll the api
+  image first, or keep the pooler off until you have.
+
+### Recovery objectives
+
+ADR 0120 §4 states a recovery point and recovery time objective per profile:
+
+| Profile | RPO / RTO |
+|---|---|
+| `small` | 1 h / 24 h |
+| `standard` | 15 min / 4 h |
+| `enterprise` | near zero / 1 h |
+
+**Unverified.** These are the objectives each profile is sized for. The restore and failover
+drills that would show an install meeting them have not been run, and this section will say what
+they showed once they have.

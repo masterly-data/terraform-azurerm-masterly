@@ -52,6 +52,17 @@ exists: `https://<hostname>/api/auth/callback`, which the module gives the front
 4. Apply once. `oidc_redirect_uri` is not passed: the example leaves it null whenever
    `frontend_custom_domain` is set.
 
+## The machine entry point on your own domain
+
+ca-edge, the entry point for the Python SDK and MCP clients, is off by default. Set
+`edge = {}` to run it, with `ingress_allowed_cidrs` listing the networks your clients call
+from: the module refuses the edge with an empty list, which means unrestricted. The same list
+also restricts the frontend, so include your users' networks too. Then set
+`edge_custom_domain`, the same shape as `frontend_custom_domain` with a different hostname,
+to serve it at `https://<hostname>` (the `edge_url` output). Create its `asuid.<hostname>` TXT
+record before the apply, as
+[docs/networking.md](../../docs/networking.md#ca-edge-on-your-own-domain) describes.
+
 ## Two applies without one
 
 Without a custom domain the frontend hostname is an **output** of the first apply, so it

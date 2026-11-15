@@ -300,6 +300,7 @@ run "edge_identity_is_its_own_and_holds_no_data_role" {
       [for r in azurerm_role_assignment.acs_email_sender : r.principal_id != module.edge_identity[0].principal_id],
       [for r in azurerm_role_assignment.acs_email_sender_workers : r.principal_id != module.edge_identity[0].principal_id],
       [for r in azurerm_role_assignment.frontend_certificate_reader : r.principal_id != module.edge_identity[0].principal_id],
+      [for r in azurerm_role_assignment.edge_certificate_reader : r.principal_id != module.edge_identity[0].principal_id],
       [for r in azurerm_postgresql_flexible_server_active_directory_administrator.apps : r.object_id != module.edge_identity[0].principal_id],
       [for r in azurerm_postgresql_flexible_server_active_directory_administrator.migrate : r.object_id != module.edge_identity[0].principal_id],
       [for r in azurerm_managed_redis_access_policy_assignment.apps : r.object_id != module.edge_identity[0].principal_id],

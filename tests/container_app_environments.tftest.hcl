@@ -568,8 +568,9 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
           location                       = var.location
           infrastructure_subnet_id       = local.aca_subnet_id
           internal_load_balancer_enabled = var.aca_internal_load_balancer
-          # Only the certificate identity, and only with frontend_custom_domain (custom-domain.tf).
-          identity_ids = module.frontend_certificate_identity[*].id
+          # Only the certificate identities, each only with its input: frontend_custom_domain and
+          # edge_custom_domain (custom-domain.tf). Empty with neither.
+          identity_ids = concat(module.frontend_certificate_identity[*].id, module.edge_certificate_identity[*].id)
           # Only with egress_firewall: the route table's precondition reads the profiles (network.tf).
           read_workload_profiles = var.egress_firewall != null
           tags                   = local.tags
@@ -730,6 +731,59 @@ run "frontend_certificate_stays_on_aca_env" {
       alltrue([for e in module.environments : azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id != e.id])
     )
     error_message = "The frontend's environment certificate must stay on module.aca_env, not on a new environment."
+  }
+}
+
+# ca-edge's custom-domain certificate, with edge and edge_custom_domain set.
+run "edge_certificate_stays_on_aca_env" {
+  command = plan
+
+  variables {
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge_custom_domain = {
+      hostname                        = "api.masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/api-masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+  }
+
+  override_module {
+    target = module.aca_env
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      identity_ids                   = []
+      workload_profile_names         = null
+      custom_domain_verification_id  = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    }
+  }
+
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_container_app_environment_certificate.edge) == 1 &&
+      azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.aca_env.id &&
+      alltrue([for e in module.environments : azurerm_container_app_environment_certificate.edge[0].container_app_environment_id != e.id])
+    )
+    error_message = "ca-edge's environment certificate must stay on module.aca_env, not on a new environment."
   }
 }
 

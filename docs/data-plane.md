@@ -16,7 +16,9 @@ on the ports the subnet's network security group admits — Postgres among them;
 [docs/networking.md](networking.md#network-security-baseline).
 
 Omit `external_database_url` and the module provisions the **starter server** instead —
-private-endpoint-only Postgres Flexible, right for evaluations and the demo. Its knobs:
+private-endpoint-only Postgres Flexible, right for evaluations and the demo. `capacity_profile`
+sizes its SKU, pooler and HA together (see [docs/scaling.md](scaling.md#capacity-profiles));
+each input below set explicitly wins over the profile. Its knobs:
 `postgres_sku_name`, `postgres_storage_mb`, `postgres_version`,
 `postgres_backup_retention_days`, `postgres_geo_redundant_backup` (on by default in
 production where the module knows the region supports it; mind data residency — backups go to
@@ -504,7 +506,8 @@ init container too.
 module's plan-time-guardrail philosophy — a misconfigured production install fails in
 `terraform plan`, not in a crash loop or a 2 a.m. page). It requires a non-burstable
 `postgres_sku_name` (General Purpose `GP_*` / Memory Optimized `MO_*`),
-`postgres_zone_redundant_ha = true`, and `postgres_backup_retention_days >= 14`. These
+`postgres_zone_redundant_ha = true` (or `capacity_profile = "standard"` or `"enterprise"`,
+which resolve both; `"small"` is refused), and `postgres_backup_retention_days >= 14`. These
 guards **do not apply when you bring your own database** (`external_database_url`) — your
 database's SKU, HA, and retention are yours. Production likewise requires
 `enable_workers = true` (the pipeline runs in `ca-workers`, not in-process) and
