@@ -5,4 +5,5 @@
 ### Changed
 
 - **`postgres_sku_name`, `postgres_pgbouncer`, `postgres_zone_redundant_ha`, `api_min_replicas`, `frontend_min_replicas` and `workers_min_replicas` default to null.** Unset, each takes the value of `capacity_profile`, and with no profile its earlier default (`B_Standard_B1ms`, false, false, 1, 1, 1), so an install that sets no profile plans no change. A value set explicitly still wins. Every validation on these inputs, including the production guards, judges the resolved value.
+- **Zone-redundant HA on a burstable (`B_*`) SKU is refused at plan.** Azure refused it at apply already. Since `standard` and `enterprise` turn HA on, a burstable `postgres_sku_name` set under either now needs `postgres_zone_redundant_ha = false` as well.
 - **Upgrading.** Nothing changes until you set `capacity_profile`. Moving an existing install to `standard` or `enterprise` updates the Postgres server in place (it is never replaced) but restarts it for the SKU change and for HA, so do it in a maintenance window. It also turns on the built-in PgBouncer unless `postgres_pgbouncer = false` is set, which needs an api image that carries MAS-1615: roll the api image first.

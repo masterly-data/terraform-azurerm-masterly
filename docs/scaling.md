@@ -175,7 +175,11 @@ Each value resolves in this order: the input set explicitly (`postgres_sku_name`
 default. Leaving `capacity_profile` unset (the default) therefore changes nothing on an existing
 install: `B_Standard_B1ms`, no pooler, no HA, Service Bus Standard and minimum replicas 1 / 1 / 1,
 as before. Every guard judges the resolved value, so `mode = "production"` refuses a burstable
-SKU, HA off or a replica floor of 0 however it was reached.
+SKU, HA off or a replica floor of 0 however it was reached. On the provisioned server, a burstable
+SKU set explicitly under `standard` or `enterprise` is refused in any mode until the pooler and HA
+are set off too
+(`postgres_pgbouncer = false`, `postgres_zone_redundant_ha = false`): Azure offers neither on
+burstable SKUs.
 
 - **`small` is refused in `mode = "production"`**, whatever the other inputs say.
 - **With `external_database_url`** the profile's Postgres values do not apply: there is no server

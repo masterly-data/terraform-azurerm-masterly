@@ -708,8 +708,27 @@ run "production_refuses_a_workers_floor_of_zero_under_a_profile" {
   expect_failures = [var.workers_min_replicas]
 }
 
-# standard turns the pooler on; a burstable SKU set explicitly cannot carry it.
+# standard turns the pooler on; a burstable SKU set explicitly cannot carry it. HA is set off so
+# only the pooler guard is left to refuse it.
 run "profile_pooler_refused_on_an_explicit_burstable_sku" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    enable_redis               = true
+    redis_offering             = "cache"
+    api_max_replicas           = 2
+    capacity_profile           = "standard"
+    postgres_sku_name          = "B_Standard_B2s"
+    postgres_zone_redundant_ha = false
+  }
+
+  expect_failures = [var.postgres_pgbouncer]
+}
+
+# standard turns HA on; a burstable SKU set explicitly cannot carry it, in evaluation mode too.
+# The pooler is set off so only the HA guard is left to refuse it.
+run "profile_ha_refused_on_an_explicit_burstable_sku" {
   command = plan
 
   variables {
@@ -719,9 +738,47 @@ run "profile_pooler_refused_on_an_explicit_burstable_sku" {
     api_max_replicas      = 2
     capacity_profile      = "standard"
     postgres_sku_name     = "B_Standard_B2s"
+    postgres_pgbouncer    = false
   }
 
-  expect_failures = [var.postgres_pgbouncer]
+  expect_failures = [var.postgres_zone_redundant_ha]
+}
+
+# With the pooler and HA both set off, a burstable SKU under standard plans.
+run "profile_burstable_sku_plans_with_pooler_and_ha_off" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    enable_redis               = true
+    redis_offering             = "cache"
+    api_max_replicas           = 2
+    capacity_profile           = "standard"
+    postgres_sku_name          = "B_Standard_B2s"
+    postgres_pgbouncer         = false
+    postgres_zone_redundant_ha = false
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server.this[0].sku_name == "B_Standard_B2s" &&
+      length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0 &&
+      length(azurerm_postgresql_flexible_server_configuration.pgbouncer) == 0
+    )
+    error_message = "A burstable SKU under standard with the pooler and HA set off must plan the SKU with no HA and no pgbouncer parameters."
+  }
+}
+
+# The same guard holds without a profile: HA set on over the burstable default.
+run "explicit_ha_refused_on_the_burstable_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    postgres_zone_redundant_ha = true
+  }
+
+  expect_failures = [var.postgres_zone_redundant_ha]
 }
 
 # The pooler standard turns on owns the pgbouncer.* keys, as postgres_pgbouncer = true does.

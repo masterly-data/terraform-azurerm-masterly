@@ -725,7 +725,7 @@ variable "postgres_geo_redundant_backup" {
 variable "postgres_zone_redundant_ha" {
   type        = bool
   default     = null
-  description = "Zone-redundant high availability for the provisioned Postgres server (standby in another AZ, same region). Unset (null), capacity_profile decides (on for standard and enterprise, off for small), and with no profile it is off, the earlier default. Requires a General Purpose or Memory Optimized SKU — not supported on the burstable default. Required by mode=production on the provisioned starter server."
+  description = "Zone-redundant high availability for the provisioned Postgres server (standby in another AZ, same region). Unset (null), capacity_profile decides (on for standard and enterprise, off for small), and with no profile it is off, the earlier default. Requires a General Purpose or Memory Optimized SKU — not supported on the burstable default, and refused at plan on a burstable (B_*) SKU. Required by mode=production on the provisioned starter server."
 
   # Production requires an HA standby on the provisioned starter server (ADR 0066). Pairs
   # with the non-burstable SKU guard above — both must be satisfied together. BYO-DB owns
@@ -734,6 +734,14 @@ variable "postgres_zone_redundant_ha" {
   validation {
     condition     = var.mode != "production" || var.external_database_url != null || coalesce(var.postgres_zone_redundant_ha, local.capacity_postgres.postgres_zone_redundant_ha)
     error_message = "mode=production requires zone-redundant HA on the provisioned starter server: set postgres_zone_redundant_ha = true (with a General Purpose or Memory Optimized postgres_sku_name), or capacity_profile \"standard\" or \"enterprise\" with postgres_zone_redundant_ha unset, or bring your own HA database via external_database_url."
+  }
+
+  # Azure refuses zone-redundant HA on a burstable SKU at apply; refuse it at plan, judged on the
+  # resolved HA and SKU, since standard and enterprise turn HA on by default. Production is left
+  # to the burstable-SKU guard on postgres_sku_name, which already refuses any B_* SKU there.
+  validation {
+    condition     = var.mode == "production" || var.external_database_url != null || !coalesce(var.postgres_zone_redundant_ha, local.capacity_postgres.postgres_zone_redundant_ha) || !can(regex("^B_", local.postgres_sku_name))
+    error_message = "Zone-redundant HA (postgres_zone_redundant_ha = true, or capacity_profile \"standard\" or \"enterprise\" with postgres_zone_redundant_ha unset) is refused on a burstable (B_*) postgres_sku_name: Azure does not offer HA on burstable SKUs. Set postgres_sku_name to a General Purpose (GP_*) or Memory Optimized (MO_*) SKU, or set postgres_zone_redundant_ha = false."
   }
 }
 
