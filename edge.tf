@@ -355,8 +355,10 @@ resource "azurerm_container_app" "edge" {
 }
 
 output "edge_url" {
-  value       = local.edge_enabled ? "https://${azurerm_container_app.edge[0].ingress[0].fqdn}" : null
-  description = "ca-edge's base URL, the address for the Python SDK and MCP clients (subject to the ingress IP allowlist): /v1 and /mcp under it reach ca-api. Null unless edge is set. On an internal environment (aca_internal_load_balancer) it is reachable from the VNet, not the internet."
+  value = !local.edge_enabled ? null : (
+    local.edge_custom_domain ? "https://${local.edge_custom_hostname}" : "https://${azurerm_container_app.edge[0].ingress[0].fqdn}"
+  )
+  description = "ca-edge's base URL, the address for the Python SDK and MCP clients (subject to the ingress IP allowlist): /v1 and /mcp under it reach ca-api. https://<hostname> with edge_custom_domain, the Container Apps FQDN otherwise. Null unless edge is set. On an internal environment (aca_internal_load_balancer) it is reachable from the VNet, not the internet."
 }
 
 output "edge_identity_principal_id" {

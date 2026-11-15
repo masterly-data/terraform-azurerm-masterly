@@ -22,8 +22,9 @@ module "aca_env" {
   location                       = var.location
   infrastructure_subnet_id       = local.aca_subnet_id
   internal_load_balancer_enabled = var.aca_internal_load_balancer
-  # Only the certificate identity, and only with frontend_custom_domain (custom-domain.tf).
-  identity_ids = module.frontend_certificate_identity[*].id
+  # Only the certificate identities, each only with its input: frontend_custom_domain and
+  # edge_custom_domain (custom-domain.tf). Empty with neither.
+  identity_ids = concat(module.frontend_certificate_identity[*].id, module.edge_certificate_identity[*].id)
   # Only with egress_firewall: the route table's precondition reads the profiles (network.tf).
   read_workload_profiles = var.egress_firewall != null
   tags                   = local.tags

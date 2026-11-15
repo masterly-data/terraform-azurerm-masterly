@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-128 inputs in 27 groups.
+129 inputs in 27 groups.
 
 ## Groups
 
@@ -27,7 +27,7 @@ each one that is missing.
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
 - [Built-in sign-in](#built-in-sign-in) (2)
-- [Custom domain](#custom-domain) (1)
+- [Custom domain](#custom-domain) (2)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
 - [Images and registry pull credential](#images-and-registry-pull-credential) (6)
 - [Key Vault database secret names](#key-vault-database-secret-names) (1)
@@ -226,6 +226,7 @@ In `variables-custom-domain.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `frontend_custom_domain` | `object(...)` | `null` | Serve ca-frontend on your own hostname, with your own TLS certificate held in your own Key Vault. |
+| `edge_custom_domain` | `object(...)` | `null` | Serve ca-edge, the machine entry point for the Python SDK and MCP clients, on your own hostname, with your own TLS certificate held in your own Key Vault. |
 
 ## The install's Log Analytics workspace
 
