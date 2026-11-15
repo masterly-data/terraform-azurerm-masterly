@@ -90,8 +90,8 @@ your own source is the defect this manifest exists to kill.
 | `releases["X.Y.Z"]` | object | yes | One release. The key is a bare semver — `1.2.3`, **not** `v1.2.3`. |
 | `releases["X.Y.Z"].date` | string | yes | The release date, `YYYY-MM-DD`: the day the release was cut. The tag follows the merged release commit, so it may be dated later. |
 | `releases["X.Y.Z"].images` | object | yes | The images the release was tested against: `api` and `frontend`, and optionally the per-role images. No other key is accepted by the release check. |
-| `releases["X.Y.Z"].images.api` | string | yes | `registry/repository:tag`, with the repository `release/api`: `masterly.azurecr.io/release/api:vX.Y.Z`. See "The image path". |
-| `releases["X.Y.Z"].images.frontend` | string | yes | Same form, with the repository `release/frontend`. |
+| `releases["X.Y.Z"].images.api` | string | yes | `registry/repository:tag`, with the repository `release/api`: `masterly.azurecr.io/release/api:vX.Y.Z`. Two exceptions: an entry naming a tag `image_floors` lists as `unpublished`, and an older entry with a `known_issue` naming `api` at the registry root (`masterly.azurecr.io/api:vX.Y.Z`). See "The image path". |
+| `releases["X.Y.Z"].images.frontend` | string | yes | Same form, with the repository `release/frontend`, and the same two exceptions (`masterly.azurecr.io/frontend:vX.Y.Z` at the root). |
 | `releases["X.Y.Z"].images.migrate` | string | no | Same form, with the repository `release/migrate`. An entry naming it records `digests`. See "The per-role images". |
 | `releases["X.Y.Z"].images.worker_core` | string | no | Same form, with the repository `release/worker_core`. An entry naming it records `digests`. |
 | `releases["X.Y.Z"].images.worker_integration` | string | no | Same form, with the repository `release/worker_integration`. An entry naming it records `digests`. |
@@ -133,25 +133,46 @@ it is not measuring a fault.
 
 ## The image path
 
-Every image a release names is published under the `release/` path of its registry, as
-`<registry>/release/<image>:<tag>`: `masterly.azurecr.io/release/api:vX.Y.Z` and
+A release names its images under the `release/` path of its registry, bar the older entries listed
+below, as `<registry>/release/<image>:<tag>`: `masterly.azurecr.io/release/api:vX.Y.Z` and
 `masterly.azurecr.io/release/frontend:vX.Y.Z`, and likewise `release/migrate`,
 `release/worker_core` and `release/worker_integration` for a per-role image. That is also the
 repository the module's own default image references pull, so the pair an entry names and the pair
 an install that sets no `api_image` or `frontend_image` pulls are the same repositories. A mirror
 holds the images under the same `release/<image>` repositories; only the registry host differs.
 
-The release check refuses an entry that names an image under any other repository. The one
-exception is an entry whose image names a tag `image_floors` lists as `unpublished`: that image
-was never pushed under any path, so no `release/` copy of it can exist, and the entry keeps the
-references it was cut with. Today that is `0.17.0`, which also records a `known_issue`.
+The release check refuses an entry that names an image under any other repository, with two
+exceptions. Both cover `api` and `frontend` only, never a per-role image:
+
+- **A never-published tag.** An entry whose image names a tag `image_floors` lists as
+  `unpublished`: that image was never pushed under any path, so no `release/` copy of it can
+  exist, and the entry keeps the references it was cut with. Today that is `0.17.0`, which also
+  records a `known_issue`.
+- **An older entry at the registry root, with a `known_issue`.** An entry other than `latest`
+  that records a `known_issue` may name its `api` or `frontend` image at the registry's root, as
+  `<registry>/api:<tag>` or `<registry>/frontend:<tag>`, because that is the only place its build
+  was pushed. The repository must be exactly the image's name: `candidate/api` or any other
+  repository is still refused, and `latest` never has this exception. Today that is `0.15.0` and
+  `0.16.0`.
+
+Where each entry's images are:
+
+- **`0.22.0` and later** were published under `release/` by the release itself (MAS-4213,
+  2026-11-06).
+- **`0.18.0` to `0.21.0`** were published under `release/` by the MAS-4658 backfill.
+- **`0.17.0`**'s `api` image was never published; its entry names the root path it was cut with
+  and records a `known_issue`.
+- **`0.15.0` and `0.16.0`** exist only at the registry's root, as
+  `masterly.azurecr.io/api:<tag>` and `masterly.azurecr.io/frontend:<tag>`. Those builds are
+  **unsigned** and were never copied under `release/`, so each entry names the root path and
+  records a `known_issue` saying to move to `0.18.0` or later.
 
 Until 2026-10-31 the entries named each image at the registry's root, as
-`masterly.azurecr.io/<image>:<tag>`. The same builds were then published under `release/`, and
-every entry on `main` moved to the `release/` path with its tag and `digests` unchanged: the
-image an entry names is the same build, read from another repository. The file at a tag cut
-before the move still names the path that was current when that tag was cut. See
-"Compatibility".
+`masterly.azurecr.io/<image>:<tag>`. On that day the entries on `main`, bar `0.17.0`, moved to
+the `release/` path with their tags and `digests` unchanged. `0.15.0` and `0.16.0` have since
+moved back to the root, because their builds were never published under `release/`. The file at
+a tag cut before the move still names the path that was current when that
+tag was cut. See "Compatibility".
 
 ## The per-role images
 
@@ -271,13 +292,18 @@ published, on `main` only: the file at the release's own tag does not carry it.
 and its meaning. `latest` stays a key of `releases` and stays the highest version present.
 `releases` stays an object keyed by bare semver. Image values stay parseable as
 `registry/repository:tag`, and the repository of each is `release/<image>` (`release/api`,
-`release/frontend`, and `release/<role>` for a per-role image), bar the never-published exception in "The image path".
+`release/frontend`, and `release/<role>` for a per-role image), bar two exceptions for `api` and
+`frontend`, described in "The image path": an entry naming a never-published tag, and an older
+entry with a `known_issue` naming the image at the registry root (`<registry>/api:<tag>`,
+`<registry>/frontend:<tag>`).
 
-**One value change, 2026-10-31.** The image values of every entry on `main` moved from
-`masterly.azurecr.io/<image>:<tag>` to `masterly.azurecr.io/release/<image>:<tag>`, with the
-same tags and the same `digests`. No field was renamed, removed or retyped, and no field changed
-meaning: `images` still names the builds the release was tested against. A consumer that reads
-the reference from the file needs no change. A consumer that builds a reference from a tag, or
+**One value change, 2026-10-31.** The image values of the entries on `main`, bar `0.17.0`, moved
+from `masterly.azurecr.io/<image>:<tag>` to `masterly.azurecr.io/release/<image>:<tag>`, with the
+same tags and the same `digests`. `0.15.0` and `0.16.0` have since moved back to the root path,
+with a `known_issue`, because their builds were never published under `release/`; see "The image
+path". No field was renamed, removed or retyped, and no field changed meaning: `images` still
+names the builds the release was tested against. A consumer that reads the reference from the
+file needs no change. A consumer that builds a reference from a tag, or
 that matches or mirrors images by repository path, now uses `release/api` and `release/frontend`.
 
 **One deliberate change of meaning, 2026-10-06 (ADR 0106).** Releases are now cut in a commit
