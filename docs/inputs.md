@@ -22,7 +22,7 @@ each one that is missing.
 - [Outbound egress posture](#outbound-egress-posture) (2)
 - [Forced-tunnel egress through your firewall](#forced-tunnel-egress-through-your-firewall) (1)
 - [Trusting a private CA (MAS-446)](#trusting-a-private-ca-mas-446) (1)
-- [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (28)
+- [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (29)
 - [Environment subnets (ADR 0120)](#environment-subnets-adr-0120) (6)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
@@ -146,20 +146,21 @@ In `variables-core.tf`.
 |---|---|---|---|
 | `external_database_url` | `string, sensitive` | `null` | BYO-DB: the install-level SQLAlchemy async DSN (postgresql+asyncpg://…) of the customer's own Postgres (role needs CREATEDB — the api creates one database per Masterly Environment, ADR 0003). |
 | `external_database_admin_url` | `string, sensitive` | `null` | BYO-DB only: a second DSN to the same database, for a role allowed to run schema migrations and create databases (ADR 0065, amended). |
-| `postgres_sku_name` | `string` | `"B_Standard_B1ms"` | Postgres Flexible Server SKU (burstable B1ms default — demo/small-install sized). |
+| `capacity_profile` | `string` | `null` | Sizes the install's services together: the Postgres SKU, its built-in pooler (postgres_pgbouncer) and zone-redundant HA, and the minimum replicas of ca-api, ca-frontend and ca-workers. |
+| `postgres_sku_name` | `string` | `null` | Postgres Flexible Server SKU. |
 | `postgres_server_parameters` | `map(string)` | `{}` | Postgres server parameters to set on the starter Flexible Server, as name => value (for example { max_connections = "400" }). |
-| `postgres_pgbouncer` | `bool` | `false` | Turn on the Flexible Server's built-in PgBouncer in transaction mode (ADR 0003). |
+| `postgres_pgbouncer` | `bool` | `null` | Turn on the Flexible Server's built-in PgBouncer in transaction mode (ADR 0003). |
 | `postgres_storage_mb` | `number` | `32768` | Postgres storage in MB. |
 | `postgres_auto_grow` | `bool` | `null` | Storage autogrow for the provisioned Postgres server: Azure grows the disk before it fills, so a full disk does not make the server read-only. |
 | `postgres_storage_tier` | `string` | `null` | Storage performance tier of the provisioned Postgres server (P4 to P80), which sets its IOPS and throughput. |
 | `postgres_version` | `string` | `"16"` | PostgreSQL major version. |
 | `postgres_backup_retention_days` | `number` | `7` | Backup retention of the provisioned Postgres server (7-35 days). |
 | `postgres_geo_redundant_backup` | `bool` | `null` | Geo-redundant backups for the provisioned Postgres server, which copy its backups to the Azure region paired with var.location. |
-| `postgres_zone_redundant_ha` | `bool` | `false` | Zone-redundant high availability for the provisioned Postgres server (standby in another AZ, same region). |
+| `postgres_zone_redundant_ha` | `bool` | `null` | Zone-redundant high availability for the provisioned Postgres server (standby in another AZ, same region). |
 | `postgres_private_dns_zone_id` | `string` | `null` | Resource ID of an existing privatelink.postgres.database.azure.com private DNS zone (hub-and-spoke landing zones that centralize private DNS and deny zone creation in spokes). |
 | `api_max_replicas` | `number` | `1` | Maximum api replicas. |
-| `api_min_replicas` | `number` | `1` | Minimum api replicas. |
-| `frontend_min_replicas` | `number` | `1` | Minimum frontend replicas. |
+| `api_min_replicas` | `number` | `null` | Minimum api replicas. |
+| `frontend_min_replicas` | `number` | `null` | Minimum frontend replicas. |
 | `frontend_max_replicas` | `number` | `3` | Maximum frontend replicas. |
 | `app_resources` | `map(...)` | `{}` | CPU (vCPU) and memory per replica, by app: keys "api", "frontend" and "workers". |
 | `tags` | `map(string)` | `{}` | Tags applied to every resource (merge the required governance tags here: cost-center, data-residency, deployment-model, owner, lifecycle). |
@@ -355,6 +356,6 @@ In `workers.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `enable_workers` | `bool` | `false` | Run the dedicated workers Container App and take the api off the in-process worker loop (ADR 0066). |
-| `workers_min_replicas` | `number` | `1` | Minimum workers replicas (keep >= 1: the loop polls; scale-to-zero would stall the pipeline on the polling binding). |
+| `workers_min_replicas` | `number` | `null` | Minimum workers replicas (keep >= 1: the loop polls; scale-to-zero would stall the pipeline on the polling binding). |
 | `workers_max_replicas` | `number` | `1` | Maximum workers replicas. |
 | `workers_termination_grace_period_seconds` | `number` | `600` | Seconds a stopping ca-workers replica (scale-in, a new revision, a restart) has between the termination signal and a forced kill, 0-600. |
