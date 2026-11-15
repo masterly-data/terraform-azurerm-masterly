@@ -100,10 +100,34 @@ run "production_refuses_small_even_with_explicit_sku_and_ha" {
 # api floor, and workers_max_replicas to exactly the workers floor: on the polling binding
 # ca-workers stays at its minimum, and a higher maximum only draws the check's warning.
 #
-# The same runs pin what would REPLACE the server if a profile reached it: the name (with the
-# random suffix overridden, since the mock gives each run its own), the version, the
-# administrator login, the zone and geo-redundant backup. Each is the same literal in all three
+# The same runs pin what would REPLACE the server if a profile reached it: the name, the version,
+# the administrator login, the zone and geo-redundant backup. Each is the same literal in all three
 # profile runs and the unset run below.
+
+# The server's name carries the install's random suffix, which a mock plan leaves unknown
+# (`override_during = plan` needs Terraform 1.11 while CI runs 1.10). This run applies the suffix
+# alone, so every later run in this file plans against it in state and the name is known.
+run "install_suffix_applied" {
+  command = apply
+
+  plan_options {
+    target = [random_string.install]
+  }
+
+  override_resource {
+    target = random_string.install
+    values = { result = "abc123" }
+  }
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = random_string.install.result == "abc123"
+    error_message = "The install suffix must be applied for the later runs to plan a known server name."
+  }
+}
 
 run "profile_small_sizes" {
   command = plan
@@ -112,12 +136,6 @@ run "profile_small_sizes" {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_workers        = true
     capacity_profile      = "small"
-  }
-
-  override_resource {
-    target          = random_string.install
-    override_during = plan
-    values          = { result = "abc123" }
   }
 
   assert {
@@ -160,12 +178,6 @@ run "profile_standard_sizes" {
     redis_offering        = "cache"
     api_max_replicas      = 2
     capacity_profile      = "standard"
-  }
-
-  override_resource {
-    target          = random_string.install
-    override_during = plan
-    values          = { result = "abc123" }
   }
 
   assert {
@@ -218,12 +230,6 @@ run "profile_enterprise_sizes" {
     capacity_profile      = "enterprise"
   }
 
-  override_resource {
-    target          = random_string.install
-    override_during = plan
-    values          = { result = "abc123" }
-  }
-
   assert {
     condition = (
       azurerm_postgresql_flexible_server.this[0].sku_name == "GP_Standard_D4ds_v5" &&
@@ -264,12 +270,6 @@ run "unset_profile_plans_the_earlier_defaults" {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_workers        = true
     enable_service_bus    = true
-  }
-
-  override_resource {
-    target          = random_string.install
-    override_during = plan
-    values          = { result = "abc123" }
   }
 
   assert {
