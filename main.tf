@@ -1088,6 +1088,8 @@ locals {
     "session-secret"          = random_password.session_secret.result
     "session-secret-previous" = var.session_secret_previous
     "bff-shared-secret"       = random_password.bff_shared_secret.result
+    "bff-dpop-key-a"          = one(tls_private_key.bff_dpop_key_a[*].private_key_pem_pkcs8)
+    "bff-dpop-key-b"          = one(tls_private_key.bff_dpop_key_b[*].private_key_pem_pkcs8)
     "registry-password"       = local.registry_password
     "redis-url"               = local.redis_url # embeds the access key on redis_auth = "key" (ADR 0066)
     "license-token"           = var.license_token
@@ -1156,12 +1158,14 @@ locals {
   )
 
   # The BFF shared secret on every install. On oidc the frontend is also the confidential BFF
-  # client: its client secret is used only server-side at token exchange.
+  # client: its client secret is used only server-side at token exchange. The BFF's DPoP key
+  # slots (auth.tf) belong to the frontend alone.
   frontend_secret_names = concat(
     ["bff-shared-secret"],
     local.registry_secret_names,
     var.identity_binding == "oidc" ? ["oidc-client-secret"] : [],
     local.builtin_auth_secret_names,
+    local.bff_dpop_key_secret_names,
   )
 
   backend_secrets  = { for name in local.backend_secret_names : name => local.secret_values[name] }
@@ -1201,6 +1205,7 @@ locals {
   frontend_env_secret_refs = merge(
     { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret" },
     var.identity_binding == "oidc" ? { MASTERLY_OIDC_CLIENT_SECRET = "oidc-client-secret" } : {},
+    local.bff_dpop_key_env_secret_refs,
   )
 
   # The install credential (telemetry_client_id / _secret) is the install service account

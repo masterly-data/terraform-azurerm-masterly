@@ -409,17 +409,18 @@ resource "azurerm_role_assignment" "kv_secrets_officer_deployer" {
   principal_id         = each.key
 }
 
-# The frontend resolves its own secrets (the BFF shared secret, and the OIDC client secret and
-# the registry password when those are set), so its identity needs data-plane READ on exactly
-# those — one Secrets User grant PER SECRET, scoped to that secret, never to the vault. The
+# The frontend resolves its own secrets (the BFF shared secret, and the OIDC client secret, the
+# registry password and the two DPoP key slots when those are set), so its identity needs
+# data-plane READ on exactly those — one Secrets User grant PER SECRET, scoped to that secret,
+# never to the vault. The
 # frontend is the app an attacker reaches first, and the vault also holds the backend's secrets
 # (the admin DSN, the session secret, the licence, the Redis URL, the telemetry secret, the
 # break-glass hash) and everything the api seals at runtime (KeyVaultSecretStore, ADR 0066):
 # a vault-scope read would hand all of it to whoever runs code in that container. Deliberately
 # Secrets User, not the Officer grant the backend apps hold: the frontend never writes sealed
 # material. The keys are known at plan — they follow the resolved registry_credential_mode (the
-# registry password rides only in the token mode), identity_binding and builtin_auth, none of
-# them sensitive.
+# registry password rides only in the token mode), identity_binding, builtin_auth and
+# enable_bff_dpop_key (both DPoP slots, whatever the clock says), none of them sensitive.
 #
 # The scope is the secret's ARM id (resource_versionless_id), not versionless_id, which is the
 # data-plane URL the app's reference uses.

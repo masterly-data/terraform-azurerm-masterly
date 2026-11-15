@@ -68,6 +68,8 @@
         "MASTERLY_REGION"
       ],
       "env_secret_refs": [
+        "MASTERLY_BFF_DPOP_KEY",
+        "MASTERLY_BFF_DPOP_KEY_PREVIOUS",
         "MASTERLY_BFF_SHARED_SECRET",
         "MASTERLY_OIDC_CLIENT_SECRET"
       ]

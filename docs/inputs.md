@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-128 inputs in 27 groups.
+129 inputs in 28 groups.
 
 ## Groups
 
@@ -17,6 +17,7 @@ each one that is missing.
 - [Install identity (ADR 0039)](#install-identity-adr-0039) (11)
 - [Identity (ADR 0024)](#identity-adr-0024) (6)
 - [Rotating the session secret](#rotating-the-session-secret) (1)
+- [The BFF's DPoP key](#the-bffs-dpop-key) (1)
 - [Telemetry to the Masterly control plane (ADR 0034/0056)](#telemetry-to-the-masterly-control-plane-adr-00340056) (5)
 - [Licence refresh (ADR 0074)](#licence-refresh-adr-0074) (1)
 - [Outbound egress posture](#outbound-egress-posture) (2)
@@ -92,6 +93,14 @@ In `variables-core.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `session_secret_previous` | `string, sensitive` | `null` | The outgoing session secret, kept acceptable for verifying EXISTING sessions while a rotation completes — never for signing new ones. |
+
+## The BFF's DPoP key
+
+In `variables-core.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `enable_bff_dpop_key` | `bool` | `false` | Generate the BFF's DPoP signing key (EC P-256) and hand it to ca-frontend alone, as MASTERLY_BFF_DPOP_KEY (PKCS#8 PEM). |
 
 ## Telemetry to the Masterly control plane (ADR 0034/0056)
 

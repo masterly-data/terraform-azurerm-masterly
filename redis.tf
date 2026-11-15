@@ -39,7 +39,7 @@
 variable "enable_redis" {
   type        = bool
   default     = false
-  description = "Provision Redis and run the apps on the redis session registry (ADR 0066). Required for api_max_replicas > 1 and for mode=production. When true, redis_offering must also be set."
+  description = "Provision Redis and run the apps on the redis session registry (ADR 0066). Required for api_max_replicas > 1 and for mode=production. When true, redis_offering must also be set. Redis is also the target of the api's DPoP replay cache: Azure Managed Redis (redis_offering = \"managed\"); without Redis the in-memory cache is allowed on one api replica only."
 }
 
 variable "redis_offering" {
