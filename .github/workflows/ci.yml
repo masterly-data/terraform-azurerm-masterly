@@ -28,8 +28,18 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  # Two Terraform versions: 1.10.5 is the floor the module's required_version (>= 1.10)
+  # admits, and 1.12.2 is what the install template's Azure DevOps pipelines pin (1.12.0 is the
+  # first release whose azurerm backend signs in through an Azure DevOps service connection;
+  # ADR 0141 amendment, open point 4). Each leg's check is named `validate (<version>)`, so the
+  # required `validate` context is reported by the aggregate job below, not by these legs.
+  terraform:
+    name: validate (${{ matrix.terraform }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform: ["1.10.5", "1.12.2"]
     steps:
       # persist-credentials: false — actions/checkout otherwise leaves the job's
       # GITHUB_TOKEN in .git/config for the rest of the run, where any later step or
@@ -42,9 +52,10 @@ jobs:
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v4, pinned by digest
         with:
-          # At or above the module's required_version (>= 1.10) — cross-resource
-          # preconditions and the test framework both depend on it.
-          terraform_version: 1.10.5
+          # Exact versions from the matrix: 1.10.5 (at or above the module's required_version,
+          # >= 1.10 — cross-resource preconditions and the test framework both depend on it)
+          # and 1.12.2 (the template's Azure DevOps path pins it, ADR 0141 amendment open point 4).
+          terraform_version: ${{ matrix.terraform }}
 
       - name: Check formatting
         run: terraform fmt -check -recursive
@@ -69,6 +80,20 @@ jobs:
 
       - name: Test the module (mock providers — guards, residency, conditional branches)
         run: terraform test
+
+  # The one required check, `validate`, which has no `name:` so its context stays exactly that.
+  # `if: always()` makes it run when a leg failed or was cancelled (a skipped required check
+  # counts as passing), and it passes only when the matrix result is exactly `success`. The
+  # result goes through env:, never into the run: line.
+  validate:
+    needs: [terraform]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Terraform version to pass
+        env:
+          RESULT: ${{ needs.terraform.result }}
+        run: test "$RESULT" = success
 
   # The module ships three shell scripts — the operator's diagnostic bundle, the pre-apply
   # preflight, and the bundle's own test harness — and until this job existed nothing read them

@@ -13,7 +13,8 @@
 # unknown on Terraform 1.10, and the runs that read which slot is current apply the two keys first
 # (and with them their timers), with each timer's start overridden, then plan the whole
 # configuration against that state. The mock's default times are fixed and well-formed, because B's
-# timer is worked out from A's.
+# timer is worked out from A's. Every overridden time is a fixed date: an override's values cannot
+# read a run's outputs, so tests/helpers/plan-time cannot feed them.
 
 mock_provider "azurerm" {
   source = "./tests/mocks/install"
@@ -197,20 +198,20 @@ run "the_replay_cache_target_is_named_in_the_descriptions" {
 
 # --- Rotation -----------------------------------------------------------------------------------
 #
-# Three states, each set by applying the two keys with their timers' starts overridden to times
-# relative to the plan (tests/helpers/plan-time), then planning the whole configuration, with the
-# vault on, against that state. Slot A was replaced 30 days ago throughout; slot B 120 days ago
-# (before a rotation), then 10 minutes ago (during the overlap), then 2 hours ago (after it). Each
-# later apply replaces B's timer, which replaces B's key with it. The key values are placeholders,
-# not keys: the runs assert the wiring, never key material.
-
-run "plan_time" {
-  command = plan
-
-  module {
-    source = "./tests/helpers/plan-time"
-  }
-}
+# Three states, each set by applying the two keys with their timers' starts overridden, then
+# planning the whole configuration, with the vault on, against that state. The overlap is measured
+# from the plan's own time (plantimestamp()), and an override's values cannot read a run's outputs,
+# so the starts are fixed dates chosen to sit on a known side of every plan this file makes:
+#
+# - Slot A started on 2026-01-01 throughout, so its overlap is long over. Its timer expires in
+#   2099, so B's expiry, worked out from A's, stays at least 45 days ahead of any plan.
+# - Slot B started 90 days before A (before a rotation), then on 2099-01-01 (during the overlap:
+#   every plan falls before that start plus 60 minutes), then 90 days after A (after the overlap).
+#   No real rotation starts in the future: that state shows only that a plan before the current
+#   key's start plus the overlap keeps _PREVIOUS, not where the 60-minute edge falls.
+#
+# Each later apply replaces B's timer, which replaces B's key with it. The key values are
+# placeholders, not keys: the runs assert the wiring, never key material.
 
 # Before a rotation: A is the current key and the overlap after it has ended.
 run "rotation_before_a_rotation_apply" {
@@ -228,15 +229,15 @@ run "rotation_before_a_rotation_apply" {
   override_resource {
     target = time_rotating.bff_dpop_key_a
     values = {
-      rfc3339          = run.plan_time.ago_30_days
-      rotation_rfc3339 = run.plan_time.in_150_days
+      rfc3339          = "2026-01-01T00:00:00Z"
+      rotation_rfc3339 = "2099-12-31T00:00:00Z"
     }
   }
 
   override_resource {
     target = time_rotating.bff_dpop_key_b
     values = {
-      rfc3339 = run.plan_time.ago_120_days
+      rfc3339 = "2025-10-03T00:00:00Z"
     }
   }
 
@@ -260,9 +261,11 @@ run "rotation_before_a_rotation_apply" {
     error_message = "Slot B's timer must expire 90 days before slot A's, so that the two slots are replaced 90 days apart."
   }
 
+  # A targeted apply evaluates no local, so which env names ca-frontend reads is asserted by the
+  # plan that follows; here, only that A is the slot replaced last.
   assert {
-    condition     = jsonencode(local.bff_dpop_key_env_secret_refs) == jsonencode({ MASTERLY_BFF_DPOP_KEY = "bff-dpop-key-a" })
-    error_message = "Before a rotation only MASTERLY_BFF_DPOP_KEY may be set, on the slot replaced last (A)."
+    condition     = timecmp(time_rotating.bff_dpop_key_a[0].rfc3339, time_rotating.bff_dpop_key_b[0].rfc3339) > 0
+    error_message = "Before a rotation slot A must be the slot replaced last."
   }
 }
 
@@ -293,8 +296,8 @@ run "rotation_before_a_rotation" {
   }
 }
 
-# During the overlap: B was replaced 10 minutes ago, so it is the current key and A, the
-# outgoing one, is kept as _PREVIOUS.
+# During the overlap: B was replaced last, and the plan falls before its start plus 60 minutes, so
+# B is the current key and A, the outgoing one, is kept as _PREVIOUS.
 run "rotation_during_the_overlap_apply" {
   command = apply
 
@@ -311,7 +314,7 @@ run "rotation_during_the_overlap_apply" {
   override_resource {
     target = time_rotating.bff_dpop_key_b
     values = {
-      rfc3339 = run.plan_time.ago_10_minutes
+      rfc3339 = "2099-01-01T00:00:00Z"
     }
   }
 
@@ -322,14 +325,16 @@ run "rotation_during_the_overlap_apply" {
     }
   }
 
+  # The env names are asserted by the plan that follows; here, that B's key was replaced with its
+  # timer and A's was not.
   assert {
     condition = (
-      jsonencode(local.bff_dpop_key_env_secret_refs) == jsonencode({ MASTERLY_BFF_DPOP_KEY = "bff-dpop-key-b", MASTERLY_BFF_DPOP_KEY_PREVIOUS = "bff-dpop-key-a" }) &&
+      timecmp(time_rotating.bff_dpop_key_b[0].rfc3339, time_rotating.bff_dpop_key_a[0].rfc3339) > 0 &&
       tls_private_key.bff_dpop_key_b[0].private_key_pem_pkcs8 == "placeholder-not-a-key-slot-b-after" &&
       tls_private_key.bff_dpop_key_a[0].private_key_pem_pkcs8 == "placeholder-not-a-key-slot-a" &&
       tls_private_key.bff_dpop_key_b[0].private_key_pem_pkcs8 != tls_private_key.bff_dpop_key_a[0].private_key_pem_pkcs8
     )
-    error_message = "During the overlap MASTERLY_BFF_DPOP_KEY must be the new key (slot B, just replaced) and MASTERLY_BFF_DPOP_KEY_PREVIOUS the outgoing one (slot A, unchanged), and the two must differ."
+    error_message = "Replacing B's timer must replace B's key (the new key) and leave A's (the outgoing one), and the two must differ."
   }
 }
 
@@ -366,7 +371,8 @@ run "rotation_during_the_overlap" {
   }
 }
 
-# After the overlap: B was replaced 2 hours ago, so only the new key is set.
+# After the overlap: B was replaced last, 90 days after A, and its overlap is long over, so only
+# the new key is set.
 run "rotation_after_the_overlap_apply" {
   command = apply
 
@@ -383,7 +389,7 @@ run "rotation_after_the_overlap_apply" {
   override_resource {
     target = time_rotating.bff_dpop_key_b
     values = {
-      rfc3339 = run.plan_time.ago_2_hours
+      rfc3339 = "2026-04-01T00:00:00Z"
     }
   }
 
@@ -394,9 +400,10 @@ run "rotation_after_the_overlap_apply" {
     }
   }
 
+  # The env names are asserted by the plan that follows; here, that B is the slot replaced last.
   assert {
-    condition     = jsonencode(local.bff_dpop_key_env_secret_refs) == jsonencode({ MASTERLY_BFF_DPOP_KEY = "bff-dpop-key-b" })
-    error_message = "After the overlap only MASTERLY_BFF_DPOP_KEY may be set, on the new key (slot B)."
+    condition     = timecmp(time_rotating.bff_dpop_key_b[0].rfc3339, time_rotating.bff_dpop_key_a[0].rfc3339) > 0
+    error_message = "After the rotation slot B must be the slot replaced last."
   }
 }
 

@@ -119,6 +119,10 @@ module "masterly" {
   # Or serve the frontend on your own hostname and drop oidc_redirect_uri: the module derives
   # https://<hostname>/api/auth/callback from it. See "ca-frontend on your own domain".
   # frontend_custom_domain = { hostname = "...", certificate_key_vault_secret_id = "...", key_vault_id = "..." }
+  # With ca-edge on, the same for the SDK and MCP clients' hostname, which must differ from the
+  # frontend's. See "ca-edge on your own domain" in docs/networking.md.
+  # edge               = {}
+  # edge_custom_domain = { hostname = "...", certificate_key_vault_secret_id = "...", key_vault_id = "..." }
 
   # License (ADR 0013): from your install bundle.
   license_token      = var.license_token # from your secret store
@@ -173,7 +177,7 @@ Outputs include `frontend_url` (`https://<hostname>` with `frontend_custom_domai
 `custom_domain_verification_id` (the `asuid.<hostname>` TXT value), `api_url` (the API's base URL for the Python SDK and other
 clients outside the environment — null unless `api_ingress_external = true`), `edge_url` and
 `edge_identity_principal_id` (ca-edge's base URL and identity — null unless `edge` is set, which
-it is not by default), the apps resource
+it is not by default; `edge_url` is `https://<hostname>` with `edge_custom_domain` set), the apps resource
 group, the Container App names (the values the app repos' release workflows use to roll
 images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
 `apps_identity_client_id` / `frontend_identity_principal_id` / `migrate_identity_principal_id` /
@@ -276,6 +280,7 @@ check, and a rebuilt app, both go by.
 | `ca-workers` (opt-in, ADR 0066) | The dedicated async-pipeline loop (`enable_workers`): same image, command `python -m masterly_app.workers`, no ingress; the api flips to `MASTERLY_INPROCESS_WORKER=false`. |
 | `ca-edge` (opt-in, public ingress, :8080) and `id-masterly-edge` UAMI | `edge`, **off by default**: the machine entry point for the Python SDK and MCP clients (ADR 0120 §2), an Envoy proxy the module configures. HTTPS-only behind `ingress_allowed_cidrs` (which must not be empty), it forwards `/v1` and `/mcp` to `ca-api` and answers every other path with 404, strips `x-jwt-payload` and `X-MS-CLIENT-PRINCIPAL*`, and refuses a declared body over `edge.max_request_body_bytes` with 413. It does **no authentication yet**: the `Authorization` header reaches `ca-api` unchanged, and `ca-api` checks it. Its identity holds AcrPull at most, and only for an image on the install's registry. See [The edge proxy](docs/networking.md#the-edge-proxy-ca-edge) |
 | `ca-frontend` custom domain (opt-in) | `frontend_custom_domain`: `id-masterly-frontend-cert` UAMI, attached to the Container App Environment and to no app, with **Key Vault Secrets User** on your certificate's secret alone; the environment certificate, a versionless Key Vault reference read as that identity; and an SNI binding of your hostname on `ca-frontend`. See [ca-frontend on your own domain](docs/identity.md#ca-frontend-on-your-own-domain-frontend_custom_domain). |
+| `ca-edge` custom domain (opt-in) | `edge_custom_domain`, with `edge` set and a hostname other than the frontend's: `id-masterly-edge-cert` UAMI, attached to the Container App Environment and to no app (never to `ca-edge`, whose own identity reads no secret), with **Key Vault Secrets User** on your certificate's secret alone; the environment certificate, a versionless Key Vault reference read as that identity; and an SNI binding of your hostname on `ca-edge`, which `edge_url` then names. See [ca-edge on your own domain](docs/networking.md#ca-edge-on-your-own-domain). |
 
 ## Getting the images (ADR 0067)
 
@@ -1550,9 +1555,10 @@ terraform providers lock \
 ```
 
 This repo ships no lock file of its own, for the same reason: it is a module, not a root
-configuration. It constrains azurerm to `~> 5.8`, random to `~> 3.6` and azapi to `~> 2.9`
+configuration. It constrains azurerm to `~> 5.8`, random to `~> 3.6`, azapi to `~> 2.9`
 (used for [built-in authentication](docs/identity.md#built-in-authentication-in-front-of-the-frontend-builtin_auth) and to start [the migrate job](docs/data-plane.md#the-migrate-job)),
-and leaves the exact versions to you. That
+and tls to `~> 4.0` and time to `~> 0.12` (used for the BFF's DPoP key, `enable_bff_dpop_key`;
+required and mirrored even with it off), and leaves the exact versions to you. That
 floor is load-bearing rather than housekeeping: with no lock file here, the constraint is the
 only thing governing your `terraform init`. `versions.tf` records why it sits where it does.
 

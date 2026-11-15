@@ -91,6 +91,17 @@ module "masterly" {
   # custom domain it is left null: the placeholder names another host, which the module refuses.
   oidc_redirect_uri = var.frontend_custom_domain == null ? var.oidc_redirect_uri : null
 
+  # --- Machine entry point --------------------------------------------------------
+  # ca-edge, the Envoy entry point for the Python SDK and MCP clients, is off unless edge is
+  # set (edge = {} for its defaults). It is published on ingress_allowed_cidrs, which must
+  # then list the networks your clients call from: empty means unrestricted, and the module
+  # refuses the edge with it. edge_custom_domain gives it your own hostname, the same shape
+  # as frontend_custom_domain but a different hostname; it needs edge set. Create its DNS
+  # records first, as docs/networking.md describes ("ca-edge on your own domain").
+  edge                  = var.edge
+  edge_custom_domain    = var.edge_custom_domain
+  ingress_allowed_cidrs = var.ingress_allowed_cidrs
+
   # --- First Owner ----------------------------------------------------------------
   # One-shot: the first sign-in with this address becomes the Organization's Owner, then
   # the rule disarms permanently. It is the ONLY route to a first Owner — break-glass is
@@ -179,8 +190,13 @@ output "frontend_url" {
   description = "With a custom domain, https://<hostname>. Without one, register https://<this host>/api/auth/callback at your IdP, then set oidc_redirect_uri and apply again."
 }
 
+output "edge_url" {
+  value       = module.masterly.edge_url
+  description = "Where SDK and MCP clients reach ca-edge: https://<hostname> with edge_custom_domain, the Container Apps FQDN without it, null with edge unset."
+}
+
 output "custom_domain_verification_id" {
   value       = module.masterly.custom_domain_verification_id
   sensitive   = true
-  description = "The asuid.<hostname> TXT record's value (not a secret; sensitive because the provider marks it)."
+  description = "The asuid.<hostname> TXT record's value, the same for the frontend's and the edge's hostname (not a secret; sensitive because the provider marks it)."
 }
