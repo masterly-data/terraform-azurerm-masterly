@@ -7,8 +7,8 @@
 # frontend's grants and so applies only what they depend on (the vault, its secrets and their
 # inputs, the two keys and their timers among them), each with a well-formed ID, because the
 # teardown at the end of the file evaluates the whole configuration against this state. The
-# timers start as a first apply starts them, B a moment after A, so slot A is current and no
-# overlap is open.
+# timers represent a delayed first apply, B more than an hour after A, so slot A is current
+# and no overlap is open even though their starts differ by more than the overlap window.
 #
 # A targeted apply evaluates only what its targets depend on, and the apps' secret and env maps
 # are not among them, so a plan of the whole configuration against that state asserts those. The
@@ -136,7 +136,7 @@ override_resource {
   }
 }
 
-# A first apply: B's timer is created two seconds after A's. That is no rotation, so A, the key
+# A delayed first apply: B's timer is created 70 minutes after A's. That is no rotation, so A, the key
 # this apply hands out, is the current one and nothing is outgoing.
 override_resource {
   target = time_rotating.bff_dpop_key_a
@@ -149,7 +149,7 @@ override_resource {
 override_resource {
   target = time_rotating.bff_dpop_key_b
   values = {
-    rfc3339 = "2026-01-01T00:00:02Z"
+    rfc3339 = "2026-01-01T01:10:00Z"
   }
 }
 
@@ -268,7 +268,7 @@ run "bff_dpop_key_in_the_vault_is_read_by_the_frontend_alone" {
   command = apply
 
   plan_options {
-    target = [azurerm_role_assignment.kv_secrets_user_frontend, time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b]
+    target = [terraform_data.bff_dpop_key_provisioned, azurerm_role_assignment.kv_secrets_user_frontend, time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b]
   }
 
   # When A's expiry is too near (or already past), B must expire 90 days after it.
@@ -322,10 +322,12 @@ run "bff_dpop_key_in_the_vault_reaches_ca_frontend_alone" {
   command = plan
 
   # ca-frontend references each slot by its versionless URL as its own identity, and reads the
-  # current one (A: both timers started together, so no rotation has happened) as
+  # current one (A: both timers still have their provisioning starts) as
   # MASTERLY_BFF_DPOP_KEY, with no _PREVIOUS.
   assert {
     condition = (
+      terraform_data.bff_dpop_key_provisioned[0].input.a == time_rotating.bff_dpop_key_a[0].rfc3339 &&
+      terraform_data.bff_dpop_key_provisioned[0].input.b == time_rotating.bff_dpop_key_b[0].rfc3339 &&
       alltrue([
         for slot in ["bff-dpop-key-a", "bff-dpop-key-b"] :
         local.frontend_vault_secret_refs[slot].kv_secret_id == azurerm_key_vault_secret.install[slot].versionless_id &&

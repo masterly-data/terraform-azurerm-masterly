@@ -73,9 +73,10 @@ run "bff_dpop_key_is_off_by_default" {
       !var.enable_bff_dpop_key &&
       length(tls_private_key.bff_dpop_key_a) == 0 && length(tls_private_key.bff_dpop_key_b) == 0 &&
       length(time_rotating.bff_dpop_key_a) == 0 && length(time_rotating.bff_dpop_key_b) == 0 &&
-      length(terraform_data.bff_dpop_key_a_rotation) == 0 && length(terraform_data.bff_dpop_key_b_rotation) == 0
+      length(terraform_data.bff_dpop_key_a_rotation) == 0 && length(terraform_data.bff_dpop_key_b_rotation) == 0 &&
+      length(terraform_data.bff_dpop_key_provisioned) == 0
     )
-    error_message = "enable_bff_dpop_key must default to false, and with it off the module must plan no DPoP key, timer or rotation intermediary."
+    error_message = "enable_bff_dpop_key must default to false, and with it off the module must plan no DPoP key, timer, rotation intermediary or provisioning marker."
   }
 
   assert {
@@ -227,7 +228,7 @@ run "rotation_before_a_rotation_apply" {
   command = apply
 
   plan_options {
-    target = [time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b, tls_private_key.bff_dpop_key_a, tls_private_key.bff_dpop_key_b]
+    target = [terraform_data.bff_dpop_key_provisioned, time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b, tls_private_key.bff_dpop_key_a, tls_private_key.bff_dpop_key_b]
   }
 
   variables {
@@ -327,7 +328,7 @@ run "rotation_during_the_overlap_apply" {
   }
 
   plan_options {
-    target  = [time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b, tls_private_key.bff_dpop_key_a, tls_private_key.bff_dpop_key_b]
+    target  = [terraform_data.bff_dpop_key_provisioned, time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b, tls_private_key.bff_dpop_key_a, tls_private_key.bff_dpop_key_b]
     replace = [time_rotating.bff_dpop_key_b[0]]
   }
 
@@ -413,7 +414,7 @@ run "rotation_after_the_overlap_apply" {
   command = apply
 
   plan_options {
-    target  = [time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b, tls_private_key.bff_dpop_key_a, tls_private_key.bff_dpop_key_b]
+    target  = [terraform_data.bff_dpop_key_provisioned, time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b, tls_private_key.bff_dpop_key_a, tls_private_key.bff_dpop_key_b]
     replace = [time_rotating.bff_dpop_key_b[0]]
   }
 

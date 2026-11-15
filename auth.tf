@@ -72,6 +72,22 @@ resource "time_rotating" "bff_dpop_key_b" {
   }
 }
 
+# Remember the two starts from the first apply. Provisioning may create B after A, but neither
+# key has rotated then: A is the initial signing key. Later starts identify genuine rotations,
+# even when an overdue rotation happens minutes before the other slot expires.
+resource "terraform_data" "bff_dpop_key_provisioned" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  input = {
+    a = time_rotating.bff_dpop_key_a[0].rfc3339
+    b = time_rotating.bff_dpop_key_b[0].rfc3339
+  }
+
+  lifecycle {
+    ignore_changes = [input]
+  }
+}
+
 # Refresh removes an expired timer from state, so its next action is create, which does not
 # trigger replace_triggered_by. Persist its start in terraform_data: the new start updates that
 # existing resource, and that update replaces the key, including on a normal expiry.
@@ -125,22 +141,27 @@ locals {
   bff_dpop_key_a_start = one(time_rotating.bff_dpop_key_a[*].rfc3339)
   bff_dpop_key_b_start = one(time_rotating.bff_dpop_key_b[*].rfc3339)
 
-  # The slot replaced last is the current key. B counts as later only by more than the overlap:
-  # the first apply creates B a moment after A, and A is the key that apply hands out, so that B's
-  # first replacement keeps A, the key in use, as the outgoing one. The try()s turn the switch
-  # being off (no slot) into slot A and no overlap; the env refs below are empty then anyway.
-  bff_dpop_key_b_is_current  = try(timecmp(local.bff_dpop_key_b_start, timeadd(local.bff_dpop_key_a_start, "${local.bff_dpop_key_overlap_minutes}m")) > 0, false)
+  # A is current until either slot has rotated; afterwards the slot replaced last is current.
+  # Read the persisted input, whose ignore_changes keeps the first apply's starts. A short gap
+  # between later starts is still a rotation, not provisioning. The try()s handle absent slots
+  # with the switch off and plantimestamp() being unavailable under validate.
+  bff_dpop_key_initial = try(
+    local.bff_dpop_key_a_start == terraform_data.bff_dpop_key_provisioned[0].input.a &&
+    local.bff_dpop_key_b_start == terraform_data.bff_dpop_key_provisioned[0].input.b,
+    true,
+  )
+  bff_dpop_key_b_is_current  = !local.bff_dpop_key_initial && try(timecmp(local.bff_dpop_key_b_start, local.bff_dpop_key_a_start) > 0, false)
   bff_dpop_key_current       = local.bff_dpop_key_b_is_current ? "bff-dpop-key-b" : "bff-dpop-key-a"
   bff_dpop_key_previous      = local.bff_dpop_key_b_is_current ? "bff-dpop-key-a" : "bff-dpop-key-b"
   bff_dpop_key_current_start = local.bff_dpop_key_b_is_current ? local.bff_dpop_key_b_start : local.bff_dpop_key_a_start
-  bff_dpop_key_other_start   = local.bff_dpop_key_b_is_current ? local.bff_dpop_key_a_start : local.bff_dpop_key_b_start
 
   # The outgoing key is on ca-frontend while this plan is within the overlap after the current
-  # key's rotation, and only if the other slot was in use before it: on the first apply both
-  # slots are created together and neither has signed anything. The first plan after the overlap
-  # drops it, as builtin_auth_recovery_until's does (builtin-auth.tf).
+  # key's rotation. Initial provisioning has no outgoing key. The first plan after the overlap
+  # drops it, as builtin_auth_recovery_until's does (builtin-auth.tf). If the other slot expires
+  # during this window, its replacement becomes current and this key becomes previous; the
+  # oldest key then leaves early because there are only two slots.
   bff_dpop_key_previous_open = try(
-    timecmp(timeadd(local.bff_dpop_key_other_start, "${local.bff_dpop_key_overlap_minutes}m"), local.bff_dpop_key_current_start) < 0 &&
+    !local.bff_dpop_key_initial &&
     timecmp(plantimestamp(), timeadd(local.bff_dpop_key_current_start, "${local.bff_dpop_key_overlap_minutes}m")) < 0,
     false,
   )

@@ -212,9 +212,11 @@ signed-in user, and the api binds each session to the key that proved its sign-i
   as `MASTERLY_BFF_DPOP_KEY_PREVIOUS`, so sessions bound to it (renewed within 15 minutes) survive
   the change; the first apply after those 60 minutes removes it. With the vault on, ACA re-reads a
   versionless Key Vault reference within 30 minutes, which the 60 minutes cover.
-  Apply at least once between successive scheduled rotations to preserve this overlap. If both
-  slots expire before the next apply, both keys are replaced together without an outgoing key,
-  and users must sign in again once.
+  Applying at least monthly keeps the slots about 90 days apart. If a slot expires inside the
+  other slot's overlap, the older key's overlap is shortened to the gap between the two rotations;
+  the key that was current immediately before the second rotation becomes `_PREVIOUS`. If both
+  slots expire before the next apply, both keys are replaced together without retaining the
+  outgoing key, and users must sign in again once.
 - **Where the key is held.** With `enable_key_vault = true` each slot is a vault secret
   (`install-bff-dpop-key-a`, `install-bff-dpop-key-b`) that `ca-frontend` references by its
   versionless URL as its own identity, which holds Key Vault Secrets User on those two secrets
