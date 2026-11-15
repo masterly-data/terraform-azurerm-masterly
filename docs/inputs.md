@@ -294,7 +294,7 @@ In `edge.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `edge` | `object(...)` | `null` | Run ca-edge, the Envoy machine entry point for the Python SDK and MCP clients: off by default (null creates nothing), and it does no authentication yet. |
+| `edge` | `object(...)` | `null` | Run ca-edge for SDK and MCP clients: 429 with Retry-After over rate_limit_per_token (600) or rate_limit_per_client (1800) per rate_limit_interval_seconds (60) per replica, so limits multiply by 1 to 3 running replicas. |
 
 ## Email
 

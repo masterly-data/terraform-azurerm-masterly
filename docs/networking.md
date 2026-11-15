@@ -596,6 +596,26 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
   `Content-Length` streams through. Nothing is buffered, and a forwarded request has no total
   time limit, so a streamed MCP or server-sent-events response stays open; a stream with no bytes
   either way for 300 seconds is closed.
+- **Rate limits.** Requests to `/v1` and `/mcp` are limited per bearer token and per client
+  address. `edge.rate_limit_per_token` (600 by default) is how many requests one `Authorization`
+  header value may send per interval; `edge.rate_limit_per_client` (1800 by default) is how many
+  one client address may send, whatever tokens it uses, so rotating tokens does not get round the
+  per-token limit; `edge.rate_limit_interval_seconds` (60 by default) is the interval both count
+  over. A request without an `Authorization` header is held to the per-client limit only. A
+  request over either limit is answered **`429` with a `Retry-After` header** of the interval in
+  seconds (logged with response flag `RL`); the `413` and `404` answers are never limited. The
+  client address is the one the Container Apps ingress reports: the edge trusts exactly that one
+  `X-Forwarded-For` hop, so a caller cannot choose its own address, and passes the header on to
+  `ca-api` unchanged. The token is a key in Envoy's memory only, never in the configuration, the
+  plan, a log or a metric name.
+- **Limits are kept per replica.** Each `ca-edge` replica counts on its own, with no shared
+  state: no Redis and no rate-limit service (ADR 0120 §5). `ca-edge` runs 1 to 3 replicas
+  (`max_replicas = 3`), so the effective limit is the configured limit times the replicas
+  running: between 1 and 3 times the setting. `/v1` and `/mcp` are also counted separately. Set
+  the limits for one replica, and expect a caller to be refused at the configured limit only
+  while one replica runs. A replica keeps buckets for up to 1000 distinct tokens and 1000 client
+  addresses on each path, dropping the least recently seen; a dropped token's count starts
+  afresh, and the per-client limit still holds.
 - **No control plane, no secrets.** Envoy's admin interface is not configured. The whole Envoy
   configuration travels in the container's arguments (`args`), visible in the plan, and holds
   nothing secret; a change to it rolls a new revision. Because it is passed as arguments, the
@@ -677,6 +697,10 @@ it:
   longest stream your MCP clients hold, or the gateway cuts what the edge keeps open.
 - **Health probe:** the edge answers `/` with `404`, so a probe on `/` that accepts `404` shows
   the edge is up without calling `ca-api`.
+- **Rate limits:** the client address the edge sees is the gateway's, so every client behind the
+  gateway shares one `edge.rate_limit_per_client` bucket. Raise it to what all your clients
+  together may send, and limit individual clients at the gateway; the per-token limit still
+  applies to each token.
 - **Logging:** keep the gateway's own access and WAF logs free of full URLs and request bodies,
   as [If you front this install with a WAF, CDN, or gateway](../README.md#if-you-front-this-install-with-a-waf-cdn-or-gateway)
   says.
