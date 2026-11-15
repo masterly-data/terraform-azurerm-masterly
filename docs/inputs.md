@@ -17,7 +17,6 @@ each one that is missing.
 - [Install identity (ADR 0039)](#install-identity-adr-0039) (11)
 - [Identity (ADR 0024)](#identity-adr-0024) (6)
 - [Rotating the session secret](#rotating-the-session-secret) (1)
-- [The BFF's DPoP key](#the-bffs-dpop-key) (1)
 - [Telemetry to the Masterly control plane (ADR 0034/0056)](#telemetry-to-the-masterly-control-plane-adr-00340056) (5)
 - [Licence refresh (ADR 0074)](#licence-refresh-adr-0074) (1)
 - [Outbound egress posture](#outbound-egress-posture) (2)
@@ -27,6 +26,7 @@ each one that is missing.
 - [Environment subnets (ADR 0120)](#environment-subnets-adr-0120) (6)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
+- [The BFF's DPoP key](#the-bffs-dpop-key) (1)
 - [Built-in sign-in](#built-in-sign-in) (2)
 - [Custom domain](#custom-domain) (2)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
@@ -94,14 +94,6 @@ In `variables-core.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `session_secret_previous` | `string, sensitive` | `null` | The outgoing session secret, kept acceptable for verifying EXISTING sessions while a rotation completes — never for signing new ones. |
-
-## The BFF's DPoP key
-
-In `variables-core.tf`.
-
-| Input | Type | Default | Description |
-|---|---|---|---|
-| `enable_bff_dpop_key` | `bool` | `false` | Generate the BFF's DPoP signing key (EC P-256) and hand it to ca-frontend alone, as MASTERLY_BFF_DPOP_KEY (PKCS#8 PEM). |
 
 ## Telemetry to the Masterly control plane (ADR 0034/0056)
 
@@ -220,6 +212,14 @@ In `variables-auth.tf`.
 | `oidc_authority` | `string` | `null` | The IdP's discovery base for the BFF. |
 | `oidc_redirect_uri` | `string` | `null` | The BFF callback the IdP redirects to: https://<frontend host>/api/auth/callback. |
 | `breakglass_owner_email` | `string` | `null` | Break-glass local Owner (ADR 0024): IdP-independent emergency sign-in for an email that already holds the Owner role — recovery, not bootstrap (the endpoint answers 403 until that member exists). |
+
+## The BFF's DPoP key
+
+In `variables-auth.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `enable_bff_dpop_key` | `bool` | `false` | Generate the BFF's DPoP signing key (EC P-256) and hand it to ca-frontend alone, as MASTERLY_BFF_DPOP_KEY (PKCS#8 PEM). |
 
 ## Built-in sign-in
 

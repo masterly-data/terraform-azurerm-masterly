@@ -72,9 +72,10 @@ run "bff_dpop_key_is_off_by_default" {
     condition = (
       !var.enable_bff_dpop_key &&
       length(tls_private_key.bff_dpop_key_a) == 0 && length(tls_private_key.bff_dpop_key_b) == 0 &&
-      length(time_rotating.bff_dpop_key_a) == 0 && length(time_rotating.bff_dpop_key_b) == 0
+      length(time_rotating.bff_dpop_key_a) == 0 && length(time_rotating.bff_dpop_key_b) == 0 &&
+      length(terraform_data.bff_dpop_key_a_rotation) == 0 && length(terraform_data.bff_dpop_key_b_rotation) == 0
     )
-    error_message = "enable_bff_dpop_key must default to false, and with it off the module must plan no DPoP key and no timer."
+    error_message = "enable_bff_dpop_key must default to false, and with it off the module must plan no DPoP key, timer or rotation intermediary."
   }
 
   assert {
@@ -193,7 +194,7 @@ run "the_replay_cache_target_is_named_in_the_descriptions" {
   assert {
     condition = alltrue([
       for d in [
-        regex("(?s)variable \"enable_bff_dpop_key\" \\{.*?\\n\\}", file("${path.module}/variables-core.tf")),
+        regex("(?s)variable \"enable_bff_dpop_key\" \\{.*?\\n\\}", file("${path.module}/variables-auth.tf")),
         regex("(?s)variable \"api_max_replicas\" \\{.*?\\n\\}", file("${path.module}/variables-core.tf")),
         regex("(?s)variable \"enable_redis\" \\{.*?\\n\\}", file("${path.module}/redis.tf")),
       ] :

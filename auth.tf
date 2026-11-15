@@ -72,6 +72,21 @@ resource "time_rotating" "bff_dpop_key_b" {
   }
 }
 
+# Refresh removes an expired timer from state, so its next action is create, which does not
+# trigger replace_triggered_by. Persist its start in terraform_data: the new start updates that
+# existing resource, and that update replaces the key, including on a normal expiry.
+resource "terraform_data" "bff_dpop_key_a_rotation" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  input = time_rotating.bff_dpop_key_a[0].rfc3339
+}
+
+resource "terraform_data" "bff_dpop_key_b_rotation" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  input = time_rotating.bff_dpop_key_b[0].rfc3339
+}
+
 resource "tls_private_key" "bff_dpop_key_a" {
   count = var.enable_bff_dpop_key ? 1 : 0
 
@@ -79,7 +94,7 @@ resource "tls_private_key" "bff_dpop_key_a" {
   ecdsa_curve = "P256"
 
   lifecycle {
-    replace_triggered_by = [time_rotating.bff_dpop_key_a[count.index]]
+    replace_triggered_by = [terraform_data.bff_dpop_key_a_rotation[count.index]]
   }
 }
 
@@ -90,7 +105,7 @@ resource "tls_private_key" "bff_dpop_key_b" {
   ecdsa_curve = "P256"
 
   lifecycle {
-    replace_triggered_by = [time_rotating.bff_dpop_key_b[count.index]]
+    replace_triggered_by = [terraform_data.bff_dpop_key_b_rotation[count.index]]
   }
 }
 

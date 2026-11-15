@@ -342,18 +342,6 @@ variable "session_secret_previous" {
   }
 }
 
-# --- The BFF's DPoP key ------------------------------------------------------------------
-# The frontend's BFF proves possession of a key on every call it makes to the api for a signed-in
-# user (DPoP), and the api binds each session to the key that proved its sign-in. auth.tf
-# generates the key, rotates it, and hands it to ca-frontend alone. docs/identity.md, "The BFF's
-# DPoP key", has the rotation and where the key is held.
-
-variable "enable_bff_dpop_key" {
-  type        = bool
-  default     = false
-  description = "Generate the BFF's DPoP signing key (EC P-256) and hand it to ca-frontend alone, as MASTERLY_BFF_DPOP_KEY (PKCS#8 PEM). The module replaces it every 90 days, at the first apply after the period ends, and keeps the outgoing key on ca-frontend as MASTERLY_BFF_DPOP_KEY_PREVIOUS for 60 minutes after each rotation, so sessions bound to it survive the change; the first apply after those 60 minutes removes it. With enable_key_vault the key is a Key Vault secret that ca-frontend reads with its own identity, which holds Key Vault Secrets User on that secret alone; without it, a Container App secret on ca-frontend. The private key is held in Terraform state. Off (default): the frontend generates a key per process, so DPoP-bound sessions do not survive a restart and cannot span frontend replicas. The key takes effect with the first frontend release after v0.145.0; the api's session binding and DPoP replay cache arrive with the first api release after v0.137.0, so on earlier images the key is set but unread. The api's DPoP replay cache has Azure Managed Redis (redis_offering = \"managed\", with enable_redis) as its target; the in-memory cache it uses without Redis is allowed on one api replica only, which api_max_replicas enforces."
-}
-
 # --- License (ADR 0013/0018) --------------------------------------------------------
 # The install's entitlement: a platform-minted ES256 JWT plus the issuer's PUBLIC JWK.
 # Both arrive in the customer's install bundle. Unset = the app's fixture license

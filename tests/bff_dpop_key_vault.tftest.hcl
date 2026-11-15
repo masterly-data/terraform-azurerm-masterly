@@ -271,6 +271,15 @@ run "bff_dpop_key_in_the_vault_is_read_by_the_frontend_alone" {
     target = [azurerm_role_assignment.kv_secrets_user_frontend, time_rotating.bff_dpop_key_a, time_rotating.bff_dpop_key_b]
   }
 
+  # When A's expiry is too near (or already past), B must expire 90 days after it.
+  assert {
+    condition = (
+      timecmp(timeadd(time_rotating.bff_dpop_key_a[0].rotation_rfc3339, "-2160h"), timeadd(plantimestamp(), "1080h")) <= 0 &&
+      time_rotating.bff_dpop_key_b[0].rotation_rfc3339 == timeadd(time_rotating.bff_dpop_key_a[0].rotation_rfc3339, "2160h")
+    )
+    error_message = "When A's expiry minus 90 days is not at least 45 days away, B must expire 90 days after A instead."
+  }
+
   # The key is EC P-256, and each slot's vault secret holds that slot's key as PKCS#8 PEM.
   assert {
     condition = alltrue([

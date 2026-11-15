@@ -1,4 +1,4 @@
-# Inputs read by auth.tf: the OIDC identity provider and the break-glass owner.
+# Inputs read by auth.tf: the OIDC identity provider, the break-glass owner and the BFF's DPoP key.
 
 variable "oidc_tenant_id" {
   type        = string
@@ -59,4 +59,16 @@ variable "breakglass_owner_email" {
   type        = string
   default     = null
   description = "Break-glass local Owner (ADR 0024): IdP-independent emergency sign-in for an email that already holds the Owner role — recovery, not bootstrap (the endpoint answers 403 until that member exists). Armed only when both breakglass inputs are set; initial_owner_email remains the bootstrap. Null (the default) uses initial_owner_email once breakglass_secret_hash is set, which is the usual choice: that address becomes the first Owner, so it is the one break-glass can admit. Without a hash it stays unset, as before."
+}
+
+# --- The BFF's DPoP key ------------------------------------------------------------------
+# The frontend's BFF proves possession of a key on every call it makes to the api for a signed-in
+# user (DPoP), and the api binds each session to the key that proved its sign-in. auth.tf
+# generates the key, rotates it, and hands it to ca-frontend alone. docs/identity.md, "The BFF's
+# DPoP key", has the rotation and where the key is held.
+
+variable "enable_bff_dpop_key" {
+  type        = bool
+  default     = false
+  description = "Generate the BFF's DPoP signing key (EC P-256) and hand it to ca-frontend alone, as MASTERLY_BFF_DPOP_KEY (PKCS#8 PEM). The module replaces it every 90 days, at the first apply after the period ends, and keeps the outgoing key on ca-frontend as MASTERLY_BFF_DPOP_KEY_PREVIOUS for 60 minutes after each rotation, so sessions bound to it survive the change; the first apply after those 60 minutes removes it. Apply at least once between successive scheduled rotations: if both slots expire before the next apply, both keys are replaced together without an outgoing key, and users must sign in again once. With enable_key_vault the key is a Key Vault secret that ca-frontend reads with its own identity, which holds Key Vault Secrets User on that secret alone; without it, a Container App secret on ca-frontend. The private key is held in Terraform state. Off (default): the frontend generates a key per process, so DPoP-bound sessions do not survive a restart and cannot span frontend replicas. The key takes effect with the first frontend release after v0.145.0; the api's session binding and DPoP replay cache arrive with the first api release after v0.137.0, so on earlier images the key is set but unread. The api's DPoP replay cache has Azure Managed Redis (redis_offering = \"managed\", with enable_redis) as its target; the in-memory cache it uses without Redis is allowed on one api replica only, which api_max_replicas enforces."
 }
