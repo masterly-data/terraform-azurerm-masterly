@@ -572,16 +572,44 @@ variable "external_database_admin_url" {
   }
 }
 
+# Capacity profile (ADR 0120 §4): one input that sizes the services together. Each sized input
+# resolves in main.tf as the value set explicitly, else the profile's, else its earlier default,
+# and every validation that reads a sized input judges that resolved value (Terraform 1.9 and
+# later let a validation read a local value). A variable's own validation must name the variable
+# and cannot read a local built from it (that would be a cycle), so a check on a sized input
+# repeats the resolution from the profile's value: coalesce(var.x, local.capacity.x), or
+# local.capacity_postgres.x for the Postgres inputs, which is the same value as local.x in
+# main.tf. postgres_sku_name, a string, writes the same choice as a conditional, so an empty
+# string cannot make coalesce() fail.
+variable "capacity_profile" {
+  type        = string
+  default     = null
+  description = "Sizes the install's services together: the Postgres SKU, its built-in pooler (postgres_pgbouncer) and zone-redundant HA, and the minimum replicas of ca-api, ca-frontend and ca-workers. \"small\" (evaluation only; mode=production refuses it): B_Standard_B1ms, no pooler, no HA, minimum replicas 1/1/1. \"standard\": GP_Standard_D2ds_v5, pooler and HA on, 2/1/1. \"enterprise\": GP_Standard_D4ds_v5, pooler and HA on, 2/2/2, sized for Service Bus Premium. A profile never changes the topology, never raises a maximum replica count, and never chooses a Service Bus tier: enterprise with enable_service_bus = true needs servicebus_sku set, because moving an existing namespace to or from Premium replaces it. Each sized input set explicitly wins over the profile, and the profile's Postgres values do not apply with external_database_url. Null (default) changes nothing: every input keeps its earlier default. Changing the Postgres SKU or turning on HA updates the server in place but restarts it, so plan the change in a maintenance window; the pooler needs an api image that carries MAS-1615. See docs/scaling.md."
+
+  # coalesce() keeps the check total for null; the explicit != "" refuses an empty string, which
+  # an unset TF_VAR_ or a rendered template produces, rather than reading it as unset.
+  validation {
+    condition     = var.capacity_profile != "" && contains(["small", "standard", "enterprise"], coalesce(var.capacity_profile, "small"))
+    error_message = "capacity_profile must be \"small\", \"standard\" or \"enterprise\", or null (unset) to keep each input's own default."
+  }
+
+  validation {
+    condition     = var.mode != "production" || var.capacity_profile != "small"
+    error_message = "capacity_profile = \"small\" is for evaluation only, and mode = \"production\" refuses it whatever the other inputs say: it sizes a burstable Postgres server with no HA. Set \"standard\" or \"enterprise\", or leave capacity_profile unset and size each input yourself."
+  }
+}
+
 variable "postgres_sku_name" {
   type        = string
-  default     = "B_Standard_B1ms"
-  description = "Postgres Flexible Server SKU (burstable B1ms default — demo/small-install sized). Burstable SKUs do not support zone-redundant HA; mode=production refuses them on the provisioned starter server."
+  default     = null
+  description = "Postgres Flexible Server SKU. Unset (null), capacity_profile decides (B_Standard_B1ms for small, GP_Standard_D2ds_v5 for standard, GP_Standard_D4ds_v5 for enterprise), and with no profile it is B_Standard_B1ms, the earlier default (burstable, demo/small-install sized). Burstable SKUs do not support zone-redundant HA; mode=production refuses them on the provisioned starter server."
 
   # Refuse the dev-grade burstable default in production (ADR 0066): burstable SKUs run on
   # CPU credits and cannot carry zone-redundant HA — unfit for a production data plane. Only
   # bites when the module actually provisions the starter server (BYO-DB ignores this input).
+  # Judged on the resolved SKU (main.tf), so the unset default cannot slip past it.
   validation {
-    condition     = var.mode != "production" || var.external_database_url != null || !can(regex("^B_", var.postgres_sku_name))
+    condition     = var.mode != "production" || var.external_database_url != null || !can(regex("^B_", var.postgres_sku_name != null ? var.postgres_sku_name : local.capacity_postgres.postgres_sku_name))
     error_message = "mode=production refuses a burstable Postgres SKU (B_*) on the provisioned starter server — set postgres_sku_name to a General Purpose (GP_*) or Memory Optimized (MO_*) SKU, e.g. \"GP_Standard_D2ds_v5\", or bring your own database via external_database_url."
   }
 }
@@ -592,7 +620,7 @@ variable "postgres_server_parameters" {
   description = "Postgres server parameters to set on the starter Flexible Server, as name => value (for example { max_connections = \"400\" }). Applied beside the three log parameters the module sets itself. Refused: log_error_verbosity, log_parameter_max_length_on_error and log_parameter_max_length (they keep values out of the server's error log), and any entry at all when external_database_url is set (the server is then not the module's). A static parameter, max_connections among them, takes effect only after a server restart; the azurerm provider restarts the server on apply unless the root configuration turns restart_server_on_configuration_value_change off. When max_connections is set here, the connections alert measures against it (alert_postgres_max_connections still wins)."
 
   # The keys the module owns: keep this list equal to the keys of local.postgres_log_parameters
-  # in main.tf (a variable validation cannot read locals). The ADR 0080 log redaction must not be
+  # in main.tf. The ADR 0080 log redaction must not be
   # weakened from here.
   validation {
     condition     = length(setintersection([for k in keys(var.postgres_server_parameters) : lower(k)], ["log_error_verbosity", "log_parameter_max_length_on_error", "log_parameter_max_length"])) == 0
@@ -619,23 +647,25 @@ variable "postgres_server_parameters" {
 
 variable "postgres_pgbouncer" {
   type        = bool
-  default     = false
-  description = "Turn on the Flexible Server's built-in PgBouncer in transaction mode (ADR 0003). The module sets pgbouncer.enabled = true, pgbouncer.pool_mode = TRANSACTION and pgbouncer.max_prepared_statements = 100 (above 0, so prepared statements survive transaction pooling), opens port 6432 on the endpoints subnet, points MASTERLY_DATABASE_URL at the pooler on 6432, sets MASTERLY_DATABASE_POOLER = transaction, and gives ca-api and ca-workers MASTERLY_DATABASE_DIRECT_URL (the same server, role and database on 5432, as a secret) for work a transaction pooler cannot carry. Needs an api image that carries MAS-1615 (masterly-application-backend PR #488): without one the api cannot use the pooler. Refused on a burstable (B_*) postgres_sku_name, where Azure does not offer built-in PgBouncer, with external_database_url (the database is not the module's), and when postgres_server_parameters sets a pgbouncer.* key (the module owns them). Default false changes nothing."
+  default     = null
+  description = "Turn on the Flexible Server's built-in PgBouncer in transaction mode (ADR 0003). Unset (null), capacity_profile decides (on for standard and enterprise, off for small), and with no profile, or with external_database_url, it is off, the earlier default. The module sets pgbouncer.enabled = true, pgbouncer.pool_mode = TRANSACTION and pgbouncer.max_prepared_statements = 100 (above 0, so prepared statements survive transaction pooling), opens port 6432 on the endpoints subnet, points MASTERLY_DATABASE_URL at the pooler on 6432, sets MASTERLY_DATABASE_POOLER = transaction, and gives ca-api and ca-workers MASTERLY_DATABASE_DIRECT_URL (the same server, role and database on 5432, as a secret) for work a transaction pooler cannot carry. Needs an api image that carries MAS-1615 (masterly-application-backend PR #488): without one the api cannot use the pooler. Refused on a burstable (B_*) postgres_sku_name, where Azure does not offer built-in PgBouncer, with external_database_url (the database is not the module's), and when postgres_server_parameters sets a pgbouncer.* key (the module owns them). Unset with no capacity_profile changes nothing."
 
+  # Each check judges the resolved pooler and SKU (main.tf), so a profile that turns the pooler
+  # on is held to the same rules as postgres_pgbouncer = true.
   validation {
-    condition     = !var.postgres_pgbouncer || !can(regex("^B_", var.postgres_sku_name))
-    error_message = "postgres_pgbouncer = true is refused on a burstable (B_*) postgres_sku_name: Azure does not offer the built-in PgBouncer on burstable SKUs. Set postgres_sku_name to a General Purpose (GP_*) or Memory Optimized (MO_*) SKU, or leave postgres_pgbouncer false."
+    condition     = !coalesce(var.postgres_pgbouncer, local.capacity_postgres.postgres_pgbouncer) || !can(regex("^B_", local.postgres_sku_name))
+    error_message = "The built-in PgBouncer (postgres_pgbouncer = true, or capacity_profile \"standard\" or \"enterprise\" with postgres_pgbouncer unset) is refused on a burstable (B_*) postgres_sku_name: Azure does not offer the built-in PgBouncer on burstable SKUs. Set postgres_sku_name to a General Purpose (GP_*) or Memory Optimized (MO_*) SKU, or set postgres_pgbouncer = false."
   }
 
   validation {
-    condition     = !var.postgres_pgbouncer || var.external_database_url == null
+    condition     = !coalesce(var.postgres_pgbouncer, local.capacity_postgres.postgres_pgbouncer) || var.external_database_url == null
     error_message = "postgres_pgbouncer = true is refused with external_database_url: the module provisions no Postgres server then, so there is no built-in PgBouncer to turn on. Run your own pooler in front of your database."
   }
 
   # Keep this list equal to the keys of local.postgres_pgbouncer_parameters in main.tf.
   validation {
-    condition     = !var.postgres_pgbouncer || length(setintersection([for k in keys(var.postgres_server_parameters) : lower(k)], ["pgbouncer.enabled", "pgbouncer.pool_mode", "pgbouncer.max_prepared_statements"])) == 0
-    error_message = "postgres_pgbouncer = true is refused when postgres_server_parameters sets pgbouncer.enabled, pgbouncer.pool_mode or pgbouncer.max_prepared_statements: the module owns these keys when the pooler is on. Remove them from postgres_server_parameters."
+    condition     = !coalesce(var.postgres_pgbouncer, local.capacity_postgres.postgres_pgbouncer) || length(setintersection([for k in keys(var.postgres_server_parameters) : lower(k)], ["pgbouncer.enabled", "pgbouncer.pool_mode", "pgbouncer.max_prepared_statements"])) == 0
+    error_message = "The built-in PgBouncer (postgres_pgbouncer = true, or capacity_profile \"standard\" or \"enterprise\" with postgres_pgbouncer unset) is refused when postgres_server_parameters sets pgbouncer.enabled, pgbouncer.pool_mode or pgbouncer.max_prepared_statements: the module owns these keys when the pooler is on. Remove them from postgres_server_parameters, or set postgres_pgbouncer = false."
   }
 }
 
@@ -694,15 +724,16 @@ variable "postgres_geo_redundant_backup" {
 
 variable "postgres_zone_redundant_ha" {
   type        = bool
-  default     = false
-  description = "Zone-redundant high availability for the provisioned Postgres server (standby in another AZ, same region). Requires a General Purpose or Memory Optimized SKU — not supported on the burstable default. Required by mode=production on the provisioned starter server."
+  default     = null
+  description = "Zone-redundant high availability for the provisioned Postgres server (standby in another AZ, same region). Unset (null), capacity_profile decides (on for standard and enterprise, off for small), and with no profile it is off, the earlier default. Requires a General Purpose or Memory Optimized SKU — not supported on the burstable default. Required by mode=production on the provisioned starter server."
 
   # Production requires an HA standby on the provisioned starter server (ADR 0066). Pairs
   # with the non-burstable SKU guard above — both must be satisfied together. BYO-DB owns
   # its own availability posture, so this only bites when the module provisions Postgres.
+  # Judged on the resolved value (main.tf), so the unset default cannot slip past it.
   validation {
-    condition     = var.mode != "production" || var.external_database_url != null || var.postgres_zone_redundant_ha
-    error_message = "mode=production requires postgres_zone_redundant_ha=true on the provisioned starter server (with a General Purpose or Memory Optimized postgres_sku_name), or bring your own HA database via external_database_url."
+    condition     = var.mode != "production" || var.external_database_url != null || coalesce(var.postgres_zone_redundant_ha, local.capacity_postgres.postgres_zone_redundant_ha)
+    error_message = "mode=production requires zone-redundant HA on the provisioned starter server: set postgres_zone_redundant_ha = true (with a General Purpose or Memory Optimized postgres_sku_name), or capacity_profile \"standard\" or \"enterprise\" with postgres_zone_redundant_ha unset, or bring your own HA database via external_database_url."
   }
 }
 
@@ -715,7 +746,7 @@ variable "postgres_private_dns_zone_id" {
 variable "api_max_replicas" {
   type        = number
   default     = 1
-  description = "Maximum api replicas. > 1 requires enable_redis: sessions must live in the redis registry to hold across replicas (ADR 0066). mode=production requires >= 2 (no single-replica production api)."
+  description = "Maximum api replicas. > 1 requires enable_redis: sessions must live in the redis registry to hold across replicas (ADR 0066). mode=production requires >= 2 (no single-replica production api). A capacity_profile does not raise it: with the floor of 2 that standard and enterprise set, set it to at least 2."
 
   validation {
     condition     = var.api_max_replicas == 1 || var.enable_redis
@@ -738,39 +769,41 @@ variable "api_max_replicas" {
 
 variable "api_min_replicas" {
   type        = number
-  default     = 1
-  description = "Minimum api replicas. 0 enables scale-to-zero (ACA's default HTTP scale rule wakes the app on the next request) — a cost posture for idle installs. Costs of 0 without enable_redis: the in-memory session registry is dropped when the last replica stops (users re-login), and the in-process worker loop only polls while a replica is up, so async jobs stall until the next HTTP request."
+  default     = null
+  description = "Minimum api replicas. Unset (null), capacity_profile decides (2 for standard and enterprise, 1 for small), and with no profile it is 1, the earlier default. 0 enables scale-to-zero (ACA's default HTTP scale rule wakes the app on the next request) — a cost posture for idle installs. Costs of 0 without enable_redis: the in-memory session registry is dropped when the last replica stops (users re-login), and the in-process worker loop only polls while a replica is up, so async jobs stall until the next HTTP request."
 
+  # Each check judges the resolved value (main.tf): the one set here, else the profile's.
   validation {
-    condition     = var.api_min_replicas >= 0
+    condition     = coalesce(var.api_min_replicas, local.capacity.api_min_replicas) >= 0
     error_message = "api_min_replicas must be at least 0."
   }
 
   validation {
-    condition     = var.api_min_replicas <= var.api_max_replicas
-    error_message = "api_min_replicas must not exceed api_max_replicas."
+    condition     = coalesce(var.api_min_replicas, local.capacity.api_min_replicas) <= var.api_max_replicas
+    error_message = "api_min_replicas (${coalesce(var.api_min_replicas, local.capacity.api_min_replicas)}, which capacity_profile sets when api_min_replicas is unset) must not exceed api_max_replicas. A capacity profile does not raise api_max_replicas: set it to at least ${coalesce(var.api_min_replicas, local.capacity.api_min_replicas)}, which above 1 needs enable_redis."
   }
 
   # No cold starts in production: a scaled-to-zero api takes seconds of wake latency on the
   # first request, and production already requires api_max_replicas >= 2.
   validation {
-    condition     = var.mode != "production" || var.api_min_replicas >= 1
+    condition     = var.mode != "production" || coalesce(var.api_min_replicas, local.capacity.api_min_replicas) >= 1
     error_message = "mode=production requires api_min_replicas >= 1 — scale-to-zero adds cold-start latency on the first request after idle."
   }
 }
 
 variable "frontend_min_replicas" {
   type        = number
-  default     = 1
-  description = "Minimum frontend replicas. 0 enables scale-to-zero (wakes on the next request) — a cost posture for idle installs. The frontend is stateless beyond its BFF session cookie handling, so the only cost of 0 is cold-start latency."
+  default     = null
+  description = "Minimum frontend replicas. Unset (null), capacity_profile decides (2 for enterprise, 1 otherwise), and with no profile it is 1, the earlier default. 0 enables scale-to-zero (wakes on the next request) — a cost posture for idle installs. The frontend is stateless beyond its BFF session cookie handling, so the only cost of 0 is cold-start latency."
 
+  # Each check judges the resolved value (main.tf): the one set here, else the profile's.
   validation {
-    condition     = var.frontend_min_replicas >= 0
+    condition     = coalesce(var.frontend_min_replicas, local.capacity.frontend_min_replicas) >= 0
     error_message = "frontend_min_replicas must be at least 0."
   }
 
   validation {
-    condition     = var.mode != "production" || var.frontend_min_replicas >= 1
+    condition     = var.mode != "production" || coalesce(var.frontend_min_replicas, local.capacity.frontend_min_replicas) >= 1
     error_message = "mode=production requires frontend_min_replicas >= 1 — scale-to-zero adds cold-start latency on the first request after idle."
   }
 }
@@ -778,7 +811,7 @@ variable "frontend_min_replicas" {
 variable "frontend_max_replicas" {
   type        = number
   default     = 3
-  description = "Maximum frontend replicas. Container Apps adds replicas on HTTP load up to this number. The default of 3 is what every install had before this input existed, so an install that does not set it plans no change. Must be at least 1 and at least frontend_min_replicas."
+  description = "Maximum frontend replicas. Container Apps adds replicas on HTTP load up to this number. The default of 3 is what every install had before this input existed, so an install that does not set it plans no change. Must be at least 1 and at least frontend_min_replicas (or the minimum capacity_profile sets); a profile does not raise it."
 
   validation {
     condition     = var.frontend_max_replicas >= 1
@@ -786,8 +819,8 @@ variable "frontend_max_replicas" {
   }
 
   validation {
-    condition     = var.frontend_min_replicas <= var.frontend_max_replicas
-    error_message = "frontend_min_replicas must not exceed frontend_max_replicas."
+    condition     = local.frontend_min_replicas <= var.frontend_max_replicas
+    error_message = "frontend_min_replicas (${local.frontend_min_replicas}, which capacity_profile sets when frontend_min_replicas is unset) must not exceed frontend_max_replicas. A capacity profile does not raise frontend_max_replicas: set it to at least ${local.frontend_min_replicas}."
   }
 }
 
@@ -1017,7 +1050,7 @@ variable "enable_service_bus" {
 variable "servicebus_sku" {
   type        = string
   default     = null
-  description = "Service Bus namespace SKU: Basic, Standard or Premium. Required when mode = \"production\" and enable_service_bus = true, with no default on purpose: changing an existing namespace to or from Premium replaces it (Azure does not convert a namespace between Premium and the other tiers in place), and the module cannot tell a new install from an existing one, so it asks rather than guesses. Premium is the recommendation in production: the namespace runs private, with public network access disabled and a private endpoint in the install's network, which is Azure's recommended baseline. It is provisioned at one messaging unit, billed at about $677 per month in Sweden Central. Standard (about $10 per month base charge) is the documented opt-down: it cannot host a private endpoint and keeps a public endpoint, a departure the README describes. Set Standard to keep an existing Standard namespace unchanged. Outside production, null means Standard."
+  description = "Service Bus namespace SKU: Basic, Standard or Premium. Required when mode = \"production\" and enable_service_bus = true, with no default on purpose: changing an existing namespace to or from Premium replaces it (Azure does not convert a namespace between Premium and the other tiers in place), and the module cannot tell a new install from an existing one, so it asks rather than guesses. Premium is the recommendation in production: the namespace runs private, with public network access disabled and a private endpoint in the install's network, which is Azure's recommended baseline. It is provisioned at one messaging unit, billed at about $677 per month in Sweden Central. Standard (about $10 per month base charge) is the documented opt-down: it cannot host a private endpoint and keeps a public endpoint, a departure the README describes. Set Standard to keep an existing Standard namespace unchanged. Outside production, null means Standard. capacity_profile never chooses the tier: with capacity_profile = \"enterprise\", which is sized for Premium, and enable_service_bus = true, this input is required in every mode."
 
   validation {
     # coalesce() keeps the check total, so null reaches the second validation below instead of
@@ -1031,6 +1064,14 @@ variable "servicebus_sku" {
   validation {
     condition     = var.mode != "production" || !var.enable_service_bus || var.servicebus_sku != null
     error_message = "mode = \"production\" with enable_service_bus = true requires servicebus_sku. Set \"Premium\" (recommended): the namespace runs private, with public network access disabled and a private endpoint in the install's network, at about $677 per month per messaging unit in Sweden Central. Set \"Standard\" to opt down to a public endpoint (about $10 per month), and to keep an existing Standard namespace unchanged. Moving an existing namespace to or from Premium replaces it, together with its queue and role assignments."
+  }
+
+  # A profile never moves a namespace across Premium on its own: unset still means Standard
+  # (main.tf), so a profile sized for another tier (enterprise, local.capacity_profiles) asks for
+  # the tier instead of choosing it. The module cannot tell a new namespace from an existing one.
+  validation {
+    condition     = var.servicebus_sku != null || !var.enable_service_bus || local.capacity.servicebus_sku == "Standard"
+    error_message = "capacity_profile = \"enterprise\" with enable_service_bus = true requires servicebus_sku. Premium is enterprise's tier: set servicebus_sku = \"Premium\" for a new namespace. Set servicebus_sku = \"Standard\" to keep an existing Standard namespace: moving a namespace to or from Premium replaces it, together with its queue and role assignments, so the profile does not choose the tier for you."
   }
 }
 

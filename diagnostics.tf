@@ -151,7 +151,7 @@ locals {
   diag_redis         = local.diagnostics_enabled && local.redis_enabled
   diag_key_vault     = local.diagnostics_enabled && var.enable_key_vault
   diag_service_bus   = local.diagnostics_enabled && var.enable_service_bus
-  postgres_burstable = local.provision_postgres && can(regex("^B_", var.postgres_sku_name))
+  postgres_burstable = local.provision_postgres && can(regex("^B_", local.postgres_sku_name))
 
   # Alert action-group resolution: an injected group wins, else the module's own (created
   # only when alert_email is set), else none.
@@ -180,15 +180,15 @@ locals {
   # night.
   app_silent_apps = {
     for app, id in local.app_metrics_apps : app => id
-    if lookup({ api = var.api_min_replicas, frontend = var.frontend_min_replicas, workers = var.workers_min_replicas }, app) >= 1
+    if lookup({ api = local.api_min_replicas, frontend = local.frontend_min_replicas, workers = local.workers_min_replicas }, app) >= 1
   }
 
   # Which apps get a replica-availability alert. See the alert itself for why an app that is
   # allowed to sit at zero replicas is deliberately left out rather than alerted on.
   availability_alertable_apps = merge(
-    var.api_min_replicas >= 1 ? { api = module.api.id } : {},
-    var.frontend_min_replicas >= 1 ? { frontend = module.frontend.id } : {},
-    var.enable_workers && var.workers_min_replicas >= 1 ? { workers = module.workers[0].id } : {},
+    local.api_min_replicas >= 1 ? { api = module.api.id } : {},
+    local.frontend_min_replicas >= 1 ? { frontend = module.frontend.id } : {},
+    var.enable_workers && local.workers_min_replicas >= 1 ? { workers = module.workers[0].id } : {},
   )
 
   # Which apps emit the readiness signal the wedged-replica alert reads. Both serving apps do
@@ -229,12 +229,12 @@ locals {
     B1ms = 2, B2s = 4, B2ms = 8, B4ms = 16, B8ms = 32, B12ms = 48, B16ms = 64, B20ms = 80
   }
   postgres_sku_memory_gib = (
-    can(regex("^B_Standard_(B[0-9]+m?s)$", var.postgres_sku_name))
-    ? lookup(local.postgres_sku_memory_gib_burstable, regex("^B_Standard_(B[0-9]+m?s)$", var.postgres_sku_name)[0], null)
-    : can(regex("^GP_Standard_D([0-9]+)", var.postgres_sku_name))
-    ? 4 * tonumber(regex("^GP_Standard_D([0-9]+)", var.postgres_sku_name)[0])
-    : can(regex("^MO_Standard_E([0-9]+)", var.postgres_sku_name))
-    ? 8 * tonumber(regex("^MO_Standard_E([0-9]+)", var.postgres_sku_name)[0])
+    can(regex("^B_Standard_(B[0-9]+m?s)$", local.postgres_sku_name))
+    ? lookup(local.postgres_sku_memory_gib_burstable, regex("^B_Standard_(B[0-9]+m?s)$", local.postgres_sku_name)[0], null)
+    : can(regex("^GP_Standard_D([0-9]+)", local.postgres_sku_name))
+    ? 4 * tonumber(regex("^GP_Standard_D([0-9]+)", local.postgres_sku_name)[0])
+    : can(regex("^MO_Standard_E([0-9]+)", local.postgres_sku_name))
+    ? 8 * tonumber(regex("^MO_Standard_E([0-9]+)", local.postgres_sku_name)[0])
     : null
   )
   postgres_default_max_connections = (
@@ -273,7 +273,7 @@ locals {
 check "postgres_connections_alert_has_a_limit" {
   assert {
     condition     = !local.diag_postgres || local.postgres_max_connections > 0
-    error_message = "No Postgres connections alert was created: the module does not know the default max_connections of postgres_sku_name \"${var.postgres_sku_name}\". Set max_connections in postgres_server_parameters, or alert_postgres_max_connections, to the server's max_connections to create it."
+    error_message = "No Postgres connections alert was created: the module does not know the default max_connections of postgres_sku_name \"${local.postgres_sku_name}\". Set max_connections in postgres_server_parameters, or alert_postgres_max_connections, to the server's max_connections to create it."
   }
 }
 
