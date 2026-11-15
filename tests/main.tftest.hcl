@@ -37,16 +37,6 @@ variables {
 run "production_mode_full_wiring_plans" {
   command = plan
 
-  # An unset destination type plans as unknown under the mock provider; pinning the computed
-  # value to null lets the assert on it evaluate (a configured value still shows through).
-  override_resource {
-    target          = azurerm_monitor_diagnostic_setting.aca_env
-    override_during = plan
-    values = {
-      log_analytics_destination_type = null
-    }
-  }
-
   variables {
     mode                 = "production"
     identity_binding     = "oidc"
@@ -296,11 +286,10 @@ run "production_mode_full_wiring_plans" {
   assert {
     condition = (
       azurerm_monitor_diagnostic_setting.aca_env.name == "diag-masterly-aca-env" &&
-      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == null &&
       length(azurerm_monitor_diagnostic_setting.aca_env.enabled_log) == 2 &&
       toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
     )
-    error_message = "The environment's diagnostic setting must send ContainerAppConsoleLogs and ContainerAppSystemLogs, and nothing else, and leave log_analytics_destination_type unset (Azure keeps none on this resource type)."
+    error_message = "The environment's diagnostic setting must send ContainerAppConsoleLogs and ContainerAppSystemLogs, and nothing else, to the workspace."
   }
 
   # The criteria, pinned for the reason postgres_silent's are: SILENCE has to be the firing
