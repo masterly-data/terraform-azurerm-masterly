@@ -183,7 +183,7 @@ run "nsgs_present_when_module_owns_network" {
     error_message = "The endpoints subnet's NSG must deny every inbound flow it did not admit."
   }
 
-  # Container Apps platform requirements for a Consumption-only environment. They are
+  # Container Apps platform requirements for a VNet-integrated environment. They are
   # harmless while nothing denies, and load-bearing the moment something does: drop either
   # one and the environment provisions and then serves nothing.
   assert {
@@ -457,7 +457,7 @@ run "egress_firewall_route_table_id_attaches_your_table" {
   }
 }
 
-# Guard: a Consumption-only environment, on which Azure ignores the route. Refused rather than
+# Guard: an environment with no workload profile, on which Azure ignores the route. Refused rather than
 # attached, because egress would stay open while it is believed forced.
 run "egress_firewall_on_a_consumption_only_environment_is_rejected" {
   command = plan
@@ -1978,7 +1978,7 @@ run "egress_firewall_next_hop_attaches_the_route_table_to_snet_aca_only" {
 }
 
 # The same install, planned against the state the run above left, with Azure now reporting the
-# environment as Consumption-only (no workloadProfiles): the read's null becomes an empty list, and
+# environment with no workload profile (no workloadProfiles): the read's null becomes an empty list, and
 # the association is refused.
 run "egress_firewall_is_refused_when_azure_lists_no_workload_profile" {
   command   = plan

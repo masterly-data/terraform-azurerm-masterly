@@ -1,8 +1,22 @@
-# Outputs of environment.tf: the Container App Environment.
+# Outputs of environment.tf: the Container App Environments.
 
 output "aca_environment_id" {
   value       = module.aca_env.id
-  description = "Resource ID of the Container App Environment."
+  description = "Resource ID of the Container App Environment the apps run in (aca-<name_prefix>)."
+}
+
+output "container_app_environments" {
+  value = {
+    for k in ["front", "app", "workers"] : k => (
+      contains(keys(module.environments), k) ? {
+        id                = module.environments[k].id
+        default_domain    = module.environments[k].default_domain
+        static_ip_address = module.environments[k].static_ip_address
+        internal          = local.container_app_environment_internal[k]
+      } : null
+    )
+  }
+  description = "The front, app and workers Container Apps environments (ADR 0120), keyed front, app and workers: id, default_domain, static_ip_address and internal (true when the environment has an internal load balancer: app and workers always, the front when aca_internal_load_balancer is true). A hub that owns DNS (environment_private_dns_enabled = false) creates, for each internal environment, a private DNS zone named default_domain with a wildcard (*) A record to static_ip_address, linked to the install's VNet. A key's value is null where the install has no such environment, which is when environment_subnet_ids has no subnet for it. No app runs in these environments yet."
 }
 
 output "egress_route" {
