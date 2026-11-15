@@ -40,14 +40,15 @@ module "aca_env" {
 # Not gated on enable_diagnostics: the environment sent these logs to the workspace in every
 # mode before it moved to Azure Monitor, and the diagnostic bundle reads them in every mode.
 #
-# "Dedicated" writes the resource-specific ContainerAppConsoleLogs and ContainerAppSystemLogs
-# tables, the only ones the alerts and the diagnostic bundle read. The legacy custom-log (_CL)
-# tables get no new rows after the apply.
+# A Container Apps environment's categories always land in the resource-specific
+# ContainerAppConsoleLogs and ContainerAppSystemLogs tables, the only ones the alerts and the
+# diagnostic bundle read. Azure keeps no destination type on this resource type (it reads back
+# null), so none is set here: setting one made every plan show a change. The legacy custom-log
+# (_CL) tables get no new rows.
 resource "azurerm_monitor_diagnostic_setting" "aca_env" {
-  name                           = "diag-${var.name_prefix}-aca-env"
-  target_resource_id             = module.aca_env.id
-  log_analytics_workspace_id     = module.logs.id
-  log_analytics_destination_type = "Dedicated"
+  name                       = "diag-${var.name_prefix}-aca-env"
+  target_resource_id         = module.aca_env.id
+  log_analytics_workspace_id = module.logs.id
 
   enabled_log {
     category = "ContainerAppConsoleLogs"

@@ -584,10 +584,9 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
     condition = (
       azurerm_monitor_diagnostic_setting.aca_env.name == "diag-masterly-aca-env" &&
       azurerm_monitor_diagnostic_setting.aca_env.target_resource_id == module.aca_env.id &&
-      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == "Dedicated" &&
       toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
     )
-    error_message = "diag-<prefix>-aca-env must be unchanged: on aca-<prefix>, Dedicated, the console and system logs."
+    error_message = "diag-<prefix>-aca-env must be unchanged: on aca-<prefix>, the console and system logs."
   }
 
   assert {

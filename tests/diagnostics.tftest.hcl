@@ -141,10 +141,9 @@ run "one_diagnostic_setting_targets_the_environment" {
   assert {
     condition = (
       azurerm_monitor_diagnostic_setting.aca_env.target_resource_id == module.aca_env.id &&
-      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == "Dedicated" &&
       toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
     )
-    error_message = "The setting on the environment must send ContainerAppConsoleLogs and ContainerAppSystemLogs to the resource-specific (Dedicated) tables."
+    error_message = "The setting on the environment must send ContainerAppConsoleLogs and ContainerAppSystemLogs. (That it leaves log_analytics_destination_type unset is asserted in diagnostics_env_destination.tftest.hcl.)"
   }
 }
 
@@ -287,7 +286,6 @@ run "container_logs_reach_the_workspace_with_diagnostics_off" {
     condition = (
       length(azurerm_monitor_diagnostic_setting.app) == 0 &&
       length(azurerm_monitor_diagnostic_setting.postgres) == 0 &&
-      azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type == "Dedicated" &&
       toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"]) &&
       module.aca_env.logs_destination == "azure-monitor"
     )
