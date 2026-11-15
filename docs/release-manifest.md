@@ -153,7 +153,7 @@ exceptions. Both cover `api` and `frontend` only, never a per-role image:
   `<registry>/api:<tag>` or `<registry>/frontend:<tag>`, because that is the only place its build
   was pushed. The repository must be exactly the image's name: `candidate/api` or any other
   repository is still refused, and `latest` never has this exception. Today that is `0.15.0` and
-  `0.16.0`; `0.17.0`, older and with a `known_issue`, meets it too.
+  `0.16.0`.
 
 Where each entry's images are:
 
