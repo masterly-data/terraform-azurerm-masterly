@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-131 inputs in 28 groups.
+132 inputs in 29 groups.
 
 ## Groups
 
@@ -30,6 +30,7 @@ each one that is missing.
 - [Built-in sign-in](#built-in-sign-in) (2)
 - [Custom domain](#custom-domain) (2)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
+- [The front, app and workers environments (ADR 0120)](#the-front-app-and-workers-environments-adr-0120) (1)
 - [Images and registry pull credential](#images-and-registry-pull-credential) (6)
 - [Key Vault database secret names](#key-vault-database-secret-names) (1)
 - [Diagnostics and alerts](#diagnostics-and-alerts) (12)
@@ -247,6 +248,14 @@ In `variables-environment.tf`.
 | `log_query_public_access` | `bool` | `true` | Whether the install's Log Analytics workspace answers queries from the public network. |
 | `log_retention_days` | `number` | `30` | Days the install's Log Analytics workspace keeps what it holds, for every table except AZKVAuditLogs (which follows security_log_retention_days): the apps' console and system logs, the data-plane resources' logs and t... |
 | `security_log_retention_days` | `number` | `90` | Days the install's Log Analytics workspace keeps the AZKVAuditLogs table, which holds the Key Vault audit events: every operation on the install's vault, successful or refused, with the identity that made it (30-730). |
+
+## The front, app and workers environments (ADR 0120)
+
+In `variables-environment.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `environment_private_dns_enabled` | `bool` | `true` | Whether the module creates the private DNS that resolves the front, app and workers Container Apps environments inside the VNet. |
 
 ## Images and registry pull credential
 

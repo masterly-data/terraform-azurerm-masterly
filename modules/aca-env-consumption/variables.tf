@@ -23,7 +23,7 @@ variable "tags" {
 variable "infrastructure_subnet_id" {
   type        = string
   default     = null
-  description = "Subnet for VNet integration (consumption-only environments need /23 or larger). Null = no VNet. CREATE-TIME ONLY: changing this replaces the environment and its FQDNs."
+  description = "Subnet for VNet integration, delegated to Microsoft.App/environments (the root module gives it a /23). Null = no VNet. CREATE-TIME ONLY: changing this replaces the environment and its FQDNs."
 }
 
 variable "internal_load_balancer_enabled" {

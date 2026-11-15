@@ -18,7 +18,7 @@ resource "azurerm_container_app_environment" "this" {
   logs_destination = "azure-monitor"
 
   # SELF-HOSTED EXTENSION: create-time only — changing it REPLACES the environment
-  # (and with it the apps' FQDNs). Consumption-only environments need a /23 subnet.
+  # (and with it the apps' FQDNs). The root module gives it a /23 subnet.
   infrastructure_subnet_id       = var.infrastructure_subnet_id
   internal_load_balancer_enabled = var.internal_load_balancer_enabled
 
@@ -67,7 +67,7 @@ resource "azurerm_container_app_environment" "this" {
 # the caller asks (the root module does with egress_firewall). Azure honours a route table on the
 # infrastructure subnet only for a workload-profiles environment, which is one whose
 # properties.workloadProfiles lists at least one profile (Consumption, which Azure adds itself to an
-# environment on a delegated subnet, included). A Consumption-only environment has none.
+# environment on a delegated subnet, included). An environment without workload profiles has none.
 #
 # Read from Azure rather than from the resource's workload_profile attribute. This module declares no
 # profile, so that attribute plans as an empty list on a new environment whatever Azure then
@@ -82,6 +82,6 @@ data "azapi_resource" "environment" {
 }
 
 locals {
-  # null when Azure lists no profile, which is what a Consumption-only environment returns.
+  # null when Azure lists no profile, which is what an environment without workload profiles returns.
   workload_profiles = try(data.azapi_resource.environment[0].output.properties.workloadProfiles, null)
 }

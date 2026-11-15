@@ -451,7 +451,8 @@ exists:
 - Private endpoints are a Premium-tier feature, so Basic and Standard cannot be made private.
 - IP firewall rules are available on Standard, but they leave public network access enabled,
   so they do not meet the recommendation. They would also need a stable source address, which
-  this module's Consumption-only Container Apps environment does not have.
+  the environment the apps run in (`aca-<name_prefix>`) does not have unless `egress_firewall`
+  routes its traffic through your firewall.
 - Premium costs about $677 per month against Standard's $10, which is a choice the module
   leaves to you rather than making on your behalf.
 
