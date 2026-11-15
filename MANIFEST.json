@@ -122,16 +122,18 @@
     },
     "0.16.0": {
       "date": "2026-09-24",
+      "known_issue": "Its images masterly.azurecr.io/api:v0.133.5 and masterly.azurecr.io/frontend:v0.139.0 are unsigned and exist only at the registry root, never under release/. Move to 0.18.0 or later.",
       "images": {
-        "api": "masterly.azurecr.io/release/api:v0.133.5",
-        "frontend": "masterly.azurecr.io/release/frontend:v0.139.0"
+        "api": "masterly.azurecr.io/api:v0.133.5",
+        "frontend": "masterly.azurecr.io/frontend:v0.139.0"
       }
     },
     "0.15.0": {
       "date": "2026-09-07",
+      "known_issue": "Its images masterly.azurecr.io/api:v0.133.2 and masterly.azurecr.io/frontend:v0.138.2 are unsigned and exist only at the registry root, never under release/. Move to 0.18.0 or later.",
       "images": {
-        "api": "masterly.azurecr.io/release/api:v0.133.2",
-        "frontend": "masterly.azurecr.io/release/frontend:v0.138.2"
+        "api": "masterly.azurecr.io/api:v0.133.2",
+        "frontend": "masterly.azurecr.io/frontend:v0.138.2"
       }
     }
   }

@@ -55,10 +55,14 @@ that later proved never to have been published, and says so. The newest release 
 Every image a release names lives under `release/<image>`, for example
 `masterly.azurecr.io/release/api:<tag>`: the repository the release images are published to, and
 the one the module's own default image references name. An image under any other repository,
-such as the `masterly.azurecr.io/api:<tag>` path images were pushed to before, is refused. The
-one exception is the release whose image names a tag `image_floors` lists as unpublished: that
-image was never pushed anywhere, so no `release/` copy of it can exist, and its entry is left as
-it was cut.
+such as the `masterly.azurecr.io/api:<tag>` path images were pushed to before, is refused. There
+are two exceptions, both for the api and frontend images only, never a per-role one. The first is
+the release whose image names a tag `image_floors` lists as unpublished: that image was never
+pushed anywhere, so no `release/` copy of it can exist, and its entry is left as it was cut. The
+second is a release older than the newest whose entry records a `known_issue` and whose api or
+frontend image is the image's own repository at the registry root (`<registry>/api:<tag>`): its
+build was pushed only there, unsigned, and never copied under `release/`, and the entry says so.
+No other repository (`candidate/api`, `mirror/api`) and never the newest release.
 
 The shape the manifest guarantees to whoever parses it — field by field, and what may change
 without warning — is `docs/release-manifest.md`. That document and this script move together.
@@ -572,14 +576,24 @@ def check_release_paths(manifest: dict) -> None:
 
     The release images are published under `<registry>/release/<image>`, and that is the path the
     module's default image references name, so a release entry naming any other repository points
-    an install that copies its pair at a path the release was never published to. The exception is
-    a release that names a tag `image_floors` lists as unpublished: that image was never pushed
-    under any path, so no `release/` copy of it can exist and its entry stays as it was cut.
-    `check_image_floors` has already confined such a release to an older one with a `known_issue`.
+    an install that copies its pair at a path the release was never published to. There are two
+    exceptions, for the api and frontend images only; a per-role image is checked in every entry.
+
+    - A release that names a tag `image_floors` lists as unpublished: that image was never pushed
+      under any path, so no `release/` copy of it can exist and its entry stays as it was cut.
+      `check_image_floors` has already confined such a release to an older one with a
+      `known_issue`.
+    - A release older than the newest whose entry records a `known_issue` may name its api or
+      frontend image at the registry root, as `<registry>/<image>:<tag>`: its build was pushed
+      only there, unsigned, and the entry warns of it. The repository must be exactly `<image>`,
+      so `candidate/api` or `mirror/api` is still refused, and the newest release, the one the
+      stable channel resolves, never has the exception.
     """
     floors = manifest["image_floors"]
     for version in sorted(manifest["releases"], key=semver):
-        images = manifest["releases"][version]["images"]
+        entry = manifest["releases"][version]
+        images = entry["images"]
+        at_root_allowed = version != manifest["latest"] and "known_issue" in entry
         never_published = [
             name for name, image in images.items()
             if isinstance(image, str) and IMAGE_RE.match(image)
@@ -591,6 +605,9 @@ def check_release_paths(manifest: dict) -> None:
             parsed = IMAGE_RE.match(image) if isinstance(image, str) else None
             expected = f"{RELEASE_PATH}/{name}"
             if parsed and parsed.group("repo") == expected:
+                continue
+            if (at_root_allowed and name not in PER_ROLE_IMAGES
+                    and parsed and parsed.group("repo") == name):
                 continue
             raise CheckFailed(
                 f"{MANIFEST_PATH.name}: release {version} names {image!r} as its {name!r} image, "
@@ -1309,7 +1326,7 @@ LEGACY_REGISTRY = "masterly.azurecr.io"
 
 
 def _release_path_scenarios() -> list[tuple]:
-    """Every release image is a `release/<image>` reference, bar a never-published one."""
+    """Every release image is a `release/<image>` reference, bar the two api/frontend exceptions."""
     log = FIXTURE_CHANGELOG
     newest = FIXTURE_MANIFEST["latest"]
     oldest = min(FIXTURE_MANIFEST["releases"], key=semver)
@@ -1348,7 +1365,58 @@ def _release_path_scenarios() -> list[tuple]:
         "frontend": "sha256:" + "2" * 64,
         "worker_core": "sha256:" + "3" * 64,
     }
+    # An older release whose builds were pushed only to the registry root, unsigned, and says so.
+    root_api = f"{LEGACY_REGISTRY}/api:{oldest_api_tag}"
+    root_frontend = f"{LEGACY_REGISTRY}/frontend:{oldest_frontend_tag}"
+    root_issue = "its images are only at the registry root and unsigned; move to a newer release"
+    at_root_no_issue = older(api=root_api, frontend=root_frontend)
+    at_root = copy.deepcopy(at_root_no_issue)
+    at_root["releases"][oldest]["known_issue"] = root_issue
+    # The newest release never has the exception, known_issue or not.
+    newest_at_root = _with_image(newest, "api", legacy_api)
+    newest_at_root["releases"][newest]["known_issue"] = root_issue
+    # The exception is the image's own repository at the root, not any repository outside release/.
+    at_root_candidate = copy.deepcopy(at_root)
+    at_root_candidate["releases"][oldest]["images"]["api"] = (
+        f"{LEGACY_REGISTRY}/candidate/api:{oldest_api_tag}"
+    )
+    # Nor does it cover a per-role image: that is release/<role> only, in every entry.
+    at_root_per_role = copy.deepcopy(at_root)
+    at_root_per_role["releases"][oldest]["images"]["worker_core"] = (
+        f"{LEGACY_REGISTRY}/worker_core:{oldest_api_tag}"
+    )
+    at_root_per_role["releases"][oldest]["digests"] = {
+        "api": "sha256:" + "1" * 64,
+        "frontend": "sha256:" + "2" * 64,
+        "worker_core": "sha256:" + "3" * 64,
+    }
     cases = [
+        (
+            "the newest release naming a root-path api image is refused even with a known_issue",
+            newest_at_root, 1,
+            f"names {legacy_api!r} as its 'api' image, which is not a release/<image> reference",
+        ),
+        (
+            "an older release naming root-path api and frontend images without a known_issue "
+            "is refused",
+            at_root_no_issue, 1, "its repository should be 'release/api'",
+        ),
+        (
+            "an older release naming a root-path frontend image without a known_issue is refused",
+            older(frontend=root_frontend), 1, "its repository should be 'release/frontend'",
+        ),
+        (
+            "an older release with a known_issue naming candidate/api is refused",
+            at_root_candidate, 1, "its repository should be 'release/api'",
+        ),
+        (
+            "an older release with a known_issue naming a per-role image at the root is refused",
+            at_root_per_role, 1, "its repository should be 'release/worker_core'",
+        ),
+        (
+            "an older release with a known_issue may name its api and frontend images at the root",
+            at_root, 0, FIXTURE_MANIFEST["module"],
+        ),
         (
             "a never-published release still has its per-role images path-checked",
             never_published_per_role, 1, "its repository should be 'release/worker_core'",

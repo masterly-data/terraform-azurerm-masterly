@@ -1310,8 +1310,8 @@ manifest rather than copying out of this table — the table itself is generated
 | `0.19.0` | `masterly.azurecr.io/release/api:v0.134.0` | `masterly.azurecr.io/release/frontend:v0.142.0` | 2026-10-22 |
 | `0.18.0` | `masterly.azurecr.io/release/api:v0.133.13` | `masterly.azurecr.io/release/frontend:v0.141.0` | 2026-10-19 |
 | `0.17.0` | `masterly.azurecr.io/api:v0.133.11` | `masterly.azurecr.io/frontend:v0.139.5` | 2026-10-05 |
-| `0.16.0` | `masterly.azurecr.io/release/api:v0.133.5` | `masterly.azurecr.io/release/frontend:v0.139.0` | 2026-09-24 |
-| `0.15.0` | `masterly.azurecr.io/release/api:v0.133.2` | `masterly.azurecr.io/release/frontend:v0.138.2` | 2026-09-07 |
+| `0.16.0` | `masterly.azurecr.io/api:v0.133.5` | `masterly.azurecr.io/frontend:v0.139.0` | 2026-09-24 |
+| `0.15.0` | `masterly.azurecr.io/api:v0.133.2` | `masterly.azurecr.io/frontend:v0.138.2` | 2026-09-07 |
 <!-- release-manifest:end -->
 
 The image pair is what the module version was released against — the pair Masterly's own
