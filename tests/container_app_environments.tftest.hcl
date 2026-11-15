@@ -284,18 +284,9 @@ run "private_dns_for_the_internal_environments_on_a_public_install" {
     outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
   }
 
-  override_resource {
-    target          = azurerm_private_dns_zone.environment["app"]
-    override_during = plan
-    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/privateDnsZones/app-3c4d.swedencentral.azurecontainerapps.io" }
-  }
-
-  override_resource {
-    target          = azurerm_private_dns_zone.environment["workers"]
-    override_during = plan
-    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/privateDnsZones/workers-5e6f.swedencentral.azurecontainerapps.io" }
-  }
-
+  # A zone's id is computed at plan. The apply run records_and_links_are_in_their_own_environments_zone
+  # checks that each record and link uses its own environment's zone (`override_during = plan`
+  # needs Terraform 1.11 while CI runs 1.10).
   assert {
     condition = (
       toset(keys(azurerm_private_dns_zone.environment)) == toset(["app", "workers"]) &&
@@ -303,15 +294,6 @@ run "private_dns_for_the_internal_environments_on_a_public_install" {
       toset(keys(azurerm_private_dns_zone_virtual_network_link.environment)) == toset(["app", "workers"])
     )
     error_message = "On a public install only app and workers may get a private DNS zone, record and link; the public front gets none."
-  }
-
-  assert {
-    condition = alltrue([
-      for k in ["app", "workers"] :
-      azurerm_private_dns_a_record.environment[k].private_dns_zone_id == azurerm_private_dns_zone.environment[k].id &&
-      azurerm_private_dns_zone_virtual_network_link.environment[k].private_dns_zone_id == azurerm_private_dns_zone.environment[k].id
-    ])
-    error_message = "Each environment's record and link must be in that environment's own zone."
   }
 
   assert {
@@ -748,5 +730,80 @@ run "frontend_certificate_stays_on_aca_env" {
       alltrue([for e in module.environments : azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id != e.id])
     )
     error_message = "The frontend's environment certificate must stay on module.aca_env, not on a new environment."
+  }
+}
+
+# --- Apply: each record and link in its own zone -----------------------------------------------
+# A zone's id is known only once applied (`override_during = plan` needs Terraform 1.11 while CI
+# runs 1.10), so this run applies the private DNS on mock state and goes last. Each zone is pinned
+# to an id of its own, so a record or link wired to another environment's zone compares unequal.
+run "records_and_links_are_in_their_own_environments_zone" {
+  command = apply
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_internal_load_balancer  = true
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  plan_options {
+    target = [
+      azurerm_private_dns_a_record.environment,
+      azurerm_private_dns_zone_virtual_network_link.environment,
+    ]
+  }
+
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.5.10" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.environment["front"]
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/privateDnsZones/front-1a2b.swedencentral.azurecontainerapps.io" }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.environment["app"]
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/privateDnsZones/app-3c4d.swedencentral.azurecontainerapps.io" }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.environment["workers"]
+    values = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/privateDnsZones/workers-5e6f.swedencentral.azurecontainerapps.io" }
+  }
+
+  assert {
+    condition = (
+      toset(keys(azurerm_private_dns_zone.environment)) == toset(["front", "app", "workers"]) &&
+      alltrue([
+        for k in ["front", "app", "workers"] :
+        azurerm_private_dns_zone.environment[k].id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/privateDnsZones/${module.environments[k].default_domain}"
+      ])
+    )
+    error_message = "This run needs each zone pinned to an id of its own, or it proves nothing."
+  }
+
+  assert {
+    condition = alltrue([
+      for k in ["front", "app", "workers"] :
+      azurerm_private_dns_a_record.environment[k].private_dns_zone_id == azurerm_private_dns_zone.environment[k].id &&
+      azurerm_private_dns_zone_virtual_network_link.environment[k].private_dns_zone_id == azurerm_private_dns_zone.environment[k].id
+    ])
+    error_message = "Each environment's record and link must be in that environment's own zone."
   }
 }
