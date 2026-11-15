@@ -694,9 +694,10 @@ resource "azurerm_servicebus_namespace" "this" {
   #
   # On Basic or Standard, and outside production, public network access stays enabled.
   # Private endpoints are a Premium-only feature on Service Bus, and IP rules would leave
-  # public access enabled and need a stable source address, which a Container Apps environment
-  # does not have unless egress_firewall routes its traffic through the customer's firewall. The README section "Where this
-  # module departs from Azure's recommended baseline" says what that costs in posture.
+  # public access enabled and need a stable source address, which the environment the apps run
+  # in (aca-<prefix>) does not have unless egress_firewall routes its traffic through the
+  # customer's firewall. The README section "Where this module departs from Azure's recommended
+  # baseline" says what that costs in posture.
   public_network_access_enabled = !local.servicebus_private
 
   tags = local.tags
