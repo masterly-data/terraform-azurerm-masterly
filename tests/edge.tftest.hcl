@@ -875,9 +875,20 @@ run "edge_rate_limits_v1_and_mcp_per_token_and_per_client" {
       tonumber(regex("rate_limit_per_token: .*?\\(default ([0-9]+);", file("${path.module}/edge.tf"))[0]) == local.edge_rate_limit_per_token &&
       tonumber(regex("rate_limit_per_client: .*?\\(default ([0-9]+);", file("${path.module}/edge.tf"))[0]) == local.edge_rate_limit_per_client &&
       tonumber(regex("rate_limit_interval_seconds: .*?\\(default ([0-9]+);", file("${path.module}/edge.tf"))[0]) == local.edge_rate_limit_interval_seconds &&
-      strcontains(file("${path.module}/edge.tf"), format("description = \"Run ca-edge, the SDK and MCP entry point: off by default, no authentication yet, limits requests per token (rate_limit_per_token, %d) and per client (rate_limit_per_client, %d) per rate_limit_interval_seconds (%d). ", local.edge_rate_limit_per_token, local.edge_rate_limit_per_client, local.edge_rate_limit_interval_seconds))
+      strcontains(file("${path.module}/edge.tf"), format("description = \"Run ca-edge for SDK and MCP clients: 429 with Retry-After over rate_limit_per_token (%d) or rate_limit_per_client (%d) per rate_limit_interval_seconds (%d) per replica, so limits multiply by %d to %d running replicas. ", local.edge_rate_limit_per_token, local.edge_rate_limit_per_client, local.edge_rate_limit_interval_seconds, azurerm_container_app.edge[0].template[0].min_replicas, azurerm_container_app.edge[0].template[0].max_replicas))
     )
-    error_message = "With no rate limit fields set, the limits must be the defaults the edge variable's description states: 600 per token, 1800 per client, per 60 seconds."
+    error_message = "With no rate limit fields set, the limits must be the defaults the edge variable's description states: 600 per token, 1800 per client, per 60 seconds. Its first sentence must also name the refusal (429 with Retry-After) and the replicas the limits multiply by, 1 to 3."
+  }
+
+  # docs/inputs.md is generated from the description's first sentence (scripts/check_inputs_reference.py),
+  # cut at 220 characters. The sentence checked above, with the defaults, the refusal and the replica
+  # scaling, must fit, and the page's edge row must carry it whole.
+  assert {
+    condition = (
+      length(regex("description = \"(Run ca-edge .*?\\.) ", file("${path.module}/edge.tf"))[0]) <= 220 &&
+      strcontains(file("${path.module}/docs/inputs.md"), "| `edge` | `object(...)` | `null` | ${regex("description = \"(Run ca-edge .*?\\.) ", file("${path.module}/edge.tf"))[0]} |")
+    )
+    error_message = "docs/inputs.md's edge row must be the whole first sentence of the edge description, which names the three rate limit inputs and their defaults, 429 with Retry-After and the per-replica scaling; past 220 characters the generator cuts it short. Run python3 scripts/check_inputs_reference.py --write after changing the description."
   }
 
   assert {
