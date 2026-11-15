@@ -283,7 +283,7 @@ In `edge.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `edge` | `object(...)` | `null` | Run ca-edge, the Envoy machine entry point for the Python SDK and MCP clients: off by default (null creates nothing), and it does no authentication yet. |
+| `edge` | `object(...)` | `null` | Run ca-edge, the Envoy entry point for SDK and MCP clients: off by default (null), no authentication yet, limits rate_limit_per_token 600 and rate_limit_per_client 1800 requests per rate_limit_interval_seconds 60. |
 
 ## Email
 

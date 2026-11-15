@@ -2,7 +2,8 @@
 # published on the same CIDR allowlist as the frontend, that forwards /v1 and /mcp to ca-api and
 # answers every other path itself. It has no database, vault, queue or cache access and makes no
 # authorization decision: the Authorization header reaches ca-api unchanged and ca-api checks it.
-# The edge does no authentication of its own yet.
+# The edge does no authentication of its own yet. It limits the rate of requests per bearer token
+# and per client address, counted on each replica.
 #
 # Declared as its own azurerm_container_app rather than through modules/aca-container-app,
 # because that module ignores image drift (CD owns the api and frontend images) and nothing
@@ -10,11 +11,14 @@
 
 variable "edge" {
   type = object({
-    image                  = optional(string)
-    max_request_body_bytes = optional(number, 10485760)
+    image                       = optional(string)
+    max_request_body_bytes      = optional(number, 10485760)
+    rate_limit_per_token        = optional(number, 600)
+    rate_limit_per_client       = optional(number, 1800)
+    rate_limit_interval_seconds = optional(number, 60)
   })
   default     = null
-  description = "Run ca-edge, the Envoy machine entry point for the Python SDK and MCP clients: off by default (null creates nothing), and it does no authentication yet. It is published on the same CIDR allowlist as the frontend (ingress_allowed_cidrs, which must not be empty), forwards /v1 and /mcp to ca-api and answers every other path with 404. Unset, the install plans exactly as before this input existed. Without authentication of its own, it forwards the caller's Authorization header to ca-api unchanged, and ca-api checks it. It removes the identity headers ca-api could otherwise be handed (x-jwt-payload and X-MS-CLIENT-PRINCIPAL*) and holds streamed responses open. It runs as its own identity, id-<prefix>-edge, with no role but AcrPull, and that only when its image is on the install's registry. image: the Envoy image, pinned by digest (registry/repository[:tag]@sha256:<64 hex>); null uses the upstream envoyproxy/envoy image on Docker Hub the module pins. Set it to a mirror in your own registry when the environment cannot reach Docker Hub. max_request_body_bytes: a request whose Content-Length is larger is answered 413 at the edge (default 10485760, 10 MiB; from 1024 to 1073741824). A body sent without a Content-Length streams through. docs/networking.md has the network requirements."
+  description = "Run ca-edge, the Envoy entry point for SDK and MCP clients: off by default (null), no authentication yet, limits rate_limit_per_token 600 and rate_limit_per_client 1800 requests per rate_limit_interval_seconds 60. ca-edge is the machine entry point for the Python SDK and MCP clients, and null creates nothing. It is published on the same CIDR allowlist as the frontend (ingress_allowed_cidrs, which must not be empty), forwards /v1 and /mcp to ca-api and answers every other path with 404. Unset, the install plans exactly as before this input existed. Without authentication of its own, it forwards the caller's Authorization header to ca-api unchanged, and ca-api checks it. It removes the identity headers ca-api could otherwise be handed (x-jwt-payload and X-MS-CLIENT-PRINCIPAL*) and holds streamed responses open. It runs as its own identity, id-<prefix>-edge, with no role but AcrPull, and that only when its image is on the install's registry. image: the Envoy image, pinned by digest (registry/repository[:tag]@sha256:<64 hex>); null uses the upstream envoyproxy/envoy image on Docker Hub the module pins. Set it to a mirror in your own registry when the environment cannot reach Docker Hub. max_request_body_bytes: a request whose Content-Length is larger is answered 413 at the edge (default 10485760, 10 MiB; from 1024 to 1073741824). A body sent without a Content-Length streams through. rate_limit_per_token: the requests one bearer token (the Authorization header's value) may send to /v1 and /mcp per interval (default 600; from 1 to 1000000). A request without an Authorization header is held only to the per-client limit. rate_limit_per_client: the requests one client address may send per interval, whatever tokens it uses, so rotating tokens does not get round the per-token limit (default 1800; from 1 to 1000000). The client address is the caller's address as the Container Apps ingress reports it. rate_limit_interval_seconds: the interval both limits count over, in whole seconds (default 60; from 1 to 3600). A request over either limit is answered 429 with a Retry-After header of the interval in seconds. The limits are counted on each replica, with no shared state, and separately for /v1 and /mcp: with ca-edge at 1 to 3 replicas, the effective limit is the configured limit times the running replicas. docs/networking.md has the network requirements."
 
   # A conditional, not `||`: before Terraform 1.12 both sides of `||` are evaluated, and the
   # right side reads attributes of a null object when the input is unset (as builtin_auth).
@@ -32,6 +36,33 @@ variable "edge" {
       var.edge.max_request_body_bytes <= 1073741824
     )
     error_message = "edge.max_request_body_bytes must be a whole number of bytes from 1024 to 1073741824 (1 GiB)."
+  }
+
+  validation {
+    condition = var.edge == null ? true : (
+      floor(var.edge.rate_limit_per_token) == var.edge.rate_limit_per_token &&
+      var.edge.rate_limit_per_token >= 1 &&
+      var.edge.rate_limit_per_token <= 1000000
+    )
+    error_message = "edge.rate_limit_per_token must be a whole number of requests from 1 to 1000000."
+  }
+
+  validation {
+    condition = var.edge == null ? true : (
+      floor(var.edge.rate_limit_per_client) == var.edge.rate_limit_per_client &&
+      var.edge.rate_limit_per_client >= 1 &&
+      var.edge.rate_limit_per_client <= 1000000
+    )
+    error_message = "edge.rate_limit_per_client must be a whole number of requests from 1 to 1000000."
+  }
+
+  validation {
+    condition = var.edge == null ? true : (
+      floor(var.edge.rate_limit_interval_seconds) == var.edge.rate_limit_interval_seconds &&
+      var.edge.rate_limit_interval_seconds >= 1 &&
+      var.edge.rate_limit_interval_seconds <= 3600
+    )
+    error_message = "edge.rate_limit_interval_seconds must be a whole number of seconds from 1 to 3600 (one hour)."
   }
 }
 
@@ -57,6 +88,22 @@ locals {
 
   # Requests declaring a body larger than this get 413 at the edge, before ca-api sees them.
   edge_max_request_body_bytes = local.edge_enabled ? var.edge.max_request_body_bytes : 10485760
+
+  # The rate limits on /v1 and /mcp (ADR 0120 §2): requests per interval for one bearer token and
+  # for one client address. Each replica counts on its own (local_ratelimit; no Redis and no
+  # rate-limit service, ADR 0120 §5), so the effective limit is these times the running replicas.
+  edge_rate_limit_per_token        = local.edge_enabled ? var.edge.rate_limit_per_token : 600
+  edge_rate_limit_per_client       = local.edge_enabled ? var.edge.rate_limit_per_client : 1800
+  edge_rate_limit_interval_seconds = local.edge_enabled ? var.edge.rate_limit_interval_seconds : 60
+
+  # The header that carries the caller's credential, whose value keys the per-token limit. Its value
+  # is a bucket key held in Envoy's memory only: never in this configuration, a stat name or a log.
+  edge_credential_header = "authorization"
+
+  # How many distinct tokens, and distinct client addresses, one replica keeps a bucket for on each
+  # route; past it the least recently seen is dropped. It bounds the memory a caller sending many
+  # different tokens can take. A dropped token starts afresh, but the per-client limit still holds.
+  edge_rate_limit_max_dynamic_descriptors = 1000
 
   # Long enough for an MCP or SSE stream between events; a stream with no bytes either way for this
   # long is closed. There is deliberately no total cap on a request (route timeout 0s).
@@ -85,6 +132,60 @@ locals {
     # No total cap: a streamed MCP or SSE response is bounded by the stream idle timeout instead of
     # Envoy's 15 s default for a route.
     timeout = "0s"
+    # Two descriptors for local_ratelimit, one per entry: the credential header's value under the
+    # key "token", and the client address under "remote_address". A request without the header
+    # yields no token descriptor, so only the per-client limit applies to it.
+    rate_limits = [
+      { actions = [{ request_headers = { header_name = local.edge_credential_header, descriptor_key = "token" } }] },
+      { actions = [{ remote_address = {} }] },
+    ]
+  }
+
+  # Each bucket holds the limit's requests, refilled in full every interval.
+  edge_rate_limit_bucket = {
+    token = {
+      max_tokens      = local.edge_rate_limit_per_token
+      tokens_per_fill = local.edge_rate_limit_per_token
+      fill_interval   = "${local.edge_rate_limit_interval_seconds}s"
+    }
+    client = {
+      max_tokens      = local.edge_rate_limit_per_client
+      tokens_per_fill = local.edge_rate_limit_per_client
+      fill_interval   = "${local.edge_rate_limit_interval_seconds}s"
+    }
+  }
+
+  # local_ratelimit turned on, for the v1 and mcp routes only; the filter itself is off (below), so
+  # the 413 and 404 answers are never limited. Each descriptor has an empty value: a bucket per
+  # distinct token and per distinct client address, made as they are seen. The descriptors match
+  # every forwarded request (each has a client address), so the route's own bucket is never
+  # consumed; it is set to the per-client limit regardless.
+  edge_rate_limit_per_route = {
+    "envoy.filters.http.local_ratelimit" = {
+      "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
+      stat_prefix = "edge_rate_limit"
+      status      = { code = "TooManyRequests" }
+      filter_enabled = {
+        runtime_key   = "edge_rate_limit_enabled"
+        default_value = { numerator = 100, denominator = "HUNDRED" }
+      }
+      filter_enforced = {
+        runtime_key   = "edge_rate_limit_enforced"
+        default_value = { numerator = 100, denominator = "HUNDRED" }
+      }
+      token_bucket                        = local.edge_rate_limit_bucket.client
+      always_consume_default_token_bucket = false
+      descriptors = [
+        { entries = [{ key = "token", value = "" }], token_bucket = local.edge_rate_limit_bucket.token },
+        { entries = [{ key = "remote_address", value = "" }], token_bucket = local.edge_rate_limit_bucket.client },
+      ]
+      max_dynamic_descriptors = local.edge_rate_limit_max_dynamic_descriptors
+      # Added to refused (429) responses only: a bucket is full again within one interval.
+      response_headers_to_add = [{
+        append_action = "OVERWRITE_IF_EXISTS_OR_ADD"
+        header        = { key = "retry-after", value = tostring(local.edge_rate_limit_interval_seconds) }
+      }]
+    }
   }
 
   # The whole Envoy bootstrap, passed to Envoy in the container's args (below). Nothing in it is
@@ -104,6 +205,17 @@ locals {
               stat_prefix         = "edge"
               codec_type          = "AUTO"
               stream_idle_timeout = local.edge_stream_idle_timeout
+
+              # The client address the per-client limit keys on. The Container Apps ingress in
+              # front of the edge appends the caller's address to X-Forwarded-For; trusting exactly
+              # that one hop makes the rightmost entry the client address. Trusting more would let
+              # a caller pick its address by sending its own X-Forwarded-For, and trusting none
+              # would give every caller the ingress's address, and one shared bucket. The header
+              # reaches ca-api as it arrived (skip_xff_append), as does the caller's request id.
+              use_remote_address           = true
+              xff_num_trusted_hops         = 1
+              skip_xff_append              = true
+              preserve_external_request_id = true
 
               # Route on the normalized path, so /v1/../internal is matched as /internal (and
               # answered 404) rather than forwarded under /v1. An encoded slash or backslash is
@@ -194,14 +306,16 @@ locals {
                       direct_response = { status = 413 }
                     },
                     {
-                      name  = "v1"
-                      match = { path_separated_prefix = "/v1" }
-                      route = local.edge_forwarded_route
+                      name                    = "v1"
+                      match                   = { path_separated_prefix = "/v1" }
+                      route                   = local.edge_forwarded_route
+                      typed_per_filter_config = local.edge_rate_limit_per_route
                     },
                     {
-                      name  = "mcp"
-                      match = { path_separated_prefix = "/mcp" }
-                      route = local.edge_forwarded_route
+                      name                    = "mcp"
+                      match                   = { path_separated_prefix = "/mcp" }
+                      route                   = local.edge_forwarded_route
+                      typed_per_filter_config = local.edge_rate_limit_per_route
                     },
                     {
                       name            = "not-found"
@@ -212,12 +326,23 @@ locals {
                 }]
               }
 
-              http_filters = [{
-                name = "envoy.filters.http.router"
-                typed_config = {
-                  "@type" = "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
-                }
-              }]
+              # The rate limiter first, off here (Envoy enables it for no request unless told to)
+              # and turned on by the v1 and mcp routes' own configuration; the router last.
+              http_filters = [
+                {
+                  name = "envoy.filters.http.local_ratelimit"
+                  typed_config = {
+                    "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
+                    stat_prefix = "edge_rate_limit"
+                  }
+                },
+                {
+                  name = "envoy.filters.http.router"
+                  typed_config = {
+                    "@type" = "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                  }
+                },
+              ]
             }
           }]
         }]

@@ -203,6 +203,107 @@ run "edge_body_limit_out_of_range_is_refused" {
   expect_failures = [var.edge]
 }
 
+# Each rate limit input is a whole number in its range: a fraction, zero and a value past the top
+# are refused.
+run "edge_rate_limit_per_token_not_whole_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_per_token = 10.5 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_rate_limit_per_token_zero_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_per_token = 0 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_rate_limit_per_token_out_of_range_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_per_token = 1000001 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_rate_limit_per_client_not_whole_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_per_client = 10.5 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_rate_limit_per_client_zero_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_per_client = 0 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_rate_limit_per_client_out_of_range_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_per_client = 1000001 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_rate_limit_interval_not_whole_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_interval_seconds = 1.5 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_rate_limit_interval_zero_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_interval_seconds = 0 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_rate_limit_interval_out_of_range_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_interval_seconds = 3601 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.edge]
+}
+
 # --- The identity, and the only role it can hold ---------------------------------------------
 
 # Threat: the public edge holding a data credential. Every data-plane grant the module makes is on
@@ -338,6 +439,22 @@ run "edge_identity_is_its_own_and_holds_no_data_role" {
       length(azurerm_container_app.edge[0].template[0].container[0].env) == 0
     )
     error_message = "ca-edge must declare no secrets and no env."
+  }
+
+  # The rate limits keep their state on each replica (ADR 0120 §5): no rate-limit service, no
+  # cluster beside ca-api, no Redis, and no second app or grant for the edge, with Redis on here.
+  assert {
+    condition = (
+      [for c in local.edge_envoy_config.static_resources.clusters : c.name] == ["ca-api"] &&
+      !strcontains(jsonencode(local.edge_envoy_config), "\"envoy.filters.http.ratelimit\"") &&
+      !strcontains(jsonencode(local.edge_envoy_config), "rate_limit_service") &&
+      !strcontains(jsonencode(local.edge_envoy_config), "grpc_service") &&
+      !strcontains(lower(jsonencode(local.edge_envoy_config)), "redis") &&
+      length(azurerm_container_app.edge) == 1 &&
+      length(module.edge_identity) == 1 &&
+      length(azurerm_role_assignment.acr_pull_edge) == 0
+    )
+    error_message = "The rate limits must add no rate-limit service, no cluster but ca-api, no Redis reference, and no app, identity or grant for the edge."
   }
 }
 
@@ -486,16 +603,18 @@ run "edge_strips_identity_headers_and_keeps_authorization" {
   }
 
   # Authorization is neither removed nor rewritten anywhere: no header is added or removed except
-  # the list above.
+  # the list above. The configuration names it only as the header the per-token rate limit reads,
+  # once on each forwarded route (v1 and mcp).
   assert {
     condition = (
       !contains([for h in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.request_headers_to_remove : lower(h)], "authorization") &&
       length(setintersection(keys(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config), ["request_headers_to_add", "response_headers_to_add"])) == 0 &&
       length(setintersection(keys(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0]), ["request_headers_to_add", "request_headers_to_remove"])) == 0 &&
       alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : length(setintersection(keys(r), ["request_headers_to_add", "request_headers_to_remove"])) == 0]) &&
-      !strcontains(lower(jsonencode(local.edge_envoy_config)), "authorization")
+      [for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.route.rate_limits[0].actions[0].request_headers.header_name if contains(keys(r), "route")] == ["authorization", "authorization"] &&
+      length(regexall("(?i)authorization", jsonencode(local.edge_envoy_config))) == 2
     )
-    error_message = "The edge must not remove or rewrite the Authorization header."
+    error_message = "The edge must not remove or rewrite the Authorization header; the configuration may name it only as the per-token rate limit's header on /v1 and /mcp."
   }
 }
 
@@ -535,14 +654,16 @@ run "edge_refuses_oversized_bodies_and_does_not_cut_streams" {
     error_message = "A Content-Length of any size above the limit must be answered 413: the range must end at the int64 maximum and the second route must refuse every value of 19 digits or more."
   }
 
-  # Nothing buffers a forwarded body or response: the router is the only HTTP filter.
+  # Nothing buffers a forwarded body or response: the rate limiter and the router are the only
+  # HTTP filters, and the only per-route filter configuration is the rate limiter's, on v1 and mcp.
   assert {
     condition = (
-      [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.router"] &&
-      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : !contains(keys(r), "typed_per_filter_config")]) &&
+      [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.local_ratelimit", "envoy.filters.http.router"] &&
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : tolist(keys(r.typed_per_filter_config)) == tolist(["envoy.filters.http.local_ratelimit"]) if contains(keys(r), "typed_per_filter_config")]) &&
+      [for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name if contains(keys(r), "typed_per_filter_config")] == ["v1", "mcp"] &&
       !strcontains(jsonencode(local.edge_envoy_config), "envoy.filters.http.buffer")
     )
-    error_message = "No envoy.filters.http.buffer filter may apply to the forwarded routes."
+    error_message = "No envoy.filters.http.buffer filter may apply to the forwarded routes: the HTTP filters must be local_ratelimit then the router, and only v1 and mcp may carry per-route configuration, the rate limiter's."
   }
 
   # No total cap on a forwarded request, and a finite idle timeout instead.
@@ -587,6 +708,32 @@ run "edge_logs_and_plan_carry_no_credential" {
       length(azurerm_container_app.edge[0].template[0].init_container) == 0
     )
     error_message = "The bootstrap and ca-edge's args and command must hold no secret value, and ca-edge must declare no secrets, env or init container."
+  }
+
+  # Threat: the bearer token, the per-token limit's key, written down. The access log reads no
+  # credential header; every descriptor entry is a key with an empty value (Envoy fills it from the
+  # request, in memory); every stat prefix is a literal; and nothing else reads a request header.
+  assert {
+    condition = (
+      !strcontains(upper(jsonencode(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.access_log)), upper(local.edge_credential_header)) &&
+      local.edge_credential_header == "authorization" &&
+      alltrue(flatten([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : [for d in r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].descriptors : [for e in d.entries : e.value == ""]] if contains(keys(r), "typed_per_filter_config")])) &&
+      length(flatten([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : [for d in r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].descriptors : d.entries] if contains(keys(r), "typed_per_filter_config")])) == 4 &&
+      toset(flatten(regexall("\"stat_prefix\":\"([^\"]*)\"", jsonencode(local.edge_envoy_config)))) == toset(["edge", "edge_rate_limit"]) &&
+      length(regexall("%", jsonencode(local.edge_envoy_config))) == length(regexall("%", jsonencode(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.access_log)))
+    )
+    error_message = "No credential header may reach the access log, a descriptor value or a stat prefix: descriptor entries must have empty values, stat prefixes must be the literals edge and edge_rate_limit, and only the access log may use a %...% command."
+  }
+
+  # No output is built from the Envoy configuration or the credential header. Read from the source,
+  # comments stripped, because an output's value is not known at plan.
+  assert {
+    condition = (
+      length(flatten([for f in fileset(path.module, "*.tf") : regexall("(?s)\\noutput \"[^\"]+\" \\{.*?\\n\\}", file("${path.module}/${f}"))])) > 0 &&
+      anytrue(flatten([for f in fileset(path.module, "*.tf") : [for o in regexall("(?s)\\noutput \"[^\"]+\" \\{.*?\\n\\}", file("${path.module}/${f}")) : strcontains(o, "output \"edge_url\"")]])) &&
+      alltrue(flatten([for f in fileset(path.module, "*.tf") : [for o in regexall("(?s)\\noutput \"[^\"]+\" \\{.*?\\n\\}", file("${path.module}/${f}")) : !strcontains(o, "edge_envoy_config") && !strcontains(o, "edge_credential_header") && !strcontains(o, "edge_forwarded_route") && !strcontains(o, "edge_rate_limit") && !strcontains(lower(replace(o, "/#[^\\n]*/", "")), "authorization")]]))
+    )
+    error_message = "No output may be built from local.edge_envoy_config, the rate limit locals or the credential header."
   }
 }
 
@@ -656,6 +803,170 @@ run "edge_follows_the_egress_firewall_association" {
       "azurerm_subnet_route_table_association.aca,"
     )
     error_message = "ca-edge must depend on azurerm_subnet_route_table_association.aca, so its first pull does not take Azure's default path before the firewall route is attached."
+  }
+}
+
+# --- Rate limits -----------------------------------------------------------------------------
+# Per bearer token and per client address, on /v1 and /mcp only, kept on each replica
+# (local_ratelimit; ADR 0120 §5: no Redis and no rate-limit service).
+
+run "edge_rate_limits_v1_and_mcp_per_token_and_per_client" {
+  command = plan
+
+  variables {
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  # The limiter runs before the router, which stays last. Off at the filter level: only its
+  # stat_prefix is set there, so Envoy enables it for no request a route does not turn it on for.
+  assert {
+    condition = (
+      [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.local_ratelimit", "envoy.filters.http.router"] &&
+      reverse(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters)[0].name == "envoy.filters.http.router" &&
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters[0].typed_config == {
+        "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
+        stat_prefix = "edge_rate_limit"
+      }
+    )
+    error_message = "The HTTP filters must be envoy.filters.http.local_ratelimit (disabled at the filter level: stat_prefix only) followed by envoy.filters.http.router, last."
+  }
+
+  # v1 and mcp each produce a per-token descriptor (the Authorization header's value, key "token")
+  # and a per-client one (the client address, key "remote_address"), and turn the limiter on for
+  # every request, enforced.
+  assert {
+    condition = alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+      r.route.rate_limits == [
+        { actions = [{ request_headers = { header_name = "authorization", descriptor_key = "token" } }] },
+        { actions = [{ remote_address = {} }] },
+      ] &&
+      [for d in r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].descriptors : d.entries] == [[{ key = "token", value = "" }], [{ key = "remote_address", value = "" }]] &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"]["@type"] == "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit" &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].filter_enabled.default_value == { numerator = 100, denominator = "HUNDRED" } &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].filter_enforced.default_value == { numerator = 100, denominator = "HUNDRED" } &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].always_consume_default_token_bucket == false &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].max_dynamic_descriptors == local.edge_rate_limit_max_dynamic_descriptors &&
+      local.edge_rate_limit_max_dynamic_descriptors >= 1
+    ) if contains(["v1", "mcp"], r.name)])
+    error_message = "The v1 and mcp routes must each carry a per-token descriptor (request_headers on authorization, key token) and a per-client descriptor (remote_address), with the limiter enabled and enforced for 100% of requests and a bound on dynamic descriptors."
+  }
+
+  assert {
+    condition = (
+      length([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r if contains(["v1", "mcp"], r.name)]) == 2 &&
+      length([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r if contains(["request-too-large", "request-too-large-beyond-int64", "not-found"], r.name)]) == 3 &&
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+        !contains(keys(r), "typed_per_filter_config") &&
+        !contains(keys(r), "route") &&
+        !strcontains(jsonencode(r), "ratelimit") &&
+        !strcontains(jsonencode(r), "rate_limit")
+      ) if contains(["request-too-large", "request-too-large-beyond-int64", "not-found"], r.name)])
+    )
+    error_message = "request-too-large, request-too-large-beyond-int64 and not-found must carry no rate-limit configuration: the 413 and 404 answers are never limited."
+  }
+
+  # Unset, each limit and the interval are the defaults the variable's description states.
+  assert {
+    condition = (
+      local.edge_rate_limit_per_token == 600 &&
+      local.edge_rate_limit_per_client == 1800 &&
+      local.edge_rate_limit_interval_seconds == 60 &&
+      tonumber(regex("rate_limit_per_token: .*?\\(default ([0-9]+);", file("${path.module}/edge.tf"))[0]) == local.edge_rate_limit_per_token &&
+      tonumber(regex("rate_limit_per_client: .*?\\(default ([0-9]+);", file("${path.module}/edge.tf"))[0]) == local.edge_rate_limit_per_client &&
+      tonumber(regex("rate_limit_interval_seconds: .*?\\(default ([0-9]+);", file("${path.module}/edge.tf"))[0]) == local.edge_rate_limit_interval_seconds &&
+      strcontains(file("${path.module}/edge.tf"), "limits rate_limit_per_token 600 and rate_limit_per_client 1800 requests per rate_limit_interval_seconds 60.")
+    )
+    error_message = "With no rate limit fields set, the limits must be the defaults the edge variable's description states: 600 per token, 1800 per client, per 60 seconds."
+  }
+
+  assert {
+    condition = alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].descriptors[0].token_bucket == { max_tokens = 600, tokens_per_fill = 600, fill_interval = "60s" } &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].descriptors[1].token_bucket == { max_tokens = 1800, tokens_per_fill = 1800, fill_interval = "60s" } &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].token_bucket == { max_tokens = 1800, tokens_per_fill = 1800, fill_interval = "60s" }
+    ) if contains(["v1", "mcp"], r.name)])
+    error_message = "With no rate limit fields set, the token bucket must hold 600 requests per 60s, the client bucket and the route's own 1800 per 60s."
+  }
+
+  # Refused: 429 (envoy.type.v3.StatusCode TooManyRequests), with Retry-After of the interval in
+  # whole seconds, added to refused responses only (the filter's own response_headers_to_add).
+  assert {
+    condition = alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].status == { code = "TooManyRequests" } &&
+      length(r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].response_headers_to_add) == 1 &&
+      lower(r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].response_headers_to_add[0].header.key) == "retry-after" &&
+      can(regex("^[1-9][0-9]*$", r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].response_headers_to_add[0].header.value)) &&
+      tonumber(r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].response_headers_to_add[0].header.value) <= local.edge_rate_limit_interval_seconds &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].response_headers_to_add[0].header.value == "60" &&
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].response_headers_to_add[0].append_action == "OVERWRITE_IF_EXISTS_OR_ADD"
+    ) if contains(["v1", "mcp"], r.name)])
+    error_message = "A rate-limited request must be answered 429 (TooManyRequests) with a Retry-After header of the interval in whole seconds (60 by default)."
+  }
+}
+
+run "edge_rate_limits_come_from_the_input" {
+  command = plan
+
+  variables {
+    edge                  = { rate_limit_per_token = 7, rate_limit_per_client = 11, rate_limit_interval_seconds = 13 }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      local.edge_rate_limit_per_token == 7 &&
+      local.edge_rate_limit_per_client == 11 &&
+      local.edge_rate_limit_interval_seconds == 13 &&
+      length([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r if contains(keys(r), "typed_per_filter_config")]) == 2 &&
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+        r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].descriptors[0].token_bucket == { max_tokens = 7, tokens_per_fill = 7, fill_interval = "13s" } &&
+        r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].descriptors[1].token_bucket == { max_tokens = 11, tokens_per_fill = 11, fill_interval = "13s" } &&
+        r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].token_bucket == { max_tokens = 11, tokens_per_fill = 11, fill_interval = "13s" }
+      ) if contains(keys(r), "typed_per_filter_config")])
+    )
+    error_message = "The per-token limit, the per-client limit and the interval in the rendered buckets must come from edge.rate_limit_per_token, edge.rate_limit_per_client and edge.rate_limit_interval_seconds."
+  }
+
+  assert {
+    condition = alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+      r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].response_headers_to_add[0].header.value == "13" &&
+      tonumber(r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].response_headers_to_add[0].header.value) <= var.edge.rate_limit_interval_seconds
+    ) if contains(keys(r), "typed_per_filter_config")])
+    error_message = "Retry-After must be edge.rate_limit_interval_seconds, in whole seconds."
+  }
+}
+
+# Threat: a forged client address, or one bucket for everyone. The Container Apps ingress appends
+# the caller to X-Forwarded-For; exactly that one hop is trusted, so the rightmost entry keys the
+# per-client limit. More would let a caller choose its address; none would key every caller on the
+# ingress, in one bucket. With use_remote_address, Envoy reads the Nth entry from the right for N
+# trusted hops (without it, the (N+1)th: one the caller wrote).
+run "edge_trusts_exactly_the_ingress_hop_for_the_client_address" {
+  command = plan
+
+  variables {
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.use_remote_address == true &&
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.xff_num_trusted_hops == 1 &&
+      length(setintersection(keys(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config), ["original_ip_detection_extensions", "internal_address_config"])) == 0 &&
+      !strcontains(jsonencode(local.edge_envoy_config), "xff_trusted_cidrs")
+    )
+    error_message = "The connection manager must set use_remote_address = true and xff_num_trusted_hops = 1 (the ingress's hop, no more), with no other client-address detection."
+  }
+
+  # X-Forwarded-For and the caller's request id reach ca-api as they arrived.
+  assert {
+    condition = (
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.skip_xff_append == true &&
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.preserve_external_request_id == true
+    )
+    error_message = "The edge must forward X-Forwarded-For unchanged (skip_xff_append) and keep the caller's x-request-id (preserve_external_request_id)."
   }
 }
 
