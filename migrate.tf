@@ -50,12 +50,12 @@ locals {
     var.external_database_url != null ? coalesce(var.external_database_admin_url, var.external_database_url) : module.postgres_connection_urls_migrate[0].pooler_url
   )
 
-  # Null on BYO-DB, where postgres_pgbouncer is refused and the secret is never named.
+  # Null on BYO-DB, where the pooler is off (postgres_pgbouncer is refused) and the secret is never named.
   migrate_database_direct_url = !local.migrate_job || var.external_database_url != null ? null : module.postgres_connection_urls_migrate[0].direct_url
 
   migrate_secret_names = !local.migrate_job ? [] : concat(
     ["migrate-database-url"],
-    var.postgres_pgbouncer ? ["migrate-database-direct-url"] : [],
+    local.postgres_pgbouncer ? ["migrate-database-direct-url"] : [],
     local.registry_secret_names,
     var.ca_bundle_pem != null ? ["ca-bundle-pem"] : [],
   )
@@ -84,7 +84,7 @@ locals {
     },
     var.org_name != null ? { MASTERLY_ORG_NAME = var.org_name } : {},
     var.mode == "production" ? { MASTERLY_CONTROLPLANE_STORE = "postgres" } : {},
-    var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
+    local.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
     local.ca_bundle_env,
     local.private_egress_env,
     local.migrate_job && var.enable_key_vault ? {
@@ -115,7 +115,7 @@ locals {
 
   migrate_env_secret_refs = merge(
     { MASTERLY_DATABASE_URL = "migrate-database-url" },
-    var.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = "migrate-database-direct-url" } : {},
+    local.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = "migrate-database-direct-url" } : {},
   )
 }
 

@@ -97,9 +97,26 @@ run "one_diagnostic_setting_targets_the_environment" {
     }
   }
 
+  # The front, app and workers environments (environment.tf) each carry a setting of their own.
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
   assert {
     condition = (
       length(azurerm_monitor_diagnostic_setting.app) == 2 &&
+      length(azurerm_monitor_diagnostic_setting.environment) == 3 &&
       length(azurerm_monitor_diagnostic_setting.postgres) == 0
     )
     error_message = "This run needs the per-app settings planned beside the environment's, or it proves nothing about them."
@@ -110,6 +127,7 @@ run "one_diagnostic_setting_targets_the_environment" {
       for target in concat(
         [azurerm_monitor_diagnostic_setting.aca_env.target_resource_id],
         [for s in azurerm_monitor_diagnostic_setting.app : s.target_resource_id],
+        [for s in azurerm_monitor_diagnostic_setting.environment : s.target_resource_id],
         azurerm_monitor_diagnostic_setting.postgres[*].target_resource_id,
         azurerm_monitor_diagnostic_setting.redis[*].target_resource_id,
         azurerm_monitor_diagnostic_setting.redis_database[*].target_resource_id,

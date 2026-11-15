@@ -19,15 +19,16 @@ variable "enable_workers" {
 
 variable "workers_min_replicas" {
   type        = number
-  default     = 1
-  description = "Minimum workers replicas (keep >= 1: the loop polls; scale-to-zero would stall the pipeline on the polling binding). mode=production requires >= 1."
+  default     = null
+  description = "Minimum workers replicas (keep >= 1: the loop polls; scale-to-zero would stall the pipeline on the polling binding). Unset (null), capacity_profile decides (2 for enterprise, 1 otherwise), and with no profile it is 1, the earlier default. mode=production requires >= 1."
 
   # No stalled pipeline in production: ca-workers has no ingress, so nothing wakes a
   # scaled-to-zero workers app — every queued job would wait indefinitely. It is also the one
   # floor at which the workers no-replica alert stands down (diagnostics.tf), so a production
-  # install at zero would stall with nothing reporting it.
+  # install at zero would stall with nothing reporting it. Judged on the resolved value
+  # (main.tf), so a capacity profile cannot carry a zero floor past it either.
   validation {
-    condition     = var.mode != "production" || var.workers_min_replicas >= 1
+    condition     = var.mode != "production" || coalesce(var.workers_min_replicas, local.capacity.workers_min_replicas) >= 1
     error_message = "mode=production requires workers_min_replicas >= 1 — ca-workers has no ingress, so nothing wakes it from zero and every queued job would wait indefinitely."
   }
 }
@@ -35,11 +36,11 @@ variable "workers_min_replicas" {
 variable "workers_max_replicas" {
   type        = number
   default     = 1
-  description = "Maximum workers replicas. ca-workers scales above workers_min_replicas only on the Service Bus binding (enable_service_bus = true), where a scale rule on the jobs queue targets 5 waiting messages per replica, up to this number. On the polling binding (the default) there is no queue length to scale on, so ca-workers stays at workers_min_replicas whatever this is set to. Jobs are claimed per Environment and job kind across all replicas: jobs of different kinds, or in different Environments, run in parallel, and two jobs of the same kind in one Environment never overlap, so an extra replica adds throughput and never duplicates work."
+  description = "Maximum workers replicas. ca-workers scales above workers_min_replicas only on the Service Bus binding (enable_service_bus = true), where a scale rule on the jobs queue targets 5 waiting messages per replica, up to this number. On the polling binding (the default) there is no queue length to scale on, so ca-workers stays at workers_min_replicas whatever this is set to. Jobs are claimed per Environment and job kind across all replicas: jobs of different kinds, or in different Environments, run in parallel, and two jobs of the same kind in one Environment never overlap, so an extra replica adds throughput and never duplicates work. A capacity_profile does not raise it: with enterprise's floor of 2, set it to at least 2."
 
   validation {
-    condition     = !var.enable_workers || var.workers_max_replicas >= var.workers_min_replicas
-    error_message = "workers_max_replicas must be at least workers_min_replicas."
+    condition     = !var.enable_workers || var.workers_max_replicas >= local.workers_min_replicas
+    error_message = "workers_max_replicas must be at least workers_min_replicas (${local.workers_min_replicas}, which capacity_profile sets when workers_min_replicas is unset). A capacity profile does not raise workers_max_replicas: set it to at least ${local.workers_min_replicas}."
   }
 }
 
@@ -122,7 +123,7 @@ resource "azurerm_role_assignment" "sb_scaler_workers" {
 
 check "workers_scale_on_the_polling_binding" {
   assert {
-    condition     = !var.enable_workers || var.enable_service_bus || var.workers_max_replicas <= var.workers_min_replicas
+    condition     = !var.enable_workers || var.enable_service_bus || var.workers_max_replicas <= local.workers_min_replicas
     error_message = "workers_max_replicas is above workers_min_replicas, but ca-workers scales only on the Service Bus binding (enable_service_bus = true). On the polling binding it stays at workers_min_replicas."
   }
 }
@@ -145,7 +146,7 @@ module "workers" {
   ingress_enabled = false
   command         = ["python", "-m", "masterly_app.workers"]
 
-  min_replicas = var.workers_min_replicas
+  min_replicas = local.workers_min_replicas
   max_replicas = var.workers_max_replicas
 
   cpu    = local.app_resources.workers.cpu
