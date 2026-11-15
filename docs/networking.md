@@ -124,9 +124,9 @@ firewall. Your firewall then decides what passes, and it must admit the destinat
 The `egress_route` output shows the route table in effect and the next-hop address, and is null
 when `egress_firewall` is unset.
 
-**Only on a workload-profiles environment.** Azure ignores a route on a Consumption-only
-Container Apps environment, so egress would stay open while you believe it is filtered. The
-module therefore refuses `egress_firewall` unless the environment's subnet is delegated to
+**Only on a workload-profiles environment.** Azure ignores a route on a Container Apps
+environment that reports no workload profile, so egress would stay open while you believe it is
+filtered. The module therefore refuses `egress_firewall` unless the environment's subnet is delegated to
 `Microsoft.App/environments` and Azure lists at least one workload profile on the environment.
 Every environment the module builds meets both (ADR 0104): its subnet is delegated, and on a
 delegated subnet Azure creates a workload-profiles environment with the `Consumption` profile
@@ -140,8 +140,8 @@ az containerapp env show \
 ```
 
 A list with a profile of type `Consumption` is a workload-profiles environment; `null` or an empty
-list is Consumption-only. The `terraform output` form needs your root configuration to re-export
-the module's `aca_environment_id` output (`output "aca_environment_id" { value =
+list is an environment without workload profiles. The `terraform output` form needs your root
+configuration to re-export the module's `aca_environment_id` output (`output "aca_environment_id" { value =
 module.<name>.aca_environment_id }`). Without that, use `-n aca-<name_prefix> -g
 rg-<name_prefix>-aca` instead of `--ids`. On an injected subnet, run the same check before your
 platform team attaches the hub's route table.
@@ -309,7 +309,7 @@ that opens by itself.
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
 | 100 | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443 | Reach the apps. 80 carries Azure's 301 to `https://`, so dropping it turns that redirect into a timeout |
-| 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement for a Consumption-only environment |
+| 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement: the platform's load balancer reaches the environment on the ephemeral range |
 | 120 | Allow | `snet-aca` | any | Container Apps platform requirement: traffic within the infrastructure subnet |
 | 4000 | Deny | any | any | Everything not admitted above |
 
@@ -357,10 +357,10 @@ layer under the allowlist, not a replacement for it.
 
 ### The environment subnets
 
-The install is moving from one Consumption-only environment in `snet-aca` to three
-workload-profiles Container Apps environments, each in a subnet of its own (ADR 0120): **front**
-(the frontend, the one environment callers reach), **app** (the api, reached only from the
-front) and **workers** (no inbound caller). The subnets sit beside `snet-aca`, which keeps
+The install is moving from one Container Apps environment in `snet-aca` (`aca-<name_prefix>`) to
+three workload-profiles Container Apps environments, each in a subnet of its own (ADR 0120):
+**front** (the frontend, the one environment callers reach), **app** (the api, reached only from
+the front) and **workers** (no inbound caller). The subnets sit beside `snet-aca`, which keeps
 serving the apps until they move; a later module version moves them and retires `snet-aca`.
 
 On a network the module builds, `front_subnet_prefix`, `app_subnet_prefix` and
@@ -373,9 +373,26 @@ explicit `aca_subnet_prefix` and `private_endpoints_subnet_prefix` that already 
 /24s, gets no environment subnets until the three prefixes are set. The `environment_subnet_ids`
 and `environment_subnet_prefixes` outputs carry what was created.
 
-No app runs in these subnets yet, and `egress_firewall` still attaches its route table to
-`snet-aca` only ([Egress](#egress)): the three environment subnets get no route table in this
-version.
+Each subnet holds its environment, `aca-<name_prefix>-front`, `aca-<name_prefix>-app` and
+`aca-<name_prefix>-workers`, each declaring the `Consumption` workload profile and sending its
+console and system logs to the install's workspace. The app and workers environments always have
+an internal load balancer; the front has one exactly when `aca_internal_load_balancer = true`, so
+an install that is private today gets no public front. No app runs in them yet: every app, the
+migrate job and the custom-domain certificate stay on `aca-<name_prefix>`, which plans no change.
+An install whose `environment_subnet_ids` are all null gets none of the three environments.
+
+An internal environment's default domain resolves only through a private DNS zone. With
+`environment_private_dns_enabled` at its default (`true`), the module creates, for each internal
+environment, a zone in `rg-<name_prefix>-aca` named the environment's default domain, a `*` A
+record to its static IP, and a link to the install's VNet (on an injected spoke, the VNet of
+`aca_subnet_id`), with auto-registration off. Azure assigns the default domain when it creates
+the environment, so the zone cannot be injected the way the Key Vault one is. Where your platform
+team owns DNS, set it to `false`: the module creates no zone, record or link, and the
+`container_app_environments` output gives each environment's `default_domain`,
+`static_ip_address` and whether it is `internal`, for the records the hub creates.
+
+`egress_firewall` still attaches its route table to `snet-aca` only ([Egress](#egress)): the
+three environment subnets get no route table in this version.
 
 Each subnet carries its own NSG, ending in the same deny. The platform rows are the inbound
 rules Microsoft lists for a workload-profiles environment in

@@ -1,4 +1,5 @@
-# Inputs read by environment.tf: the Container App Environment's log workspace.
+# Inputs read by environment.tf: the Container App Environment's log workspace, and the private
+# DNS of the front, app and workers environments.
 
 # --- The install's Log Analytics workspace ---------------------------------------------
 # The workspace accepts Microsoft Entra ID only: its shared keys authenticate nothing, and it
@@ -32,4 +33,15 @@ variable "security_log_retention_days" {
     condition     = var.security_log_retention_days >= 30 && var.security_log_retention_days <= 730
     error_message = "security_log_retention_days must be between 30 and 730."
   }
+}
+
+# --- The front, app and workers environments (ADR 0120) --------------------------------
+# One workload-profiles environment on each environment subnet. The app and workers environments
+# are always internal, and the front is internal exactly when aca_internal_load_balancer is true.
+
+variable "environment_private_dns_enabled" {
+  type        = bool
+  default     = true
+  nullable    = false
+  description = "Whether the module creates the private DNS that resolves the front, app and workers Container Apps environments inside the VNet. True (the default): for each of them that is internal (app and workers always, the front when aca_internal_load_balancer is true), the module creates a private DNS zone in rg-<name_prefix>-aca named the environment's default domain, a wildcard (*) A record to the environment's static IP, and a link from the zone to the install's VNet (on an injected network, the VNet of aca_subnet_id) with auto-registration off. Without such a zone the apps in an internal environment cannot be reached by name. Set false when your platform team owns DNS: the module then creates no zone, record or link, and the container_app_environments output gives each environment's default_domain and static_ip_address for the records your hub creates. Azure assigns the default domain when it creates the environment, so the zone cannot be created ahead of the install."
 }
