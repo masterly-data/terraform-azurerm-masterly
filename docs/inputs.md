@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-129 inputs in 27 groups.
+130 inputs in 27 groups.
 
 ## Groups
 
