@@ -52,7 +52,7 @@ resource "azurerm_virtual_network" "this" {
   }
 }
 
-# Consumption-only Container App Environments require /23 or larger, and Azure now
+# The runtime environment (aca-<prefix>) was sized for a /23 or larger, and Azure now
 # requires the subnet to be delegated to Microsoft.App/environments (the first apply
 # failed with ManagedEnvironmentSubnetDelegationError without it).
 resource "azurerm_subnet" "aca" {
@@ -61,7 +61,7 @@ resource "azurerm_subnet" "aca" {
   name                 = "snet-aca"
   resource_group_name  = azurerm_resource_group.aca.name
   virtual_network_name = azurerm_virtual_network.this[0].name
-  address_prefixes     = [local.aca_subnet_prefix] # /23 required by consumption-only ACA
+  address_prefixes     = [local.aca_subnet_prefix] # /23, the size aca-<prefix> was created on
 
   delegation {
     name = "aca-environments"
@@ -161,7 +161,7 @@ resource "azurerm_network_security_group" "aca" {
     description                = "Reach the frontend (and the api when api_ingress_external is true); ingress_allowed_cidrs narrows it further at the Container Apps edge."
   }
 
-  # Required by Container Apps on a Consumption-only environment: the platform's load
+  # Required by Container Apps on a VNet-integrated environment: the platform's load
   # balancer reaches the environment on the ephemeral range. Without this rule the deny below
   # takes the apps offline — the environment provisions and then serves nothing.
   security_rule {
@@ -438,7 +438,7 @@ resource "azurerm_subnet_route_table_association" "aca" {
   route_table_id = local.egress_route_table_id
 
   lifecycle {
-    # Azure ignores a route on a Consumption-only environment, and egress would then stay open
+    # Azure ignores a route on an environment with no workload profile, and egress would stay open
     # while it is believed forced, so the module refuses rather than attach one. What makes the
     # environment workload-profiles is known in two halves. The Microsoft.App/environments
     # delegation on its subnet is known at plan (ADR 0104: on a delegated subnet Azure creates a
@@ -450,7 +450,7 @@ resource "azurerm_subnet_route_table_association" "aca" {
         try(azurerm_subnet.aca[0].delegation[0].service_delegation[0].name, null) == "Microsoft.App/environments" &&
         try(length(module.aca_env.workload_profile_names) > 0, true)
       )
-      error_message = "egress_firewall needs a workload-profiles Container Apps environment: Azure ignores a route on a Consumption-only environment, so egress would stay open while it is believed forced through your firewall. The environment's subnet must be delegated to Microsoft.App/environments and Azure must list at least one workload profile on the environment (az containerapp env show --query properties.workloadProfiles). Remove egress_firewall, or move the install to a workload-profiles environment first."
+      error_message = "egress_firewall needs a workload-profiles Container Apps environment: Azure ignores a route on an environment that reports no workload profile, so egress would stay open while it is believed forced through your firewall. The environment's subnet must be delegated to Microsoft.App/environments and Azure must list at least one workload profile on the environment (az containerapp env show --query properties.workloadProfiles). Remove egress_firewall, or move the install to a workload-profiles environment first."
     }
   }
 }

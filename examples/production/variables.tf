@@ -88,6 +88,31 @@ variable "frontend_custom_domain" {
   description = "Your own hostname for the frontend, with the certificate in your Key Vault: the hostname, the certificate's versionless secret id and the vault's resource id. Set it and the install is one apply. Null serves the Container Apps FQDN, in two applies."
 }
 
+variable "edge" {
+  type = object({
+    image                  = optional(string)
+    max_request_body_bytes = optional(number)
+  })
+  default     = null
+  description = "Run ca-edge, the machine entry point for the Python SDK and MCP clients: edge = {} for its defaults. Null (the default) creates nothing. Needs ingress_allowed_cidrs."
+}
+
+variable "edge_custom_domain" {
+  type = object({
+    hostname                        = string
+    certificate_key_vault_secret_id = string
+    key_vault_id                    = string
+  })
+  default     = null
+  description = "Your own hostname for ca-edge, the same shape as frontend_custom_domain and a different hostname. Needs edge set. Null serves the edge on its Container Apps FQDN."
+}
+
+variable "ingress_allowed_cidrs" {
+  type        = list(string)
+  default     = []
+  description = "CIDRs allowed to reach the frontend and, with edge set, ca-edge. Empty means unrestricted, which the module refuses for the edge."
+}
+
 variable "initial_owner_email" {
   type        = string
   description = "The address that becomes the first Owner on first sign-in. Must be one you can actually authenticate as."

@@ -1,7 +1,9 @@
 # aca-env-consumption
 
-Azure Container App Environment configured for **Consumption-only** workloads
-(no dedicated workload profile, no infrastructure subnet). Logs are sent through **Azure Monitor**
+Azure Container App Environment that declares **no workload profile** of its own (no dedicated
+profile; on a delegated subnet Azure adds the `Consumption` profile itself, and the module ignores
+that change). The root module's front, app and workers environments, which declare the profile,
+use `aca-env-workload-profiles` instead. Logs are sent through **Azure Monitor**
 (`logs_destination = "azure-monitor"`): the environment does not write to a Log
 Analytics workspace itself, and does not use a workspace's shared key. The caller
 attaches a diagnostic setting to the environment's `id` to send its apps' logs to a
@@ -32,7 +34,7 @@ the diagnostic setting instead.
 | `default_domain` | Default domain suffix for apps in this environment. |
 | `logs_destination` | Where the environment sends its logs. Always `azure-monitor`. |
 | `identity_ids` | Self-hosted extension: the identities attached to the environment. |
-| `workload_profile_names` | Self-hosted extension: the workload profiles Azure reports, with `read_workload_profiles` on (null otherwise). Empty means Consumption-only, where Azure ignores a route table on the subnet. Unknown at plan for a new environment. |
+| `workload_profile_names` | Self-hosted extension: the workload profiles Azure reports, with `read_workload_profiles` on (null otherwise). Empty means an environment without workload profiles, where Azure ignores a route table on the subnet. Unknown at plan for a new environment. |
 | `custom_domain_verification_id` | Self-hosted extension: the `asuid.<hostname>` TXT value Azure checks before it binds a custom domain. Sensitive, as the provider marks it. |
 
 ## Deviation from `design.md`
@@ -43,10 +45,10 @@ module sends logs through Azure Monitor rather than with the workspace's key, so
 variable is dropped.
 
 `zone_redundancy_enabled` is also omitted: azurerm requires it to be paired with
-`infrastructure_subnet_id`, which a Consumption-only environment (no VNet
-integration in v1) does not have. Setting it — even to `false` — trips the
-provider's `RequiredWith` validation. Add both together if VNet integration
-lands later.
+`infrastructure_subnet_id`, which the platform-iac original (no VNet integration in
+v1) does not set; setting it there — even to `false` — trips the provider's
+`RequiredWith` validation. This module now takes `infrastructure_subnet_id`, but
+zone redundancy is create-time only and stays out of scope.
 
 ## Usage
 

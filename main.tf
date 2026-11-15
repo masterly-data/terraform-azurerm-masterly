@@ -261,7 +261,7 @@ locals {
     local.use_managed_redis ? [tostring(azurerm_managed_redis.this[0].default_database[0].port)] : [],
     local.servicebus_private ? ["5671"] : [],
     # The server's built-in PgBouncer listens on 6432 of the same private endpoint.
-    var.postgres_pgbouncer ? ["6432"] : [],
+    local.postgres_pgbouncer ? ["6432"] : [],
   ))
 
   # Data plane seam (ADR 0065): BYO-DB when the customer supplies a DSN, otherwise the
@@ -285,6 +285,72 @@ locals {
   servicebus_private     = local.servicebus_premium && var.mode == "production"
   create_servicebus_dns  = local.servicebus_private && var.servicebus_private_dns_zone_id == null
   servicebus_dns_zone_id = local.servicebus_private ? (var.servicebus_private_dns_zone_id != null ? var.servicebus_private_dns_zone_id : azurerm_private_dns_zone.servicebus[0].id) : null
+
+  # Capacity profiles (ADR 0120 §4): capacity_profile sizes the services an install already has
+  # and never changes its topology. docs/scaling.md lists the values and what each profile is for.
+  # servicebus_sku here is the tier the profile is sized for, not one it applies: no profile
+  # resolves Premium on its own, because moving an existing namespace to or from Premium replaces
+  # it (servicebus_sku's validation refuses enterprise with Service Bus on and no tier chosen).
+  capacity_profiles = {
+    small = {
+      postgres_sku_name          = "B_Standard_B1ms"
+      postgres_pgbouncer         = false
+      postgres_zone_redundant_ha = false
+      servicebus_sku             = "Standard"
+      api_min_replicas           = 1
+      frontend_min_replicas      = 1
+      workers_min_replicas       = 1
+    }
+    standard = {
+      postgres_sku_name          = "GP_Standard_D2ds_v5"
+      postgres_pgbouncer         = true
+      postgres_zone_redundant_ha = true
+      servicebus_sku             = "Standard"
+      api_min_replicas           = 2
+      frontend_min_replicas      = 1
+      workers_min_replicas       = 1
+    }
+    enterprise = {
+      postgres_sku_name          = "GP_Standard_D4ds_v5"
+      postgres_pgbouncer         = true
+      postgres_zone_redundant_ha = true
+      servicebus_sku             = "Premium"
+      api_min_replicas           = 2
+      frontend_min_replicas      = 2
+      workers_min_replicas       = 2
+    }
+  }
+
+  # With capacity_profile unset, each input's default from before profiles existed, so an install
+  # that sets no profile plans no change.
+  capacity_profile_unset = {
+    postgres_sku_name          = "B_Standard_B1ms"
+    postgres_pgbouncer         = false
+    postgres_zone_redundant_ha = false
+    servicebus_sku             = "Standard"
+    api_min_replicas           = 1
+    frontend_min_replicas      = 1
+    workers_min_replicas       = 1
+  }
+
+  # lookup() rather than an index: a refused capacity_profile ("" or a misspelling) is reported
+  # by the variable's validation, not by a second error here.
+  capacity = lookup(local.capacity_profiles, coalesce(var.capacity_profile, "unset"), local.capacity_profile_unset)
+
+  # Each sized input resolves as: the value set explicitly, else the profile's, else the earlier
+  # default. Every consumer reads these, never the variables, and each variable's validation
+  # repeats the same resolution from capacity and capacity_postgres (variables-core.tf). The profile's
+  # Postgres values apply to the starter server only: with external_database_url there is no
+  # server to size and no built-in pooler, so the pooler is on there only when postgres_pgbouncer
+  # is set true, which its validation refuses. nonsensitive() on the presence test alone, as for
+  # the server's configurations below: a marked value could not drive for_each.
+  capacity_postgres          = nonsensitive(local.provision_postgres) ? local.capacity : local.capacity_profile_unset
+  postgres_sku_name          = var.postgres_sku_name != null ? var.postgres_sku_name : local.capacity_postgres.postgres_sku_name
+  postgres_pgbouncer         = var.postgres_pgbouncer != null ? var.postgres_pgbouncer : local.capacity_postgres.postgres_pgbouncer
+  postgres_zone_redundant_ha = var.postgres_zone_redundant_ha != null ? var.postgres_zone_redundant_ha : local.capacity_postgres.postgres_zone_redundant_ha
+  api_min_replicas           = var.api_min_replicas != null ? var.api_min_replicas : local.capacity.api_min_replicas
+  frontend_min_replicas      = var.frontend_min_replicas != null ? var.frontend_min_replicas : local.capacity.frontend_min_replicas
+  workers_min_replicas       = var.workers_min_replicas != null ? var.workers_min_replicas : local.capacity.workers_min_replicas
 }
 
 # A stable per-install suffix for the globally-unique Postgres server name.
@@ -459,7 +525,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   location            = var.location
 
   version  = var.postgres_version
-  sku_name = var.postgres_sku_name
+  sku_name = local.postgres_sku_name
 
   # Never below the real size (local.postgres_storage_mb). Grown storage cannot be shrunk.
   storage_mb = local.postgres_storage_mb
@@ -497,7 +563,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   geo_redundant_backup_enabled = local.postgres_geo_redundant_backup
 
   dynamic "high_availability" {
-    for_each = var.postgres_zone_redundant_ha ? [1] : []
+    for_each = local.postgres_zone_redundant_ha ? [1] : []
     content {
       mode = "ZoneRedundant"
     }
@@ -612,7 +678,7 @@ resource "azurerm_postgresql_flexible_server_configuration" "operator" {
 # so the "log" and "operator" state addresses stay unchanged. The variable refuses a burstable
 # SKU, BYO-DB and operator-set pgbouncer.* keys; the gate below is the second line.
 resource "azurerm_postgresql_flexible_server_configuration" "pgbouncer" {
-  for_each = nonsensitive(local.provision_postgres) && var.postgres_pgbouncer ? local.postgres_pgbouncer_parameters : {}
+  for_each = nonsensitive(local.provision_postgres) && local.postgres_pgbouncer ? local.postgres_pgbouncer_parameters : {}
 
   name      = each.key
   server_id = azurerm_postgresql_flexible_server.this[0].id
@@ -694,9 +760,10 @@ resource "azurerm_servicebus_namespace" "this" {
   #
   # On Basic or Standard, and outside production, public network access stays enabled.
   # Private endpoints are a Premium-only feature on Service Bus, and IP rules would leave
-  # public access enabled and need a stable source address, which a Consumption-only
-  # Container Apps environment does not have. The README section "Where this module departs
-  # from Azure's recommended baseline" says what that costs in posture.
+  # public access enabled and need a stable source address, which the environment the apps run
+  # in (aca-<prefix>) does not have unless egress_firewall routes its traffic through the
+  # customer's firewall. The README section "Where this module departs from Azure's recommended
+  # baseline" says what that costs in posture.
   public_network_access_enabled = !local.servicebus_private
 
   tags = local.tags
@@ -815,7 +882,7 @@ locals {
   # database_direct_url is the same server, role and database on 5432 for what a transaction
   # pooler cannot carry (CREATE DATABASE, migrations).
   # The starter server's URLs are composed in modules/postgres-connection-urls from these.
-  database_pooler_port = var.postgres_pgbouncer ? "6432" : "5432"
+  database_pooler_port = local.postgres_pgbouncer ? "6432" : "5432"
   database_direct_port = "5432"
   database_auth_mode   = local.database_entra ? "entra" : "password"
   database_role        = local.database_entra ? local.database_entra_role : "masterly_admin"
@@ -901,7 +968,7 @@ locals {
   # The shared DSN secrets no app's env names with the app roles. They stay in the vault
   # (install_secret_names, keyvault.tf), because the revisions running before an upgrade to
   # migrations = "job" still reference them until their replacements are ready.
-  shared_database_secret_names = concat(["database-url"], var.postgres_pgbouncer ? ["database-direct-url"] : [])
+  shared_database_secret_names = concat(["database-url"], local.postgres_pgbouncer ? ["database-direct-url"] : [])
 
   # ca-api keeps their Container App secret definitions too, as vault references no env names
   # (api_vault_secret_refs, keyvault.tf): its revision from before the upgrade still resolves
@@ -1053,7 +1120,7 @@ locals {
       MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = tostring(var.postgres_backup_retention_days)
     } : {},
     # Transaction pooling (MAS-1615): the backend needs to be told, or it fails through the pooler.
-    var.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
+    local.postgres_pgbouncer ? { MASTERLY_DATABASE_POOLER = "transaction" } : {},
     # With migrations = "job", migrations run in the migrate job (migrate.tf, ADR 0120) and the
     # api and the workers only check the schema stamps. Unset otherwise: the image's own default,
     # migrating at start, as before.
@@ -1124,8 +1191,8 @@ locals {
   # (backend_shared_secret_names).
   backend_secret_names = concat(
     [local.workers_database_secret_name, "session-secret"],
-    # The direct (non-pooled) DSN, named only with the pooler: var.postgres_pgbouncer is a plain bool.
-    var.postgres_pgbouncer ? [local.workers_database_direct_secret_name] : [],
+    # The direct (non-pooled) DSN, named only with the pooler: local.postgres_pgbouncer is a plain bool.
+    local.postgres_pgbouncer ? [local.workers_database_direct_secret_name] : [],
     local.backend_shared_secret_names,
   )
 
@@ -1149,7 +1216,7 @@ locals {
   # (random_password.bff_shared_secret). ca-workers serves no request, so it does not get it.
   api_secret_names = concat(
     [local.api_database_secret_name, "session-secret"],
-    var.postgres_pgbouncer ? [local.api_database_direct_secret_name] : [],
+    local.postgres_pgbouncer ? [local.api_database_direct_secret_name] : [],
     local.backend_shared_secret_names,
     ["bff-shared-secret"],
     local.builtin_auth_secret_names,
@@ -1172,7 +1239,7 @@ locals {
   # its own DSNs and adds the BFF shared secret below.
   backend_env_secret_refs = merge(
     { MASTERLY_DATABASE_URL = local.workers_database_secret_name },
-    var.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = local.workers_database_direct_secret_name } : {},
+    local.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = local.workers_database_direct_secret_name } : {},
     local.backend_shared_env_secret_refs,
   )
 
@@ -1191,7 +1258,7 @@ locals {
 
   api_env_secret_refs = merge(
     { MASTERLY_DATABASE_URL = local.api_database_secret_name },
-    var.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = local.api_database_direct_secret_name } : {},
+    local.postgres_pgbouncer ? { MASTERLY_DATABASE_DIRECT_URL = local.api_database_direct_secret_name } : {},
     local.backend_shared_env_secret_refs,
     { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret" },
   )
@@ -1316,7 +1383,7 @@ module "api" {
   # would drop sessions mid-flight. api_max_replicas > 1 requires enable_redis
   # (validation on the variable). min 0 = scale-to-zero cost posture (validations on
   # the variable spell out what an idle stop drops).
-  min_replicas = var.api_min_replicas
+  min_replicas = local.api_min_replicas
   max_replicas = var.api_max_replicas
 
   cpu    = local.app_resources.api.cpu
@@ -1478,7 +1545,7 @@ module "frontend" {
   ingress_external    = var.frontend_ingress_external
   ingress_target_port = 3000
 
-  min_replicas = var.frontend_min_replicas
+  min_replicas = local.frontend_min_replicas
   max_replicas = var.frontend_max_replicas
 
   cpu    = local.app_resources.frontend.cpu
