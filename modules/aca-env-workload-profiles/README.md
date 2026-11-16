@@ -23,6 +23,7 @@ It is a separate module because `aca-env-consumption` freezes `workload_profile`
 | `infrastructure_subnet_id` | string | — | Self-hosted extension: the delegated subnet (/27 or larger). Create-time only. |
 | `internal_load_balancer_enabled` | bool | — | Internal load balancer instead of a public endpoint. No default, so each caller decides. |
 | `mutual_tls_enabled` | bool | `true` | Peer-to-peer encryption between apps in the environment. |
+| `identity_ids` | list(string) | `[]` | Self-hosted extension: user-assigned identities on the environment itself, which it uses to read certificates from Key Vault. Empty attaches none. |
 
 ## Outputs
 
@@ -37,6 +38,8 @@ It is a separate module because `aca-env-consumption` freezes `workload_profile`
 | `mutual_tls_enabled` | Whether traffic between apps in the environment is encrypted. |
 | `infrastructure_subnet_id` | Self-hosted extension: the subnet the environment resource runs in. |
 | `workload_profiles` | Self-hosted extension: the profiles the environment resource declares, each with `name` and `workload_profile_type`. |
+| `identity_ids` | Self-hosted extension: the identity ids attached to the environment itself. |
+| `custom_domain_verification_id` | Self-hosted extension, sensitive: the value of the `asuid.<hostname>` TXT record Azure checks before it binds a custom domain. |
 
 ## Usage
 

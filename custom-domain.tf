@@ -23,8 +23,9 @@ locals {
 
 # The identity the environment reads the certificate as. Its own, never the frontend's: the
 # frontend runs code an attacker reaches first, and a read on the certificate would hand them the
-# private key of the customer's hostname. It is attached to the environment (module.aca_env) and
-# to no Container App, and holds one role, below.
+# private key of the customer's hostname. It is attached to the environment ca-frontend runs in
+# (module.aca_env, or the front environment with frontend_environment = "front") and to no
+# Container App, and holds one role, below.
 module "frontend_certificate_identity" {
   source = "./modules/user-assigned-identity"
   count  = local.frontend_custom_domain ? 1 : 0
@@ -51,8 +52,10 @@ resource "azurerm_role_assignment" "frontend_certificate_reader" {
 resource "azurerm_container_app_environment_certificate" "frontend" {
   count = local.frontend_custom_domain ? 1 : 0
 
-  name                         = "cert-${var.name_prefix}-frontend"
-  container_app_environment_id = module.aca_env.id
+  name = "cert-${var.name_prefix}-frontend"
+  # The environment ca-frontend runs in (frontend_environment): a binding takes a certificate
+  # from its app's own environment only.
+  container_app_environment_id = local.frontend_environment_id
 
   # A reference only: no certificate_blob_base64, no certificate_password.
   certificate_key_vault {
@@ -96,7 +99,7 @@ locals {
   edge_certificate_secret_name = local.edge_custom_domain ? element(split("/", var.edge_custom_domain.certificate_key_vault_secret_id), 4) : null
 }
 
-# Attached to the environment (module.aca_env) and to no Container App, ca-edge included.
+# Attached to the environment ca-edge runs in and to no Container App, ca-edge included.
 module "edge_certificate_identity" {
   source = "./modules/user-assigned-identity"
   count  = local.edge_custom_domain ? 1 : 0
@@ -119,8 +122,9 @@ resource "azurerm_role_assignment" "edge_certificate_reader" {
 resource "azurerm_container_app_environment_certificate" "edge" {
   count = local.edge_custom_domain ? 1 : 0
 
-  name                         = "cert-${var.name_prefix}-edge"
-  container_app_environment_id = module.aca_env.id
+  name = "cert-${var.name_prefix}-edge"
+  # The environment ca-edge runs in (edge_environment).
+  container_app_environment_id = local.edge_environment_id
 
   # A reference only: no certificate_blob_base64, no certificate_password.
   certificate_key_vault {

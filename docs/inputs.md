@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-132 inputs in 29 groups.
+135 inputs in 29 groups.
 
 ## Groups
 
@@ -22,7 +22,7 @@ each one that is missing.
 - [Outbound egress posture](#outbound-egress-posture) (2)
 - [Forced-tunnel egress through your firewall](#forced-tunnel-egress-through-your-firewall) (1)
 - [Trusting a private CA (MAS-446)](#trusting-a-private-ca-mas-446) (1)
-- [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (29)
+- [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (32)
 - [Environment subnets (ADR 0120)](#environment-subnets-adr-0120) (6)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
@@ -169,6 +169,9 @@ In `variables-core.tf`.
 | `aca_subnet_id` | `string` | `null` | Join an existing network instead of creating one (hub-and-spoke / landing zone): the id of a subnet delegated to Microsoft.App/environments, /23 or larger. |
 | `private_endpoints_subnet_id` | `string` | `null` | Subnet for the Postgres, Key Vault, Redis and registry (registry_private_endpoint) private endpoints when joining an existing network. |
 | `api_ingress_external` | `bool` | `false` | Whether the api is reachable beyond the Container App Environment. |
+| `frontend_environment` | `string` | `"aca"` | The Container Apps environment ca-frontend runs in. |
+| `edge_environment` | `string` | `"aca"` | The Container Apps environment ca-edge runs in, with edge set. |
+| `api_environment` | `string` | `"aca"` | The Container Apps environment ca-api runs in. |
 | `public_api_url` | `string` | `null` | The api's public base URL, as an absolute https:// URL with no query string, fragment or credentials — the api Container App's external FQDN ("https://ca-api.<environment default domain>") or your own domain in front... |
 | `frontend_ingress_external` | `bool` | `true` | Whether the frontend has ingress beyond the Container App Environment itself. |
 | `aca_internal_load_balancer` | `bool` | `false` | Give the Container App Environment an internal load balancer, so it has no public endpoint and its apps answer only inside the VNet — reached over VPN or ExpressRoute. |

@@ -320,11 +320,17 @@ that opens by itself.
 | 100 | Allow | `snet-aca` | TCP 443, 5432, 6380, 10000 | Key Vault and the registry's private endpoint (443), Postgres, Azure Cache for Redis, Azure Managed Redis |
 | 110 | Allow | `snet-app` | the same ports | The app environment (present with the [environment subnets](#the-environment-subnets)) |
 | 120 | Allow | `snet-workers` | the same ports | The workers environment (likewise) |
+| 130 | Allow | `snet-front` | TCP 443, to the Key Vault private endpoint's address (/32) only | Only with `frontend_environment = "front"` and the vault's private endpoint: `ca-frontend` resolves its vault secret references |
 | 4000 | Deny | any | any | Everything not admitted above |
 
-`snet-front` is never a source here: the front environment is the one that faces your users,
-and the internet when it is external, so it cannot open a connection to any private endpoint.
-The `snet-aca` rule stays for as long as the apps run there.
+`snet-front` is otherwise never a source here: the front environment is the one that faces your
+users, and the internet when it is external, so it opens no connection to Postgres, PgBouncer,
+Redis, Service Bus or the registry. Its one exception (ADR 0120 amendment, 2026-11-16) is the
+Key Vault private endpoint's own address on 443, and only once `ca-frontend` runs there; reaching
+the vault grants no secret, since `ca-frontend` reads its own secrets only, as its own identity.
+On an injected network the module creates no NSG here, so your hub must admit the front subnet to
+the Key Vault private endpoint on 443 before moving `ca-frontend`. The `snet-aca` rule stays for
+as long as the apps run there.
 
 The module sets `private_endpoint_network_policies = "Enabled"` on that subnet, without which
 an NSG on a private-endpoint subnet does not apply to private-endpoint traffic at all. Note
@@ -377,8 +383,20 @@ Each subnet holds its environment, `aca-<name_prefix>-front`, `aca-<name_prefix>
 `aca-<name_prefix>-workers`, each declaring the `Consumption` workload profile and sending its
 console and system logs to the install's workspace. The app and workers environments always have
 an internal load balancer; the front has one exactly when `aca_internal_load_balancer = true`, so
-an install that is private today gets no public front. No app runs in them yet: every app, the
-migrate job and the custom-domain certificate stay on `aca-<name_prefix>`, which plans no change.
+an install that is private today gets no public front. By default no app runs in them: every app,
+the migrate job and the custom-domain certificates stay on `aca-<name_prefix>`, which plans no
+change.
+
+`frontend_environment = "front"`, `edge_environment = "front"` and `api_environment = "app"`,
+set together, move `ca-frontend` and `ca-edge` to the front environment and `ca-api` to the app
+environment; any other mix is refused. The custom-domain certificates and their identities follow
+the frontend and the edge, and `custom_domain_verification_id` then reads the front environment's.
+The callers reach `ca-api` at `https://ca-api.<app environment default domain>` and verify its
+certificate: the BFF through `MASTERLY_API_BASE_URL`, the edge through an upstream TLS context
+that checks the chain and the host name. `ca-api` takes VNet-only ingress there and refuses plain
+HTTP. The move replaces the three apps (new FQDNs, downtime between destroy and create), so plan
+it on a test install first. `ca-workers` and the migrate job stay on `aca-<name_prefix>`, and
+`egress_firewall` is refused with the apps moved, because only `snet-aca` gets its route table.
 An install whose `environment_subnet_ids` are all null gets none of the three environments.
 
 An internal environment's default domain resolves only through a private DNS zone. With

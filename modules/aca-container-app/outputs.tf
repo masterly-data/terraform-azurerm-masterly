@@ -8,6 +8,13 @@ output "name" {
   description = "Name of the Container App."
 }
 
+# Read from the resource, a configured value, so a test proves which environment the app is
+# planned onto.
+output "environment_id" {
+  value       = azurerm_container_app.this.container_app_environment_id
+  description = "Resource ID of the Container Apps environment the app runs in."
+}
+
 # Memory per replica as configured, for the same reason the probe outputs exist: the root
 # module's memory alert takes its threshold as a share of this, and a configured value is
 # known at plan time, so a test can pin the arithmetic.

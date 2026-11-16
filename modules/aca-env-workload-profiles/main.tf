@@ -44,6 +44,18 @@ resource "azurerm_container_app_environment" "this" {
   # the detail and the az query that checks the second.
   mutual_tls_enabled = var.mutual_tls_enabled
 
+  # SELF-HOSTED EXTENSION: user-assigned identities on the environment itself, which it uses
+  # to read certificates from Key Vault (the root's custom-domain.tf, when the frontend and the
+  # edge run on the front environment). Empty by default, which renders no block, so an
+  # environment without them plans exactly as before.
+  dynamic "identity" {
+    for_each = length(var.identity_ids) > 0 ? [1] : []
+    content {
+      type         = "UserAssigned"
+      identity_ids = var.identity_ids
+    }
+  }
+
   dynamic "workload_profile" {
     for_each = local.workload_profiles
     content {

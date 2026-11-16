@@ -235,8 +235,9 @@ resource "azurerm_network_security_group" "private_endpoints" {
   }
 
   # ADR 0120 §5: the app and workers environments reach the data plane on the same ports. The
-  # front environment never does: it is the one that faces the callers, and when it is
-  # external, the internet. The rule above stays while the apps still run in snet-aca.
+  # front environment never does on these ports: it is the one that faces the callers, and when
+  # it is external, the internet (its one exception, the vault on 443, is below). The rule above
+  # stays while the apps still run in snet-aca.
   dynamic "security_rule" {
     for_each = { for k in ["app", "workers"] : k => local.env_subnet_prefixes[k] if contains(keys(local.env_subnet_prefixes), k) }
 
@@ -251,6 +252,30 @@ resource "azurerm_network_security_group" "private_endpoints" {
       destination_address_prefix = local.private_endpoints_subnet_prefix
       destination_port_ranges    = local.private_endpoint_ports
       description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the ${security_rule.key} environment's subnet."
+    }
+  }
+
+  # The one exception for the front subnet (ADR 0120 amendment, 2026-11-16): with ca-frontend in
+  # the front environment, it resolves its per-secret vault references through the Key Vault
+  # private endpoint. The endpoint's own address and 443 only, never the subnet or another port,
+  # so the front reaches no database, Redis or Service Bus. Reaching the vault grants no secret:
+  # ca-frontend reads its own secrets only, as module.frontend_identity.
+  dynamic "security_rule" {
+    for_each = (
+      var.frontend_environment == "front" && local.key_vault_private_endpoint && contains(keys(local.env_subnet_prefixes), "front")
+    ) ? { front = local.env_subnet_prefixes["front"] } : {}
+
+    content {
+      name                       = "allow-key-vault-from-front-subnet"
+      priority                   = 130
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = "${azurerm_private_endpoint.key_vault[0].private_service_connection[0].private_ip_address}/32"
+      destination_port_range     = "443"
+      description                = "Key Vault's private endpoint only, on 443, from the front environment's subnet: ca-frontend's vault secret references."
     }
   }
 

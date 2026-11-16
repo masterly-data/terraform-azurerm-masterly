@@ -114,8 +114,10 @@ run "edge_is_published_https_only_on_the_allowlist" {
     error_message = "Ingress must target the one Envoy listener's port."
   }
 
+  # In the default placement (api_environment = "aca"); the app placement has its own run in
+  # app_placement.tftest.hcl.
   assert {
-    condition     = local.edge_upstream == module.api.name
+    condition     = var.api_environment != "aca" || (local.edge_upstream == module.api.name && local.edge_upstream_host == module.api.name)
     error_message = "The edge must address ca-api by module.api's app name."
   }
 }
@@ -538,9 +540,9 @@ run "edge_routes_only_v1_and_mcp_to_ca_api" {
   assert {
     condition = (
       [for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.match if contains(keys(r), "route")] == [{ path_separated_prefix = "/v1" }, { path_separated_prefix = "/mcp" }] &&
-      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.route.cluster == "ca-api" && r.route.host_rewrite_literal == "ca-api" if contains(keys(r), "route")])
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.route.cluster == "ca-api" && (var.api_environment != "aca" || r.route.host_rewrite_literal == "ca-api") if contains(keys(r), "route")])
     )
-    error_message = "Only the prefixes /v1 and /mcp may route to a cluster, the ca-api cluster, with Host rewritten to ca-api."
+    error_message = "Only the prefixes /v1 and /mcp may route to a cluster, the ca-api cluster, with Host rewritten to ca-api in the default placement."
   }
 
   # Every other route answers itself, and the last one is the catch-all 404.
@@ -556,15 +558,19 @@ run "edge_routes_only_v1_and_mcp_to_ca_api" {
     error_message = "Any path other than /v1 and /mcp must be answered 404 by a direct_response, never reach the cluster."
   }
 
-  # The one cluster: ca-api by app name, port 80, plain http (no transport socket).
+  # The one cluster: in the default placement (api_environment = "aca"), ca-api by app name, port
+  # 80, plain http (no transport socket). The app placement's TLS cluster has its own run in
+  # app_placement.tftest.hcl.
   assert {
     condition = (
       length(local.edge_envoy_config.static_resources.clusters) == 1 &&
       local.edge_envoy_config.static_resources.clusters[0].name == "ca-api" &&
-      local.edge_envoy_config.static_resources.clusters[0].load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address == { address = "ca-api", port_value = 80 } &&
-      !contains(keys(local.edge_envoy_config.static_resources.clusters[0]), "transport_socket")
+      (var.api_environment != "aca" || (
+        local.edge_envoy_config.static_resources.clusters[0].load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address == { address = "ca-api", port_value = 80 } &&
+        !contains(keys(local.edge_envoy_config.static_resources.clusters[0]), "transport_socket")
+      ))
     )
-    error_message = "The cluster must address ca-api by app name over plain http on port 80."
+    error_message = "In the default placement the cluster must address ca-api by app name over plain http on port 80."
   }
 
   # Routing reads the normalized path, so a dot segment cannot climb out of /v1.
@@ -575,6 +581,55 @@ run "edge_routes_only_v1_and_mcp_to_ca_api" {
       local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.path_with_escaped_slashes_action == "REJECT_REQUEST"
     )
     error_message = "The edge must route on the normalized path and refuse encoded slashes."
+  }
+}
+
+# Threat: the edge forwarding unverified across environments. With ca-api in the app environment
+# (app_placement.tftest.hcl), the one cluster targets ca-api.<app default domain>:443 through an
+# UpstreamTlsContext that sends the host as SNI, checks the chain against a CA bundle file and
+# checks that the certificate names the host; every forwarded route sends that host.
+run "edge_forwards_to_ca_api_in_app_over_verified_tls" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    frontend_environment  = "front"
+    edge_environment      = "front"
+    api_environment       = "app"
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  assert {
+    condition = (
+      length(local.edge_envoy_config.static_resources.clusters) == 1 &&
+      local.edge_envoy_config.static_resources.clusters[0].name == "ca-api" &&
+      local.edge_envoy_config.static_resources.clusters[0].load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address == { address = "ca-api.app-3c4d.swedencentral.azurecontainerapps.io", port_value = 443 } &&
+      local.edge_envoy_config.static_resources.clusters[0].transport_socket.name == "envoy.transport_sockets.tls" &&
+      local.edge_envoy_config.static_resources.clusters[0].transport_socket.typed_config["@type"] == "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext" &&
+      local.edge_envoy_config.static_resources.clusters[0].transport_socket.typed_config.sni == "ca-api.app-3c4d.swedencentral.azurecontainerapps.io" &&
+      local.edge_envoy_config.static_resources.clusters[0].transport_socket.typed_config.common_tls_context.validation_context.trusted_ca == { filename = "/etc/ssl/certs/ca-certificates.crt" } &&
+      local.edge_envoy_config.static_resources.clusters[0].transport_socket.typed_config.common_tls_context.validation_context.match_typed_subject_alt_names == [{ san_type = "DNS", matcher = { exact = "ca-api.app-3c4d.swedencentral.azurecontainerapps.io" } }]
+    )
+    error_message = "With ca-api in app, the edge's cluster must target ca-api.<app default domain>:443 with an UpstreamTlsContext: sni the host, trusted_ca the CA bundle file, and the host as the subject alternative name."
+  }
+
+  assert {
+    condition = (
+      length([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r if contains(keys(r), "route")]) == 2 &&
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.route.cluster == "ca-api" && r.route.host_rewrite_literal == "ca-api.app-3c4d.swedencentral.azurecontainerapps.io" if contains(keys(r), "route")])
+    )
+    error_message = "With ca-api in app, every forwarded route's host_rewrite_literal must be ca-api.<app default domain>."
+  }
+
+  # The stat prefixes stay the two the edge always had: the TLS context adds none.
+  assert {
+    condition     = toset(flatten(regexall("\"stat_prefix\":\"([^\"]*)\"", jsonencode(local.edge_envoy_config)))) == toset(["edge", "edge_rate_limit"])
+    error_message = "The upstream TLS context must add no stat prefix."
   }
 }
 
