@@ -112,8 +112,33 @@ locals {
   # ca-api by its app name over http, as ca-frontend calls it (main.tf, MASTERLY_API_BASE_URL):
   # the environment encrypts the hop with mutual TLS underneath the http:// scheme. Typed rather
   # than read from module.api, so the edge does not depend on ca-api's whole graph; a test pins
-  # it to module.api's name.
+  # it to module.api's name. The cluster keeps this name in every placement.
   edge_upstream = "ca-api"
+
+  # Where the cluster connects and the Host it sends. With ca-api in the app environment
+  # (api_environment = "app") the app name resolves nowhere from the front environment, so the
+  # edge connects to ca-api.<app default domain> on 443 over TLS it verifies (below); by default
+  # ca-api on 80, as before.
+  edge_upstream_host = local.api_in_app_environment ? local.api_cross_environment_host : local.edge_upstream
+  edge_upstream_port = local.api_in_app_environment ? 443 : 80
+
+  # Upstream TLS, only across environments. The chain is checked against the image's system CA
+  # bundle (the envoyproxy/envoy image installs ca-certificates there), and the certificate must
+  # name the host: Envoy checks no hostname unless a subject alternative name is matched, and SNI
+  # alone does not make it. Without this key the cluster has no transport socket, as before.
+  edge_upstream_transport_socket = local.api_in_app_environment ? [{
+    name = "envoy.transport_sockets.tls"
+    typed_config = {
+      "@type" = "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext"
+      sni     = local.edge_upstream_host
+      common_tls_context = {
+        validation_context = {
+          trusted_ca                    = { filename = "/etc/ssl/certs/ca-certificates.crt" }
+          match_typed_subject_alt_names = [{ san_type = "DNS", matcher = { exact = local.edge_upstream_host } }]
+        }
+      }
+    }
+  }] : []
 
   # Headers ca-api could be handed as a statement of who the caller is: the decoded token a
   # gateway forwards, and every header App Service built-in authentication sets. Removed from every
@@ -128,7 +153,7 @@ locals {
 
   edge_forwarded_route = {
     cluster              = local.edge_upstream
-    host_rewrite_literal = local.edge_upstream
+    host_rewrite_literal = local.edge_upstream_host
     # No total cap: a streamed MCP or SSE response is bounded by the stream idle timeout instead of
     # Envoy's 15 s default for a route.
     timeout = "0s"
@@ -348,24 +373,29 @@ locals {
         }]
       }]
 
-      clusters = [{
-        name              = local.edge_upstream
-        type              = "LOGICAL_DNS"
-        connect_timeout   = "5s"
-        dns_lookup_family = "V4_ONLY"
-        load_assignment = {
-          cluster_name = local.edge_upstream
-          endpoints = [{
-            lb_endpoints = [{
-              endpoint = {
-                address = {
-                  socket_address = { address = local.edge_upstream, port_value = 80 }
+      # merge() with an expanded list: the transport socket is added only across environments,
+      # and the default cluster has no transport_socket key at all.
+      clusters = [merge(
+        {
+          name              = local.edge_upstream
+          type              = "LOGICAL_DNS"
+          connect_timeout   = "5s"
+          dns_lookup_family = "V4_ONLY"
+          load_assignment = {
+            cluster_name = local.edge_upstream
+            endpoints = [{
+              lb_endpoints = [{
+                endpoint = {
+                  address = {
+                    socket_address = { address = local.edge_upstream_host, port_value = local.edge_upstream_port }
+                  }
                 }
-              }
+              }]
             }]
-          }]
-        }
-      }]
+          }
+        },
+        [for socket in local.edge_upstream_transport_socket : { transport_socket = socket }]...
+      )]
     }
   }
 }
@@ -395,7 +425,7 @@ resource "azurerm_container_app" "edge" {
 
   name                         = "ca-edge"
   resource_group_name          = azurerm_resource_group.aca.name
-  container_app_environment_id = module.aca_env.id
+  container_app_environment_id = local.edge_environment_id
   revision_mode                = "Single"
 
   identity {

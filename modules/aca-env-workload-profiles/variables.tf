@@ -39,3 +39,10 @@ variable "mutual_tls_enabled" {
   nullable    = false
   description = "Encrypt traffic between apps inside the environment. TRUE by default. Azure manages the certificates and the apps do not see them, so callers keep using http:// — the platform encrypts the hop underneath."
 }
+
+# SELF-HOSTED EXTENSION: identities the environment itself runs as, as in aca-env-consumption.
+variable "identity_ids" {
+  type        = list(string)
+  default     = []
+  description = "User-assigned identity ids to attach to the environment itself, not to any app in it. The environment uses them to read certificates from Key Vault. Empty (the default) attaches none."
+}

@@ -369,6 +369,8 @@ public endpoint and onto the install's VNet. It creates, in `registry.tf`:
 The login server, the image references and the `AcrPull` grants do not change; the output
 `registry_private_endpoint_id` names the endpoint. The plan refuses the input with the `token`
 mode (set or derived from `registry_token`) and without `acr_id` set to a registry's resource ID.
+It also refuses the input with `frontend_environment = "front"`: `ca-frontend` would then pull
+from the front subnet, which may reach only the Key Vault private endpoint.
 Before you turn it on:
 
 - **`acr_id` must be the registry the apps pull from**, the one `registry_location` names: the

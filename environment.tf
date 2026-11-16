@@ -25,7 +25,9 @@ module "aca_env" {
   internal_load_balancer_enabled = var.aca_internal_load_balancer
   # Only the certificate identities, each only with its input: frontend_custom_domain and
   # edge_custom_domain (custom-domain.tf). Empty with neither.
-  identity_ids = concat(module.frontend_certificate_identity[*].id, module.edge_certificate_identity[*].id)
+  # They follow the apps: with frontend_environment and edge_environment = "front" they are on the
+  # front environment instead, and this list is empty.
+  identity_ids = local.environment_certificate_identity_ids["aca"]
   # Only with egress_firewall: the route table's precondition reads the profiles (network.tf).
   read_workload_profiles = var.egress_firewall != null
   tags                   = local.tags
@@ -61,8 +63,11 @@ resource "azurerm_monitor_diagnostic_setting" "aca_env" {
 # --- The front, app and workers environments (ADR 0120 §4-§5) ------------------------
 # One workload-profiles environment on each environment subnet (network.tf), created beside
 # aca-<prefix>. By default no app runs in them: every app, the migrate job and the custom-domain
-# certificate stay on module.aca_env, which plans no change. workers_environment and
-# migrate_job_environment place ca-workers and caj-migrate in the workers environment.
+# certificates stay on module.aca_env, which plans no change. frontend_environment,
+# edge_environment and api_environment move ca-frontend and ca-edge to the front environment and
+# ca-api to the app environment, together; the certificates follow the frontend and the edge.
+# workers_environment and migrate_job_environment place ca-workers and caj-migrate in the
+# workers environment.
 #
 # The app and workers environments are always internal: nothing in them is meant to be reached
 # from outside the VNet, so no input turns their load balancer public. The front follows
@@ -90,6 +95,35 @@ locals {
     for k in local.container_app_environment_keys : k
     if var.environment_private_dns_enabled && local.container_app_environment_internal[k]
   ])
+
+  # --- Where ca-frontend, ca-edge and ca-api run (variables-core.tf) ---
+  # "aca" is module.aca_env; any other placement is that key of module.environments. A placement
+  # on an environment the module does not create is refused (main.tf, azurerm_resource_group.aca);
+  # try() only keeps the missing key from erroring beside that refusal, and the fallback is never
+  # applied.
+  frontend_environment_id = var.frontend_environment == "aca" ? module.aca_env.id : try(module.environments[var.frontend_environment].id, module.aca_env.id)
+  edge_environment_id     = var.edge_environment == "aca" ? module.aca_env.id : try(module.environments[var.edge_environment].id, module.aca_env.id)
+  api_environment_id      = var.api_environment == "aca" ? module.aca_env.id : try(module.environments[var.api_environment].id, module.aca_env.id)
+
+  # ca-api in the app environment: its callers cross environments, so they address it by its
+  # name under the app environment's default domain, over HTTPS, and verify its certificate. Built
+  # from the environment's default domain, never from module.api's fqdn: Azure has reported that
+  # fqdn in the internal and the external form with no change on our side (main.tf).
+  api_in_app_environment     = var.api_environment == "app"
+  api_cross_environment_host = local.api_in_app_environment ? "ca-api.${try(module.environments["app"].default_domain, "")}" : null
+
+  # The certificate identities go on the environment that runs the app they serve, and nowhere
+  # else; concat(frontend, edge), the order module.aca_env always had.
+  environment_certificate_identity_ids = {
+    for k in ["aca", "front", "app", "workers"] : k => concat(
+      var.frontend_environment == k ? module.frontend_certificate_identity[*].id : [],
+      var.edge_environment == k ? module.edge_certificate_identity[*].id : [],
+    )
+  }
+
+  # The environment that holds the custom-domain certificates (custom-domain.tf), for the
+  # verification id the asuid TXT records carry.
+  certificate_environment_key = var.frontend_environment
 }
 
 module "environments" {
@@ -101,7 +135,9 @@ module "environments" {
   location                       = var.location
   infrastructure_subnet_id       = local.env_subnet_ids[each.key]
   internal_load_balancer_enabled = local.container_app_environment_internal[each.key]
-  tags                           = local.tags
+  # The certificate identities, only on the environment the frontend and the edge run in.
+  identity_ids = local.environment_certificate_identity_ids[each.key]
+  tags         = local.tags
 
   # The subnet's NSG is in place before an environment starts using the subnet.
   depends_on = [azurerm_subnet_network_security_group_association.environment]

@@ -516,6 +516,13 @@ variable "egress_firewall" {
     condition     = var.egress_firewall == null || var.aca_internal_load_balancer
     error_message = "egress_firewall needs aca_internal_load_balancer = true. Microsoft documents forced tunnelling for Container Apps only as an internal environment behind an Application Gateway, with the route to your firewall on the environment's subnet. On an external environment inbound traffic arrives on a public IP in the managed resource group, and public ingress alongside 0.0.0.0/0 to a firewall is not a documented configuration. Set aca_internal_load_balancer = true and publish the frontend through your Application Gateway (frontend_custom_domain), or remove egress_firewall."
   }
+
+  # The route table goes on snet-aca only. An app moved to the front or app environment would
+  # leave through a subnet with no route table, with egress believed forced.
+  validation {
+    condition     = var.egress_firewall == null || (var.frontend_environment == "aca" && var.edge_environment == "aca" && var.api_environment == "aca")
+    error_message = "egress_firewall cannot be combined with frontend_environment, edge_environment or api_environment off \"aca\": the route table is attached to snet-aca only, and the front and app environment subnets get no route table, so the moved apps' egress would not go through your firewall while it is believed forced. Keep all three \"aca\", or remove egress_firewall."
+  }
 }
 
 # --- Trusting a private CA (MAS-446) --------------------------------------------------
@@ -910,6 +917,72 @@ variable "api_ingress_external" {
   type        = bool
   default     = false
   description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session. Set true only when something outside the environment must call /v1 directly — the Python SDK, a customer's own pipeline, an integration — and narrow it with ingress_allowed_cidrs, which is applied to the api whenever this is true — an empty list is refused at plan, because empty means unrestricted in Azure. builtin_auth does not gate the api, and a plan that sets both warns. On an internal environment (aca_internal_load_balancer) `external` still means \"reachable from the VNet\", not from the internet."
+}
+
+# Where ca-frontend, ca-edge and ca-api run (ADR 0120 §4-§5). The three move together or not at all. The callers reach the api by its short app name inside
+# aca-<prefix>, and across environments over verified HTTPS to its name in the app environment;
+# snet-app admits 443 only from snet-front (network.tf), so the front and app environments are
+# the only other placement the network allows.
+
+variable "frontend_environment" {
+  type        = string
+  default     = "aca"
+  nullable    = false
+  description = "The Container Apps environment ca-frontend runs in. \"aca\" (the default) is aca-<name_prefix>, as before; or \"front\", aca-<name_prefix>-front, together with edge_environment = \"front\" and api_environment = \"app\". Moving it REPLACES ca-frontend: its FQDN and frontend_url change, and with frontend_custom_domain set its certificate and custom domain are created again on the front environment, whose custom_domain_verification_id the asuid TXT record must then carry. On the front environment ca-frontend reads its vault secrets through the Key Vault private endpoint, which the module's private-endpoint NSG admits from the front subnet on 443 only; on an injected network the hub must admit it. Refused with egress_firewall, which forces egress on snet-aca only, and with registry_private_endpoint: ca-frontend pulls its image from the front subnet, which the private-endpoint NSG does not admit to the registry's endpoint."
+
+  validation {
+    condition     = contains(["aca", "front"], var.frontend_environment)
+    error_message = "frontend_environment must be \"aca\" (aca-<name_prefix>) or \"front\" (aca-<name_prefix>-front): the frontend faces the callers, so it runs in no other environment."
+  }
+
+  # ADR 0120 §5 and its 2026-11-16 amendment open only the Key Vault endpoint to the front subnet.
+  # The registry's endpoint has several addresses (the login server and a data endpoint per
+  # geo-replica), so ca-frontend's image pull from the front subnet would be dropped.
+  validation {
+    condition     = var.frontend_environment != "front" || !var.registry_private_endpoint
+    error_message = "frontend_environment = \"front\" cannot be combined with registry_private_endpoint = true: ca-frontend pulls its image from the front subnet, and the front subnet may reach only the Key Vault private endpoint, not the registry's, so the pull would fail and the new ca-frontend would never start. Keep frontend_environment = \"aca\", or leave registry_private_endpoint off."
+  }
+}
+
+variable "edge_environment" {
+  type        = string
+  default     = "aca"
+  nullable    = false
+  description = "The Container Apps environment ca-edge runs in, with edge set. \"aca\" (the default) is aca-<name_prefix>, as before; or \"front\", aca-<name_prefix>-front, together with frontend_environment = \"front\" and api_environment = \"app\". Moving it REPLACES ca-edge, so its FQDN changes, and with edge_custom_domain set its certificate and custom domain are created again on the front environment. On the front environment the edge forwards to ca-api over HTTPS, verifying the api's certificate and hostname. Refused with egress_firewall."
+
+  validation {
+    condition     = contains(["aca", "front"], var.edge_environment)
+    error_message = "edge_environment must be \"aca\" (aca-<name_prefix>) or \"front\" (aca-<name_prefix>-front): the edge faces the callers, so it runs in no other environment."
+  }
+}
+
+variable "api_environment" {
+  type        = string
+  default     = "aca"
+  nullable    = false
+  description = "The Container Apps environment ca-api runs in. \"aca\" (the default) is aca-<name_prefix>, as before, where ca-frontend calls http://ca-api; or \"app\", aca-<name_prefix>-app, together with frontend_environment and edge_environment = \"front\". In the app environment, which is always internal, ca-api has VNet-only ingress (external on an internal environment) with plain HTTP refused, and ca-frontend and ca-edge call https://ca-api.<app environment default domain>, verifying its certificate. That name resolves through the app environment's private DNS zone; with environment_private_dns_enabled = false your hub must create it (the container_app_environments output). Moving it REPLACES ca-api, so its FQDN changes. Refused with api_ingress_external = true, and with egress_firewall."
+
+  validation {
+    condition     = contains(["aca", "app"], var.api_environment)
+    error_message = "api_environment must be \"aca\" (aca-<name_prefix>) or \"app\" (aca-<name_prefix>-app)."
+  }
+
+  # The callers reach the api by its short app name only inside one environment, and snet-app
+  # admits 443 only from snet-front: any other mix leaves a caller with no path to the api.
+  validation {
+    condition = (
+      (var.frontend_environment == "aca" && var.edge_environment == "aca" && var.api_environment == "aca") ||
+      (var.frontend_environment == "front" && var.edge_environment == "front" && var.api_environment == "app")
+    )
+    error_message = "frontend_environment, edge_environment and api_environment move together: leave all three \"aca\", or set frontend_environment = \"front\", edge_environment = \"front\" and api_environment = \"app\". ca-frontend and ca-edge reach ca-api by its app name inside aca-<name_prefix>, and over HTTPS from the front environment, the only subnet the app environment admits; any other mix leaves a caller with no path to the api."
+  }
+
+  # In the internal app environment `external` already means the VNet only. A public api there
+  # would need a public environment, which the app environment never is.
+  validation {
+    condition     = var.api_environment != "app" || !var.api_ingress_external
+    error_message = "api_ingress_external = true cannot be combined with api_environment = \"app\": the app environment is internal, so the api there is reachable from the VNet only, and ca-frontend and ca-edge are its callers. Leave api_ingress_external false, or keep api_environment = \"aca\"."
+  }
 }
 
 variable "public_api_url" {

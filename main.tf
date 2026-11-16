@@ -464,6 +464,15 @@ resource "azurerm_resource_group" "aca" {
       error_message = "front_subnet_id, app_subnet_id and workers_subnet_id must be subnets of the same virtual network as aca_subnet_id: the install's private DNS zones are linked to that network, and its private endpoints answer only to callers that resolve them."
     }
 
+    # Read from the environment keys, which are known at plan, never from a subnet id.
+    precondition {
+      condition = alltrue([
+        for placement in [var.frontend_environment, var.edge_environment, var.api_environment] :
+        placement == "aca" || contains(local.container_app_environment_keys, placement)
+      ])
+      error_message = "frontend_environment, edge_environment and api_environment name the front and app environments, and this install has none: they exist only beside the three environment subnets, which the module derives from vnet_address_space or front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix, or which an injected network supplies as front_subnet_id, app_subnet_id and workers_subnet_id. Give the install those subnets, or leave all three \"aca\"."
+    }
+
     precondition {
       condition     = var.frontend_ingress_external || !var.aca_internal_load_balancer
       error_message = "aca_internal_load_balancer with frontend_ingress_external = false leaves the frontend reachable from nothing outside the environment — not over VPN either. On an internal environment `external` already means \"reachable from the VNet only\", so leave frontend_ingress_external true."
@@ -1334,7 +1343,7 @@ module "api" {
 
   name                = "ca-api"
   resource_group_name = azurerm_resource_group.aca.name
-  environment_id      = module.aca_env.id
+  environment_id      = local.api_environment_id
   image               = local.api_image
 
   acr_login_server           = local.registry_server
@@ -1349,7 +1358,11 @@ module "api" {
   # session COOKIES and short-circuits unauthenticated requests without forwarding, so it is
   # not a substitute for a bearer-token client). Until this input existed, an install could
   # not be reached by the SDK we publish and document.
-  ingress_external    = var.api_ingress_external
+  #
+  # In the app environment (api_environment = "app") it is always external: the environment is
+  # internal, so external means the VNet only, and it is what lets ca-frontend and ca-edge in
+  # the front environment reach it. api_ingress_external = true is refused there.
+  ingress_external    = local.api_in_app_environment ? true : var.api_ingress_external
   ingress_target_port = 8001
 
   # Plain HTTP is allowed only while the api is unreachable from outside the environment.
@@ -1369,7 +1382,10 @@ module "api" {
   # stays http://ca-api rather than moving to https:// — an app-name call cannot present a
   # hostname the environment's certificate matches, so https://ca-api would fail
   # verification. Azure encrypts that hop underneath the http:// scheme instead.
-  ingress_allow_insecure = !var.api_ingress_external
+  #
+  # In the app environment the callers are in another environment and call https://, so plain
+  # HTTP is never served there.
+  ingress_allow_insecure = local.api_in_app_environment ? false : !var.api_ingress_external
 
   # The SAME allowlist the frontend gets. Until api_ingress_external existed this list was
   # frontend-only, which was fine while the api was unreachable — exposing it without also
@@ -1506,7 +1522,13 @@ locals {
       # https://ca-api would fail hostname verification on the very name chosen because it
       # cannot drift. The scheme here says what the BFF speaks, not what crosses the wire:
       # with mutual_tls_enabled on module.aca_env, Azure encrypts the hop underneath it.
-      MASTERLY_API_BASE_URL = "http://${module.api.name}"
+      #
+      # With ca-api in the app environment (api_environment = "app") the short name resolves
+      # nowhere from the front environment, so the BFF calls https://ca-api.<app default
+      # domain>: a name the environment's certificate matches, verified by the BFF's default
+      # TLS checks. Built from the environment's default domain, never from module.api's fqdn,
+      # for the reason above.
+      MASTERLY_API_BASE_URL = local.api_in_app_environment ? "https://${local.api_cross_environment_host}" : "http://${module.api.name}"
       MASTERLY_REGION       = var.masterly_region
       MASTERLY_IDP_BINDING  = var.identity_binding
     },
@@ -1538,7 +1560,7 @@ module "frontend" {
 
   name                = "ca-frontend"
   resource_group_name = azurerm_resource_group.aca.name
-  environment_id      = module.aca_env.id
+  environment_id      = local.frontend_environment_id
   image               = local.frontend_image
 
   acr_login_server           = local.registry_server

@@ -570,7 +570,9 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
           internal_load_balancer_enabled = var.aca_internal_load_balancer
           # Only the certificate identities, each only with its input: frontend_custom_domain and
           # edge_custom_domain (custom-domain.tf). Empty with neither.
-          identity_ids = concat(module.frontend_certificate_identity[*].id, module.edge_certificate_identity[*].id)
+          # They follow the apps: with frontend_environment and edge_environment = "front" they are on the
+          # front environment instead, and this list is empty.
+          identity_ids = local.environment_certificate_identity_ids["aca"]
           # Only with egress_firewall: the route table's precondition reads the profiles (network.tf).
           read_workload_profiles = var.egress_firewall != null
           tags                   = local.tags
@@ -589,14 +591,15 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
     error_message = "diag-<prefix>-aca-env must be unchanged: on aca-<prefix>, the console and system logs."
   }
 
+  # ca-api and ca-frontend choose their environment from frontend_environment and
+  # api_environment (environment.tf), so they are read from the plan.
   assert {
-    condition = alltrue([
-      for block in [
-        regex("(?s)module \"api\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0],
-        regex("(?s)module \"frontend\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0],
-      ] :
-      can(regex("(?m)^  environment_id\\s*=\\s*module\\.aca_env\\.id$", block))
-    ])
+    condition = (
+      module.api.environment_id == module.aca_env.id &&
+      module.frontend.environment_id == module.aca_env.id &&
+      local.api_environment_id == module.aca_env.id &&
+      local.frontend_environment_id == module.aca_env.id
+    )
     error_message = "ca-api and ca-frontend must stay on module.aca_env."
   }
 

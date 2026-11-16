@@ -117,8 +117,9 @@ run "auth_config_alert_routes_to_the_module_action_group" {
     }
   }
 
-  # The migrate job behind ca-api's migrate_start names the workers environment
-  # (migrate_job_environment), so the environments are applied too, as in
+  # The frontend's environment id is chosen between module.aca_env and the front environment
+  # (frontend_environment), and the migrate job behind ca-api's migrate_start names the workers
+  # environment (migrate_job_environment), so the environments are applied too, as in
   # availability_routing.tftest.hcl.
   override_module {
     target  = module.environments["front"]

@@ -24,7 +24,7 @@ endpoints for Postgres, Key Vault, and Redis, and the private DNS zones those ne
 `registry_private_endpoint = true` (the `managed_identity` and `customer_registry` registry
 modes, with `acr_id` set) it adds one more: a private endpoint to your registry's `registry`
 subresource, and a `privatelink.azurecr.io` zone linked to the VNet, so image pulls stay on the
-VNet.
+VNet. It is refused with `frontend_environment = "front"` (see the private-endpoint NSG below).
 
 `ingress_allowed_cidrs` narrows who can reach the frontend. **An empty list means
 unrestricted, not deny-all** — that is Azure's semantics, not ours, and it is the one default
@@ -320,11 +320,21 @@ that opens by itself.
 | 100 | Allow | `snet-aca` | TCP 443, 5432, 6380, 10000 | Key Vault and the registry's private endpoint (443), Postgres, Azure Cache for Redis, Azure Managed Redis |
 | 110 | Allow | `snet-app` | the same ports | The app environment (present with the [environment subnets](#the-environment-subnets)) |
 | 120 | Allow | `snet-workers` | the same ports | The workers environment (likewise) |
+| 130 | Allow | `snet-front` | TCP 443, to the Key Vault private endpoint's address (/32) only | Only with `frontend_environment = "front"` and the vault's private endpoint: `ca-frontend` resolves its vault secret references |
 | 4000 | Deny | any | any | Everything not admitted above |
 
-`snet-front` is never a source here: the front environment is the one that faces your users,
-and the internet when it is external, so it cannot open a connection to any private endpoint.
-The `snet-aca` rule stays for as long as the apps run there.
+`snet-front` is otherwise never a source here: the front environment is the one that faces your
+users, and the internet when it is external, so it opens no connection to Postgres, PgBouncer,
+Redis or Service Bus. Its one exception (ADR 0120 amendment, 2026-11-16) is the Key Vault
+private endpoint's own address on 443, and only once `ca-frontend` runs there; reaching the vault
+grants no secret, since `ca-frontend` reads its own secrets only, as its own identity. Once
+`ca-frontend` runs there, it does pull its image from the front subnet. With
+`registry_private_endpoint` the registry resolves to its private endpoint, which this NSG does
+not admit from `snet-front`, so the plan refuses `frontend_environment = "front"` with
+`registry_private_endpoint = true`, on either network shape.
+On an injected network the module creates no NSG here, so your hub must admit the front subnet to
+the Key Vault private endpoint on 443 before moving `ca-frontend`. The `snet-aca` rule stays for
+as long as the apps run there.
 
 The module sets `private_endpoint_network_policies = "Enabled"` on that subnet, without which
 an NSG on a private-endpoint subnet does not apply to private-endpoint traffic at all. Note
@@ -378,15 +388,28 @@ Each subnet holds its environment, `aca-<name_prefix>-front`, `aca-<name_prefix>
 console and system logs to the install's workspace. The app and workers environments always have
 an internal load balancer; the front has one exactly when `aca_internal_load_balancer = true`, so
 an install that is private today gets no public front. By default no app runs in them: every app,
-the migrate job and the custom-domain certificate stay on `aca-<name_prefix>`, which plans no
-change. Two workloads can be placed in the workers environment, each with its own input:
+the migrate job and the custom-domain certificates stay on `aca-<name_prefix>`, which plans no
+change.
+
+`frontend_environment = "front"`, `edge_environment = "front"` and `api_environment = "app"`,
+set together, move `ca-frontend` and `ca-edge` to the front environment and `ca-api` to the app
+environment; any other mix is refused. The custom-domain certificates and their identities follow
+the frontend and the edge, and `custom_domain_verification_id` then reads the front environment's.
+The callers reach `ca-api` at `https://ca-api.<app environment default domain>` and verify its
+certificate: the BFF through `MASTERLY_API_BASE_URL`, the edge through an upstream TLS context
+that checks the chain and the host name. `ca-api` takes VNet-only ingress there and refuses plain
+HTTP. The move replaces the three apps (new FQDNs, downtime between destroy and create), so plan
+it on a test install first. `egress_firewall` is refused with the apps moved, because only
+`snet-aca` gets its route table.
+
+Two workloads can be placed in the workers environment, each with its own input:
 `ca-workers` with `workers_environment = "workers"`, and `caj-migrate` (with `migrations = "job"`)
 with `migrate_job_environment = "workers"`. Each keeps its identity, env and secrets, `ca-workers`
 its scale rule, and neither has ingress. Changing either input replaces that workload under the same name, on the
 module's api image, so run CD's release again afterwards; a replaced `caj-migrate` also runs once
-at apply. `ca-frontend`, `ca-api` and `ca-edge` cannot be moved yet. An install whose
-`environment_subnet_ids` are all null gets none of the three environments, and the plan refuses
-either input set to `"workers"` there.
+at apply. An install whose `environment_subnet_ids` are all null gets none of the three
+environments, and the plan refuses any of these placement inputs set off `aca-<name_prefix>`
+there.
 
 An internal environment's default domain resolves only through a private DNS zone. With
 `environment_private_dns_enabled` at its default (`true`), the module creates, for each internal
