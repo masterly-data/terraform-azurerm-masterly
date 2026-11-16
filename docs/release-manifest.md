@@ -38,6 +38,9 @@ A tag URL never does: the file at `vX.Y.Z` is the one that was published. If you
 *published* version, take the highest key of `releases` on `main` whose `vX.Y.Z` tag exists
 (`git ls-remote --tags` on this repository, or the registry's version list).
 
+A Stable version's redacted test-evidence summary lives beside the manifest, under
+`customer-summary/`; its contract is [customer-summary.md](customer-summary.md).
+
 The manifest names no commit. It cannot: a release's entry is written in the commit that is then
 tagged, so it would have to contain its own hash. The tag is the commit pointer — `git rev-parse
 "vX.Y.Z^{commit}"` resolves it locally, and the GitHub ref API resolves it remotely.

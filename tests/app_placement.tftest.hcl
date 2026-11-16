@@ -434,6 +434,88 @@ run "egress_firewall_with_the_apps_moved_is_refused" {
   expect_failures = [var.egress_firewall]
 }
 
+# Out-of-set placements: each guard on the allowed values fires. The environments named exist on
+# this network, so the missing-environment precondition does not. The mix validation on
+# var.api_environment does not report a frontend or edge value that already failed its own guard
+# (Terraform treats a failed variable as unknown there), so only the guard is expected.
+run "frontend_environment_app_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    frontend_environment  = "app"
+  }
+
+  expect_failures = [var.frontend_environment]
+}
+
+run "edge_environment_workers_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    edge_environment      = "workers"
+  }
+
+  expect_failures = [var.edge_environment]
+}
+
+run "api_environment_front_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_environment       = "front"
+  }
+
+  expect_failures = [var.api_environment]
+}
+
+# ca-frontend in front pulls its image from the front subnet, which the private-endpoint NSG
+# admits to the Key Vault endpoint only (ADR 0120 amendment 2026-11-16): with the registry's
+# private endpoint the pull would be dropped, so the plan refuses, on a network the module builds.
+run "frontend_in_front_with_registry_private_endpoint_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs     = ["203.0.113.7/32"]
+    acr_login_server          = null
+    registry_credential_mode  = "managed_identity"
+    acr_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    registry_private_endpoint = true
+    frontend_environment      = "front"
+    edge_environment          = "front"
+    api_environment           = "app"
+  }
+
+  expect_failures = [var.frontend_environment]
+}
+
+# The same refusal on an injected network with the three environment subnets, where the hub owns
+# the NSG: the refusal does not depend on who builds the network.
+run "frontend_in_front_with_registry_private_endpoint_is_refused_on_an_injected_network" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+    acr_login_server            = null
+    registry_credential_mode    = "managed_identity"
+    acr_id                      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    registry_private_endpoint   = true
+    frontend_environment        = "front"
+    edge_environment            = "front"
+    api_environment             = "app"
+  }
+
+  expect_failures = [var.frontend_environment]
+}
+
 # --- The private-endpoint NSG ----------------------------------------------------------------
 
 # By default no rule names the front subnet (10.20.5.0/24), with the vault, Redis and a private

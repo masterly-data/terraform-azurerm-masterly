@@ -117,12 +117,13 @@ run "auth_config_alert_routes_to_the_module_action_group" {
     }
   }
 
-  # As in availability_routing.tftest.hcl: the frontend's environment id is chosen between
-  # module.aca_env and the front environment, so its inputs depend on module.environments too, and
-  # teardown's pre-destroy refresh plans the environments' diagnostic settings and private DNS.
+  # The frontend's environment id is chosen between module.aca_env and the front environment
+  # (frontend_environment), and the migrate job behind ca-api's migrate_start names the workers
+  # environment (migrate_job_environment), so the environments are applied too, as in
+  # availability_routing.tftest.hcl.
   override_module {
     target  = module.environments["front"]
-    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.5.10" }
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
   }
 
   override_module {

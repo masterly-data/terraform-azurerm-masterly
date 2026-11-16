@@ -38,3 +38,6 @@
 - `egress_firewall` is refused with any of the three apps off `"aca"`. The route table is attached
   to snet-aca only, and the front and app environment subnets get no route table, so the moved
   apps' egress would not be forced.
+- `frontend_environment = "front"` is refused with `registry_private_endpoint = true`, on either
+  network shape. `ca-frontend` pulls its image from the front subnet, and the front subnet may
+  reach only the Key Vault private endpoint, not the registry's, so the pull would fail.

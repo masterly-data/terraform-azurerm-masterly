@@ -66,6 +66,8 @@ resource "azurerm_monitor_diagnostic_setting" "aca_env" {
 # certificates stay on module.aca_env, which plans no change. frontend_environment,
 # edge_environment and api_environment move ca-frontend and ca-edge to the front environment and
 # ca-api to the app environment, together; the certificates follow the frontend and the edge.
+# workers_environment and migrate_job_environment place ca-workers and caj-migrate in the
+# workers environment.
 #
 # The app and workers environments are always internal: nothing in them is meant to be reached
 # from outside the VNet, so no input turns their load balancer public. The front follows

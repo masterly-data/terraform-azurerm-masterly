@@ -928,11 +928,19 @@ variable "frontend_environment" {
   type        = string
   default     = "aca"
   nullable    = false
-  description = "The Container Apps environment ca-frontend runs in. \"aca\" (the default) is aca-<name_prefix>, as before; or \"front\", aca-<name_prefix>-front, together with edge_environment = \"front\" and api_environment = \"app\". Moving it REPLACES ca-frontend: its FQDN and frontend_url change, and with frontend_custom_domain set its certificate and custom domain are created again on the front environment, whose custom_domain_verification_id the asuid TXT record must then carry. On the front environment ca-frontend reads its vault secrets through the Key Vault private endpoint, which the module's private-endpoint NSG admits from the front subnet on 443 only; on an injected network the hub must admit it. Refused with egress_firewall, which forces egress on snet-aca only."
+  description = "The Container Apps environment ca-frontend runs in. \"aca\" (the default) is aca-<name_prefix>, as before; or \"front\", aca-<name_prefix>-front, together with edge_environment = \"front\" and api_environment = \"app\". Moving it REPLACES ca-frontend: its FQDN and frontend_url change, and with frontend_custom_domain set its certificate and custom domain are created again on the front environment, whose custom_domain_verification_id the asuid TXT record must then carry. On the front environment ca-frontend reads its vault secrets through the Key Vault private endpoint, which the module's private-endpoint NSG admits from the front subnet on 443 only; on an injected network the hub must admit it. Refused with egress_firewall, which forces egress on snet-aca only, and with registry_private_endpoint: ca-frontend pulls its image from the front subnet, which the private-endpoint NSG does not admit to the registry's endpoint."
 
   validation {
     condition     = contains(["aca", "front"], var.frontend_environment)
     error_message = "frontend_environment must be \"aca\" (aca-<name_prefix>) or \"front\" (aca-<name_prefix>-front): the frontend faces the callers, so it runs in no other environment."
+  }
+
+  # ADR 0120 §5 and its 2026-11-16 amendment open only the Key Vault endpoint to the front subnet.
+  # The registry's endpoint has several addresses (the login server and a data endpoint per
+  # geo-replica), so ca-frontend's image pull from the front subnet would be dropped.
+  validation {
+    condition     = var.frontend_environment != "front" || !var.registry_private_endpoint
+    error_message = "frontend_environment = \"front\" cannot be combined with registry_private_endpoint = true: ca-frontend pulls its image from the front subnet, and the front subnet may reach only the Key Vault private endpoint, not the registry's, so the pull would fail and the new ca-frontend would never start. Keep frontend_environment = \"aca\", or leave registry_private_endpoint off."
   }
 }
 

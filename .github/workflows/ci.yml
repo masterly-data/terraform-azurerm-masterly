@@ -240,6 +240,15 @@ jobs:
       - name: Check the release manifest, changelog, README and script headers
         run: python3 scripts/check_release_manifest.py
 
+      # The customer summary is published publicly, so this check is the last line of defence
+      # against an internal name or a security finding. The selftest runs first: a check that has
+      # silently stopped detecting must turn the job red before it is trusted.
+      - name: The customer-summary check still rejects a leaking or malformed summary
+        run: python3 scripts/check_customer_summary.py --selftest
+
+      - name: Check the customer summaries against the contract and the manifest
+        run: python3 scripts/check_customer_summary.py
+
       # github.ref_name is the tag itself on a tag push. Split out so the failure message says
       # which of the two questions was being asked. The tag reaches the shell through `env:`,
       # as data, rather than spliced into the command line: a `${{ }}` expression is substituted

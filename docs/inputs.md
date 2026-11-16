@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-135 inputs in 29 groups.
+137 inputs in 29 groups.
 
 ## Groups
 
@@ -38,10 +38,10 @@ each one that is missing.
 - [Email](#email) (2)
 - [Database and Redis authentication](#database-and-redis-authentication) (2)
 - [Key Vault](#key-vault) (7)
-- [Migrations](#migrations) (2)
+- [Migrations](#migrations) (3)
 - [Redis](#redis) (6)
 - [Registry private endpoint](#registry-private-endpoint) (1)
-- [Workers](#workers) (4)
+- [Workers](#workers) (5)
 
 ## Core
 
@@ -347,6 +347,7 @@ In `migrate.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `migrations` | `string` | `"start"` | Where schema migrations run. |
+| `migrate_job_environment` | `string` | `"runtime"` | With migrations = "job": which Container Apps environment the migrate job (caj-migrate) runs in. |
 | `migrate_job_schedule` | `string` | `"*/5 * * * *"` | With migrations = "job": when the migrate job (caj-migrate) runs on its own, as a five-field cron expression in UTC. |
 
 ## Redis
@@ -377,6 +378,7 @@ In `workers.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `enable_workers` | `bool` | `false` | Run the dedicated workers Container App and take the api off the in-process worker loop (ADR 0066). |
+| `workers_environment` | `string` | `"runtime"` | Which Container Apps environment ca-workers runs in. |
 | `workers_min_replicas` | `number` | `null` | Minimum workers replicas (keep >= 1: the loop polls; scale-to-zero would stall the pipeline on the polling binding). |
 | `workers_max_replicas` | `number` | `1` | Maximum workers replicas. |
 | `workers_termination_grace_period_seconds` | `number` | `600` | Seconds a stopping ca-workers replica (scale-in, a new revision, a restart) has between the termination signal and a forced kill, 0-600. |
