@@ -1,0 +1,15 @@
+### Added
+
+- **`workers_environment` and `migrate_job_environment` inputs (default `"runtime"`): `ca-workers` and `caj-migrate` can run in the workers environment (ADR 0120 §4).** Each takes `"runtime"`, `aca-<prefix>` on `snet-aca` as before, or `"workers"`, `aca-<prefix>-workers` on `snet-workers`, which is internal and admits no inbound caller. `workers_environment` moves `ca-workers` only, and `migrate_job_environment` (with `migrations = "job"`) moves `caj-migrate` only. A moved workload keeps its identity (`ca-workers` its own or the apps identity as before, `caj-migrate` only `id-<prefix>-migrate`), its env, its secrets and, for `ca-workers`, its scale rule; `ca-workers` still has no ingress and a job has none. In the workers environment, each waits for the environment subnets' network security group associations.
+- **Two plan-time refusals for either input set to `"workers"`.** On an install without the workers environment (`environment_subnet_ids` has no workers subnet, as on an injected network without `workers_subnet_id`), the plan is refused, naming the input. With `egress_firewall` set it is refused too: `egress_firewall` attaches its route table to `snet-aca` only, so the environment subnets get no route table from it and the moved workload's egress would bypass your firewall.
+- The nested module `modules/aca-container-app` gains two outputs, `environment_id` and `ingress_enabled`.
+
+### Changed
+
+- **Upgrading plans nothing with the defaults.** Both inputs default to `"runtime"`, so `ca-workers` and `caj-migrate` stay on `aca-<prefix>` and plan no change.
+- **Setting either input (or setting it back) replaces the workload.** Azure does not move a Container App or a job between environments, so the plan destroys `ca-workers` or `caj-migrate` and creates it again under the same name. While `ca-workers` is replaced, the pipeline pauses: no job runs until the new app's first replica starts. The new app or job is created on the module's api image (the release channel's, or `api_image`), not the digest CD last rolled, so run CD's release again after the apply to roll it to the current digest. A replaced `caj-migrate` also starts one more execution at apply (`migrate_start` is replaced with the job).
+- `migrate_start` is now also replaced when the job's id changes, so a replaced job always runs once at apply.
+
+### Documentation
+
+- docs/networking.md, "The environment subnets", says which workloads can be placed in the workers environment (`ca-workers` and `caj-migrate`), with which inputs, and that `egress_firewall` refuses it.

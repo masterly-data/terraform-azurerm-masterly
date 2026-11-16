@@ -60,8 +60,9 @@ resource "azurerm_monitor_diagnostic_setting" "aca_env" {
 
 # --- The front, app and workers environments (ADR 0120 §4-§5) ------------------------
 # One workload-profiles environment on each environment subnet (network.tf), created beside
-# aca-<prefix>. No app runs in them yet: every app, the migrate job and the custom-domain
-# certificate stay on module.aca_env, which plans no change.
+# aca-<prefix>. By default no app runs in them: every app, the migrate job and the custom-domain
+# certificate stay on module.aca_env, which plans no change. workers_environment and
+# migrate_job_environment place ca-workers and caj-migrate in the workers environment.
 #
 # The app and workers environments are always internal: nothing in them is meant to be reached
 # from outside the VNet, so no input turns their load balancer public. The front follows

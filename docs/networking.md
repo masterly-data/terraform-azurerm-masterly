@@ -377,9 +377,16 @@ Each subnet holds its environment, `aca-<name_prefix>-front`, `aca-<name_prefix>
 `aca-<name_prefix>-workers`, each declaring the `Consumption` workload profile and sending its
 console and system logs to the install's workspace. The app and workers environments always have
 an internal load balancer; the front has one exactly when `aca_internal_load_balancer = true`, so
-an install that is private today gets no public front. No app runs in them yet: every app, the
-migrate job and the custom-domain certificate stay on `aca-<name_prefix>`, which plans no change.
-An install whose `environment_subnet_ids` are all null gets none of the three environments.
+an install that is private today gets no public front. By default no app runs in them: every app,
+the migrate job and the custom-domain certificate stay on `aca-<name_prefix>`, which plans no
+change. Two workloads can be placed in the workers environment, each with its own input:
+`ca-workers` with `workers_environment = "workers"`, and `caj-migrate` (with `migrations = "job"`)
+with `migrate_job_environment = "workers"`. Each keeps its identity, env and secrets, `ca-workers`
+its scale rule, and neither has ingress. Changing either input replaces that workload under the same name, on the
+module's api image, so run CD's release again afterwards; a replaced `caj-migrate` also runs once
+at apply. `ca-frontend`, `ca-api` and `ca-edge` cannot be moved yet. An install whose
+`environment_subnet_ids` are all null gets none of the three environments, and the plan refuses
+either input set to `"workers"` there.
 
 An internal environment's default domain resolves only through a private DNS zone. With
 `environment_private_dns_enabled` at its default (`true`), the module creates, for each internal
@@ -392,7 +399,9 @@ team owns DNS, set it to `false`: the module creates no zone, record or link, an
 `static_ip_address` and whether it is `internal`, for the records the hub creates.
 
 `egress_firewall` still attaches its route table to `snet-aca` only ([Egress](#egress)): the
-three environment subnets get no route table in this version.
+three environment subnets get no route table in this version. So with `egress_firewall` set, the
+plan refuses `workers_environment` or `migrate_job_environment` set to `"workers"`: the moved
+workload's egress would bypass your firewall.
 
 Each subnet carries its own NSG, ending in the same deny. The platform rows are the inbound
 rules Microsoft lists for a workload-profiles environment in

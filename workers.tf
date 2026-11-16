@@ -17,6 +17,30 @@ variable "enable_workers" {
   }
 }
 
+variable "workers_environment" {
+  type        = string
+  default     = "runtime"
+  nullable    = false
+  description = "Which Container Apps environment ca-workers runs in. \"runtime\" (default): aca-<name_prefix> on snet-aca, where it has always run; the default plans no change. \"workers\": the workers environment of ADR 0120, aca-<name_prefix>-workers on snet-workers, internal and with no inbound caller (docs/networking.md, \"The environment subnets\"). ca-workers keeps its identity, env, secrets and scale rule, and still has no ingress. Changing it replaces ca-workers under the same name: the pipeline pauses until the new app's first replica runs, and the new app starts on the module's api image, not the digest CD last rolled, so run CD's release again afterwards. The plan refuses \"workers\" on an install without the workers environment (environment_subnet_ids has no workers subnet, as on an injected network without workers_subnet_id), and with egress_firewall set: egress_firewall attaches its route table to snet-aca only, so the environment subnets get no route table from it and ca-workers' egress would bypass your firewall."
+
+  validation {
+    condition     = contains(["runtime", "workers"], var.workers_environment)
+    error_message = "workers_environment must be \"runtime\" (aca-<name_prefix>; the default) or \"workers\" (the workers environment, aca-<name_prefix>-workers)."
+  }
+
+  # Read at plan: the environment keys depend on the subnet inputs only (environment.tf).
+  validation {
+    condition     = var.workers_environment != "workers" || contains(local.container_app_environment_keys, "workers")
+    error_message = "workers_environment = \"workers\" needs the workers environment (aca-<name_prefix>-workers), and this install has none: environment_subnet_ids has no workers subnet. On an injected network set front_subnet_id, app_subnet_id and workers_subnet_id; on a network the module builds set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix, or use a VNet of /21 or larger. Or keep workers_environment = \"runtime\"."
+  }
+
+  # egress_firewall routes snet-aca only (network.tf): a move off it would leave forced tunnelling.
+  validation {
+    condition     = var.workers_environment != "workers" || var.egress_firewall == null
+    error_message = "workers_environment = \"workers\" cannot be used with egress_firewall: egress_firewall attaches its route table to snet-aca only, so the environment subnets get no route table from egress_firewall and ca-workers' egress would bypass your firewall. Keep workers_environment = \"runtime\" while egress_firewall is set."
+  }
+}
+
 variable "workers_min_replicas" {
   type        = number
   default     = null
@@ -134,8 +158,10 @@ module "workers" {
 
   name                = "ca-workers"
   resource_group_name = azurerm_resource_group.aca.name
-  environment_id      = module.aca_env.id
-  image               = local.api_image # the same image as the api; only the command differs
+  # aca-<prefix>, or the workers environment with workers_environment = "workers". A change
+  # replaces the app: Azure does not move a Container App between environments.
+  environment_id = var.workers_environment == "workers" ? module.environments["workers"].id : module.aca_env.id
+  image          = local.api_image # the same image as the api; only the command differs
 
   acr_login_server           = local.registry_server
   user_assigned_identity_ids = [local.workers_identity_id]
@@ -221,6 +247,8 @@ module "workers" {
     azapi_resource_action.migrate_start,
     # With egress_firewall, the first pull takes the firewall's route, as on the api (main.tf).
     azurerm_subnet_route_table_association.aca,
+    # In the workers environment, its subnet's NSG is in place first, as for the environment.
+    azurerm_subnet_network_security_group_association.environment,
   ]
 }
 

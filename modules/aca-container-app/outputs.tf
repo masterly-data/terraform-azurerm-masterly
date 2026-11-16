@@ -8,6 +8,13 @@ output "name" {
   description = "Name of the Container App."
 }
 
+# The environment the app is placed in, read off the resource so a test can pin which
+# environment a root module put an app in. Known at plan: the caller passes it.
+output "environment_id" {
+  value       = azurerm_container_app.this.container_app_environment_id
+  description = "Resource ID of the Container App Environment the app runs in."
+}
+
 # Memory per replica as configured, for the same reason the probe outputs exist: the root
 # module's memory alert takes its threshold as a share of this, and a configured value is
 # known at plan time, so a test can pin the arithmetic.
@@ -79,6 +86,13 @@ output "liveness_probe" {
     failure_count_threshold = var.liveness_probe_failure_count_threshold
   }
   description = "The liveness probe as configured, or null when the app has none. A null tolerance means Azure's default applies."
+}
+
+output "ingress_enabled" {
+  # Whether the app has an ingress block at all, counted on the resource rather than the input,
+  # so a test that pins an app as unreachable proves the block itself is absent.
+  value       = length(azurerm_container_app.this.ingress) > 0
+  description = "Whether the app has ingress. False when the app declares no ingress block."
 }
 
 output "ingress_external" {
