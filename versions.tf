@@ -37,10 +37,22 @@ terraform {
     # apply (migrate.tf): azurerm has no resource for either. Required by every configuration
     # that uses the module,
     # including one that leaves builtin_auth unset, so an air-gapped install mirrors it with
-    # the other two. 2.x is the line whose `body` is an HCL object rather than a JSON string.
+    # azurerm and random. 2.x is the line whose `body` is an HCL object rather than a JSON string.
     azapi = {
       source  = "Azure/azapi"
       version = "~> 2.9"
+    }
+    # The BFF's DPoP key (auth.tf, enable_bff_dpop_key): tls generates the EC P-256 key and time
+    # rotates it every 90 days. Required by every configuration that uses the module, including
+    # one that leaves enable_bff_dpop_key off, so an air-gapped install mirrors both with azurerm,
+    # random and azapi. Neither takes any provider configuration or credential.
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
     }
   }
 }

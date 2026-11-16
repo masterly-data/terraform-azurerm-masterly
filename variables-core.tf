@@ -754,7 +754,7 @@ variable "postgres_private_dns_zone_id" {
 variable "api_max_replicas" {
   type        = number
   default     = 1
-  description = "Maximum api replicas. > 1 requires enable_redis: sessions must live in the redis registry to hold across replicas (ADR 0066). mode=production requires >= 2 (no single-replica production api). A capacity_profile does not raise it: with the floor of 2 that standard and enterprise set, set it to at least 2."
+  description = "Maximum api replicas. > 1 requires enable_redis: sessions must live in the redis registry to hold across replicas (ADR 0066), and so must the api's DPoP replay cache, whose target is Azure Managed Redis (redis_offering = \"managed\"); the in-memory cache is allowed on one api replica only. The replay cache arrives with the first api release after v0.137.0. mode=production requires >= 2 (no single-replica production api). A capacity_profile does not raise it: with the floor of 2 that standard and enterprise set, set it to at least 2."
 
   validation {
     condition     = var.api_max_replicas == 1 || var.enable_redis

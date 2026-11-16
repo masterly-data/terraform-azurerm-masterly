@@ -26,6 +26,153 @@ resource "random_password" "bff_shared_secret" {
   special = false
 }
 
+# --- The BFF's DPoP key (enable_bff_dpop_key) ---------------------------------------------
+# The frontend's BFF signs a DPoP proof with this key on every call it makes to the api for a
+# signed-in user, and the api binds the session to the key that proved the sign-in. The frontend
+# reads it as MASTERLY_BFF_DPOP_KEY (EC P-256, PKCS#8 PEM) and, during a rotation, the outgoing key
+# as MASTERLY_BFF_DPOP_KEY_PREVIOUS. Without it the frontend generates a key per process, so a
+# session does not survive a restart and cannot move between frontend replicas. Only ca-frontend
+# carries it: the api reads no BFF key, it checks each proof against the session's binding.
+#
+# Two slots, A and B, each a key replaced when its own timer expires. Each timer runs for twice the
+# rotation period, and B's expires halfway through A's, so one of the two is replaced every 90
+# days. The current key is the slot replaced last; the other slot is the outgoing key, kept on
+# ca-frontend for the overlap after a rotation and then only in the vault or the app's secrets,
+# unread, until its own timer replaces it. Both slots exist whenever the switch is on, so a
+# rotation changes secret VALUES and which secret each env name points at, and never deletes a
+# Key Vault secret: with purge protection a deleted secret's name stays taken until it is purged.
+#
+# A timer expires on the clock but the key is replaced by an apply: the first apply after the
+# rotation date replaces it, and an install nobody applies keeps its key. The private key is held
+# in Terraform state, as every other secret the module generates is.
+
+resource "time_rotating" "bff_dpop_key_a" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  rotation_days = local.bff_dpop_key_slot_days
+}
+
+# B's first expiry is halfway through A's, and each later one is 90 days either side of A's
+# expiry as it stands when B is replaced: before it when that is still at least 45 days away,
+# otherwise after it. So the two stay about 90 days apart, and a late apply that replaces A
+# later than planned moves B's next expiry with it rather than replacing the two together.
+# The time is worked out only when B is created: ignore_changes keeps a later plan, which sees a
+# later plan time, from replacing B.
+resource "time_rotating" "bff_dpop_key_b" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  rotation_rfc3339 = (
+    timecmp(timeadd(time_rotating.bff_dpop_key_a[0].rotation_rfc3339, "-${local.bff_dpop_key_rotation_days * 24}h"), timeadd(plantimestamp(), "${local.bff_dpop_key_rotation_days * 12}h")) > 0
+    ? timeadd(time_rotating.bff_dpop_key_a[0].rotation_rfc3339, "-${local.bff_dpop_key_rotation_days * 24}h")
+    : timeadd(time_rotating.bff_dpop_key_a[0].rotation_rfc3339, "${local.bff_dpop_key_rotation_days * 24}h")
+  )
+
+  lifecycle {
+    ignore_changes = [rotation_rfc3339]
+  }
+}
+
+# Remember the two starts from the first apply. Provisioning may create B after A, but neither
+# key has rotated then: A is the initial signing key. Later starts identify genuine rotations,
+# even when an overdue rotation happens minutes before the other slot expires.
+resource "terraform_data" "bff_dpop_key_provisioned" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  input = {
+    a = time_rotating.bff_dpop_key_a[0].rfc3339
+    b = time_rotating.bff_dpop_key_b[0].rfc3339
+  }
+
+  lifecycle {
+    ignore_changes = [input]
+  }
+}
+
+# Refresh removes an expired timer from state, so its next action is create, which does not
+# trigger replace_triggered_by. Persist its start in terraform_data: the new start updates that
+# existing resource, and that update replaces the key, including on a normal expiry.
+resource "terraform_data" "bff_dpop_key_a_rotation" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  input = time_rotating.bff_dpop_key_a[0].rfc3339
+}
+
+resource "terraform_data" "bff_dpop_key_b_rotation" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  input = time_rotating.bff_dpop_key_b[0].rfc3339
+}
+
+resource "tls_private_key" "bff_dpop_key_a" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  algorithm   = "ECDSA"
+  ecdsa_curve = "P256"
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.bff_dpop_key_a_rotation[count.index]]
+  }
+}
+
+resource "tls_private_key" "bff_dpop_key_b" {
+  count = var.enable_bff_dpop_key ? 1 : 0
+
+  algorithm   = "ECDSA"
+  ecdsa_curve = "P256"
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.bff_dpop_key_b_rotation[count.index]]
+  }
+}
+
+locals {
+  # A new key every 90 days; each slot's timer runs for two periods.
+  bff_dpop_key_rotation_days = 90
+  bff_dpop_key_slot_days     = local.bff_dpop_key_rotation_days * 2
+
+  # How long the outgoing key stays on ca-frontend after a rotation. At least 45 minutes: a
+  # session renews within 15, and ACA re-reads a versionless Key Vault reference within 30.
+  bff_dpop_key_overlap_minutes = 60
+
+  # Both slots whenever the switch is on, whatever the clock says: these names drive the vault
+  # secrets and the frontend's grants, which a rotation must never remove.
+  bff_dpop_key_secret_names = var.enable_bff_dpop_key ? ["bff-dpop-key-a", "bff-dpop-key-b"] : []
+
+  bff_dpop_key_a_start = one(time_rotating.bff_dpop_key_a[*].rfc3339)
+  bff_dpop_key_b_start = one(time_rotating.bff_dpop_key_b[*].rfc3339)
+
+  # A is current until either slot has rotated; afterwards the slot replaced last is current.
+  # Read the persisted input, whose ignore_changes keeps the first apply's starts. A short gap
+  # between later starts is still a rotation, not provisioning. The try()s handle absent slots
+  # with the switch off and plantimestamp() being unavailable under validate.
+  bff_dpop_key_initial = try(
+    local.bff_dpop_key_a_start == terraform_data.bff_dpop_key_provisioned[0].input.a &&
+    local.bff_dpop_key_b_start == terraform_data.bff_dpop_key_provisioned[0].input.b,
+    true,
+  )
+  bff_dpop_key_b_is_current  = !local.bff_dpop_key_initial && try(timecmp(local.bff_dpop_key_b_start, local.bff_dpop_key_a_start) > 0, false)
+  bff_dpop_key_current       = local.bff_dpop_key_b_is_current ? "bff-dpop-key-b" : "bff-dpop-key-a"
+  bff_dpop_key_previous      = local.bff_dpop_key_b_is_current ? "bff-dpop-key-a" : "bff-dpop-key-b"
+  bff_dpop_key_current_start = local.bff_dpop_key_b_is_current ? local.bff_dpop_key_b_start : local.bff_dpop_key_a_start
+
+  # The outgoing key is on ca-frontend while this plan is within the overlap after the current
+  # key's rotation. Initial provisioning has no outgoing key. The first plan after the overlap
+  # drops it, as builtin_auth_recovery_until's does (builtin-auth.tf). If the other slot expires
+  # during this window, its replacement becomes current and this key becomes previous; the
+  # oldest key then leaves early because there are only two slots.
+  bff_dpop_key_previous_open = try(
+    !local.bff_dpop_key_initial &&
+    timecmp(plantimestamp(), timeadd(local.bff_dpop_key_current_start, "${local.bff_dpop_key_overlap_minutes}m")) < 0,
+    false,
+  )
+
+  # ca-frontend's env names for the key: the two names the frontend reads, each pointing at a slot.
+  bff_dpop_key_env_secret_refs = var.enable_bff_dpop_key ? merge(
+    { MASTERLY_BFF_DPOP_KEY = local.bff_dpop_key_current },
+    local.bff_dpop_key_previous_open ? { MASTERLY_BFF_DPOP_KEY_PREVIOUS = local.bff_dpop_key_previous } : {},
+  ) : {}
+}
+
 locals {
   # The identity provider's endpoints: an explicit input wins, otherwise derived from
   # oidc_tenant_id for a single-tenant Entra registration, otherwise null (and the oidc

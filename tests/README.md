@@ -11,7 +11,8 @@ Each per-concern plan file starts with the same two parts. Copy them into a new 
 
 - the three mock providers, with azurerm loading the shared mock data:
   `mock_provider "azurerm" { source = "./tests/mocks/install" }`, then `mock_provider "random" {}`
-  and `mock_provider "azapi" {}`;
+  and `mock_provider "azapi" {}` (a file with a run that turns on `enable_bff_dpop_key` also mocks
+  `tls` and `time`, as `bff_dpop_key.tftest.hcl` does);
 - the same file-wide `variables` block: location, org_id, install_id, the two images,
   acr_login_server, key_vault_deployer_ip_rules and alert_email, with the comments that say why the
   last two are set for every run.

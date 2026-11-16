@@ -187,4 +187,52 @@ break-glass path. Set it to an RFC 3339 UTC time, such as `2026-11-14T15:30:00Z`
 The configuration is written with the `Azure/azapi` provider, because azurerm has no resource
 for it; the same provider starts the [migrate job](data-plane.md#the-migrate-job) at apply. The module
 requires that provider whether or not you set `builtin_auth`, so an
-air-gapped install mirrors it alongside azurerm and random.
+air-gapped install mirrors it alongside azurerm, random, tls and time.
+
+### The BFF's DPoP key (`enable_bff_dpop_key`)
+
+The frontend's BFF proves possession of a key (DPoP) on every call it makes to the api for a
+signed-in user, and the api binds each session to the key that proved its sign-in. With
+`enable_bff_dpop_key = true` the module generates that key and hands it to `ca-frontend` alone:
+
+- **What the frontend reads.** `MASTERLY_BFF_DPOP_KEY`, an EC P-256 private key in PKCS#8 PEM, and
+  during a rotation `MASTERLY_BFF_DPOP_KEY_PREVIOUS`, the outgoing key. With the input off (the
+  default) the frontend generates a key per process, so a DPoP-bound session does not survive a
+  restart and cannot move between frontend replicas.
+- **Which releases read it.** The key takes effect with the first frontend release after v0.145.0,
+  and the api's session binding and DPoP replay cache arrive with the first api release after
+  v0.137.0; on earlier images the key is set but unread. The input is off by default, so installs
+  on 0.24.0's images are unaffected apart from the two new required providers.
+- **Rotation every 90 days, at an apply.** The key is held in two slots, each replaced by its own
+  timer, so a new key takes over every 90 days. A timer expires on the clock, but the key is
+  replaced by the first apply after that: an install nobody applies keeps its key. Each rotation
+  rolls `ca-frontend` twice, once when the new key arrives and once when the outgoing key is
+  removed.
+- **A 60-minute overlap.** For 60 minutes after a rotation the outgoing key stays on `ca-frontend`
+  as `MASTERLY_BFF_DPOP_KEY_PREVIOUS`, so sessions bound to it (renewed within 15 minutes) survive
+  the change; the first apply after those 60 minutes removes it. With the vault on, ACA re-reads a
+  versionless Key Vault reference within 30 minutes, which the 60 minutes cover.
+  Applying at least monthly keeps the slots about 90 days apart. If a slot expires inside the
+  other slot's overlap, the older key's overlap is shortened to the gap between the two rotations;
+  the key that was current immediately before the second rotation becomes `_PREVIOUS`. If both
+  slots expire before the next apply, both keys are replaced together without retaining the
+  outgoing key, and users must sign in again once.
+- **Where the key is held.** With `enable_key_vault = true` each slot is a vault secret
+  (`install-bff-dpop-key-a`, `install-bff-dpop-key-b`) that `ca-frontend` references by its
+  versionless URL as its own identity, which holds Key Vault Secrets User on those two secrets
+  alone, never on the vault. Both secrets stay for as long as the input is on: a rotation writes a
+  new version, and never deletes a secret that purge protection would then keep the name of.
+  Without the vault the key is a Container App secret on `ca-frontend`. `ca-api`, `ca-workers` and
+  `caj-migrate` carry neither: the api checks each proof against the session's binding and reads
+  no BFF key.
+- **The private key is in Terraform state**, as the other secrets the module generates are, so
+  whoever can read the state can read the key. With the vault on, the apps identity's app secrets
+  role on the vault (and ca-workers' own, when it has one) can read these secrets too, as it can
+  every install secret there.
+- **Two more providers.** The key and its timers use `hashicorp/tls` and `hashicorp/time`. The module
+  requires both whether or not the input is on, so a calling configuration's `terraform init`
+  installs them, and an air-gapped install mirrors them.
+- **The api's replay cache.** The api keeps a cache of DPoP proofs it has seen. Its target is Azure
+  Managed Redis (`enable_redis` with `redis_offering = "managed"`); without Redis the cache is in
+  memory and allowed on one api replica only, which is why `api_max_replicas > 1` requires
+  `enable_redis`.

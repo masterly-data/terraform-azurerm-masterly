@@ -1557,9 +1557,10 @@ terraform providers lock \
 ```
 
 This repo ships no lock file of its own, for the same reason: it is a module, not a root
-configuration. It constrains azurerm to `~> 5.8`, random to `~> 3.6` and azapi to `~> 2.9`
+configuration. It constrains azurerm to `~> 5.8`, random to `~> 3.6`, azapi to `~> 2.9`
 (used for [built-in authentication](docs/identity.md#built-in-authentication-in-front-of-the-frontend-builtin_auth) and to start [the migrate job](docs/data-plane.md#the-migrate-job)),
-and leaves the exact versions to you. That
+and tls to `~> 4.0` and time to `~> 0.12` (used for the BFF's DPoP key, `enable_bff_dpop_key`;
+required and mirrored even with it off), and leaves the exact versions to you. That
 floor is load-bearing rather than housekeeping: with no lock file here, the constraint is the
 only thing governing your `terraform init`. `versions.tf` records why it sits where it does.
 
