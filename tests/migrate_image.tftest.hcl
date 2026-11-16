@@ -48,6 +48,24 @@ variables {
   key_vault_deployer_ip_rules    = ["203.0.113.7"]
 }
 
+# The job names the workers environment (migrate_job_environment), so targeting it applies the
+# environments too. Each gets a well-formed id, domain and IP: the teardown evaluates the whole
+# configuration against this state, and their diagnostic settings and private DNS parse them.
+override_module {
+  target  = module.environments["front"]
+  outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+}
+
+override_module {
+  target  = module.environments["app"]
+  outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+}
+
+override_module {
+  target  = module.environments["workers"]
+  outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+}
+
 run "migrate_job_is_seeded_with_the_api_image" {
   command = apply
 

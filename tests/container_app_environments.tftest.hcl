@@ -518,8 +518,8 @@ run "no_environments_on_an_injected_network_without_their_subnets" {
 # environment compares unequal.
 
 # aca-<prefix> keeps its address, source and arguments, and its diagnostic setting is as before.
-# ca-api, ca-frontend and ca-workers are read from the source: aca-container-app publishes no
-# environment id. ca-edge is read from the plan.
+# ca-api and ca-frontend are read from the source; ca-workers, from the environment_id
+# aca-container-app publishes, and ca-edge from the plan.
 run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
   command = plan
 
@@ -594,16 +594,23 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
       for block in [
         regex("(?s)module \"api\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0],
         regex("(?s)module \"frontend\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0],
-        regex("(?s)module \"workers\" \\{(.*?)\\n\\}", file("${path.module}/workers.tf"))[0],
       ] :
       can(regex("(?m)^  environment_id\\s*=\\s*module\\.aca_env\\.id$", block))
     ])
-    error_message = "ca-api, ca-frontend and ca-workers must stay on module.aca_env."
+    error_message = "ca-api and ca-frontend must stay on module.aca_env."
   }
 
   assert {
     condition = (
       length(module.workers) == 1 &&
+      module.workers[0].environment_id == module.aca_env.id &&
+      alltrue([for e in module.environments : module.workers[0].environment_id != e.id])
+    )
+    error_message = "ca-workers must stay on module.aca_env by default (workers_environment = \"runtime\")."
+  }
+
+  assert {
+    condition = (
       azurerm_container_app.edge[0].container_app_environment_id == module.aca_env.id &&
       alltrue([for e in module.environments : azurerm_container_app.edge[0].container_app_environment_id != e.id])
     )
@@ -611,11 +618,139 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
   }
 }
 
-# caj-migrate, with migrations = "job" and a production posture that allows it.
+# caj-migrate, with migrations = "job" and a production posture that allows it, and ca-workers,
+# with workers_environment and migrate_job_environment at their default ("runtime"). ca-workers'
+# identity, env, secrets and scale rule, and the job's identity, are pinned here exactly as in
+# workloads_moved_to_the_workers_environment_keep_their_access below.
 run "migrate_job_stays_on_aca_env" {
   command = plan
 
   variables {
+    enable_service_bus    = true
+    servicebus_sku        = "Standard"
+    migrations            = "job"
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  override_module {
+    target = module.aca_env
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      identity_ids                   = []
+      workload_profile_names         = null
+      custom_domain_verification_id  = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    }
+  }
+
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_container_app_job.migrate) == 1 &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env.id &&
+      alltrue([for e in module.environments : azurerm_container_app_job.migrate[0].container_app_environment_id != e.id])
+    )
+    error_message = "caj-migrate must stay on module.aca_env, not on a new environment."
+  }
+
+  assert {
+    condition = (
+      length(module.workers) == 1 &&
+      module.workers[0].environment_id == module.aca_env.id &&
+      alltrue([for e in module.environments : module.workers[0].environment_id != e.id])
+    )
+    error_message = "ca-workers must stay on module.aca_env with workers_environment = \"runtime\"."
+  }
+
+  assert {
+    condition = (
+      module.workers[0].user_assigned_identity_ids == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"]) &&
+      module.workers[0].secret_ref_identity_ids == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"]) &&
+      local.workers_env["AZURE_CLIENT_ID"] == "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc" &&
+      module.workers[0].env_names == sort(keys(local.workers_env)) &&
+      module.workers[0].env_secret_refs == tomap({ MASTERLY_DATABASE_URL = "database-url", MASTERLY_LICENSE_TOKEN = "license-token", MASTERLY_REDIS_URL = "redis-url", MASTERLY_SESSION_SECRET = "session-secret" }) &&
+      module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
+      length(module.workers[0].value_secret_names) == 0 &&
+      length(module.workers[0].scale.custom_scale_rules) == 1 &&
+      module.workers[0].scale.custom_scale_rules[0].name == "jobs-queue" &&
+      module.workers[0].scale.custom_scale_rules[0].custom_rule_type == "azure-servicebus" &&
+      module.workers[0].scale.custom_scale_rules[0].metadata["queueName"] == azurerm_servicebus_queue.jobs[0].name &&
+      module.workers[0].scale.custom_scale_rules[0].metadata["messageCount"] == "5" &&
+      module.workers[0].scale.custom_scale_rules[0].identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"
+    )
+    error_message = "On aca-<prefix>, ca-workers runs as id-<prefix>-workers, with its env, the env each of its four vault-backed secrets feeds, no value secret, and the jobs-queue scale rule as that identity."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app_job.migrate[0].identity[0].type == "UserAssigned" &&
+      length(azurerm_container_app_job.migrate[0].identity[0].identity_ids) == 1 &&
+      one(azurerm_container_app_job.migrate[0].identity[0].identity_ids) == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
+    )
+    error_message = "On aca-<prefix>, caj-migrate runs as id-<prefix>-migrate and no other identity."
+  }
+}
+
+# --- ca-workers and caj-migrate in the workers environment --------------------------------------
+# workers_environment and migrate_job_environment each move one workload to
+# aca-<prefix>-workers. The pins are those above, so a workload on the wrong environment compares
+# unequal.
+
+run "workers_environment_moves_only_ca_workers" {
+  command = plan
+
+  variables {
+    workers_environment   = "workers"
     migrations            = "job"
     mode                  = "production"
     identity_binding      = "oidc"
@@ -669,12 +804,332 @@ run "migrate_job_stays_on_aca_env" {
 
   assert {
     condition = (
-      length(azurerm_container_app_job.migrate) == 1 &&
-      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env.id &&
-      alltrue([for e in module.environments : azurerm_container_app_job.migrate[0].container_app_environment_id != e.id])
+      module.environments["workers"].id != module.aca_env.id &&
+      module.workers[0].environment_id == module.environments["workers"].id &&
+      module.workers[0].environment_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers"
     )
-    error_message = "caj-migrate must stay on module.aca_env, not on a new environment."
+    error_message = "With workers_environment = \"workers\", ca-workers must be on module.environments[\"workers\"]."
   }
+
+  assert {
+    condition = (
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env.id &&
+      module.api.environment_id == module.aca_env.id &&
+      module.frontend.environment_id == module.aca_env.id
+    )
+    error_message = "workers_environment must move ca-workers only: caj-migrate, ca-api and ca-frontend stay on module.aca_env."
+  }
+}
+
+run "migrate_job_environment_moves_only_caj_migrate" {
+  command = plan
+
+  variables {
+    migrate_job_environment = "workers"
+    migrations              = "job"
+    mode                    = "production"
+    identity_binding        = "oidc"
+    oidc_allowed_issuers    = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience           = "api-client-id"
+    oidc_jwks_uri           = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id          = "bff-client-id"
+    oidc_client_secret      = "s3cret"
+    oidc_authority          = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri       = "https://app.example.com/api/auth/callback"
+    license_token           = "eyJ.fake.jwt"
+    license_public_jwk      = "{\"kty\":\"EC\"}"
+    initial_owner_email     = "owner@example.com"
+    enable_key_vault        = true
+    enable_redis            = true
+    redis_offering          = "cache"
+    enable_workers          = true
+    api_max_replicas        = 3
+    external_database_url   = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+  }
+
+  override_module {
+    target = module.aca_env
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      identity_ids                   = []
+      workload_profile_names         = null
+      custom_domain_verification_id  = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    }
+  }
+
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
+  assert {
+    condition = (
+      module.environments["workers"].id != module.aca_env.id &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.environments["workers"].id &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers"
+    )
+    error_message = "With migrate_job_environment = \"workers\", caj-migrate must be on module.environments[\"workers\"]."
+  }
+
+  assert {
+    condition = (
+      module.workers[0].environment_id == module.aca_env.id &&
+      module.api.environment_id == module.aca_env.id &&
+      module.frontend.environment_id == module.aca_env.id
+    )
+    error_message = "migrate_job_environment must move caj-migrate only: ca-workers, ca-api and ca-frontend stay on module.aca_env."
+  }
+}
+
+# Both moved: neither gains ingress, and neither gains or loses access. The identity, env, secret
+# and scale-rule assertions are migrate_job_stays_on_aca_env's, on aca-<prefix>, unchanged. The env
+# values and the vault references' targets are computed, unknown at plan: their parity is pinned by
+# the applies in tests/workers_environment_access.tftest.hcl.
+run "workloads_moved_to_the_workers_environment_keep_their_access" {
+  command = plan
+
+  variables {
+    workers_environment     = "workers"
+    migrate_job_environment = "workers"
+    enable_service_bus      = true
+    servicebus_sku          = "Standard"
+    migrations              = "job"
+    mode                    = "production"
+    identity_binding        = "oidc"
+    oidc_allowed_issuers    = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience           = "api-client-id"
+    oidc_jwks_uri           = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id          = "bff-client-id"
+    oidc_client_secret      = "s3cret"
+    oidc_authority          = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri       = "https://app.example.com/api/auth/callback"
+    license_token           = "eyJ.fake.jwt"
+    license_public_jwk      = "{\"kty\":\"EC\"}"
+    initial_owner_email     = "owner@example.com"
+    enable_key_vault        = true
+    enable_redis            = true
+    redis_offering          = "cache"
+    enable_workers          = true
+    api_max_replicas        = 3
+    external_database_url   = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+  }
+
+  override_module {
+    target = module.aca_env
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      identity_ids                   = []
+      workload_profile_names         = null
+      custom_domain_verification_id  = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    }
+  }
+
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  assert {
+    condition = (
+      module.workers[0].environment_id == module.environments["workers"].id &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.environments["workers"].id
+    )
+    error_message = "This run needs both workloads in the workers environment, or it proves nothing."
+  }
+
+  # The job resource has no ingress argument at all, so its source must not name one.
+  assert {
+    condition = (
+      !module.workers[0].ingress_enabled &&
+      !module.workers[0].ingress_external &&
+      module.workers[0].fqdn == null &&
+      length(module.workers[0].ingress_allowed_ip_ranges) == 0 &&
+      !strcontains(regex("(?s)resource \"azurerm_container_app_job\" \"migrate\" \\{(.*?)\\n\\}", file("${path.module}/migrate.tf"))[0], "ingress")
+    )
+    error_message = "In the workers environment ca-workers must have no ingress block, and caj-migrate must declare no ingress."
+  }
+
+  # Both wait for the workers subnet's NSG, as the environment itself does (environment.tf).
+  assert {
+    condition = alltrue([
+      for block in [
+        regex("(?s)module \"workers\" \\{(.*?)\\n\\}", file("${path.module}/workers.tf"))[0],
+        regex("(?s)resource \"azurerm_container_app_job\" \"migrate\" \\{(.*?)\\n\\}", file("${path.module}/migrate.tf"))[0],
+      ] :
+      strcontains(regex("(?s)depends_on = \\[([^\\]]*)\\]", block)[0], "azurerm_subnet_network_security_group_association.environment,")
+    ])
+    error_message = "ca-workers and caj-migrate must depend on the environment subnets' NSG associations."
+  }
+
+  # A replaced job has a new id, which starts it once more at apply (the changelog says so).
+  assert {
+    condition     = can(regex("(?m)^    replace_triggered_by = \\[terraform_data\\.migrate_image, azurerm_container_app_job\\.migrate\\[count\\.index\\]\\.id\\]$", regex("(?s)resource \"azapi_resource_action\" \"migrate_start\" \\{(.*?)\\n\\}", file("${path.module}/migrate.tf"))[0]))
+    error_message = "migrate_start must be replaced when caj-migrate's id changes, as on a move between environments."
+  }
+
+  assert {
+    condition = (
+      module.workers[0].user_assigned_identity_ids == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"]) &&
+      module.workers[0].secret_ref_identity_ids == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"]) &&
+      local.workers_env["AZURE_CLIENT_ID"] == "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc" &&
+      module.workers[0].env_names == sort(keys(local.workers_env)) &&
+      module.workers[0].env_secret_refs == tomap({ MASTERLY_DATABASE_URL = "database-url", MASTERLY_LICENSE_TOKEN = "license-token", MASTERLY_REDIS_URL = "redis-url", MASTERLY_SESSION_SECRET = "session-secret" }) &&
+      module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
+      length(module.workers[0].value_secret_names) == 0 &&
+      length(module.workers[0].scale.custom_scale_rules) == 1 &&
+      module.workers[0].scale.custom_scale_rules[0].name == "jobs-queue" &&
+      module.workers[0].scale.custom_scale_rules[0].custom_rule_type == "azure-servicebus" &&
+      module.workers[0].scale.custom_scale_rules[0].metadata["queueName"] == azurerm_servicebus_queue.jobs[0].name &&
+      module.workers[0].scale.custom_scale_rules[0].metadata["messageCount"] == "5" &&
+      module.workers[0].scale.custom_scale_rules[0].identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"
+    )
+    error_message = "In the workers environment, ca-workers must keep id-<prefix>-workers, its env, the env each of its four vault-backed secrets feeds, no value secret, and the jobs-queue scale rule as that identity, as on aca-<prefix>."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app_job.migrate[0].identity[0].type == "UserAssigned" &&
+      length(azurerm_container_app_job.migrate[0].identity[0].identity_ids) == 1 &&
+      one(azurerm_container_app_job.migrate[0].identity[0].identity_ids) == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
+    )
+    error_message = "In the workers environment, caj-migrate must keep id-<prefix>-migrate and no other identity."
+  }
+}
+
+# Only "runtime" and "workers" are accepted.
+run "environment_inputs_refuse_another_value" {
+  command = plan
+
+  variables {
+    workers_environment     = "front"
+    migrate_job_environment = "app"
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.workers_environment, var.migrate_job_environment]
+}
+
+# Refused at plan on an install without the workers environment: the injected network of
+# no_environments_on_an_injected_network_without_their_subnets above.
+run "workers_environment_refused_without_the_workers_environment" {
+  command = plan
+
+  variables {
+    workers_environment         = "workers"
+    enable_workers              = true
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_internal_load_balancer  = true
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+  }
+
+  expect_failures = [var.workers_environment]
+}
+
+run "migrate_job_environment_refused_without_the_workers_environment" {
+  command = plan
+
+  variables {
+    migrate_job_environment     = "workers"
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_internal_load_balancer  = true
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+  }
+
+  expect_failures = [var.migrate_job_environment]
+}
+
+# Refused at plan with egress_firewall, whose route table goes on snet-aca only (network.tf). The
+# guard run shows that the workers environment exists with these variables (the default /16) and
+# that egress_firewall alone is not refused, so in the two runs after it only the egress_firewall
+# refusal can fire.
+run "egress_firewall_install_has_the_workers_environment" {
+  command = plan
+
+  variables {
+    enable_workers             = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
+  }
+
+  assert {
+    condition     = contains(keys(module.environments), "workers") && length(azurerm_subnet_route_table_association.aca) == 1
+    error_message = "This install needs the workers environment and the snet-aca route, or the refusal runs below prove nothing."
+  }
+}
+
+run "workers_environment_refused_with_egress_firewall" {
+  command = plan
+
+  variables {
+    workers_environment        = "workers"
+    enable_workers             = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
+  }
+
+  expect_failures = [var.workers_environment]
+}
+
+run "migrate_job_environment_refused_with_egress_firewall" {
+  command = plan
+
+  variables {
+    migrate_job_environment    = "workers"
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
+  }
+
+  expect_failures = [var.migrate_job_environment]
 }
 
 # The frontend's custom-domain certificate, with frontend_custom_domain set.

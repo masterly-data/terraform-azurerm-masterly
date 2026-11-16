@@ -8,6 +8,13 @@ output "name" {
   description = "Name of the Container App."
 }
 
+# The environment the app is placed in, read off the resource so a test can pin which
+# environment a root module put an app in. Known at plan: the caller passes it.
+output "environment_id" {
+  value       = azurerm_container_app.this.container_app_environment_id
+  description = "Resource ID of the Container App Environment the app runs in."
+}
+
 # Memory per replica as configured, for the same reason the probe outputs exist: the root
 # module's memory alert takes its threshold as a share of this, and a configured value is
 # known at plan time, so a test can pin the arithmetic.
@@ -52,6 +59,19 @@ output "env_names" {
   description = "Names of the plain (non-secret) environment variables set on the container."
 }
 
+# A digest of each plain env value, by name: still never the value, for the same reason as
+# env_names, but a test can tell that two apps, or one app on two install shapes, get the same env.
+output "env_value_sha256" {
+  value       = tomap({ for name, value in var.env : name => sha256(value) })
+  description = "SHA-256 of each plain environment variable's value, by name. Never the value itself."
+}
+
+# Which app secret each secret-backed env var reads. Names only, as env_names.
+output "env_secret_refs" {
+  value       = var.env_secret_refs
+  description = "Environment variables sourced from app secrets: env var name => secret name."
+}
+
 # Readiness posture as configured — the same reason env_names exists: `terraform test` must be
 # able to assert the gate AND its tolerances, because a gate that outlasts nothing is worse
 # than no gate. Config values, not resource attributes, so it stays known at plan time.
@@ -79,6 +99,13 @@ output "liveness_probe" {
     failure_count_threshold = var.liveness_probe_failure_count_threshold
   }
   description = "The liveness probe as configured, or null when the app has none. A null tolerance means Azure's default applies."
+}
+
+output "ingress_enabled" {
+  # Whether the app has an ingress block at all, counted on the resource rather than the input,
+  # so a test that pins an app as unreachable proves the block itself is absent.
+  value       = length(azurerm_container_app.this.ingress) > 0
+  description = "Whether the app has ingress. False when the app declares no ingress block."
 }
 
 output "ingress_external" {
@@ -150,6 +177,13 @@ output "vault_backed_secret_names" {
 output "secret_ref_identity_ids" {
   value       = distinct(sort([for r in values(var.secret_refs) : r.identity_id]))
   description = "Distinct user-assigned identity resource IDs used to resolve this app's Key Vault references."
+}
+
+# Where each vault reference points, and the identity it is read with. Resource IDs, not values,
+# the reason var.secret_refs is not sensitive: a test can catch a reference pointed at another secret.
+output "secret_refs" {
+  value       = var.secret_refs
+  description = "Key Vault-backed Container App secrets: secret name => { kv_secret_id, identity_id }."
 }
 
 # Same reason as env_names and the secret-posture outputs above: `volume`, `init_container`

@@ -119,7 +119,7 @@ firewall. Your firewall then decides what passes, and it must admit the destinat
 |---|---|
 | 1: public ingress | Not offered: `egress_firewall` is refused at plan while `aca_internal_load_balancer = false` ([why](#forced-tunnelling-needs-an-internal-environment)). Make the environment internal and publish the frontend through your Application Gateway, which is topology 2 |
 | 2: the module builds the network, internal environment (`aca_internal_load_balancer = true`) | `egress_firewall = { next_hop_ip = "10.0.0.4" }`: the module creates `rt-<name_prefix>-aca` in `rg-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, and attaches it to `snet-aca`. Or `egress_firewall = { route_table_id = "/subscriptions/.../routeTables/<name>" }`: the module attaches your route table to `snet-aca` as it is, and creates none |
-| 3: injected subnets | Your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to the injected ACA subnet. `egress_firewall` is refused at plan there: a subnet holds one route table, and the module attaching its own would replace the hub's. The module creates no route table and no association on injected subnets, so the one the hub attached is never touched |
+| 3: injected subnets | Your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to the injected ACA subnet, and to `workers_subnet_id` before `workers_environment` or `migrate_job_environment` is set to `"workers"`. `egress_firewall` is refused at plan there: a subnet holds one route table, and the module attaching its own would replace the hub's. The module creates no route table and no association on injected subnets, so the one the hub attached is never touched |
 
 The `egress_route` output shows the route table in effect and the next-hop address, and is null
 when `egress_firewall` is unset.
@@ -377,9 +377,16 @@ Each subnet holds its environment, `aca-<name_prefix>-front`, `aca-<name_prefix>
 `aca-<name_prefix>-workers`, each declaring the `Consumption` workload profile and sending its
 console and system logs to the install's workspace. The app and workers environments always have
 an internal load balancer; the front has one exactly when `aca_internal_load_balancer = true`, so
-an install that is private today gets no public front. No app runs in them yet: every app, the
-migrate job and the custom-domain certificate stay on `aca-<name_prefix>`, which plans no change.
-An install whose `environment_subnet_ids` are all null gets none of the three environments.
+an install that is private today gets no public front. By default no app runs in them: every app,
+the migrate job and the custom-domain certificate stay on `aca-<name_prefix>`, which plans no
+change. Two workloads can be placed in the workers environment, each with its own input:
+`ca-workers` with `workers_environment = "workers"`, and `caj-migrate` (with `migrations = "job"`)
+with `migrate_job_environment = "workers"`. Each keeps its identity, env and secrets, `ca-workers`
+its scale rule, and neither has ingress. Changing either input replaces that workload under the same name, on the
+module's api image, so run CD's release again afterwards; a replaced `caj-migrate` also runs once
+at apply. `ca-frontend`, `ca-api` and `ca-edge` cannot be moved yet. An install whose
+`environment_subnet_ids` are all null gets none of the three environments, and the plan refuses
+either input set to `"workers"` there.
 
 An internal environment's default domain resolves only through a private DNS zone. With
 `environment_private_dns_enabled` at its default (`true`), the module creates, for each internal
@@ -392,7 +399,12 @@ team owns DNS, set it to `false`: the module creates no zone, record or link, an
 `static_ip_address` and whether it is `internal`, for the records the hub creates.
 
 `egress_firewall` still attaches its route table to `snet-aca` only ([Egress](#egress)): the
-three environment subnets get no route table in this version.
+three environment subnets get no route table in this version. So with `egress_firewall` set, the
+plan refuses `workers_environment` or `migrate_job_environment` set to `"workers"`: the moved
+workload's egress would bypass your firewall. On injected subnets `egress_firewall` is refused
+anyway, so the plan cannot see where egress goes: before either input is set to `"workers"`,
+your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to
+`workers_subnet_id` as well, or the moved workload leaves forced tunnelling.
 
 Each subnet carries its own NSG, ending in the same deny. The platform rows are the inbound
 rules Microsoft lists for a workload-profiles environment in
