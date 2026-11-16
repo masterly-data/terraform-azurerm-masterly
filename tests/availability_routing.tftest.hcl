@@ -112,6 +112,25 @@ run "availability_alerts_route_to_the_module_action_group" {
     }
   }
 
+  # The apps' environment id is chosen between module.aca_env and the front and app environments
+  # (frontend_environment, api_environment), so their inputs depend on module.environments too.
+  # Teardown's pre-destroy refresh plans the environments' untargeted diagnostic settings and
+  # private DNS, which read these values: they must be ARM-shaped, a domain and an address.
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.5.10" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
   override_resource {
     target = azurerm_virtual_network.this
     values = {
