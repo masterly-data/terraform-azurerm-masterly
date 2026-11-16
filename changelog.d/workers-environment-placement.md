@@ -1,7 +1,7 @@
 ### Added
 
 - **`workers_environment` and `migrate_job_environment` inputs (default `"runtime"`): `ca-workers` and `caj-migrate` can run in the workers environment (ADR 0120 §4).** Each takes `"runtime"`, `aca-<prefix>` on `snet-aca` as before, or `"workers"`, `aca-<prefix>-workers` on `snet-workers`, which is internal and admits no inbound caller. `workers_environment` moves `ca-workers` only, and `migrate_job_environment` (with `migrations = "job"`) moves `caj-migrate` only. A moved workload keeps its identity (`ca-workers` its own or the apps identity as before, `caj-migrate` only `id-<prefix>-migrate`), its env, its secrets and, for `ca-workers`, its scale rule; `ca-workers` still has no ingress and a job has none. In the workers environment, each waits for the environment subnets' network security group associations.
-- **Two plan-time refusals for either input set to `"workers"`.** On an install without the workers environment (`environment_subnet_ids` has no workers subnet, as on an injected network without `workers_subnet_id`), the plan is refused, naming the input. With `egress_firewall` set it is refused too: `egress_firewall` attaches its route table to `snet-aca` only, so the environment subnets get no route table from it and the moved workload's egress would bypass your firewall.
+- **Two plan-time refusals for either input set to `"workers"`.** On an install without the workers environment (`environment_subnet_ids` has no workers subnet, as on an injected network without `workers_subnet_id`), the plan is refused, naming the input. With `egress_firewall` set it is refused too: `egress_firewall` attaches its route table to `snet-aca` only, so the environment subnets get no route table from it and the moved workload's egress would bypass your firewall. On an injected network `egress_firewall` is refused anyway, so the plan cannot see forced tunnelling there: your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to `workers_subnet_id` before either input is set to `"workers"`.
 - The nested module `modules/aca-container-app` gains two outputs, `environment_id` and `ingress_enabled`.
 
 ### Changed
@@ -12,4 +12,4 @@
 
 ### Documentation
 
-- docs/networking.md, "The environment subnets", says which workloads can be placed in the workers environment (`ca-workers` and `caj-migrate`), with which inputs, and that `egress_firewall` refuses it.
+- docs/networking.md, "The environment subnets", says which workloads can be placed in the workers environment (`ca-workers` and `caj-migrate`), with which inputs, that `egress_firewall` refuses it, and that on an injected network the hub's route table must be on `workers_subnet_id` first.
