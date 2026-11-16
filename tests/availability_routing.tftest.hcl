@@ -112,6 +112,24 @@ run "availability_alerts_route_to_the_module_action_group" {
     }
   }
 
+  # ca-workers and the migrate job (behind the apps' migrate_start) name the workers environment
+  # (workers_environment, migrate_job_environment), so the environments are applied too. Their
+  # diagnostic settings and private DNS parse these at the teardown.
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
   override_resource {
     target = azurerm_virtual_network.this
     values = {
