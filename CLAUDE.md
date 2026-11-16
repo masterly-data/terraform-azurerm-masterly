@@ -30,6 +30,7 @@ terraform fmt -check -recursive
 terraform init -backend=false -input=false && terraform validate
 terraform test                                   # mock providers, no cloud access
 python3 scripts/check_release_manifest.py --selftest && python3 scripts/check_release_manifest.py
+python3 scripts/check_customer_summary.py --selftest && python3 scripts/check_customer_summary.py
 python3 scripts/check_runtime_env.py --selftest && python3 scripts/check_runtime_env.py
 python3 scripts/check_inputs_reference.py --selftest && python3 scripts/check_inputs_reference.py
 python3 scripts/release_notes.py --selftest && python3 scripts/release_gate.py --selftest
