@@ -12,6 +12,8 @@ What it refuses, per file, naming the file and the fix:
   * a file name that is not `<version>.json`, or a `version` that is not a key of the manifest's
     `releases` (the keys are read from MANIFEST.json; no version is typed in here);
   * a `schema_version` other than 1, or any field of the contract with the wrong type or shape;
+  * a JSON object that repeats a key, since a parser keeps only one of the values and the other
+    would be published unchecked;
   * a SEC block that is anything other than integer counts keyed by ZAP risk — an allowlist, so
     an alert name, a URL, a parameter or a rule id has nowhere to go;
   * any string ANYWHERE in the document, keys included, that names a `*.internal` host, a
@@ -19,7 +21,7 @@ What it refuses, per file, naming the file and the fix:
     not limited to known fields, so a field added later cannot become a leak.
     `masterly.azurecr.io` is the public registry and passes.
 
-With no `customer-summary/` directory, or none in it, the check passes: nothing is published yet
+A `.gitkeep` in `customer-summary/` is ignored. With no `customer-summary/` directory, or none in it, the check passes: nothing is published yet
 for a version until its Stable release step writes the file.
 
 Standard library only, and no network call: release metadata should not depend on anything
@@ -226,6 +228,17 @@ def _reject_constant(token: str):
     raise ValueError(f"{token} is not valid JSON")
 
 
+def _reject_duplicates(pairs):
+    # json.loads keeps only the last of a repeated key, so a value under an earlier one would
+    # stay in the published file without ever being checked for redaction.
+    seen = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ValueError(f"the key {key!r} appears twice; keep one")
+        seen.add(key)
+    return dict(pairs)
+
+
 def load_releases(manifest_path: Path) -> dict | str:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -256,7 +269,8 @@ def check_tree(manifest_path: Path, summary_dir: Path) -> tuple[list[str], int]:
             continue
         checked += 1
         try:
-            document = json.loads(path.read_text(encoding="utf-8"), parse_constant=_reject_constant)
+            document = json.loads(path.read_text(encoding="utf-8"), parse_constant=_reject_constant,
+                                  object_pairs_hook=_reject_duplicates)
         except (OSError, ValueError) as exc:
             errors.append(f"{name}: not valid JSON ({exc}). Regenerate it. See {DOC}.")
             continue
@@ -375,6 +389,8 @@ BAD = [
                                           "Informational": 0}), "1.2.3.json", "`sec.High`"),
     ("sec with a boolean count", _with(sec={"High": True, "Medium": 0, "Low": 0,
                                             "Informational": 0}), "1.2.3.json", "`sec.High`"),
+    ("duplicate key hiding a leak", '{"notes": "api.example.internal", "notes": "ok", '
+     + json.dumps(_good())[1:], "1.2.3.json", "the key 'notes' appears twice"),
     ("sec as a list of findings", _with(sec=["XSS on /login"]), "1.2.3.json",
      "`sec` must be an object"),
 ]
