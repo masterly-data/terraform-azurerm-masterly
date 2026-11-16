@@ -21,8 +21,11 @@ What it refuses, per file, naming the file and the fix:
     not limited to known fields, so a field added later cannot become a leak.
     `masterly.azurecr.io` is the public registry and passes.
 
-A `.gitkeep` in `customer-summary/` is ignored. With no `customer-summary/` directory, or none in it, the check passes: nothing is published yet
-for a version until its Stable release step writes the file.
+`upgrade_verified_from` entries and `perf.baseline` must be earlier releases named in the manifest.
+
+A `.gitkeep` in `customer-summary/` is ignored. With no `customer-summary/` directory, or none in
+it, the check passes: nothing is published yet for a version until its Stable release step
+writes the file.
 
 Standard library only, and no network call: release metadata should not depend on anything
 resolving. Paths are overridable through the environment (`RELEASE_MANIFEST_PATH` as the release
@@ -165,11 +168,17 @@ def shape_errors(name: str, file_name: str, document: dict, releases: dict) -> l
             isinstance(v, str) and SEMVER.match(v) for v in verified
         ):
             bad("`upgrade_verified_from` must be an array of bare semvers such as `1.2.2`.")
-        elif len(set(verified)) != len(verified) or version in verified:
-            bad("`upgrade_verified_from` must not repeat a version or list the version itself.")
+        elif len(set(verified)) != len(verified):
+            bad("`upgrade_verified_from` must not repeat a version.")
+        else:
+            for v in verified:
+                problem = _earlier_release_problem(v, version, releases)
+                if problem:
+                    bad(f"`upgrade_verified_from` entry {v!r} {problem}")
 
     if "perf" in document:
-        errors.extend(f"{name}: {m} See {DOC}." for m in perf_errors(document["perf"], version))
+        errors.extend(f"{name}: {m} See {DOC}."
+                      for m in perf_errors(document["perf"], version, releases))
 
     if "sec" in document:
         errors.extend(f"{name}: {m} See {DOC}." for m in sec_errors(document["sec"]))
@@ -179,7 +188,17 @@ def shape_errors(name: str, file_name: str, document: dict, releases: dict) -> l
     return errors
 
 
-def perf_errors(perf, version) -> list[str]:
+def _earlier_release_problem(candidate: str, version, releases: dict) -> str | None:
+    """Why `candidate` is not an earlier release of the manifest, or None if it is."""
+    if candidate not in releases:
+        return "is not a key of `releases` in MANIFEST.json. Name a released version."
+    if isinstance(version, str) and SEMVER.match(version):
+        if tuple(map(int, candidate.split("."))) >= tuple(map(int, version.split("."))):
+            return f"is not lower than the version {version!r}. Name an earlier release."
+    return None
+
+
+def perf_errors(perf, version, releases) -> list[str]:
     if perf is None:
         return []  # the first Stable has no previous Stable to measure against
     if not isinstance(perf, dict) or set(perf) != {"baseline", "profiles"}:
@@ -188,8 +207,10 @@ def perf_errors(perf, version) -> list[str]:
     baseline = perf["baseline"]
     if not isinstance(baseline, str) or not SEMVER.match(baseline):
         errors.append("`perf.baseline` must be the previous Stable version, a bare semver.")
-    elif baseline == version:
-        errors.append("`perf.baseline` must be the previous Stable version, not the version itself.")
+    else:
+        problem = _earlier_release_problem(baseline, version, releases)
+        if problem:
+            errors.append(f"`perf.baseline` {baseline!r} {problem}")
     profiles = perf["profiles"]
     if not isinstance(profiles, dict) or not profiles:
         return errors + ["`perf.profiles` must be a non-empty object keyed by profile name."]
@@ -356,6 +377,18 @@ BAD = [
      "bare semvers"),
     ("perf baseline is not a semver", _with(perf={"baseline": "latest", "profiles": {}}),
      "1.2.3.json", "previous Stable version"),
+    ("upgrade_verified_from not in the manifest", _with(upgrade_verified_from=["1.2.2", "9.0.0"]),
+     "1.2.3.json", "'9.0.0' is not a key of `releases`"),
+    ("upgrade_verified_from is the version itself", _with(upgrade_verified_from=["1.2.3"]),
+     "1.2.3.json", "'1.2.3' is not lower than the version"),
+    ("upgrade_verified_from is a later release", _with(upgrade_verified_from=["1.2.3"]),
+     "1.2.2.json", "is not lower than the version"),
+    ("perf baseline not in the manifest", _with(perf={"baseline": "4.0.0", "profiles": {
+        "small": {"p50_ms": 1, "p95_ms": 2, "throughput_per_s": 3, "error_rate": 0}}}),
+     "1.2.3.json", "`perf.baseline` '4.0.0' is not a key of `releases`"),
+    ("perf baseline is the version itself", _with(perf={"baseline": "1.2.3", "profiles": {
+        "small": {"p50_ms": 1, "p95_ms": 2, "throughput_per_s": 3, "error_rate": 0}}}),
+     "1.2.3.json", "`perf.baseline` '1.2.3' is not lower than the version"),
     ("perf error_rate above 1", _with(perf={"baseline": "1.2.2", "profiles": {"small": {
         "p50_ms": 1, "p95_ms": 2, "throughput_per_s": 3, "error_rate": 7}}}),
      "1.2.3.json", "`error_rate`"),

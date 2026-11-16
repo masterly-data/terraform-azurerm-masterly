@@ -75,9 +75,9 @@ The values above are illustrative. Read the real ones from the file.
 | `ring` | object | yes | The date the version reached each ring (ADR 0107): exactly `canary`, `beta` and `stable`. |
 | `ring.canary`, `ring.beta`, `ring.stable` | string | yes | `YYYY-MM-DD`, a real date, the day the version was promoted into that ring. Dates do not go backwards: canary, then beta, then stable. |
 | `gates_passed` | array of strings | yes | The names of the release gates the version passed before it was promoted to Stable. Distinct, non-empty names. Like every string, subject to "Redaction". |
-| `upgrade_verified_from` | array of strings | yes | The module versions an upgrade to this version was verified from, each a bare semver. May be empty. Does not repeat a version or list `version` itself. |
+| `upgrade_verified_from` | array of strings | yes | The module versions an upgrade to this version was verified from, each a bare semver. May be empty. Each is a key of `releases` in `MANIFEST.json` and lower than `version`; none repeats. |
 | `perf` | object or `null` | yes | The performance of this version against the previous Stable version. `null` when there is no previous Stable version to compare with. |
-| `perf.baseline` | string | with `perf` | The previous Stable version it was measured against, a bare semver. |
+| `perf.baseline` | string | with `perf` | The previous Stable version it was measured against, a bare semver. A key of `releases` in `MANIFEST.json`, lower than `version`. |
 | `perf.profiles` | object | with `perf` | The measures per load profile, keyed by a profile name (lowercase letters, digits, `_`, `-`). Never empty. |
 | `perf.profiles.<profile>.p50_ms` | number | with the profile | Median latency in milliseconds, 0 or more. |
 | `perf.profiles.<profile>.p95_ms` | number | with the profile | 95th percentile latency in milliseconds, 0 or more. |
@@ -115,7 +115,9 @@ public registry, is not an internal name.
 in, a rule identifier or any other key is refused. Findings of the dynamic scan stay internal;
 what a customer is told is how many there are at each severity.
 
-A JSON object may not repeat a key: a parser keeps only one of the values, so the other would be published unchecked. The check refuses a violation naming the file, where in it the value sits, and the value.
+A JSON object may not repeat a key: a parser keeps only one of the values, so the other would be
+published unchecked. The check refuses a violation naming the file, where in it the value sits,
+and the value.
 
 
 ## Compatibility
@@ -133,8 +135,8 @@ Ignore keys you do not recognise. Do not fail on them. The producer is stricter 
 consumer: a key added within 1 is still subject to "Redaction", so it carries no internal name.
 
 **Will not happen without a `schema_version` bump:** renaming, removing or retyping any field in
-the table; a new measure inside a `perf.profiles.<profile>`; a new ring, or a ring renamed; a new severity key or any non-count value in `sec`;
-`date`-style fields changing format; version keys growing a `v` prefix; the file moving.
+the table; a new measure inside a `perf.profiles.<profile>`; a new ring, or a ring renamed; a new
+severity key or any non-count value in `sec`; `date`-style fields changing format; version keys growing a `v` prefix; the file moving.
 
 So the one compatibility check a consumer owes itself is:
 
