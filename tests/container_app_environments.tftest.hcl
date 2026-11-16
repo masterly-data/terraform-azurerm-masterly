@@ -718,6 +718,7 @@ run "migrate_job_stays_on_aca_env" {
       module.workers[0].secret_ref_identity_ids == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"]) &&
       local.workers_env["AZURE_CLIENT_ID"] == "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc" &&
       module.workers[0].env_names == sort(keys(local.workers_env)) &&
+      module.workers[0].env_secret_refs == tomap({ MASTERLY_DATABASE_URL = "database-url", MASTERLY_LICENSE_TOKEN = "license-token", MASTERLY_REDIS_URL = "redis-url", MASTERLY_SESSION_SECRET = "session-secret" }) &&
       module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
       length(module.workers[0].value_secret_names) == 0 &&
       length(module.workers[0].scale.custom_scale_rules) == 1 &&
@@ -727,7 +728,7 @@ run "migrate_job_stays_on_aca_env" {
       module.workers[0].scale.custom_scale_rules[0].metadata["messageCount"] == "5" &&
       module.workers[0].scale.custom_scale_rules[0].identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"
     )
-    error_message = "On aca-<prefix>, ca-workers runs as id-<prefix>-workers, with its env, its four vault-backed secrets and no value secret, and the jobs-queue scale rule as that identity."
+    error_message = "On aca-<prefix>, ca-workers runs as id-<prefix>-workers, with its env, the env each of its four vault-backed secrets feeds, no value secret, and the jobs-queue scale rule as that identity."
   }
 
   assert {
@@ -896,7 +897,9 @@ run "migrate_job_environment_moves_only_caj_migrate" {
 }
 
 # Both moved: neither gains ingress, and neither gains or loses access. The identity, env, secret
-# and scale-rule assertions are migrate_job_stays_on_aca_env's, on aca-<prefix>, unchanged.
+# and scale-rule assertions are migrate_job_stays_on_aca_env's, on aca-<prefix>, unchanged. The env
+# values and the vault references' targets are computed, unknown at plan: their parity is pinned by
+# the applies in tests/workers_environment_access.tftest.hcl.
 run "workloads_moved_to_the_workers_environment_keep_their_access" {
   command = plan
 
@@ -1015,6 +1018,7 @@ run "workloads_moved_to_the_workers_environment_keep_their_access" {
       module.workers[0].secret_ref_identity_ids == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"]) &&
       local.workers_env["AZURE_CLIENT_ID"] == "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc" &&
       module.workers[0].env_names == sort(keys(local.workers_env)) &&
+      module.workers[0].env_secret_refs == tomap({ MASTERLY_DATABASE_URL = "database-url", MASTERLY_LICENSE_TOKEN = "license-token", MASTERLY_REDIS_URL = "redis-url", MASTERLY_SESSION_SECRET = "session-secret" }) &&
       module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
       length(module.workers[0].value_secret_names) == 0 &&
       length(module.workers[0].scale.custom_scale_rules) == 1 &&
@@ -1024,7 +1028,7 @@ run "workloads_moved_to_the_workers_environment_keep_their_access" {
       module.workers[0].scale.custom_scale_rules[0].metadata["messageCount"] == "5" &&
       module.workers[0].scale.custom_scale_rules[0].identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"
     )
-    error_message = "In the workers environment, ca-workers must keep id-<prefix>-workers, its env, its four vault-backed secrets and no value secret, and the jobs-queue scale rule as that identity, as on aca-<prefix>."
+    error_message = "In the workers environment, ca-workers must keep id-<prefix>-workers, its env, the env each of its four vault-backed secrets feeds, no value secret, and the jobs-queue scale rule as that identity, as on aca-<prefix>."
   }
 
   assert {

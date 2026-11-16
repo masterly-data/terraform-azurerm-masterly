@@ -59,6 +59,19 @@ output "env_names" {
   description = "Names of the plain (non-secret) environment variables set on the container."
 }
 
+# A digest of each plain env value, by name: still never the value, for the same reason as
+# env_names, but a test can tell that two apps, or one app on two install shapes, get the same env.
+output "env_value_sha256" {
+  value       = tomap({ for name, value in var.env : name => sha256(value) })
+  description = "SHA-256 of each plain environment variable's value, by name. Never the value itself."
+}
+
+# Which app secret each secret-backed env var reads. Names only, as env_names.
+output "env_secret_refs" {
+  value       = var.env_secret_refs
+  description = "Environment variables sourced from app secrets: env var name => secret name."
+}
+
 # Readiness posture as configured — the same reason env_names exists: `terraform test` must be
 # able to assert the gate AND its tolerances, because a gate that outlasts nothing is worse
 # than no gate. Config values, not resource attributes, so it stays known at plan time.
@@ -164,6 +177,13 @@ output "vault_backed_secret_names" {
 output "secret_ref_identity_ids" {
   value       = distinct(sort([for r in values(var.secret_refs) : r.identity_id]))
   description = "Distinct user-assigned identity resource IDs used to resolve this app's Key Vault references."
+}
+
+# Where each vault reference points, and the identity it is read with. Resource IDs, not values,
+# the reason var.secret_refs is not sensitive: a test can catch a reference pointed at another secret.
+output "secret_refs" {
+  value       = var.secret_refs
+  description = "Key Vault-backed Container App secrets: secret name => { kv_secret_id, identity_id }."
 }
 
 # Same reason as env_names and the secret-posture outputs above: `volume`, `init_container`
