@@ -97,7 +97,7 @@ run "default_placement_keeps_the_apps_and_certificates_on_aca_env" {
       azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id == module.aca_env[0].id &&
       azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.aca_env[0].id
     )
-    error_message = "By default ca-api, ca-frontend, ca-edge and both custom-domain certificates must plan container_app_environment_id = module.aca_env.id."
+    error_message = "By default ca-api, ca-frontend, ca-edge and both custom-domain certificates must plan container_app_environment_id = module.aca_env[0].id."
   }
 
   assert {

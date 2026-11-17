@@ -602,9 +602,10 @@ a test install first, and read every plan before you apply it.
      `ca-frontend.<front default_domain>`, can be registered beforehand. With
      `frontend_custom_domain`, the redirect URI stays on your hostname and nothing changes.
    - **The custom-domain records, set before the apply.** With `frontend_custom_domain` or
-     `edge_custom_domain`, the certificates, their identities and the custom domains are created
-     again on the front environment, and `custom_domain_verification_id` reads the front
-     environment's. Before the apply:
+     `edge_custom_domain`, the certificates and the custom domains are created again on the front
+     environment, and `custom_domain_verification_id` reads the front environment's. The
+     certificate identities and their Key Vault grants are kept as they are, under the same names;
+     the apply attaches them to the front environment instead of aca-<prefix>. Before the apply:
      - Make sure each `asuid.<hostname>` TXT record carries that value. Azure derives it from the
        subscription, so it is normally the value already there.
      - Point each hostname's routing record at the front environment. That is a **CNAME** to
