@@ -60,7 +60,7 @@ run "the_environment_setting_leaves_the_destination_type_unset" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/cae-masterly"
       default_domain                 = "masterly.swedencentral.azurecontainerapps.io"
@@ -78,12 +78,12 @@ run "the_environment_setting_leaves_the_destination_type_unset" {
   }
 
   assert {
-    condition     = azurerm_monitor_diagnostic_setting.aca_env.log_analytics_destination_type != "Dedicated"
+    condition     = azurerm_monitor_diagnostic_setting.aca_env[0].log_analytics_destination_type != "Dedicated"
     error_message = "The environment's diagnostic setting must not set log_analytics_destination_type: Azure keeps none on a Container Apps environment, so setting one shows a change on every plan."
   }
 
   assert {
-    condition     = toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
+    condition     = toset([for l in azurerm_monitor_diagnostic_setting.aca_env[0].enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
     error_message = "The setting on the environment must send ContainerAppConsoleLogs and ContainerAppSystemLogs."
   }
 }

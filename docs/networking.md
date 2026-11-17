@@ -143,8 +143,10 @@ A list with a profile of type `Consumption` is a workload-profiles environment; 
 list is an environment without workload profiles. The `terraform output` form needs your root
 configuration to re-export the module's `aca_environment_id` output (`output "aca_environment_id" { value =
 module.<name>.aca_environment_id }`). Without that, use `-n aca-<name_prefix> -g
-rg-<name_prefix>-aca` instead of `--ids`. On an injected subnet, run the same check before your
-platform team attaches the hub's route table.
+rg-<name_prefix>-aca` instead of `--ids`. The output is null once `aca-<name_prefix>` is retired
+([Retiring the runtime environment](#retiring-the-runtime-environment)), and `egress_firewall` is
+refused by then, since every move off `aca-<name_prefix>` refuses it. On an injected subnet, run the
+same check before your platform team attaches the hub's route table.
 
 **The private endpoints are unaffected.** No route goes on `snet-private-endpoints`: it has
 private endpoint network policies enabled, under which a route table there would apply to
@@ -371,7 +373,11 @@ The install is moving from one Container Apps environment in `snet-aca` (`aca-<n
 three workload-profiles Container Apps environments, each in a subnet of its own (ADR 0120):
 **front** (the frontend, the one environment callers reach), **app** (the api, reached only from
 the front) and **workers** (no inbound caller). The subnets sit beside `snet-aca`, which keeps
-serving the apps until they move; a later module version moves them and retires `snet-aca`.
+serving the apps until they move. The placement inputs below move them, and
+`retire_runtime_environment` then deletes `aca-<name_prefix>` once nothing runs in it. `snet-aca`,
+its NSG and the private-endpoint rule from it stay in this version: the environment is retired,
+the subnet is not yet. [Retiring the runtime environment](#retiring-the-runtime-environment) gives
+the order.
 
 On a network the module builds, `front_subnet_prefix`, `app_subnet_prefix` and
 `workers_subnet_prefix` set the three ranges, all three or none, each /27 or larger, inside
@@ -410,6 +416,10 @@ module's api image, so run CD's release again afterwards; a replaced `caj-migrat
 at apply. An install whose `environment_subnet_ids` are all null gets none of the three
 environments, and the plan refuses any of these placement inputs set off `aca-<name_prefix>`
 there.
+
+Once every placement is off `aca-<name_prefix>`, `retire_runtime_environment = true` deletes it
+and its diagnostic setting. On an existing install, make the moves and the retirement in the
+order [Retiring the runtime environment](#retiring-the-runtime-environment) gives, one apply each.
 
 An internal environment's default domain resolves only through a private DNS zone. With
 `environment_private_dns_enabled` at its default (`true`), the module creates, for each internal
@@ -552,6 +562,94 @@ things to check in the plan first:
   nothing; set the three prefixes when you want them.
 
 An injected install changes nothing until you set the three subnet ids.
+
+### Retiring the runtime environment
+
+`retire_runtime_environment` gave `aca-<name_prefix>` and its diagnostic setting a `count`. The
+module carries `moved` blocks for both (`module.aca_env` to `module.aca_env[0]`, and
+`azurerm_monitor_diagnostic_setting.aca_env` to `azurerm_monitor_diagnostic_setting.aca_env[0]`),
+so with the input unset the upgrade plans **no changes**: the two moved addresses, and nothing
+destroyed or created.
+
+Moving an existing install off `aca-<name_prefix>` takes four applies, in this order. Plan each on
+a test install first, and read every plan before you apply it.
+
+1. **Give the install the three environment subnets, and plan the environments.** On a network
+   the module builds, a VNet of /21 or larger gets `snet-front`, `snet-app` and `snet-workers` on
+   upgrade, or set `front_subnet_prefix`, `app_subnet_prefix` and `workers_subnet_prefix`
+   ([The environment subnets](#the-environment-subnets)). On an injected network, set
+   `front_subnet_id`, `app_subnet_id` and `workers_subnet_id`. The plan creates
+   `aca-<name_prefix>-front`, `-app` and `-workers` beside `aca-<name_prefix>`, and moves no
+   app. After the apply, the `container_app_environments` output gives each environment's
+   `default_domain` and `static_ip_address`. With `environment_private_dns_enabled = false`, your
+   hub creates the private DNS records for the internal ones from it.
+2. **Move `ca-workers` and `caj-migrate`.** Set `workers_environment = "workers"`. With
+   `migrations = "job"`, also set `migrate_job_environment = "workers"`. Each is replaced under
+   the same name in the workers environment. The pipeline pauses until the new `ca-workers` runs,
+   and the apply starts one more execution of `caj-migrate`. Both start on the module's api image,
+   so run CD's release again afterwards. Neither has ingress, so no address changes.
+3. **Move `ca-frontend`, `ca-edge` and `ca-api` together.** Set `frontend_environment = "front"`,
+   `edge_environment = "front"` and `api_environment = "app"` in one apply. That apply replaces
+   the three apps, with downtime between destroy and create. What changes:
+   - **The FQDNs.** `ca-frontend` and `ca-edge` get new Container Apps FQDNs under the front
+     environment's default domain, and with them `frontend_url` and `edge_url`. `ca-api` gets
+     one under the app environment's. Anything that holds the old URLs needs the new ones: your
+     users' bookmarks, an Application Gateway's backend pool, and an allowlist.
+   - **The OIDC redirect URI.** Without `frontend_custom_domain`, the BFF's redirect URI is on
+     `frontend_url`'s host. Register `https://<new frontend_url host>/api/auth/callback` with your
+     identity provider, and set `oidc_redirect_uri` to it, in the same apply. The front
+     environment's default domain is known after step 1, so the new host,
+     `ca-frontend.<front default_domain>`, can be registered beforehand. With
+     `frontend_custom_domain`, the redirect URI stays on your hostname and nothing changes.
+   - **The custom-domain records, set before the apply.** With `frontend_custom_domain` or
+     `edge_custom_domain`, the certificates, their identities and the custom domains are created
+     again on the front environment, and `custom_domain_verification_id` reads the front
+     environment's. Before the apply:
+     - Make sure each `asuid.<hostname>` TXT record carries that value. Azure derives it from the
+       subscription, so it is normally the value already there.
+     - Point each hostname's routing record at the front environment. That is a **CNAME** to
+       `ca-frontend.<front default_domain>` or `ca-edge.<front default_domain>`, or an **A**
+       record to the front environment's `static_ip_address`. Behind a gateway, point its backend
+       there instead.
+     Azure checks these records when the apply binds the hostnames again.
+   - **SDK and API clients.** They reach the API through `ca-edge`, at `edge_url` or
+     `edge_custom_domain`'s hostname, never at `ca-api` directly: `ca-api` in the app environment
+     takes traffic from inside the VNet only. Give them the new `edge_url`, or keep your
+     hostname, whose record now points at the front environment. The edge forwards to
+     `https://ca-api.<app default_domain>` and verifies its certificate.
+   - **The front subnet's one rule, on an injected network.** With `ca-frontend` on the front
+     environment and the Key Vault private endpoint in use, the hub must add one rule before this
+     apply: admit the front subnet to the Key Vault private endpoint, TCP 443, to the endpoint's
+     own address (/32) only (ADR 0120 amendment, 2026-11-16). Add nothing wider: no other port,
+     no other private endpoint, no Postgres, Redis or Service Bus, and not the whole
+     private-endpoint subnet. On a network the module builds, the module adds that rule itself
+     ([Network security baseline](#network-security-baseline)).
+   - **`egress_firewall`.** The plan refuses `egress_firewall` with the apps moved, as it does in
+     step 2 for `ca-workers` and `caj-migrate`. Its route table is attached to `snet-aca` only,
+     and the environment subnets get none, so the moved workloads' egress would bypass your
+     firewall. Remove `egress_firewall` before step 2. On an injected network, your hub attaches
+     its route table to the front, app and workers subnets instead.
+
+   Run CD's release again after this apply too.
+4. **Set `retire_runtime_environment = true` and plan the deletion.** The plan must destroy
+   exactly two objects, `module.aca_env[0]` (`aca-<name_prefix>`) and
+   `azurerm_monitor_diagnostic_setting.aca_env[0]` (`diag-<name_prefix>-aca-env`), and nothing
+   else. The `aca_environment_id` output becomes null.
+
+   The plan refuses retirement while anything the module places is still on `aca-<name_prefix>`,
+   and names what is left:
+   - `ca-frontend`, `ca-edge`, `ca-api`, and a custom-domain certificate;
+   - `ca-workers`, with `enable_workers`;
+   - `caj-migrate`, with `migrations = "job"`.
+
+   The module cannot see what you created in `aca-<name_prefix>` yourself. Azure deletes the
+   environment with every app and job in it, so list the environment's apps and jobs first
+   (`az containerapp list` and `az containerapp job list` on `rg-<name_prefix>-aca`, filtered on
+   `aca-<name_prefix>`'s id). Move or delete anything else you find.
+
+`snet-aca`, its NSG, the private-endpoint rule from it and `aca_subnet_id` stay after step 4. A
+later version retires the subnet. Setting `retire_runtime_environment` back to `false` creates a
+new, empty `aca-<name_prefix>`.
 
 ## Landing-zone notes
 

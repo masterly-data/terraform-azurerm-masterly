@@ -137,9 +137,9 @@ run "ca_workers_access_on_aca_env" {
 
   assert {
     condition = (
-      module.workers[0].environment_id == module.aca_env.id &&
-      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env.id &&
-      module.aca_env.id != module.environments["workers"].id
+      module.workers[0].environment_id == module.aca_env[0].id &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env[0].id &&
+      module.aca_env[0].id != module.environments["workers"].id
     )
     error_message = "This run needs both workloads on aca-<prefix>, or it is no baseline."
   }
@@ -191,7 +191,7 @@ run "ca_workers_access_in_the_workers_environment" {
     condition = (
       module.workers[0].environment_id == module.environments["workers"].id &&
       azurerm_container_app_job.migrate[0].container_app_environment_id == module.environments["workers"].id &&
-      module.environments["workers"].id != module.aca_env.id
+      module.environments["workers"].id != module.aca_env[0].id
     )
     error_message = "This run needs both workloads in the workers environment, or it proves nothing."
   }

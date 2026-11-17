@@ -54,7 +54,7 @@ run "custom_domain_unset_plans_no_certificate_identity_or_binding" {
   assert {
     condition = (
       length(module.frontend_certificate_identity) == 0 &&
-      length(module.aca_env.identity_ids) == 0 &&
+      length(module.aca_env[0].identity_ids) == 0 &&
       length(azurerm_role_assignment.frontend_certificate_reader) == 0 &&
       length(azurerm_container_app_environment_certificate.frontend) == 0 &&
       length(azurerm_container_app_custom_domain.frontend) == 0

@@ -159,8 +159,9 @@ module "workers" {
   name                = "ca-workers"
   resource_group_name = azurerm_resource_group.aca.name
   # aca-<prefix>, or the workers environment with workers_environment = "workers". A change
-  # replaces the app: Azure does not move a Container App between environments.
-  environment_id = var.workers_environment == "workers" ? module.environments["workers"].id : module.aca_env.id
+  # replaces the app: Azure does not move a Container App between environments. aca-<prefix> is
+  # read through one() (environment.tf), as it may be retired.
+  environment_id = var.workers_environment == "workers" ? module.environments["workers"].id : local.aca_environment_id
   image          = local.api_image # the same image as the api; only the command differs
 
   acr_login_server           = local.registry_server

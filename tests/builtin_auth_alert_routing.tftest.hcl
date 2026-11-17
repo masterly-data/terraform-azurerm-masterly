@@ -91,7 +91,7 @@ run "auth_config_alert_routes_to_the_module_action_group" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/cae-masterly"
       default_domain                 = "masterly.swedencentral.azurecontainerapps.io"

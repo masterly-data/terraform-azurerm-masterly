@@ -12,7 +12,7 @@ mock_provider "azurerm" {
   source = "./tests/mocks/migrate"
 
   override_resource {
-    target = module.aca_env.azurerm_container_app_environment.this
+    target = module.aca_env[0].azurerm_container_app_environment.this
     values = {
       id                            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       custom_domain_verification_id = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
@@ -119,7 +119,7 @@ run "custom_domain_unset_keeps_the_frontend_fqdn" {
   assert {
     condition = (
       length(module.frontend_certificate_identity) == 0 &&
-      length(module.aca_env.identity_ids) == 0 &&
+      length(module.aca_env[0].identity_ids) == 0 &&
       length(azurerm_role_assignment.frontend_certificate_reader) == 0 &&
       length(azurerm_container_app_environment_certificate.frontend) == 0 &&
       length(azurerm_container_app_custom_domain.frontend) == 0
@@ -187,7 +187,7 @@ run "custom_domain_binds_the_hostname_on_a_public_environment" {
   assert {
     condition = (
       length(azurerm_container_app_environment_certificate.frontend) == 1 &&
-      azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id == module.aca_env.id &&
+      azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id == module.aca_env[0].id &&
       length(azurerm_container_app_environment_certificate.frontend[0].certificate_key_vault) == 1 &&
       azurerm_container_app_environment_certificate.frontend[0].certificate_key_vault[0].key_vault_secret_id == "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com" &&
       azurerm_container_app_environment_certificate.frontend[0].certificate_key_vault[0].identity == module.frontend_certificate_identity[0].id &&
@@ -202,7 +202,7 @@ run "custom_domain_binds_the_hostname_on_a_public_environment" {
   # and to no app, and its one grant is Key Vault Secrets User on the certificate's secret.
   assert {
     condition = (
-      tolist(module.aca_env.identity_ids) == tolist([module.frontend_certificate_identity[0].id]) &&
+      tolist(module.aca_env[0].identity_ids) == tolist([module.frontend_certificate_identity[0].id]) &&
       !contains(module.frontend.user_assigned_identity_ids, module.frontend_certificate_identity[0].id) &&
       !contains(module.api.user_assigned_identity_ids, module.frontend_certificate_identity[0].id) &&
       !contains(module.workers[0].user_assigned_identity_ids, module.frontend_certificate_identity[0].id) &&
@@ -281,14 +281,14 @@ run "custom_domain_binds_the_hostname_on_an_internal_environment" {
 
   assert {
     condition = (
-      module.aca_env.internal_load_balancer_enabled == true &&
+      module.aca_env[0].internal_load_balancer_enabled == true &&
       length(azurerm_container_app_custom_domain.frontend) == 1 &&
       azurerm_container_app_custom_domain.frontend[0].name == "masterly.example.com" &&
       azurerm_container_app_custom_domain.frontend[0].certificate_binding_type == "SniEnabled" &&
       azurerm_container_app_custom_domain.frontend[0].container_app_id == module.frontend.id &&
       azurerm_container_app_custom_domain.frontend[0].container_app_environment_certificate_id == azurerm_container_app_environment_certificate.frontend[0].id &&
       azurerm_container_app_environment_certificate.frontend[0].certificate_key_vault[0].identity == module.frontend_certificate_identity[0].id &&
-      tolist(module.aca_env.identity_ids) == tolist([module.frontend_certificate_identity[0].id])
+      tolist(module.aca_env[0].identity_ids) == tolist([module.frontend_certificate_identity[0].id])
     )
     error_message = "On an internal environment ca-frontend must carry the same binding: exactly the hostname, SNI, bound to the Key Vault certificate the environment reads as the certificate identity."
   }
@@ -328,7 +328,7 @@ run "edge_custom_domain_unset_keeps_the_edge_fqdn" {
     condition = (
       length(azurerm_container_app.edge) == 1 &&
       length(module.edge_certificate_identity) == 0 &&
-      length(module.aca_env.identity_ids) == 0 &&
+      length(module.aca_env[0].identity_ids) == 0 &&
       length(azurerm_role_assignment.edge_certificate_reader) == 0 &&
       length(azurerm_container_app_environment_certificate.edge) == 0 &&
       length(azurerm_container_app_custom_domain.edge) == 0
@@ -391,7 +391,7 @@ run "edge_custom_domain_binds_the_hostname_on_ca_edge" {
   assert {
     condition = (
       length(azurerm_container_app_environment_certificate.edge) == 1 &&
-      azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.aca_env.id &&
+      azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.aca_env[0].id &&
       length(azurerm_container_app_environment_certificate.edge[0].certificate_key_vault) == 1 &&
       azurerm_container_app_environment_certificate.edge[0].certificate_key_vault[0].key_vault_secret_id == "https://kv-customer-certs.vault.azure.net/secrets/api-masterly-example-com" &&
       azurerm_container_app_environment_certificate.edge[0].certificate_key_vault[0].identity == module.edge_certificate_identity[0].id &&
@@ -406,7 +406,7 @@ run "edge_custom_domain_binds_the_hostname_on_ca_edge" {
   # never on ca-edge, and is not the edge's own identity.
   assert {
     condition = (
-      tolist(module.aca_env.identity_ids) == tolist([module.edge_certificate_identity[0].id]) &&
+      tolist(module.aca_env[0].identity_ids) == tolist([module.edge_certificate_identity[0].id]) &&
       tolist(azurerm_container_app.edge[0].identity[0].identity_ids) == tolist([module.edge_identity[0].id]) &&
       !contains(azurerm_container_app.edge[0].identity[0].identity_ids, module.edge_certificate_identity[0].id) &&
       !contains(module.frontend.user_assigned_identity_ids, module.edge_certificate_identity[0].id) &&
@@ -534,7 +534,7 @@ run "edge_and_frontend_custom_domains_bind_both" {
 
   assert {
     condition = (
-      tolist(module.aca_env.identity_ids) == tolist([module.frontend_certificate_identity[0].id, module.edge_certificate_identity[0].id]) &&
+      tolist(module.aca_env[0].identity_ids) == tolist([module.frontend_certificate_identity[0].id, module.edge_certificate_identity[0].id]) &&
       tolist(azurerm_container_app.edge[0].identity[0].identity_ids) == tolist([module.edge_identity[0].id])
     )
     error_message = "With both custom domains set, the environment must carry both certificate identities, and ca-edge its own identity alone."

@@ -1084,7 +1084,7 @@ run "edge_applied_with_one_digest" {
 
   assert {
     condition = (
-      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env.id &&
+      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env[0].id &&
       azurerm_container_app.edge[0].resource_group_name == azurerm_resource_group.aca.name
     )
     error_message = "ca-edge must be created in module.aca_env's environment, in the apps' resource group."
