@@ -119,6 +119,17 @@ run "default_placement_keeps_the_apps_and_certificates_on_aca_env" {
     error_message = "By default MASTERLY_API_BASE_URL must stay http://ca-api."
   }
 
+  # Threat: nobody can sign in. ca-api refuses every session's DPoP proof (401) unless
+  # MASTERLY_DPOP_INTERNAL_ORIGIN is exactly the origin the BFF calls it on.
+  assert {
+    condition = (
+      module.api.env_value_sha256["MASTERLY_DPOP_INTERNAL_ORIGIN"] == sha256("http://ca-api") &&
+      module.api.env_value_sha256["MASTERLY_DPOP_INTERNAL_ORIGIN"] == sha256(local.frontend_env["MASTERLY_API_BASE_URL"]) &&
+      !contains(module.frontend.env_names, "MASTERLY_DPOP_INTERNAL_ORIGIN")
+    )
+    error_message = "By default ca-api must carry MASTERLY_DPOP_INTERNAL_ORIGIN = http://ca-api, the frontend's MASTERLY_API_BASE_URL."
+  }
+
   assert {
     condition     = module.api.ingress_external == false && module.api.ingress_allow_insecure == true
     error_message = "By default ca-api's ingress must stay internal, with the in-environment http:// hop allowed, as before."
@@ -240,6 +251,14 @@ run "moved_placement_puts_frontend_and_edge_on_front_and_api_on_app" {
       !can(regex("module\\.api\\.fqdn", regex("(?s)frontend_env = merge\\((.*?)\\n  \\)", file("${path.module}/main.tf"))[0]))
     )
     error_message = "With ca-api in app, MASTERLY_API_BASE_URL must be https://ca-api.<app default domain>, not built from module.api's fqdn, with no NODE_TLS_REJECT_UNAUTHORIZED."
+  }
+
+  assert {
+    condition = (
+      module.api.env_value_sha256["MASTERLY_DPOP_INTERNAL_ORIGIN"] == sha256("https://ca-api.app-3c4d.swedencentral.azurecontainerapps.io") &&
+      module.api.env_value_sha256["MASTERLY_DPOP_INTERNAL_ORIGIN"] == sha256(local.frontend_env["MASTERLY_API_BASE_URL"])
+    )
+    error_message = "With ca-api in app, MASTERLY_DPOP_INTERNAL_ORIGIN must follow the frontend's MASTERLY_API_BASE_URL to https://ca-api.<app default domain>."
   }
 
   # Threat: ca-api in app published, or answering plain HTTP. The app environment is internal,
