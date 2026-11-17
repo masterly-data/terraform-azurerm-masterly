@@ -112,6 +112,11 @@ locals {
   api_in_app_environment     = var.api_environment == "app"
   api_cross_environment_host = local.api_in_app_environment ? "ca-api.${try(module.environments["app"].default_domain, "")}" : null
 
+  # The one origin ca-frontend's BFF calls ca-api on, scheme and host only. Both apps read it from
+  # here so the two can never disagree: the BFF uses it as MASTERLY_API_BASE_URL, and ca-api as
+  # MASTERLY_DPOP_INTERNAL_ORIGIN, the URL every session's DPoP proof must name (main.tf).
+  api_internal_origin = local.api_in_app_environment ? "https://${local.api_cross_environment_host}" : "http://ca-api"
+
   # The certificate identities go on the environment that runs the app they serve, and nowhere
   # else; concat(frontend, edge), the order module.aca_env always had.
   environment_certificate_identity_ids = {

@@ -1110,6 +1110,12 @@ locals {
     local.private_egress_env, # the egress guard's allowlist (and deprecated override), empty unless set
     local.public_api_url_env, # the api's public base URL, empty unless set
     local.ca_bundle_env,      # SSL_CERT_FILE, pointed at the mounted bundle, empty unless set
+    # The origin the BFF calls ca-api on, which every session's DPoP proof must name. From the first
+    # api release after v0.137.0 sessions are DPoP-bound, and on mode = "demo" or "production" an
+    # api without this refuses every session's proof with 401, so nobody can sign in through the
+    # frontend (service-account callers send no proof). Shared with local.frontend_env's
+    # MASTERLY_API_BASE_URL so the two cannot disagree; ca-workers reads it too and ignores it.
+    { MASTERLY_DPOP_INTERNAL_ORIGIN = local.api_internal_origin },
     local.servicebus_env,
     local.acs_email_env,          # ACS endpoint + sender auto-wired when email is enabled (ADR 0040)
     local.keyvault_env,           # durable secret store when the Key Vault is enabled (ADR 0066)
@@ -1528,7 +1534,7 @@ locals {
       # domain>: a name the environment's certificate matches, verified by the BFF's default
       # TLS checks. Built from the environment's default domain, never from module.api's fqdn,
       # for the reason above.
-      MASTERLY_API_BASE_URL = local.api_in_app_environment ? "https://${local.api_cross_environment_host}" : "http://${module.api.name}"
+      MASTERLY_API_BASE_URL = local.api_internal_origin
       MASTERLY_REGION       = var.masterly_region
       MASTERLY_IDP_BINDING  = var.identity_binding
     },

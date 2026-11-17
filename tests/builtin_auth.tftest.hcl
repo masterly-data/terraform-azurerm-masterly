@@ -496,6 +496,7 @@ run "builtin_auth_recovery_baseline_api" {
   assert {
     condition = nonsensitive(jsonencode(module.api.env_names)) == jsonencode([
       "MASTERLY_ALLOWED_REGIONS",
+      "MASTERLY_DPOP_INTERNAL_ORIGIN",
       "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS",
       "MASTERLY_IDENTITY_BINDING",
       "MASTERLY_INSTALL_ID",
@@ -510,6 +511,7 @@ run "builtin_auth_recovery_baseline_api" {
   assert {
     condition = jsonencode(local.api_env) == jsonencode({
       MASTERLY_ALLOWED_REGIONS               = "eu"
+      MASTERLY_DPOP_INTERNAL_ORIGIN          = "http://ca-api"
       MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = "7"
       MASTERLY_IDENTITY_BINDING              = "dev"
       MASTERLY_INSTALL_ID                    = "test"
@@ -613,6 +615,7 @@ run "builtin_auth_recovery_opens_only_the_frontend_gate" {
   assert {
     condition = nonsensitive(jsonencode(module.api.env_names)) == jsonencode([
       "MASTERLY_ALLOWED_REGIONS",
+      "MASTERLY_DPOP_INTERNAL_ORIGIN",
       "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS",
       "MASTERLY_IDENTITY_BINDING",
       "MASTERLY_INSTALL_ID",
@@ -626,6 +629,7 @@ run "builtin_auth_recovery_opens_only_the_frontend_gate" {
   assert {
     condition = jsonencode(local.api_env) == jsonencode({
       MASTERLY_ALLOWED_REGIONS               = "eu"
+      MASTERLY_DPOP_INTERNAL_ORIGIN          = "http://ca-api"
       MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = "7"
       MASTERLY_IDENTITY_BINDING              = "dev"
       MASTERLY_INSTALL_ID                    = "test"
