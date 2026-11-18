@@ -167,8 +167,9 @@ resource "azurerm_container_app_job" "migrate" {
   location            = var.location
   resource_group_name = azurerm_resource_group.aca.name
   # aca-<prefix>, or the workers environment with migrate_job_environment = "workers". A change
-  # replaces the job, and so starts it once more (migrate_start).
-  container_app_environment_id = var.migrate_job_environment == "workers" ? module.environments["workers"].id : module.aca_env.id
+  # replaces the job, and so starts it once more (migrate_start). aca-<prefix> is read through
+  # one() (environment.tf), as it may be retired.
+  container_app_environment_id = var.migrate_job_environment == "workers" ? module.environments["workers"].id : local.aca_environment_id
 
   # An execution that has not finished in 30 minutes is stopped; the next one starts over.
   replica_timeout_in_seconds = 1800

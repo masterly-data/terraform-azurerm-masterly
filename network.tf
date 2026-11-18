@@ -470,10 +470,14 @@ resource "azurerm_subnet_route_table_association" "aca" {
     # workload-profiles environment, with the Consumption profile filled in). The profiles Azure
     # actually lists are known at plan for an existing environment and at apply for a new one,
     # when Terraform evaluates this condition again; until then the unknown half does not refuse.
+    # A retired aca-<prefix> (retire_runtime_environment) refuses: no environment on snet-aca
+    # lists a profile. The plan refuses egress_firewall with retire before this anyway, as every
+    # move off aca-<prefix> does, but this does not rely on it.
     precondition {
       condition = (
         try(azurerm_subnet.aca[0].delegation[0].service_delegation[0].name, null) == "Microsoft.App/environments" &&
-        try(length(module.aca_env.workload_profile_names) > 0, true)
+        length(module.aca_env) == 1 &&
+        try(length(one(module.aca_env[*].workload_profile_names)) > 0, true)
       )
       error_message = "egress_firewall needs a workload-profiles Container Apps environment: Azure ignores a route on an environment that reports no workload profile, so egress would stay open while it is believed forced through your firewall. The environment's subnet must be delegated to Microsoft.App/environments and Azure must list at least one workload profile on the environment (az containerapp env show --query properties.workloadProfiles). Remove egress_firewall, or move the install to a workload-profiles environment first."
     }

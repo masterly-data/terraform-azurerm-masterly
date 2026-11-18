@@ -53,7 +53,7 @@ run "edge_custom_domain_unset_without_edge_plans_nothing" {
       length(azurerm_role_assignment.edge_certificate_reader) == 0 &&
       length(azurerm_container_app_environment_certificate.edge) == 0 &&
       length(azurerm_container_app_custom_domain.edge) == 0 &&
-      length(module.aca_env.identity_ids) == 0
+      length(module.aca_env[0].identity_ids) == 0
     )
     error_message = "With edge_custom_domain unset the module must plan no edge certificate identity, no grant, no certificate, no binding and no environment identity."
   }
@@ -81,7 +81,7 @@ run "edge_custom_domain_unset_with_edge_plans_nothing" {
       length(azurerm_role_assignment.edge_certificate_reader) == 0 &&
       length(azurerm_container_app_environment_certificate.edge) == 0 &&
       length(azurerm_container_app_custom_domain.edge) == 0 &&
-      length(module.aca_env.identity_ids) == 0
+      length(module.aca_env[0].identity_ids) == 0
     )
     error_message = "With edge set and edge_custom_domain unset the module must plan ca-edge, and no edge certificate identity, no grant, no certificate, no binding and no environment identity."
   }
@@ -112,7 +112,7 @@ run "edge_custom_domain_plans_the_identity_grant_certificate_and_binding" {
       length(azurerm_container_app_custom_domain.edge) == 1 &&
       azurerm_container_app_custom_domain.edge[0].name == "api.masterly.example.com" &&
       azurerm_container_app_custom_domain.edge[0].certificate_binding_type == "SniEnabled" &&
-      length(module.aca_env.identity_ids) == 1
+      length(module.aca_env[0].identity_ids) == 1
     )
     error_message = "With edge_custom_domain set the module must plan the certificate identity id-<prefix>-edge-cert, one grant, the certificate cert-<prefix>-edge, an SNI binding for the hostname, and the one identity on the environment."
   }
@@ -164,7 +164,7 @@ run "edge_and_frontend_custom_domains_plan_together" {
     condition = (
       length(azurerm_container_app_custom_domain.frontend) == 1 &&
       length(azurerm_container_app_custom_domain.edge) == 1 &&
-      length(module.aca_env.identity_ids) == 2 &&
+      length(module.aca_env[0].identity_ids) == 2 &&
       output.edge_url == "https://api.masterly.example.com"
     )
     error_message = "With both custom domains set the module must plan both bindings, put both certificate identities on the environment, and point edge_url at the edge's hostname."

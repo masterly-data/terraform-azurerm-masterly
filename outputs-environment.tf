@@ -1,8 +1,8 @@
 # Outputs of environment.tf: the Container App Environments.
 
 output "aca_environment_id" {
-  value       = module.aca_env.id
-  description = "Resource ID of the Container App Environment the apps run in (aca-<name_prefix>), except ca-frontend, ca-edge and ca-api when frontend_environment, edge_environment and api_environment move them."
+  value       = local.aca_environment_id
+  description = "Resource ID of the Container App Environment the apps run in (aca-<name_prefix>), except ca-frontend, ca-edge and ca-api when frontend_environment, edge_environment and api_environment move them, and ca-workers and caj-migrate when workers_environment and migrate_job_environment do. Null once aca-<name_prefix> is retired (retire_runtime_environment = true)."
 }
 
 output "container_app_environments" {

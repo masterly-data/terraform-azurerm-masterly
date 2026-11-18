@@ -478,7 +478,7 @@ run "no_environments_on_a_vnet_smaller_than_21" {
   }
 
   assert {
-    condition     = azurerm_monitor_diagnostic_setting.aca_env.name == "diag-masterly-aca-env"
+    condition     = azurerm_monitor_diagnostic_setting.aca_env[0].name == "diag-masterly-aca-env"
     error_message = "aca-<prefix>'s own diagnostic setting must still be planned."
   }
 }
@@ -530,7 +530,7 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -561,7 +561,10 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
   assert {
     condition = (
       trimspace(regex("(?s)module \"aca_env\" \\{(.*?)\\n\\}", file("${path.module}/environment.tf"))[0]) == trimspace(<<-EOT
-        source = "./modules/aca-env-consumption"
+        # Gone with retire_runtime_environment, once nothing runs in it (variables-environment.tf).
+          # Read it through module.aca_env[*] or one(): with count = 0 there is no [0].
+          count  = var.retire_runtime_environment ? 0 : 1
+          source = "./modules/aca-env-consumption"
 
           name                           = "aca-$${var.name_prefix}"
           resource_group_name            = azurerm_resource_group.aca.name
@@ -584,9 +587,9 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
 
   assert {
     condition = (
-      azurerm_monitor_diagnostic_setting.aca_env.name == "diag-masterly-aca-env" &&
-      azurerm_monitor_diagnostic_setting.aca_env.target_resource_id == module.aca_env.id &&
-      toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
+      azurerm_monitor_diagnostic_setting.aca_env[0].name == "diag-masterly-aca-env" &&
+      azurerm_monitor_diagnostic_setting.aca_env[0].target_resource_id == module.aca_env[0].id &&
+      toset([for l in azurerm_monitor_diagnostic_setting.aca_env[0].enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
     )
     error_message = "diag-<prefix>-aca-env must be unchanged: on aca-<prefix>, the console and system logs."
   }
@@ -595,10 +598,10 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
   # api_environment (environment.tf), so they are read from the plan.
   assert {
     condition = (
-      module.api.environment_id == module.aca_env.id &&
-      module.frontend.environment_id == module.aca_env.id &&
-      local.api_environment_id == module.aca_env.id &&
-      local.frontend_environment_id == module.aca_env.id
+      module.api.environment_id == module.aca_env[0].id &&
+      module.frontend.environment_id == module.aca_env[0].id &&
+      local.api_environment_id == module.aca_env[0].id &&
+      local.frontend_environment_id == module.aca_env[0].id
     )
     error_message = "ca-api and ca-frontend must stay on module.aca_env."
   }
@@ -606,7 +609,7 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
   assert {
     condition = (
       length(module.workers) == 1 &&
-      module.workers[0].environment_id == module.aca_env.id &&
+      module.workers[0].environment_id == module.aca_env[0].id &&
       alltrue([for e in module.environments : module.workers[0].environment_id != e.id])
     )
     error_message = "ca-workers must stay on module.aca_env by default (workers_environment = \"runtime\")."
@@ -614,7 +617,7 @@ run "aca_env_keeps_its_arguments_its_setting_the_apps_and_the_edge" {
 
   assert {
     condition = (
-      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env.id &&
+      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env[0].id &&
       alltrue([for e in module.environments : azurerm_container_app.edge[0].container_app_environment_id != e.id])
     )
     error_message = "ca-edge must stay on module.aca_env, not on a new environment."
@@ -654,7 +657,7 @@ run "migrate_job_stays_on_aca_env" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -700,7 +703,7 @@ run "migrate_job_stays_on_aca_env" {
   assert {
     condition = (
       length(azurerm_container_app_job.migrate) == 1 &&
-      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env.id &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env[0].id &&
       alltrue([for e in module.environments : azurerm_container_app_job.migrate[0].container_app_environment_id != e.id])
     )
     error_message = "caj-migrate must stay on module.aca_env, not on a new environment."
@@ -709,7 +712,7 @@ run "migrate_job_stays_on_aca_env" {
   assert {
     condition = (
       length(module.workers) == 1 &&
-      module.workers[0].environment_id == module.aca_env.id &&
+      module.workers[0].environment_id == module.aca_env[0].id &&
       alltrue([for e in module.environments : module.workers[0].environment_id != e.id])
     )
     error_message = "ca-workers must stay on module.aca_env with workers_environment = \"runtime\"."
@@ -777,7 +780,7 @@ run "workers_environment_moves_only_ca_workers" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -807,7 +810,7 @@ run "workers_environment_moves_only_ca_workers" {
 
   assert {
     condition = (
-      module.environments["workers"].id != module.aca_env.id &&
+      module.environments["workers"].id != module.aca_env[0].id &&
       module.workers[0].environment_id == module.environments["workers"].id &&
       module.workers[0].environment_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers"
     )
@@ -816,9 +819,9 @@ run "workers_environment_moves_only_ca_workers" {
 
   assert {
     condition = (
-      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env.id &&
-      module.api.environment_id == module.aca_env.id &&
-      module.frontend.environment_id == module.aca_env.id
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env[0].id &&
+      module.api.environment_id == module.aca_env[0].id &&
+      module.frontend.environment_id == module.aca_env[0].id
     )
     error_message = "workers_environment must move ca-workers only: caj-migrate, ca-api and ca-frontend stay on module.aca_env."
   }
@@ -852,7 +855,7 @@ run "migrate_job_environment_moves_only_caj_migrate" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -882,7 +885,7 @@ run "migrate_job_environment_moves_only_caj_migrate" {
 
   assert {
     condition = (
-      module.environments["workers"].id != module.aca_env.id &&
+      module.environments["workers"].id != module.aca_env[0].id &&
       azurerm_container_app_job.migrate[0].container_app_environment_id == module.environments["workers"].id &&
       azurerm_container_app_job.migrate[0].container_app_environment_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers"
     )
@@ -891,9 +894,9 @@ run "migrate_job_environment_moves_only_caj_migrate" {
 
   assert {
     condition = (
-      module.workers[0].environment_id == module.aca_env.id &&
-      module.api.environment_id == module.aca_env.id &&
-      module.frontend.environment_id == module.aca_env.id
+      module.workers[0].environment_id == module.aca_env[0].id &&
+      module.api.environment_id == module.aca_env[0].id &&
+      module.frontend.environment_id == module.aca_env[0].id
     )
     error_message = "migrate_job_environment must move caj-migrate only: ca-workers, ca-api and ca-frontend stay on module.aca_env."
   }
@@ -934,7 +937,7 @@ run "workloads_moved_to_the_workers_environment_keep_their_access" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -1153,7 +1156,7 @@ run "frontend_certificate_stays_on_aca_env" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -1184,7 +1187,7 @@ run "frontend_certificate_stays_on_aca_env" {
   assert {
     condition = (
       length(azurerm_container_app_environment_certificate.frontend) == 1 &&
-      azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id == module.aca_env.id &&
+      azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id == module.aca_env[0].id &&
       alltrue([for e in module.environments : azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id != e.id])
     )
     error_message = "The frontend's environment certificate must stay on module.aca_env, not on a new environment."
@@ -1206,7 +1209,7 @@ run "edge_certificate_stays_on_aca_env" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -1237,7 +1240,7 @@ run "edge_certificate_stays_on_aca_env" {
   assert {
     condition = (
       length(azurerm_container_app_environment_certificate.edge) == 1 &&
-      azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.aca_env.id &&
+      azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.aca_env[0].id &&
       alltrue([for e in module.environments : azurerm_container_app_environment_certificate.edge[0].container_app_environment_id != e.id])
     )
     error_message = "ca-edge's environment certificate must stay on module.aca_env, not on a new environment."
@@ -1317,4 +1320,386 @@ run "records_and_links_are_in_their_own_environments_zone" {
     ])
     error_message = "Each environment's record and link must be in that environment's own zone."
   }
+}
+
+# --- Retiring aca-<prefix> (retire_runtime_environment) ---------------------------------------
+# module.aca_env and its diagnostic setting take count = 0 once every workload has moved off
+# aca-<prefix>. The plan refuses retire while anything the module places there is left, and names
+# it (local.runtime_environment_workloads).
+
+# Retire unset: aca-<prefix> and diag-<prefix>-aca-env at their indexed addresses, moved there from
+# the unindexed ones, and the output still set. Everything the guard counts is on aca-<prefix>
+# here, so the list it names covers each workload and both certificates.
+run "retire_runtime_environment_unset_keeps_aca_env" {
+  command = plan
+
+  variables {
+    enable_service_bus    = true
+    servicebus_sku        = "Standard"
+    migrations            = "job"
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://masterly.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    frontend_custom_domain = {
+      hostname                        = "masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+    edge_custom_domain = {
+      hostname                        = "api.masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/api-masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+  }
+
+  override_module {
+    target = module.aca_env[0]
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      identity_ids                   = []
+      workload_profile_names         = null
+      custom_domain_verification_id  = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    }
+  }
+
+  # Threat: an upgrade that has not opted in destroys and recreates aca-<prefix> with every app in
+  # it. Both moved blocks carry the existing objects to their [0] instances.
+  assert {
+    condition = (
+      can(regex("moved \\{\\n  from = module\\.aca_env\\n  to   = module\\.aca_env\\[0\\]\\n\\}", file("${path.module}/environment.tf"))) &&
+      can(regex("moved \\{\\n  from = azurerm_monitor_diagnostic_setting\\.aca_env\\n  to   = azurerm_monitor_diagnostic_setting\\.aca_env\\[0\\]\\n\\}", file("${path.module}/environment.tf")))
+    )
+    error_message = "environment.tf must move module.aca_env to module.aca_env[0] and azurerm_monitor_diagnostic_setting.aca_env to azurerm_monitor_diagnostic_setting.aca_env[0]."
+  }
+
+  assert {
+    condition = (
+      var.retire_runtime_environment == false &&
+      length(module.aca_env) == 1 &&
+      length(azurerm_monitor_diagnostic_setting.aca_env) == 1 &&
+      azurerm_monitor_diagnostic_setting.aca_env[0].name == "diag-masterly-aca-env" &&
+      azurerm_monitor_diagnostic_setting.aca_env[0].target_resource_id == module.aca_env[0].id &&
+      toset([for l in azurerm_monitor_diagnostic_setting.aca_env[0].enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
+    )
+    error_message = "With retire_runtime_environment unset, aca-<prefix> and diag-<prefix>-aca-env must each plan one instance, as before."
+  }
+
+  assert {
+    condition     = output.aca_environment_id != null && output.aca_environment_id == module.aca_env[0].id
+    error_message = "With retire_runtime_environment unset, aca_environment_id must be aca-<prefix>'s id."
+  }
+
+  assert {
+    condition = (
+      module.frontend.environment_id == module.aca_env[0].id &&
+      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env[0].id &&
+      module.api.environment_id == module.aca_env[0].id &&
+      module.workers[0].environment_id == module.aca_env[0].id &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.aca_env[0].id &&
+      nonsensitive(output.custom_domain_verification_id == "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF")
+    )
+    error_message = "With retire_runtime_environment unset and nothing moved, the five workloads and the verification id must read aca-<prefix>."
+  }
+
+  # What the retire refusal names, with everything still on aca-<prefix>.
+  assert {
+    condition = local.runtime_environment_workloads == tolist([
+      "ca-frontend (frontend_environment = \"aca\")",
+      "ca-edge (edge_environment = \"aca\")",
+      "ca-api (api_environment = \"aca\")",
+      "the frontend_custom_domain certificate (it follows frontend_environment)",
+      "the edge_custom_domain certificate (it follows edge_environment)",
+      "ca-workers (workers_environment = \"runtime\")",
+      "caj-migrate (migrations = \"job\" with migrate_job_environment = \"runtime\")",
+    ])
+    error_message = "The retire refusal must name ca-frontend, ca-edge, ca-api, both custom-domain certificates, ca-workers and caj-migrate while each is on aca-<prefix>."
+  }
+
+  # The refusals below can only name the variable they fail on, so the message is read from the
+  # source: it lists local.runtime_environment_workloads.
+  assert {
+    condition     = can(regex("error_message = \"retire_runtime_environment = true would delete aca-<name_prefix> while these still run in it: \\$\\{join\\(\"; \", local\\.runtime_environment_workloads\\)\\}", file("${path.module}/variables-environment.tf")))
+    error_message = "The retire refusal must name what is left on aca-<prefix> (local.runtime_environment_workloads)."
+  }
+
+  # Threat: egress believed forced while open. The route table's precondition reads module.aca_env
+  # through a splat only, and refuses when aca-<prefix> is retired rather than passing.
+  assert {
+    condition     = can(regex("length\\(module\\.aca_env\\) == 1 &&\\n\\s+try\\(length\\(one\\(module\\.aca_env\\[\\*\\]\\.workload_profile_names\\)\\) > 0, true\\)", file("${path.module}/network.tf")))
+    error_message = "The egress route table's precondition must refuse with no aca-<prefix> and read its profiles through one(module.aca_env[*])."
+  }
+}
+
+# Threat: aca-<prefix> deleted from under a running workload. ca-frontend, ca-edge, ca-api and
+# both custom-domain certificates are still on it.
+run "retire_refused_with_the_apps_on_aca_env" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    edge                       = {}
+    frontend_custom_domain = {
+      hostname                        = "masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+    edge_custom_domain = {
+      hostname                        = "api.masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/api-masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+  }
+
+  expect_failures = [var.retire_runtime_environment]
+}
+
+# With only ca-workers left on aca-<prefix>, the refusal names ca-workers alone: the moved apps
+# and their certificates are no longer listed.
+run "retire_names_only_what_is_left_on_aca_env" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    frontend_environment  = "front"
+    edge_environment      = "front"
+    api_environment       = "app"
+    enable_workers        = true
+    frontend_custom_domain = {
+      hostname                        = "masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+  }
+
+  assert {
+    condition     = local.runtime_environment_workloads == tolist(["ca-workers (workers_environment = \"runtime\")"])
+    error_message = "With the apps and their certificates moved, the retire refusal must name ca-workers only."
+  }
+}
+
+# The apps have moved; ca-workers is still on aca-<prefix>.
+run "retire_refused_with_ca_workers_on_runtime" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+    enable_workers             = true
+  }
+
+  expect_failures = [var.retire_runtime_environment]
+}
+
+# The apps and ca-workers have moved; caj-migrate is still on aca-<prefix>.
+run "retire_refused_with_the_migrate_job_on_runtime" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    enable_service_bus         = true
+    servicebus_sku             = "Standard"
+    migrations                 = "job"
+    mode                       = "production"
+    identity_binding           = "oidc"
+    oidc_allowed_issuers       = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience              = "api-client-id"
+    oidc_jwks_uri              = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id             = "bff-client-id"
+    oidc_client_secret         = "s3cret"
+    oidc_authority             = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri          = "https://app.example.com/api/auth/callback"
+    license_token              = "eyJ.fake.jwt"
+    license_public_jwk         = "{\"kty\":\"EC\"}"
+    initial_owner_email        = "owner@example.com"
+    enable_key_vault           = true
+    enable_redis               = true
+    redis_offering             = "cache"
+    enable_workers             = true
+    api_max_replicas           = 3
+    external_database_url      = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+    workers_environment        = "workers"
+  }
+
+  expect_failures = [var.retire_runtime_environment]
+}
+
+# migrations = "start" creates no migrate job, so migrate_job_environment left at "runtime" does
+# not hold retire back. ca-workers is off (enable_workers = false), so it is not counted either.
+run "retire_with_migrations_start_ignores_migrate_job_environment" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+  }
+
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  assert {
+    condition = (
+      var.migrations == "start" && var.migrate_job_environment == "runtime" &&
+      length(azurerm_container_app_job.migrate) == 0 &&
+      length(local.runtime_environment_workloads) == 0 &&
+      length(module.aca_env) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.aca_env) == 0
+    )
+    error_message = "With migrations = \"start\" the migrate job's placement must not hold retire back, and aca-<prefix> must plan no instance."
+  }
+}
+
+# Everything moved, then retired: aca-<prefix> and diag-<prefix>-aca-env plan no instance, the
+# output is null, and the five workloads and the certificates read only module.environments.
+run "retire_with_everything_moved_removes_aca_env" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    enable_service_bus         = true
+    servicebus_sku             = "Standard"
+    migrations                 = "job"
+    mode                       = "production"
+    identity_binding           = "oidc"
+    oidc_allowed_issuers       = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience              = "api-client-id"
+    oidc_jwks_uri              = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id             = "bff-client-id"
+    oidc_client_secret         = "s3cret"
+    oidc_authority             = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri          = "https://masterly.example.com/api/auth/callback"
+    license_token              = "eyJ.fake.jwt"
+    license_public_jwk         = "{\"kty\":\"EC\"}"
+    initial_owner_email        = "owner@example.com"
+    enable_key_vault           = true
+    enable_redis               = true
+    redis_offering             = "cache"
+    enable_workers             = true
+    api_max_replicas           = 3
+    external_database_url      = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    edge                       = {}
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+    workers_environment        = "workers"
+    migrate_job_environment    = "workers"
+    frontend_custom_domain = {
+      hostname                        = "masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+    edge_custom_domain = {
+      hostname                        = "api.masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-customer-certs.vault.azure.net/secrets/api-masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-customer-certs"
+    }
+  }
+
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50", custom_domain_verification_id = "FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
+  assert {
+    condition = (
+      length(module.aca_env) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.aca_env) == 0 &&
+      length(local.runtime_environment_workloads) == 0
+    )
+    error_message = "With retire_runtime_environment and everything moved, aca-<prefix> and diag-<prefix>-aca-env must plan no instance."
+  }
+
+  assert {
+    condition     = output.aca_environment_id == null && local.aca_environment_id == null
+    error_message = "With aca-<prefix> retired, aca_environment_id must be null."
+  }
+
+  assert {
+    condition     = nonsensitive(output.custom_domain_verification_id == "FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210")
+    error_message = "With aca-<prefix> retired, custom_domain_verification_id must read the front environment's."
+  }
+
+  assert {
+    condition = (
+      module.frontend.environment_id == module.environments["front"].id &&
+      azurerm_container_app.edge[0].container_app_environment_id == module.environments["front"].id &&
+      module.api.environment_id == module.environments["app"].id &&
+      module.workers[0].environment_id == module.environments["workers"].id &&
+      azurerm_container_app_job.migrate[0].container_app_environment_id == module.environments["workers"].id &&
+      azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id == module.environments["front"].id &&
+      azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.environments["front"].id &&
+      length(local.environment_certificate_identity_ids["aca"]) == 0
+    )
+    error_message = "With aca-<prefix> retired, ca-frontend, ca-edge, ca-api, ca-workers, caj-migrate and both certificates must plan only module.environments ids."
+  }
+}
+
+# Threat: egress believed forced while open. Retire does not lift the egress_firewall refusal: with
+# everything moved and retired, egress_firewall is still refused (the apps' move refuses it), and
+# the route table's precondition would refuse with no aca-<prefix> as well (asserted from the
+# source in retire_runtime_environment_unset_keeps_aca_env).
+run "retire_refused_with_egress_firewall" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+  }
+
+  expect_failures = [var.egress_firewall]
 }

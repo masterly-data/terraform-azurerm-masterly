@@ -16,6 +16,9 @@ module "logs" {
 }
 
 module "aca_env" {
+  # Gone with retire_runtime_environment, once nothing runs in it (variables-environment.tf).
+  # Read it through module.aca_env[*] or one(): with count = 0 there is no [0].
+  count  = var.retire_runtime_environment ? 0 : 1
   source = "./modules/aca-env-consumption"
 
   name                           = "aca-${var.name_prefix}"
@@ -48,8 +51,10 @@ module "aca_env" {
 # null), so none is set here: setting one made every plan show a change. The legacy custom-log
 # (_CL) tables get no new rows.
 resource "azurerm_monitor_diagnostic_setting" "aca_env" {
+  count = var.retire_runtime_environment ? 0 : 1
+
   name                       = "diag-${var.name_prefix}-aca-env"
-  target_resource_id         = module.aca_env.id
+  target_resource_id         = module.aca_env[0].id
   log_analytics_workspace_id = module.logs.id
 
   enabled_log {
@@ -58,6 +63,18 @@ resource "azurerm_monitor_diagnostic_setting" "aca_env" {
   enabled_log {
     category = "ContainerAppSystemLogs"
   }
+}
+
+# Before retire_runtime_environment the two were single objects. Without these an upgrade would
+# destroy aca-<prefix>, with every app in it, and create it again.
+moved {
+  from = module.aca_env
+  to   = module.aca_env[0]
+}
+
+moved {
+  from = azurerm_monitor_diagnostic_setting.aca_env
+  to   = azurerm_monitor_diagnostic_setting.aca_env[0]
 }
 
 # --- The front, app and workers environments (ADR 0120 §4-§5) ------------------------
@@ -100,10 +117,26 @@ locals {
   # "aca" is module.aca_env; any other placement is that key of module.environments. A placement
   # on an environment the module does not create is refused (main.tf, azurerm_resource_group.aca);
   # try() only keeps the missing key from erroring beside that refusal, and the fallback is never
-  # applied.
-  frontend_environment_id = var.frontend_environment == "aca" ? module.aca_env.id : try(module.environments[var.frontend_environment].id, module.aca_env.id)
-  edge_environment_id     = var.edge_environment == "aca" ? module.aca_env.id : try(module.environments[var.edge_environment].id, module.aca_env.id)
-  api_environment_id      = var.api_environment == "aca" ? module.aca_env.id : try(module.environments[var.api_environment].id, module.aca_env.id)
+  # applied. aca-<prefix> is read through one(): retire_runtime_environment refuses while any app
+  # is placed on it, and the splat keeps a retired (count = 0) module.aca_env from erroring.
+  aca_environment_id      = one(module.aca_env[*].id)
+  frontend_environment_id = var.frontend_environment == "aca" ? local.aca_environment_id : try(module.environments[var.frontend_environment].id, local.aca_environment_id)
+  edge_environment_id     = var.edge_environment == "aca" ? local.aca_environment_id : try(module.environments[var.edge_environment].id, local.aca_environment_id)
+  api_environment_id      = var.api_environment == "aca" ? local.aca_environment_id : try(module.environments[var.api_environment].id, local.aca_environment_id)
+
+  # What the module still places on aca-<prefix>; retire_runtime_environment is refused while any
+  # is left (variables-environment.tf). The certificates follow ca-frontend and ca-edge, so they
+  # leave with them. ca-workers counts only with enable_workers, caj-migrate only with
+  # migrations = "job": otherwise neither exists.
+  runtime_environment_workloads = compact([
+    var.frontend_environment == "aca" ? "ca-frontend (frontend_environment = \"aca\")" : "",
+    var.edge_environment == "aca" ? (local.edge_enabled ? "ca-edge (edge_environment = \"aca\")" : "edge_environment = \"aca\"") : "",
+    var.api_environment == "aca" ? "ca-api (api_environment = \"aca\")" : "",
+    var.frontend_environment == "aca" && local.frontend_custom_domain ? "the frontend_custom_domain certificate (it follows frontend_environment)" : "",
+    var.edge_environment == "aca" && local.edge_custom_domain ? "the edge_custom_domain certificate (it follows edge_environment)" : "",
+    var.enable_workers && var.workers_environment == "runtime" ? "ca-workers (workers_environment = \"runtime\")" : "",
+    var.migrations == "job" && var.migrate_job_environment == "runtime" ? "caj-migrate (migrations = \"job\" with migrate_job_environment = \"runtime\")" : "",
+  ])
 
   # ca-api in the app environment: its callers cross environments, so they address it by its
   # name under the app environment's default domain, over HTTPS, and verify its certificate. Built

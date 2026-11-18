@@ -61,7 +61,7 @@ run "default_placement_keeps_the_apps_and_certificates_on_aca_env" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -91,13 +91,13 @@ run "default_placement_keeps_the_apps_and_certificates_on_aca_env" {
 
   assert {
     condition = (
-      module.api.environment_id == module.aca_env.id &&
-      module.frontend.environment_id == module.aca_env.id &&
-      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env.id &&
-      azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id == module.aca_env.id &&
-      azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.aca_env.id
+      module.api.environment_id == module.aca_env[0].id &&
+      module.frontend.environment_id == module.aca_env[0].id &&
+      azurerm_container_app.edge[0].container_app_environment_id == module.aca_env[0].id &&
+      azurerm_container_app_environment_certificate.frontend[0].container_app_environment_id == module.aca_env[0].id &&
+      azurerm_container_app_environment_certificate.edge[0].container_app_environment_id == module.aca_env[0].id
     )
-    error_message = "By default ca-api, ca-frontend, ca-edge and both custom-domain certificates must plan container_app_environment_id = module.aca_env.id."
+    error_message = "By default ca-api, ca-frontend, ca-edge and both custom-domain certificates must plan container_app_environment_id = module.aca_env[0].id."
   }
 
   assert {
@@ -171,7 +171,7 @@ run "moved_placement_puts_frontend_and_edge_on_front_and_api_on_app" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -346,7 +346,7 @@ run "moved_placement_attaches_the_certificate_identities_to_front_only" {
         "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend-cert",
         "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-edge-cert",
       ]) &&
-      length(module.aca_env.identity_ids) == 0 &&
+      length(module.aca_env[0].identity_ids) == 0 &&
       length(module.environments["app"].identity_ids) == 0 &&
       length(module.environments["workers"].identity_ids) == 0
     )

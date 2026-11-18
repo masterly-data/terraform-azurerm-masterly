@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-137 inputs in 29 groups.
+138 inputs in 29 groups.
 
 ## Groups
 
@@ -30,7 +30,7 @@ each one that is missing.
 - [Built-in sign-in](#built-in-sign-in) (2)
 - [Custom domain](#custom-domain) (2)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
-- [The front, app and workers environments (ADR 0120)](#the-front-app-and-workers-environments-adr-0120) (1)
+- [The front, app and workers environments (ADR 0120)](#the-front-app-and-workers-environments-adr-0120) (2)
 - [Images and registry pull credential](#images-and-registry-pull-credential) (6)
 - [Key Vault database secret names](#key-vault-database-secret-names) (1)
 - [Diagnostics and alerts](#diagnostics-and-alerts) (12)
@@ -259,6 +259,7 @@ In `variables-environment.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `environment_private_dns_enabled` | `bool` | `true` | Whether the module creates the private DNS that resolves the front, app and workers Container Apps environments inside the VNet. |
+| `retire_runtime_environment` | `bool` | `false` | Whether to delete aca-<name_prefix>, the Container Apps environment the apps ran in before the front, app and workers environments, once nothing runs in it. |
 
 ## Images and registry pull credential
 

@@ -61,7 +61,7 @@ run "one_diagnostic_setting_targets_the_environment" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -125,7 +125,7 @@ run "one_diagnostic_setting_targets_the_environment" {
   assert {
     condition = length([
       for target in concat(
-        [azurerm_monitor_diagnostic_setting.aca_env.target_resource_id],
+        [azurerm_monitor_diagnostic_setting.aca_env[0].target_resource_id],
         [for s in azurerm_monitor_diagnostic_setting.app : s.target_resource_id],
         [for s in azurerm_monitor_diagnostic_setting.environment : s.target_resource_id],
         azurerm_monitor_diagnostic_setting.postgres[*].target_resource_id,
@@ -133,15 +133,15 @@ run "one_diagnostic_setting_targets_the_environment" {
         azurerm_monitor_diagnostic_setting.redis_database[*].target_resource_id,
         azurerm_monitor_diagnostic_setting.key_vault[*].target_resource_id,
         azurerm_monitor_diagnostic_setting.service_bus[*].target_resource_id,
-      ) : target if target == module.aca_env.id
+      ) : target if target == module.aca_env[0].id
     ]) == 1
     error_message = "Exactly one diagnostic setting must target the Container Apps environment."
   }
 
   assert {
     condition = (
-      azurerm_monitor_diagnostic_setting.aca_env.target_resource_id == module.aca_env.id &&
-      toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
+      azurerm_monitor_diagnostic_setting.aca_env[0].target_resource_id == module.aca_env[0].id &&
+      toset([for l in azurerm_monitor_diagnostic_setting.aca_env[0].enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"])
     )
     error_message = "The setting on the environment must send ContainerAppConsoleLogs and ContainerAppSystemLogs. (That it leaves log_analytics_destination_type unset is asserted in diagnostics_env_destination.tftest.hcl.)"
   }
@@ -286,8 +286,8 @@ run "container_logs_reach_the_workspace_with_diagnostics_off" {
     condition = (
       length(azurerm_monitor_diagnostic_setting.app) == 0 &&
       length(azurerm_monitor_diagnostic_setting.postgres) == 0 &&
-      toset([for l in azurerm_monitor_diagnostic_setting.aca_env.enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"]) &&
-      module.aca_env.logs_destination == "azure-monitor"
+      toset([for l in azurerm_monitor_diagnostic_setting.aca_env[0].enabled_log : l.category]) == toset(["ContainerAppConsoleLogs", "ContainerAppSystemLogs"]) &&
+      module.aca_env[0].logs_destination == "azure-monitor"
     )
     error_message = "With diagnostics off, the environment's diagnostic setting must still send both Container Apps log categories to the workspace."
   }

@@ -124,7 +124,7 @@ run "default_topology_owns_its_network" {
   }
 
   assert {
-    condition     = module.aca_env.internal_load_balancer_enabled == false
+    condition     = module.aca_env[0].internal_load_balancer_enabled == false
     error_message = "The default topology keeps the environment's public endpoint."
   }
 }
@@ -240,7 +240,7 @@ run "private_ingress_topology" {
   }
 
   assert {
-    condition     = module.aca_env.internal_load_balancer_enabled == true
+    condition     = module.aca_env[0].internal_load_balancer_enabled == true
     error_message = "aca_internal_load_balancer must reach the Container App Environment."
   }
 
@@ -362,7 +362,7 @@ run "egress_firewall_unset_attaches_no_route_table" {
   }
 
   assert {
-    condition     = output.egress_route == null && module.aca_env.workload_profile_names == null
+    condition     = output.egress_route == null && module.aca_env[0].workload_profile_names == null
     error_message = "With egress_firewall unset, egress_route must be null and the environment's workload profiles must not be read."
   }
 }
@@ -427,7 +427,7 @@ run "egress_firewall_route_table_id_attaches_your_table" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -469,7 +469,7 @@ run "egress_firewall_on_a_consumption_only_environment_is_rejected" {
   }
 
   override_module {
-    target = module.aca_env
+    target = module.aca_env[0]
     outputs = {
       id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
       default_domain                 = "example.swedencentral.azurecontainerapps.io"
@@ -1692,7 +1692,7 @@ run "the_environment_encrypts_peer_traffic" {
   }
 
   assert {
-    condition     = module.aca_env.mutual_tls_enabled == true
+    condition     = module.aca_env[0].mutual_tls_enabled == true
     error_message = "Traffic between apps inside the environment must be encrypted."
   }
 
@@ -1940,14 +1940,14 @@ run "egress_firewall_next_hop_attaches_the_route_table_to_snet_aca_only" {
   }
 
   override_data {
-    target = module.aca_env.data.azapi_resource.environment
+    target = module.aca_env[0].data.azapi_resource.environment
     values = {
       output = { properties = { workloadProfiles = [{ name = "Consumption", workloadProfileType = "Consumption" }] } }
     }
   }
 
   assert {
-    condition     = length(module.aca_env.workload_profile_names) == 1 && module.aca_env.workload_profile_names[0] == "Consumption"
+    condition     = length(module.aca_env[0].workload_profile_names) == 1 && module.aca_env[0].workload_profile_names[0] == "Consumption"
     error_message = "workload_profile_names must be the names of the profiles Azure lists on the environment."
   }
 
@@ -1991,7 +1991,7 @@ run "egress_firewall_is_refused_when_azure_lists_no_workload_profile" {
   }
 
   override_data {
-    target = module.aca_env.data.azapi_resource.environment
+    target = module.aca_env[0].data.azapi_resource.environment
     values = {
       output = { properties = { workloadProfiles = null } }
     }

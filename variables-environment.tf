@@ -1,5 +1,5 @@
-# Inputs read by environment.tf: the Container App Environment's log workspace, and the private
-# DNS of the front, app and workers environments.
+# Inputs read by environment.tf: the Container App Environment's log workspace, the private DNS
+# of the front, app and workers environments, and the retirement of aca-<prefix>.
 
 # --- The install's Log Analytics workspace ---------------------------------------------
 # The workspace accepts Microsoft Entra ID only: its shared keys authenticate nothing, and it
@@ -44,4 +44,20 @@ variable "environment_private_dns_enabled" {
   default     = true
   nullable    = false
   description = "Whether the module creates the private DNS that resolves the front, app and workers Container Apps environments inside the VNet. True (the default): for each of them that is internal (app and workers always, the front when aca_internal_load_balancer is true), the module creates a private DNS zone in rg-<name_prefix>-aca named the environment's default domain, a wildcard (*) A record to the environment's static IP, and a link from the zone to the install's VNet (on an injected network, the VNet of aca_subnet_id) with auto-registration off. Without such a zone the apps in an internal environment cannot be reached by name. Set false when your platform team owns DNS: the module then creates no zone, record or link, and the container_app_environments output gives each environment's default_domain and static_ip_address for the records your hub creates. Azure assigns the default domain when it creates the environment, so the zone cannot be created ahead of the install."
+}
+
+# Removes aca-<prefix> once every workload has moved off it. The subnet it ran on, snet-aca, its
+# NSG and aca_subnet_id stay: only the environment and its diagnostic setting go.
+variable "retire_runtime_environment" {
+  type        = bool
+  default     = false
+  nullable    = false
+  description = "Whether to delete aca-<name_prefix>, the Container Apps environment the apps ran in before the front, app and workers environments, once nothing runs in it. False (the default) keeps it, and an upgrade plans no change to it. True deletes aca-<name_prefix> and its diagnostic setting, diag-<name_prefix>-aca-env, and the aca_environment_id output becomes null. Set it only after every move is applied, in the order docs/networking.md gives under \"Retiring the runtime environment\": ca-workers and caj-migrate to the workers environment (workers_environment and migrate_job_environment = \"workers\"), then ca-frontend, ca-edge and ca-api together (frontend_environment and edge_environment = \"front\", api_environment = \"app\"), which also moves the custom-domain certificates. The plan refuses true while any of these is still placed on aca-<name_prefix>, and names what is left; the migrate job is counted only with migrations = \"job\", and ca-workers only with enable_workers. Anything you created in aca-<name_prefix> yourself is not visible to the module: move or delete it first, because Azure deletes the environment with every app and job in it. snet-aca, its NSG and aca_subnet_id stay. Setting it back to false creates a new, empty aca-<name_prefix>."
+
+  # Azure deletes an environment with everything in it, so nothing the module places there may
+  # be left: local.runtime_environment_workloads (environment.tf) lists what still is.
+  validation {
+    condition     = !var.retire_runtime_environment || length(local.runtime_environment_workloads) == 0
+    error_message = "retire_runtime_environment = true would delete aca-<name_prefix> while these still run in it: ${join("; ", local.runtime_environment_workloads)}. Move them first, in the order docs/networking.md gives under \"Retiring the runtime environment\", apply, and then set retire_runtime_environment = true; or keep it false."
+  }
 }

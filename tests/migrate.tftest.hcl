@@ -1413,9 +1413,9 @@ run "migrate_job_preserves_the_existing_install" {
       azurerm_monitor_scheduled_query_rules_alert_v2.api_latency, azurerm_monitor_scheduled_query_rules_alert_v2.app_not_ready,
       azurerm_monitor_scheduled_query_rules_alert_v2.postgres_silent, random_password.postgres_admin,
       ] : length(group) == 1 && group[0].id != null]) && alltrue([for id in [
-      azurerm_resource_group.aca.id, azurerm_resource_group.data.id, module.aca_env.id, module.logs.id,
+      azurerm_resource_group.aca.id, azurerm_resource_group.data.id, module.aca_env[0].id, module.logs.id,
       module.api.id, module.frontend.id, module.workers[0].id, module.apps_identity.id, module.frontend_identity.id,
-      azurerm_monitor_diagnostic_setting.aca_env.id, random_password.session_secret.id, random_password.bff_shared_secret.id,
+      azurerm_monitor_diagnostic_setting.aca_env[0].id, random_password.session_secret.id, random_password.bff_shared_secret.id,
     ] : id != null])
     error_message = "Every existing counted resource must remain at its address with a known state ID; replacement or recreation makes its computed ID unknown."
   }
@@ -1453,7 +1453,7 @@ run "migrate_job_preserves_the_existing_install" {
       azurerm_servicebus_namespace.this[0].resource_group_name == "rg-masterly-aca" &&
       azurerm_servicebus_namespace.this[0].location == "swedencentral" &&
       azurerm_servicebus_namespace.this[0].sku == "Standard" && azurerm_servicebus_namespace.this[0].premium_messaging_partitions == 0 &&
-      !module.aca_env.internal_load_balancer_enabled && module.aca_env.logs_destination == "azure-monitor" && module.aca_env.mutual_tls_enabled
+      !module.aca_env[0].internal_load_balancer_enabled && module.aca_env[0].logs_destination == "azure-monitor" && module.aca_env[0].mutual_tls_enabled
     )
     error_message = "The complete stateful-resource names and replacement-sensitive settings must equal the pre-job configuration, not merely share a prefix."
   }
