@@ -33,6 +33,27 @@ full commit SHA, and creates the tag only when all of these hold:
 image, a moved tag and a missing or refused credential against a fake registry. CI runs both on
 every pull request.
 
+## At Stable: the evidence
+
+The tag stays on the tested candidate, unchanged. The evidence that a version passed its rings
+exists only after the tag, so it reaches readers afterwards, and no workflow writes to `main` to
+deliver it. Once the version is Stable:
+
+1. Open a pull request to `main` with the producer's `customer-summary/X.Y.Z.json`
+   ([contract](customer-summary.md)). Do not edit the file by hand.
+2. In the same pull request run `python3 scripts/release_evidence.py --write X.Y.Z`. It checks the
+   summary against the contract, refuses on any failure, and writes the evidence block between
+   `customer-evidence` markers at the end of the version's `## [X.Y.Z]` section of `CHANGELOG.md`.
+   It does not touch the tag's copy of the changelog.
+3. `release-metadata` runs `python3 scripts/release_evidence.py --check` on the pull request: it
+   fails when a block differs from what its summary generates, when a summary has no block, and
+   when a block has no summary.
+4. Merge. The `release-evidence` workflow runs on the push, checks the summary again, and edits the
+   GitHub Release body to the tag's changelog section followed by the block. It pushes no commit
+   and no tag, holds only `contents: write`, and refuses a missing, failing or mismatched summary
+   and a version with no tag. The tag build's `release` job builds the same body when it finds the
+   summary on `main`, so re-running it keeps the block.
+
 ## Live checks before the next tag
 
 Every check above, except the `images` job's read of the registry, runs without Azure.
