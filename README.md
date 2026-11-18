@@ -1436,9 +1436,9 @@ Tagging, later and separately:
 8. **At Stable**, once the version has passed its rings, open a pull request to `main` that adds
    the producer's `customer-summary/X.Y.Z.json` and runs
    `python3 scripts/release_evidence.py --write X.Y.Z` to put the evidence block in the version's
-   changelog section. CI runs `--check`; after the merge a maintainer edits
-   the Release page's body to the tag's changelog section followed by the block (no workflow does
-   this yet). The tag never moves and no workflow writes to `main`. See [docs/releasing.md](docs/releasing.md#at-stable-the-evidence)
+   changelog section. CI runs `--check`; after the merge the `release-evidence` workflow edits
+   the Release page's body to the tag's changelog section followed by the block (the tag build's
+   `release` job composes the same body, so a re-run keeps it). The tag never moves and no workflow writes to `main`. See [docs/releasing.md](docs/releasing.md#at-stable-the-evidence)
    and [docs/customer-summary.md](docs/customer-summary.md).
 
 A tag on this repository is the release: the Terraform Registry publishes the version from its own

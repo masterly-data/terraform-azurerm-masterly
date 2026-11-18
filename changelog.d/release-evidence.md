@@ -6,7 +6,9 @@
   the security counts. `--write` puts the block into the version's `CHANGELOG.md` section, and
   `--check`, run by `release-metadata`, fails on a hand-edited block, a summary with no block or
   a block with no summary. `--compose` and `--post-tag` build the release body (the tag's
-  changelog section followed by the block); no workflow edits the Release body yet.
+  changelog section followed by the block). The new `release-evidence` workflow edits the Release
+  body when a summary is pushed to `main`, and the tag build's `release` job composes the same
+  body, so a re-run keeps the evidence. Neither pushes to `main`.
 
 ### Documentation
 

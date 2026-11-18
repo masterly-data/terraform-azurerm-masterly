@@ -317,12 +317,16 @@ jobs:
   #
   # The body comes from CHANGELOG.md as it is at the tagged commit, never from text typed here, and
   # scripts/release_notes.py fails the job when that section is missing or empty rather than
-  # publishing a placeholder.
+  # publishing a placeholder. When main has the version's customer summary,
+  # scripts/release_evidence.py --compose appends the evidence block after the contract check; a
+  # summary that fails it fails the job rather than being published.
   #
   # Re-running is safe. When a Release for the tag already exists its title, body and latest flag
-  # are rewritten from the tagged changelog — which cannot have changed, since the tag has not — so
-  # a re-run converges instead of failing on "already exists" or creating a second page. The one
-  # thing it overwrites is a hand edit to that page's notes; correct the changelog instead.
+  # are rewritten from the tagged changelog (and main's summary, when there is one) — which cannot
+  # have changed, since the tag has not — so a re-run converges instead of failing on "already
+  # exists" or creating a second page, and keeps the evidence block that release-evidence.yml put
+  # there. The one thing it overwrites is a hand edit to that page's notes; correct the changelog
+  # instead.
   #
   # "Latest" is decided from the tags, not left to GitHub's default, which weighs when a release
   # was created as well as its version: a patch tagged for an older line after a newer version
@@ -345,11 +349,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Extract this version's changelog section
+      # The body is the tag's changelog section, followed by the version's customer-evidence block
+      # when main already has its summary (customer-summary/X.Y.Z.json is added to main after the
+      # tag, never to the tagged tree). Main's file is read from the public repository with no
+      # credential, so a re-run after Stable keeps the evidence instead of wiping it. Before
+      # Stable there is no summary and the body is the changelog section alone. The same composer
+      # builds the body in release-evidence.yml, so both paths give the same bytes.
+      - name: Compose the release body (changelog section, then evidence when main has it)
         env:
           TAG: ${{ github.ref_name }}
           LINK_BASE: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/
-        run: python3 scripts/release_notes.py "$TAG" --link-base "$LINK_BASE" > "$RUNNER_TEMP/release-notes.md"
+        run: |
+          version="${TAG#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag $TAG is not vX.Y.Z" >&2
+            exit 1
+          fi
+          mkdir "$RUNNER_TEMP/main-summary"
+          git fetch --depth=1 origin main
+          git show "FETCH_HEAD:customer-summary/${version}.json" > "$RUNNER_TEMP/main-summary/${version}.json" 2> /dev/null \
+            || rm -f "$RUNNER_TEMP/main-summary/${version}.json"
+          python3 scripts/release_evidence.py --compose "$version" --optional \
+            --summary-dir "$RUNNER_TEMP/main-summary" --link-base "$LINK_BASE" > "$RUNNER_TEMP/release-notes.md"
 
       # Public repository, so listing its tags needs no credential.
       - name: Decide whether this version is the newest release
