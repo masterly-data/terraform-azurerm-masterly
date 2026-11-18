@@ -34,8 +34,8 @@ pushes it to `main` automatically.
 
 The same evidence is quoted in that version's `CHANGELOG.md` section and on its GitHub Release
 page, generated from the file by `scripts/release_evidence.py`. A summary with an internal name
-fails the contract check and is never quoted; so does a gate name that is not plain words, since
-the generator would otherwise place it into the release notes.
+fails the contract check and is never quoted. The generator also refuses a gate name that is not
+plain words (see `gates_passed` below), since it would otherwise place it into the release notes.
 
 The file name is the bare semver of a key of `releases` in `MANIFEST.json`, plus `.json`:
 `customer-summary/1.2.3.json`, **not** `v1.2.3.json`. A version with no file has no summary; a
@@ -84,7 +84,7 @@ The values above are illustrative. Read the real ones from the file.
 | `version` | string | yes | The module version the summary describes, a bare semver. Always a key of `releases` in `MANIFEST.json`, and always the file's name without `.json`. |
 | `ring` | object | yes | The date the version reached each ring (ADR 0107): exactly `canary`, `beta` and `stable`. |
 | `ring.canary`, `ring.beta`, `ring.stable` | string | yes | `YYYY-MM-DD`, a real date, the day the version was promoted into that ring. Dates do not go backwards: canary, then beta, then stable. |
-| `gates_passed` | array of strings | yes | The names of the release gates the version passed before it was promoted to Stable. Distinct, non-empty names. Like every string, subject to "Redaction". |
+| `gates_passed` | array of strings | yes | The names of the release gates the version passed before it was promoted to Stable. Distinct, non-empty names. Like every string, subject to "Redaction". `scripts/release_evidence.py` also requires plain words: letters, digits, spaces and `. _ : + / -`, at most 80 characters, starting with a letter or digit. |
 | `upgrade_verified_from` | array of strings | yes | The module versions an upgrade to this version was verified from, each a bare semver. May be empty. Each is a key of `releases` in `MANIFEST.json` and lower than `version`; none repeats. |
 | `perf` | object or `null` | yes | The performance of this version against the previous Stable version. `null` when there is no previous Stable version to compare with. |
 | `perf.baseline` | string | with `perf` | The previous Stable version it was measured against, a bare semver. A key of `releases` in `MANIFEST.json`, lower than `version`. |

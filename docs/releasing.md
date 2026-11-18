@@ -55,6 +55,10 @@ deliver it. Once the version is Stable:
    by the block; then it runs `gh release edit` on that Release. It pushes nothing and holds only
    `contents: write` on `GITHUB_TOKEN`. The tag build's `release` job composes the same body
    with `--compose --optional` from main's summary, so re-running the tag build keeps the block.
+   A re-run uses the workflow and scripts as they are at the tag: for a tag cut before the
+   composer existed it drops the block, and if the block's rendering has changed on `main` since,
+   it renders the older one. In either case re-dispatch `release-evidence` with the version to put
+   main's rendering back.
 
 ## Live checks before the next tag
 

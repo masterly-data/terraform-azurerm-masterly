@@ -326,7 +326,10 @@ jobs:
   # have changed, since the tag has not — so a re-run converges instead of failing on "already
   # exists" or creating a second page, and keeps the evidence block that release-evidence.yml put
   # there. The one thing it overwrites is a hand edit to that page's notes; correct the changelog
-  # instead.
+  # instead. A re-run executes this file and scripts/release_evidence.py as they are at the tag:
+  # a tag cut before this composer existed drops the block, and a later change to how the block is
+  # rendered gives a different one. Either way, re-dispatch release-evidence.yml with the version
+  # to put main's rendering back.
   #
   # "Latest" is decided from the tags, not left to GitHub's default, which weighs when a release
   # was created as well as its version: a patch tagged for an older line after a newer version
