@@ -244,6 +244,15 @@ def render(manifest: dict[str, object]) -> str:
     return json.dumps(manifest, indent=2) + "\n"
 
 
+def apps_of(manifest: dict[str, object]) -> dict:
+    """The manifest's `apps`. generate() always builds an object here, so anything else is a bug
+    in this script; raised as a CheckError rather than asserted, so `python -O` cannot skip it."""
+    apps = manifest["apps"]
+    if not isinstance(apps, dict):
+        raise CheckError(f"the generated manifest's apps is a {type(apps).__name__}, not an object")
+    return apps
+
+
 # --- The checks ---------------------------------------------------------------------
 
 
@@ -287,8 +296,7 @@ def describe_drift(committed: object, generated: dict[str, object]) -> str:
     if committed.get("module") != generated["module"]:
         lines.append(f"  module: committed {committed.get('module')!r}, generated {generated['module']!r}")
     committed_apps = committed.get("apps") if isinstance(committed.get("apps"), dict) else {}
-    generated_apps = generated["apps"]
-    assert isinstance(generated_apps, dict)
+    generated_apps = apps_of(generated)
     for app in sorted(set(committed_apps) | set(generated_apps)):
         if app not in generated_apps:
             lines.append(f"  {app}: in the committed manifest, set by no module block")
@@ -320,8 +328,7 @@ def check_allowlist(root: Path, manifest: dict[str, object]) -> int:
         allowlist = json.loads(match.group(1))
     except json.JSONDecodeError as exc:
         raise CheckError(f"{BUNDLE_SCRIPT}: ENV_VALUE_ALLOWLIST is not valid JSON ({exc})") from None
-    apps = manifest["apps"]
-    assert isinstance(apps, dict)
+    apps = apps_of(manifest)
     set_names: set[str] = set()
     for spec in apps.values():
         set_names |= set(spec["env"]) | set(spec["env_secret_refs"])
@@ -341,11 +348,10 @@ def run_check(root: Path, write: bool) -> int:
     try:
         manifest = check_manifest(root, write)
         listed = check_allowlist(root, manifest)
+        apps = apps_of(manifest)
     except CheckError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    apps = manifest["apps"]
-    assert isinstance(apps, dict)
     summary = ", ".join(
         f"{app} ({len(spec['env'])} env + {len(spec['env_secret_refs'])} secret refs)"
         for app, spec in apps.items()

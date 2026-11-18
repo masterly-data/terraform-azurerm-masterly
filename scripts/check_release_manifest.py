@@ -1224,7 +1224,8 @@ def _floor_scenarios(canonical_readme: str) -> list[tuple]:
     # A tag below the fixture's api floor, and a release older than the fixture's oldest that
     # names it. Its frontend is the oldest release's, so the api floor is all that is wrong.
     below = "v0.9.0"
-    assert semver(below[1:]) < semver(api_floor["minimum"][1:])
+    if not semver(below[1:]) < semver(api_floor["minimum"][1:]):
+        raise ValueError(f"fixture: {below} is not below the api floor {api_floor['minimum']}")
     oldest = min(FIXTURE_MANIFEST["releases"], key=semver)
     under_floor = copy.deepcopy(FIXTURE_MANIFEST)
     under_floor["releases"]["1.9.0"] = {
@@ -1234,7 +1235,8 @@ def _floor_scenarios(canonical_readme: str) -> list[tuple]:
             "api": f"registry.example.invalid/release/api:{below}",
         },
     }
-    assert semver("1.9.0") < semver(oldest)
+    if not semver("1.9.0") < semver(oldest):
+        raise ValueError(f"fixture: 1.9.0 is not older than the oldest release {oldest}")
 
     def older_on_unpublished(**entry_changes) -> dict:
         """The oldest release re-recorded against the unpublished tag, with `entry_changes`."""
