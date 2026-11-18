@@ -83,7 +83,7 @@ jobs:
           while IFS= read -r version; do
             [ -n "$version" ] || continue
             if ! printf '%s' "$version" | grep -Eq "$semver"; then
-              echo "::error::'$version' is not an X.Y.Z version"
+              echo "::error::a changed customer-summary file name is not an X.Y.Z version"
               status=1
               continue
             fi
@@ -102,12 +102,20 @@ jobs:
               status=1
               continue
             fi
-            if ! gh release view "$tag" > /dev/null 2>&1; then
-              if [ "$EVENT" = "workflow_dispatch" ]; then
-                echo "::error::there is no Release for ${tag} to edit"
-                status=1
+            # Only "release not found" counts as no Release; any other failure (API error, token)
+            # fails the job instead of hiding a skipped edit behind a green run.
+            if ! view_err="$(gh release view "$tag" 2>&1 > /dev/null)"; then
+              if printf '%s' "$view_err" | grep -qi 'release not found'; then
+                if [ "$EVENT" = "workflow_dispatch" ]; then
+                  echo "::error::there is no Release for ${tag} to edit"
+                  status=1
+                else
+                  echo "::notice::no Release for ${tag} yet; the tag build adds the evidence when it creates it"
+                fi
               else
-                echo "::notice::no Release for ${tag} yet; the tag build adds the evidence when it creates it"
+                printf '%s\n' "$view_err" | sed 's/^::/ ::/' >&2
+                echo "::error::could not look up the ${tag} Release (gh output above)"
+                status=1
               fi
               continue
             fi

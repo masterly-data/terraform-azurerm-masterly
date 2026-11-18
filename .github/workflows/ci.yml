@@ -372,7 +372,12 @@ jobs:
           git fetch --depth=1 origin main
           git show "FETCH_HEAD:customer-summary/${version}.json" > "$RUNNER_TEMP/main-summary/${version}.json" 2> /dev/null \
             || rm -f "$RUNNER_TEMP/main-summary/${version}.json"
+          # The summary is checked against main's MANIFEST.json, as release-evidence.yml does, so a
+          # patch released after the tag (named by upgrade_verified_from or perf.baseline) does not
+          # make a re-run fail.
+          git show "FETCH_HEAD:MANIFEST.json" > "$RUNNER_TEMP/main-MANIFEST.json"
           python3 scripts/release_evidence.py --compose "$version" --optional \
+            --manifest "$RUNNER_TEMP/main-MANIFEST.json" \
             --summary-dir "$RUNNER_TEMP/main-summary" --link-base "$LINK_BASE" > "$RUNNER_TEMP/release-notes.md"
 
       # Public repository, so listing its tags needs no credential.
