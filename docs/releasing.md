@@ -48,11 +48,13 @@ deliver it. Once the version is Stable:
 3. `release-metadata` runs `python3 scripts/release_evidence.py --check` on the pull request: it
    fails when a block differs from what its summary generates, when a summary has no block, and
    when a block has no summary.
-4. Merge. The `release-evidence` workflow runs on the push, checks the summary again, and edits the
-   GitHub Release body to the tag's changelog section followed by the block. It pushes no commit
-   and no tag, holds only `contents: write`, and refuses a missing, failing or mismatched summary
-   and a version with no tag. The tag build's `release` job builds the same body when it finds the
-   summary on `main`, so re-running it keeps the block.
+4. Merge. No workflow edits the GitHub Release body yet. A maintainer builds it with
+   `python3 scripts/release_evidence.py --post-tag X.Y.Z --tags-file <file listing the tags>
+   --link-base <blob URL of the tag>`, which refuses a missing, failing or mismatched summary and
+   a version with no tag, and gives the tag's changelog section followed by the block. They apply
+   it with `gh release edit vX.Y.Z --notes-file`. Until the tag build's `release` job uses the
+   composer, re-running it replaces the body with the changelog section alone, so apply the
+   body again after any re-run.
 
 ## Live checks before the next tag
 

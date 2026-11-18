@@ -249,6 +249,14 @@ jobs:
       - name: Check the customer summaries against the contract and the manifest
         run: python3 scripts/check_customer_summary.py
 
+      # The evidence block in a released CHANGELOG section is generated from the committed
+      # summary, never typed. Selftest first, for the same reason as the check above.
+      - name: The evidence generator still refuses a leaking summary and a hand-edited block
+        run: python3 scripts/release_evidence.py --selftest
+
+      - name: The CHANGELOG evidence blocks match the committed customer summaries
+        run: python3 scripts/release_evidence.py --check
+
       # github.ref_name is the tag itself on a tag push. Split out so the failure message says
       # which of the two questions was being asked. The tag reaches the shell through `env:`,
       # as data, rather than spliced into the command line: a `${{ }}` expression is substituted
