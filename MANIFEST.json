@@ -29,6 +29,7 @@
     },
     "0.23.0": {
       "date": "2026-11-05",
+      "known_issue": "Its images masterly.azurecr.io/release/api:v0.135.0 (sha256:00b0c775ff83cd4b1d0a9c79e9290d3166f471b5576f43e4272ab0d031a9ed04) and masterly.azurecr.io/release/frontend:v0.143.0 (sha256:e1e59d896125ee033a461297b9c36b57507320d7cb8c4b0897011aa7066e6a2b) have known HIGH-severity vulnerability findings: a Trivy scan on 2026-11-08 found 2 in the api image and 10 in the frontend image, each with a fix available. Move to 0.24.0.",
       "images": {
         "api": "masterly.azurecr.io/release/api:v0.135.0",
         "frontend": "masterly.azurecr.io/release/frontend:v0.143.0"
@@ -41,6 +42,7 @@
     },
     "0.22.0": {
       "date": "2026-10-29",
+      "known_issue": "Its images masterly.azurecr.io/release/api:v0.135.0 (sha256:00b0c775ff83cd4b1d0a9c79e9290d3166f471b5576f43e4272ab0d031a9ed04) and masterly.azurecr.io/release/frontend:v0.143.0 (sha256:e1e59d896125ee033a461297b9c36b57507320d7cb8c4b0897011aa7066e6a2b) have known HIGH-severity vulnerability findings: a Trivy scan on 2026-11-08 found 2 in the api image and 10 in the frontend image, each with a fix available. Move to 0.24.0.",
       "images": {
         "api": "masterly.azurecr.io/release/api:v0.135.0",
         "frontend": "masterly.azurecr.io/release/frontend:v0.143.0"
