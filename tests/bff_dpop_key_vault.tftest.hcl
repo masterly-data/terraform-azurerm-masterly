@@ -129,6 +129,29 @@ override_resource {
   }
 }
 
+# Every secret depends on the vault's private endpoint and DNS link, so the apply writes them
+# too; the endpoint, the link and the zone group parse the ID of what they are placed in.
+override_resource {
+  target = azurerm_virtual_network.this
+  values = {
+    id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/virtualNetworks/vnet-masterly"
+  }
+}
+
+override_resource {
+  target = azurerm_subnet.private_endpoints
+  values = {
+    id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-pe"
+  }
+}
+
+override_resource {
+  target = azurerm_private_dns_zone.key_vault
+  values = {
+    id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+  }
+}
+
 override_resource {
   target = azurerm_redis_cache.this
   values = {

@@ -1071,7 +1071,9 @@ makes the change durable rather than a manual patch the next apply reverts.
      about **every** future run, including the one that tears the install down: an operator who
      sets it and then plans from a laptop gets the 403 above, on an install Terraform can no
      longer fully manage until the path exists. Declaring this from a hosted runner is a false
-     claim — see the refresh warning above for what it costs.
+     claim — see the refresh warning above for what it costs. On destroy the module orders the
+     secret deletes before the vault's private endpoint and DNS link, so an in-VNet destroy
+     deletes the secrets while the private path still exists.
    - `key_vault_deployer_ip_rules = ["203.0.113.7"]` — the egress address of the machine or
      runner that applies, owned by a NAT gateway fronting the runner or by a fixed apply host.
      This is the documented **smaller-scale alternative**, with its weaker posture stated

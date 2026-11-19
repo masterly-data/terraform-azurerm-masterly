@@ -395,7 +395,20 @@ resource "azurerm_key_vault_secret" "install" {
   # first secret; re-running the apply is the remedy (see README, "Key Vault-backed app
   # secrets"). Deliberately not papered over with a fixed sleep: that would tax every apply
   # for a race that only the first one can lose.
-  depends_on = [azurerm_role_assignment.kv_secrets_officer_deployer]
+  #
+  # The private endpoint and its DNS link are ordering edges too. On create the secrets are
+  # written only once the private path exists, so an in-VNet deployer can reach the vault. On
+  # destroy Terraform removes a dependent before its dependency, so the secrets go first, while
+  # the vault is still reachable: with the endpoint gone first, every delete failed with 403
+  # ForbiddenByConnection, because the vault has no public path. Both are counted, and a
+  # dependency on a count-0 resource is valid, so demo and an injected central zone still plan.
+  # Every azurerm_key_vault_secret carries the same three edges; tests/keyvault.tftest.hcl
+  # reads this file and fails on one that does not.
+  depends_on = [
+    azurerm_role_assignment.kv_secrets_officer_deployer,
+    azurerm_private_endpoint.key_vault,
+    azurerm_private_dns_zone_virtual_network_link.key_vault,
+  ]
 }
 
 # The deploying principal's data-plane write. Contributor and Owner do NOT carry Key Vault
@@ -456,7 +469,12 @@ resource "azurerm_key_vault_secret" "migrate_api_role_password" {
 
   tags = local.tags
 
-  depends_on = [azurerm_role_assignment.kv_secrets_officer_deployer]
+  # Same ordering as azurerm_key_vault_secret.install: after the grant, the endpoint and the link.
+  depends_on = [
+    azurerm_role_assignment.kv_secrets_officer_deployer,
+    azurerm_private_endpoint.key_vault,
+    azurerm_private_dns_zone_virtual_network_link.key_vault,
+  ]
 }
 
 resource "azurerm_key_vault_secret" "migrate_workers_role_password" {
@@ -469,7 +487,12 @@ resource "azurerm_key_vault_secret" "migrate_workers_role_password" {
 
   tags = local.tags
 
-  depends_on = [azurerm_role_assignment.kv_secrets_officer_deployer]
+  # Same ordering as azurerm_key_vault_secret.install: after the grant, the endpoint and the link.
+  depends_on = [
+    azurerm_role_assignment.kv_secrets_officer_deployer,
+    azurerm_private_endpoint.key_vault,
+    azurerm_private_dns_zone_virtual_network_link.key_vault,
+  ]
 }
 
 # Read on each of those two secrets alone, as kv_secrets_user_migrate: never at vault scope.
