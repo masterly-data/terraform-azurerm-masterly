@@ -411,6 +411,53 @@ when its administrator is removed has not yet been confirmed on a live install: 
 released with that check still owed ([docs/releasing.md](releasing.md), "Live checks before
 the next tag").
 
+### Destroying a production install
+
+With `database_auth = "entra"`, a full `terraform destroy` removes the server's Microsoft Entra
+administrator before the server. Azure then drops that administrator's role in Postgres, the role
+still owns objects in the database, and Postgres refuses with `2BP01`
+(`dependent_objects_still_exist`). The destroy stops there. Deleting the server removes the
+administrator with it, so the way past is to make Terraform forget the administrator first, and
+leave the server to take it down.
+
+Which administrator exists depends on the configuration:
+
+| Configuration | Administrator in state |
+| --- | --- |
+| `database_auth = "entra"`, `migrations = "start"` | `apps[0]` only |
+| `database_auth = "entra"`, `migrations = "job"` | `migrate[0]` only |
+| `database_auth = "password"`, or `external_database_url` (BYO-DB) | none: nothing to remove |
+
+List what your state holds, and remove only the addresses it shows:
+
+```bash
+terraform state list | grep active_directory_administrator
+terraform state rm 'module.masterly.azurerm_postgresql_flexible_server_active_directory_administrator.apps[0]'
+terraform state rm 'module.masterly.azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0]'
+```
+
+(with your own module name in place of `masterly`). Run the `state rm` for an address only if
+`state list` printed it. Then run `terraform destroy` for the whole install.
+
+Run `state rm` only immediately before a full `terraform destroy`, never before a plan or an
+apply: Azure still has the administrator, so a plan would propose creating it and an apply would
+fail on an administrator that already exists. If you abandon the destroy before the server is
+deleted, the administrator is still in Azure, with the privileges of the database's owner, and
+Terraform no longer tracks it. Bring it back with `terraform import` before the next apply:
+
+```bash
+terraform import 'module.masterly.azurerm_postgresql_flexible_server_active_directory_administrator.apps[0]' \
+  '/subscriptions/<subscription id>/resourceGroups/<resource group>/providers/Microsoft.DBforPostgreSQL/flexibleServers/<server name>/administrators/<object id>'
+```
+
+Use `migrate[0]` in place of `apps[0]` if that was the address you removed. The `<object id>`
+is the Entra object ID of the administrator's principal.
+
+Do not touch anything else: leave the administrator in Azure alone, and remove no other resource
+from state, the server least of all. A server forgotten in state stays in Azure with its
+databases and keeps costing money. For the other precondition of a destroy, see "Terraform has
+to reach the vault" in the [README](../README.md).
+
 ### Moving an existing install to Microsoft Entra authentication
 
 An install created before this default authenticates with the `masterly_admin` password and
