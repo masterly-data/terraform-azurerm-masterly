@@ -33,6 +33,33 @@ full commit SHA, and creates the tag only when all of these hold:
 image, a moved tag and a missing or refused credential against a fake registry. CI runs both on
 every pull request.
 
+## At Stable: the evidence
+
+The tag stays on the tested candidate, unchanged. The evidence that a version passed its rings
+exists only after the tag, so it reaches readers afterwards, and no workflow writes to `main` to
+deliver it. Once the version is Stable:
+
+1. Open a pull request to `main` with the producer's `customer-summary/X.Y.Z.json`
+   ([contract](customer-summary.md)). Do not edit the file by hand.
+2. In the same pull request run `python3 scripts/release_evidence.py --write X.Y.Z`. It checks the
+   summary against the contract, refuses on any failure, and writes the evidence block between
+   `customer-evidence` markers at the end of the version's `## [X.Y.Z]` section of `CHANGELOG.md`.
+   It does not touch the tag's copy of the changelog.
+3. `release-metadata` runs `python3 scripts/release_evidence.py --check` on the pull request: it
+   fails when a block differs from what its summary generates, when a summary has no block, and
+   when a block has no summary.
+4. Merge. The `release-evidence` workflow runs on the push to `main` that changes
+   `customer-summary/**` (or by hand with a `version` input). For each changed summary it runs
+   `python3 scripts/release_evidence.py --post-tag X.Y.Z`, which refuses a missing, failing or
+   mismatched summary and a version with no tag, and gives the tag's changelog section followed
+   by the block; then it runs `gh release edit` on that Release. It pushes nothing and holds only
+   `contents: write` on `GITHUB_TOKEN`. The tag build's `release` job composes the same body
+   with `--compose --optional` from main's summary, so re-running the tag build keeps the block.
+   A re-run uses the workflow and scripts as they are at the tag: for a tag cut before the
+   composer existed it drops the block, and if the block's rendering has changed on `main` since,
+   it renders the older one. In either case re-dispatch `release-evidence` with the version to put
+   main's rendering back.
+
 ## Live checks before the next tag
 
 Every check above, except the `images` job's read of the registry, runs without Azure.

@@ -249,6 +249,14 @@ jobs:
       - name: Check the customer summaries against the contract and the manifest
         run: python3 scripts/check_customer_summary.py
 
+      # The evidence block in a released CHANGELOG section is generated from the committed
+      # summary, never typed. Selftest first, for the same reason as the check above.
+      - name: The evidence generator still refuses a leaking summary and a hand-edited block
+        run: python3 scripts/release_evidence.py --selftest
+
+      - name: The CHANGELOG evidence blocks match the committed customer summaries
+        run: python3 scripts/release_evidence.py --check
+
       # github.ref_name is the tag itself on a tag push. Split out so the failure message says
       # which of the two questions was being asked. The tag reaches the shell through `env:`,
       # as data, rather than spliced into the command line: a `${{ }}` expression is substituted
@@ -309,12 +317,19 @@ jobs:
   #
   # The body comes from CHANGELOG.md as it is at the tagged commit, never from text typed here, and
   # scripts/release_notes.py fails the job when that section is missing or empty rather than
-  # publishing a placeholder.
+  # publishing a placeholder. When main has the version's customer summary,
+  # scripts/release_evidence.py --compose appends the evidence block after the contract check; a
+  # summary that fails it fails the job rather than being published.
   #
   # Re-running is safe. When a Release for the tag already exists its title, body and latest flag
-  # are rewritten from the tagged changelog — which cannot have changed, since the tag has not — so
-  # a re-run converges instead of failing on "already exists" or creating a second page. The one
-  # thing it overwrites is a hand edit to that page's notes; correct the changelog instead.
+  # are rewritten from the tagged changelog (and main's summary, when there is one) — which cannot
+  # have changed, since the tag has not — so a re-run converges instead of failing on "already
+  # exists" or creating a second page, and keeps the evidence block that release-evidence.yml put
+  # there. The one thing it overwrites is a hand edit to that page's notes; correct the changelog
+  # instead. A re-run executes this file and scripts/release_evidence.py as they are at the tag:
+  # a tag cut before this composer existed drops the block, and a later change to how the block is
+  # rendered gives a different one. Either way, re-dispatch release-evidence.yml with the version
+  # to put main's rendering back.
   #
   # "Latest" is decided from the tags, not left to GitHub's default, which weighs when a release
   # was created as well as its version: a patch tagged for an older line after a newer version
@@ -337,11 +352,33 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Extract this version's changelog section
+      # The body is the tag's changelog section, followed by the version's customer-evidence block
+      # when main already has its summary (customer-summary/X.Y.Z.json is added to main after the
+      # tag, never to the tagged tree). Main's file is read from the public repository with no
+      # credential, so a re-run after Stable keeps the evidence instead of wiping it. Before
+      # Stable there is no summary and the body is the changelog section alone. The same composer
+      # builds the body in release-evidence.yml, so both paths give the same bytes.
+      - name: Compose the release body (changelog section, then evidence when main has it)
         env:
           TAG: ${{ github.ref_name }}
           LINK_BASE: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/
-        run: python3 scripts/release_notes.py "$TAG" --link-base "$LINK_BASE" > "$RUNNER_TEMP/release-notes.md"
+        run: |
+          version="${TAG#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag $TAG is not vX.Y.Z" >&2
+            exit 1
+          fi
+          mkdir "$RUNNER_TEMP/main-summary"
+          git fetch --depth=1 origin main
+          git show "FETCH_HEAD:customer-summary/${version}.json" > "$RUNNER_TEMP/main-summary/${version}.json" 2> /dev/null \
+            || rm -f "$RUNNER_TEMP/main-summary/${version}.json"
+          # The summary is checked against main's MANIFEST.json, as release-evidence.yml does, so a
+          # patch released after the tag (named by upgrade_verified_from or perf.baseline) does not
+          # make a re-run fail.
+          git show "FETCH_HEAD:MANIFEST.json" > "$RUNNER_TEMP/main-MANIFEST.json"
+          python3 scripts/release_evidence.py --compose "$version" --optional \
+            --manifest "$RUNNER_TEMP/main-MANIFEST.json" \
+            --summary-dir "$RUNNER_TEMP/main-summary" --link-base "$LINK_BASE" > "$RUNNER_TEMP/release-notes.md"
 
       # Public repository, so listing its tags needs no credential.
       - name: Decide whether this version is the newest release

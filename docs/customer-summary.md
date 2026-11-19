@@ -19,13 +19,23 @@ part of the contract as the shape.
 ## Where to get it
 
 One file per version, in the `customer-summary/` directory at the repository root, named for the
-version it describes:
+version it describes. **It is added to `main` after the version is tagged, and it never appears in
+the tagged tree.** The tag goes on the release-cut commit, which was fixed and tested before any
+Stable evidence existed, so `vX.Y.Z/customer-summary/X.Y.Z.json` does not exist and must not be
+read. The release engineer commits the file in a reviewed pull request to `main`, together with
+the evidence block in `CHANGELOG.md` (see "At Stable" in [releasing](releasing.md)); nothing
+pushes it to `main` automatically.
 
 | You want | Read |
 |---|---|
-| One specific version | `https://raw.githubusercontent.com/masterly-data/terraform-azurerm-masterly/vX.Y.Z/customer-summary/X.Y.Z.json` |
-| The newest summary | `https://raw.githubusercontent.com/masterly-data/terraform-azurerm-masterly/main/customer-summary/X.Y.Z.json`, for the `X.Y.Z` that `MANIFEST.json`'s `latest` names |
-| A local checkout | `customer-summary/X.Y.Z.json` at the root of the module |
+| One specific version | `https://raw.githubusercontent.com/masterly-data/terraform-azurerm-masterly/main/customer-summary/X.Y.Z.json` |
+| The newest summary | the same URL, for the `X.Y.Z` that `MANIFEST.json`'s `latest` names |
+| A local checkout | `customer-summary/X.Y.Z.json` at the root of a checkout of `main` (not of a tag) |
+
+The same evidence is quoted in that version's `CHANGELOG.md` section and on its GitHub Release
+page, generated from the file by `scripts/release_evidence.py`. A summary with an internal name
+fails the contract check and is never quoted. The generator also refuses a gate name that is not
+plain words (see `gates_passed` below), since it would otherwise place it into the release notes.
 
 The file name is the bare semver of a key of `releases` in `MANIFEST.json`, plus `.json`:
 `customer-summary/1.2.3.json`, **not** `v1.2.3.json`. A version with no file has no summary; a
@@ -74,7 +84,7 @@ The values above are illustrative. Read the real ones from the file.
 | `version` | string | yes | The module version the summary describes, a bare semver. Always a key of `releases` in `MANIFEST.json`, and always the file's name without `.json`. |
 | `ring` | object | yes | The date the version reached each ring (ADR 0107): exactly `canary`, `beta` and `stable`. |
 | `ring.canary`, `ring.beta`, `ring.stable` | string | yes | `YYYY-MM-DD`, a real date, the day the version was promoted into that ring. Dates do not go backwards: canary, then beta, then stable. |
-| `gates_passed` | array of strings | yes | The names of the release gates the version passed before it was promoted to Stable. Distinct, non-empty names. Like every string, subject to "Redaction". |
+| `gates_passed` | array of strings | yes | The names of the release gates the version passed before it was promoted to Stable. Distinct, non-empty names. Like every string, subject to "Redaction". `scripts/release_evidence.py` also requires plain words: letters, digits, spaces and `. _ : + / -`, at most 80 characters, starting with a letter or digit. |
 | `upgrade_verified_from` | array of strings | yes | The module versions an upgrade to this version was verified from, each a bare semver. May be empty. Each is a key of `releases` in `MANIFEST.json` and lower than `version`; none repeats. |
 | `perf` | object or `null` | yes | The performance of this version against the previous Stable version. `null` when there is no previous Stable version to compare with. |
 | `perf.baseline` | string | with `perf` | The previous Stable version it was measured against, a bare semver. A key of `releases` in `MANIFEST.json`, lower than `version`. |
@@ -124,7 +134,7 @@ and the value.
 
 **Stable while `schema_version` is `1`.** Every field in the table above keeps its name, its type
 and its meaning. `ring` keeps exactly the three rings. `sec` keeps exactly the four severities
-and stays counts only. The file stays at `customer-summary/X.Y.Z.json` with a bare-semver name.
+and stays counts only. The file stays at `customer-summary/X.Y.Z.json` with a bare-semver name, on `main`.
 
 **May appear without a `schema_version` bump — parse permissively:**
 
@@ -152,7 +162,7 @@ Refuse loudly rather than guessing.
 ## Consuming it
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/masterly-data/terraform-azurerm-masterly/vX.Y.Z/customer-summary/X.Y.Z.json \
+curl -fsSL https://raw.githubusercontent.com/masterly-data/terraform-azurerm-masterly/main/customer-summary/X.Y.Z.json \
   | jq '{version, stable: .ring.stable, upgrade_verified_from, sec}'
 ```
 

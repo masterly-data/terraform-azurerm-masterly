@@ -1,0 +1,125 @@
+name: release-evidence
+
+# Option B for the customer evidence (MAS-4843): the tag stays on the tested candidate, and the
+# version's customer summary (customer-summary/X.Y.Z.json) reaches main after the tag, by a
+# reviewed pull request. This workflow then edits that version's GitHub Release body so it carries
+# the evidence block after the changelog section. The tag build's `release` job (ci.yml) composes
+# the same body with the same script, so a re-run of it keeps the block.
+#
+# It pushes no commit and no tag, and holds no credential beyond the job's GITHUB_TOKEN with
+# contents: write, which edits the Release object. Every input reaches the shell through env: and
+# each version is checked against ^[0-9]+\.[0-9]+\.[0-9]+$ before use.
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - customer-summary/**
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Module version whose Release body to rebuild, X.Y.Z (no leading v)"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-evidence
+  cancel-in-progress: false
+
+jobs:
+  edit-release:
+    name: Add the customer evidence to the GitHub Release body
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Edit the Release body of each changed summary's version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+          LINK_ROOT: ${{ github.server_url }}/${{ github.repository }}/blob
+        run: |
+          set -euo pipefail
+          semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            printf '%s\n' "$INPUT_VERSION" > "$RUNNER_TEMP/versions.txt"
+          else
+            if printf '%s' "$BEFORE" | grep -Eq '^0+$'; then
+              git diff-tree --no-commit-id --name-only -r --diff-filter=AM "$AFTER" > "$RUNNER_TEMP/changed.txt"
+            else
+              git diff --name-only --diff-filter=AM "$BEFORE" "$AFTER" -- customer-summary/ > "$RUNNER_TEMP/changed.txt"
+            fi
+            : > "$RUNNER_TEMP/versions.txt"
+            while IFS= read -r path; do
+              case "$path" in
+                customer-summary/*.json)
+                  name="${path#customer-summary/}"
+                  printf '%s\n' "${name%.json}" >> "$RUNNER_TEMP/versions.txt"
+                  ;;
+              esac
+            done < "$RUNNER_TEMP/changed.txt"
+          fi
+
+          git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' > "$RUNNER_TEMP/tags.txt"
+
+          status=0
+          while IFS= read -r version; do
+            [ -n "$version" ] || continue
+            if ! printf '%s' "$version" | grep -Eq "$semver"; then
+              echo "::error::a changed customer-summary file name is not an X.Y.Z version"
+              status=1
+              continue
+            fi
+            tag="v${version}"
+            changelog="CHANGELOG.md"
+            if grep -Fxq "$tag" "$RUNNER_TEMP/tags.txt"; then
+              # The Release body is the changelog as it is at the tag, then the evidence block.
+              git fetch --depth=1 origin "refs/tags/${tag}:refs/tags/${tag}"
+              git show "${tag}:CHANGELOG.md" > "$RUNNER_TEMP/tag-changelog.md"
+              changelog="$RUNNER_TEMP/tag-changelog.md"
+            fi
+            if ! python3 scripts/release_evidence.py --post-tag "$version" \
+                --tags-file "$RUNNER_TEMP/tags.txt" --changelog "$changelog" \
+                --link-base "${LINK_ROOT}/${tag}/" > "$RUNNER_TEMP/body-${version}.md"; then
+              echo "::error::not editing the ${tag} Release: the evidence was refused (reason above)"
+              status=1
+              continue
+            fi
+            # Only "release not found" counts as no Release; any other failure (API error, token)
+            # fails the job instead of hiding a skipped edit behind a green run.
+            if ! view_err="$(gh release view "$tag" 2>&1 > /dev/null)"; then
+              if printf '%s' "$view_err" | grep -qi 'release not found'; then
+                if [ "$EVENT" = "workflow_dispatch" ]; then
+                  echo "::error::there is no Release for ${tag} to edit"
+                  status=1
+                else
+                  echo "::notice::no Release for ${tag} yet; the tag build adds the evidence when it creates it"
+                fi
+              else
+                printf '%s\n' "$view_err" | sed 's/^::/ ::/' >&2
+                echo "::error::could not look up the ${tag} Release (gh output above)"
+                status=1
+              fi
+              continue
+            fi
+            gh release edit "$tag" --notes-file "$RUNNER_TEMP/body-${version}.md"
+            echo "edited the ${tag} Release body"
+          done < "$RUNNER_TEMP/versions.txt"
+          exit "$status"
