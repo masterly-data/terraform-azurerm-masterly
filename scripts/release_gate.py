@@ -13,8 +13,13 @@ It refuses, with a message that names the fault, when:
   * the version is not X.Y.Z (a leading `v` is accepted);
   * the commit is not a full 40-character commit SHA — a short or symbolic ref is exactly how a
     tag lands on a commit other than the one that was meant;
-  * the tag already exists — a published version cannot be replaced, so the answer is the next
-    version, never a moved tag;
+  * the tag already exists at another commit — a published version cannot be replaced or moved,
+    so the answer is the next version. The commit a tag points at is the peeled one (`^{}`) for
+    an annotated tag, so a tag object's own SHA is never mistaken for the commit;
+  * the release commit's MANIFEST.json has no entry for the version, or the entry does not name
+    its `api` and `frontend` images under `masterly.azurecr.io/release/` with a `digests.api` and
+    a `digests.frontend` that are each `sha256:` plus 64 lowercase hex — a version is published
+    pinned to exact builds, never to image tags alone, which can be moved;
   * the commit has no `ci` workflow run from a push to `main` — it never reached `main`, so no
     check has passed on it where it will be released from;
   * that run, the most recent for the commit, has not finished, or finished with anything other
@@ -23,23 +28,34 @@ It refuses, with a message that names the fault, when:
     metadata — so there is no second list of job names here to fall out of step with the
     workflow.
 
+A tag that already exists at exactly this commit is not refused: it is what a run that created
+the tag and then failed later leaves behind, so dispatching the same version and commit again
+finishes that release (the workflow skips the tag write and goes on) instead of failing on it.
+
 What it does not check, because the workflow checks it with the tools built for it: that the
 commit is on `main` (`git merge-base --is-ancestor`), and that the manifest, the changelog and the
 README at that commit publish this version (`scripts/check_release_manifest.py --tag` and
-`scripts/release_notes.py`, run against the commit's own tree).
+`scripts/release_notes.py`, run against the commit's own tree). The manifest entry is checked
+here, by `main`'s copy of this script reading the commit's file as data, so the rule binds every
+commit dispatched, including one cut before the rule existed.
 
 Inputs are files rather than API calls, so the decision can be tested without a network:
 
-  --runs  the JSON the Actions API returns for
-          `GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs?head_sha=...&event=push`
-          (the object with `workflow_runs`, or a bare list of runs);
-  --tags  the repository's tag names, one per line (`git ls-remote --tags --refs`, stripped).
+  --runs      the JSON the Actions API returns for
+              `GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs?head_sha=...&event=push`
+              (the object with `workflow_runs`, or a bare list of runs);
+  --tags      the repository's tags as `git ls-remote --tags origin 'v*'` prints them, peeled
+              lines included: `<sha>TAB refs/tags/<name>`, and `<sha>TAB refs/tags/<name>^{}`
+              for the commit an annotated tag points at. Any other line is refused;
+  --manifest  the release commit's MANIFEST.json (`git show <commit>:MANIFEST.json`).
 
 On success the tag name is printed on stdout and nothing else, so a workflow can capture it; the
-reasoning goes to stderr.
+reasoning goes to stderr. `--existing-out FILE` receives `true` when the tag already exists at the
+commit and `false` when it is still to be created; nothing is written to it when the gate refuses.
 
 Run:
-    python3 scripts/release_gate.py --version 0.16.0 --commit <sha> --runs runs.json --tags tags.txt
+    python3 scripts/release_gate.py --version 0.16.0 --commit <sha> --runs runs.json \
+        --tags tag-refs.txt --manifest MANIFEST.json --existing-out existing.txt
     python3 scripts/release_gate.py --selftest       # it still refuses what it should
 
 Standard library only — release metadata should not depend on anything resolving.
@@ -60,6 +76,15 @@ VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 RELEASE_BRANCH = "main"
+# One line of `git ls-remote --tags`: the object a tag ref names, and `^{}` on the line that gives
+# the commit an annotated tag peels to.
+TAG_REF_RE = re.compile(r"^(?P<sha>[0-9a-f]{40})\trefs/tags/(?P<name>[^\s^]+)(?P<peeled>\^\{\})?$")
+# Where every release image is published, and the shape of a recorded digest (the same rule as
+# scripts/check_release_manifest.py's DIGEST_RE; release metadata scripts do not import each other).
+RELEASE_IMAGE_PREFIX = "masterly.azurecr.io/release/"
+IMAGE_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+RELEASE_ROLES = ("api", "frontend")
 
 
 class GateRefused(Exception):
@@ -85,12 +110,94 @@ def check_commit(commit: str) -> str:
     return commit
 
 
-def check_tag_is_new(tag: str, existing: list[str]) -> None:
-    if tag in existing:
+def parse_tag_refs(text: str) -> dict[str, str]:
+    """Each tag's commit, from `git ls-remote --tags` output with its peeled lines.
+
+    An annotated tag is listed twice: once naming the tag object, once (`^{}`) naming the commit
+    it points at, and that second line is the one that counts. A lightweight tag is listed once,
+    naming its commit. A line in any other form is refused rather than skipped, so a listing in
+    the wrong format cannot read as "no tag exists".
+    """
+    named: dict[str, str] = {}
+    peeled: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        match = TAG_REF_RE.match(line.strip())
+        if not match:
+            raise GateRefused(
+                f"{line.strip()!r} is not a line of `git ls-remote --tags` output "
+                f"('<40-hex sha>\\trefs/tags/<name>', optionally ending '^{{}}'). Refusing rather "
+                f"than reading the tag listing wrongly."
+            )
+        target = peeled if match.group("peeled") else named
+        target[match.group("name")] = match.group("sha")
+    return {**named, **peeled}
+
+
+def check_tag(tag: str, commit: str, tag_commits: dict[str, str]) -> bool:
+    """True when the tag already exists at this commit; refused when it exists anywhere else."""
+    at = tag_commits.get(tag)
+    if at is None:
+        return False
+    if at != commit:
         raise GateRefused(
-            f"{tag} already exists. A version the registry has published cannot be replaced or "
-            f"moved, only superseded: release the change as the next version instead."
+            f"{tag} already exists at {at}, not at {commit}. A version the registry has published "
+            f"cannot be replaced or moved, only superseded: release the change as the next "
+            f"version instead."
         )
+    return True
+
+
+def check_release_entry(version: str, manifest: object) -> dict:
+    """The version's MANIFEST.json entry names release images, each pinned by its digest."""
+    releases = manifest.get("releases") if isinstance(manifest, dict) else None
+    if not isinstance(releases, dict):
+        raise GateRefused(
+            "the release commit's MANIFEST.json has no 'releases' object, so nothing says which "
+            "images this version is released against."
+        )
+    entry = releases.get(version)
+    if not isinstance(entry, dict):
+        raise GateRefused(
+            f"the release commit's MANIFEST.json has no entry for {version}. The release-cut "
+            f"commit adds it; name the commit that carries it."
+        )
+    faults: list[str] = []
+    images = entry.get("images")
+    images = images if isinstance(images, dict) else {}
+    digests = entry.get("digests")
+    if not isinstance(digests, dict):
+        faults.append(
+            "it records no digests, so the version would be published naming its images by "
+            "tag alone, which can be moved: add digests.api and digests.frontend"
+        )
+        digests = None
+    for role in RELEASE_ROLES:
+        image = images.get(role)
+        prefix = f"{RELEASE_IMAGE_PREFIX}{role}:"
+        if not (
+            isinstance(image, str)
+            and image.startswith(prefix)
+            and IMAGE_TAG_RE.match(image[len(prefix):])
+        ):
+            faults.append(
+                f"images.{role} is {image!r}, not an image under {RELEASE_IMAGE_PREFIX} "
+                f"({prefix}<tag>)"
+            )
+        if digests is not None:
+            digest = digests.get(role)
+            if not (isinstance(digest, str) and DIGEST_RE.match(digest)):
+                faults.append(
+                    f"digests.{role} is {digest!r}, not 'sha256:' followed by 64 lowercase hex"
+                )
+    if faults:
+        raise GateRefused(
+            f"the release commit's MANIFEST.json entry for {version} cannot be released: "
+            + "; ".join(faults)
+            + "."
+        )
+    return entry
 
 
 def _is_ci_workflow(run: dict) -> bool:
@@ -150,12 +257,16 @@ def check_ci(commit: str, payload: object) -> dict:
     return newest
 
 
-def decide(version: str, commit: str, runs_payload: object, tags: list[str]) -> tuple[str, dict]:
-    tag = "v" + parse_version(version)
+def decide(
+    version: str, commit: str, runs_payload: object, tag_refs: str, manifest: object
+) -> tuple[str, dict, bool]:
+    version = parse_version(version)
+    tag = "v" + version
     commit = check_commit(commit.strip())
-    check_tag_is_new(tag, tags)
+    existing = check_tag(tag, commit, parse_tag_refs(tag_refs))
+    check_release_entry(version, manifest)
     run = check_ci(commit, runs_payload)
-    return tag, run
+    return tag, run, existing
 
 
 # ---------------------------------------------------------------------------
@@ -165,13 +276,59 @@ def decide(version: str, commit: str, runs_payload: object, tags: list[str]) -> 
 # A gate nobody has watched refuse anything is a hypothesis, and this one guards the only step in
 # this repository that cannot be undone. `--selftest` runs THIS script as a subprocess — the real
 # entry point and the real exit code, which is what the workflow depends on — against synthetic
-# run and tag files, and asserts both halves: a sound release passes and prints only its tag, and
-# each way a release can be wrong is refused with the message that names that fault, so a scenario
-# failing for an unrelated reason does not read as proof.
+# run, tag and manifest files, and asserts both halves: a sound release passes, prints only its
+# tag and reports whether that tag already exists, and each way a release can be wrong is refused
+# with the message that names that fault, so a scenario failing for an unrelated reason does not
+# read as proof.
 #
 SHA = "0123456789abcdef0123456789abcdef01234567"
 OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
-TAGS = "v0.14.0\nv0.15.0\n"
+# The SHAs of annotated tag objects, which are never commits.
+TAG_OBJECT = "1111111111111111111111111111111111111111"
+OTHER_TAG_OBJECT = "2222222222222222222222222222222222222222"
+OLD_COMMIT = "3333333333333333333333333333333333333333"
+
+
+def _tag_refs(*tags: tuple[str, str, str | None]) -> str:
+    """`git ls-remote --tags` output for (name, object, peeled commit or None if lightweight)."""
+    lines = []
+    for name, sha, peeled in tags:
+        lines.append(f"{sha}\trefs/tags/{name}")
+        if peeled is not None:
+            lines.append(f"{peeled}\trefs/tags/{name}^{{}}")
+    return "\n".join(lines) + "\n"
+
+
+# v0.14.0 lightweight, v0.15.0 annotated at OTHER_SHA.
+_OLD_TAGS = (("v0.14.0", OLD_COMMIT, None), ("v0.15.0", OTHER_TAG_OBJECT, OTHER_SHA))
+TAGS = _tag_refs(*_OLD_TAGS)
+
+
+def _entry(**overrides) -> dict:
+    entry = {
+        "date": "2026-09-23",
+        "images": {
+            "api": f"{RELEASE_IMAGE_PREFIX}api:v0.140.0",
+            "frontend": f"{RELEASE_IMAGE_PREFIX}frontend:v0.150.0",
+        },
+        "digests": {"api": "sha256:" + "a" * 64, "frontend": "sha256:" + "b" * 64},
+    }
+    for key, value in overrides.items():
+        if value is None:
+            entry.pop(key, None)
+        else:
+            entry[key] = value
+    return entry
+
+
+def _manifest(entry: dict | None = None, version: str = "0.16.0") -> str:
+    releases = {"0.15.0": _entry()}
+    if entry is not None:
+        releases[version] = entry
+    return json.dumps({"schema_version": 1, "latest": version, "releases": releases})
+
+
+MANIFEST = _manifest(_entry())
 
 
 def _run(**overrides) -> dict:
@@ -196,8 +353,15 @@ def _payload(*runs: dict) -> str:
 
 
 def _selftest_scenarios() -> list[tuple]:
-    """(name, version, commit, runs file content, tags, expected exit, must print, must not)."""
+    """(name, version, commit, runs file content, tags, expected exit, must print, must not[,
+    manifest[, what --existing-out must hold on a pass]]).
+
+    The manifest defaults to MANIFEST, a sound entry for 0.16.0; a pass must report `false`
+    (the tag is still to be created) unless the scenario says otherwise.
+    """
     ok = _payload(_run())
+    images = _entry()["images"]
+    digests = _entry()["digests"]
     return [
         ("a green commit on main passes and prints only its tag",
          "0.16.0", SHA, ok, TAGS, 0, "v0.16.0", "refused"),
@@ -214,8 +378,60 @@ def _selftest_scenarios() -> list[tuple]:
          None),
         ("an uppercase SHA is refused", "0.16.0", SHA.upper(), ok, TAGS, 1,
          "not a full 40-character", None),
-        ("an existing tag is refused", "0.15.0", SHA, ok, TAGS, 1, "v0.15.0 already exists",
-         None),
+        # The tag: new, already at this commit (a re-run), or at another commit (refused).
+        ("a tag at another commit is refused, naming both commits", "0.15.0", SHA, ok, TAGS, 1,
+         f"v0.15.0 already exists at {OTHER_SHA}, not at {SHA}", None, _manifest(_entry())),
+        ("a lightweight tag at another commit is refused", "0.14.0", SHA, ok, TAGS, 1,
+         f"v0.14.0 already exists at {OLD_COMMIT}, not at {SHA}", None,
+         _manifest(_entry(), "0.14.0")),
+        ("an annotated tag at this commit passes and reports it already exists", "0.16.0", SHA,
+         ok, _tag_refs(*_OLD_TAGS, ("v0.16.0", TAG_OBJECT, SHA)), 0, "v0.16.0", "refused",
+         MANIFEST, "true"),
+        ("a lightweight tag at this commit passes and reports it already exists", "0.16.0", SHA,
+         ok, _tag_refs(*_OLD_TAGS, ("v0.16.0", SHA, None)), 0, "v0.16.0", "refused", MANIFEST,
+         "true"),
+        ("a tag whose tag object, not its commit, is the SHA is refused", "0.16.0", SHA, ok,
+         _tag_refs(*_OLD_TAGS, ("v0.16.0", SHA, OTHER_SHA)), 1,
+         f"v0.16.0 already exists at {OTHER_SHA}, not at {SHA}", None),
+        ("a tag listing of bare names is refused", "0.16.0", SHA, ok, "v0.14.0\nv0.15.0\n", 1,
+         "is not a line of `git ls-remote --tags` output", None),
+        ("an existing tag at this commit is still refused when CI did not pass", "0.16.0", SHA,
+         _payload(_run(conclusion="failure")),
+         _tag_refs(*_OLD_TAGS, ("v0.16.0", TAG_OBJECT, SHA)), 1, "concluded 'failure'", None),
+        # The version's manifest entry: present, release images, each pinned by its digest.
+        ("a version with no manifest entry is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "has no entry for 0.16.0", None, _manifest(None)),
+        ("a manifest with no releases is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "has no 'releases' object", None, json.dumps({"schema_version": 1})),
+        ("an entry with no digests is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "it records no digests", None, _manifest(_entry(digests=None))),
+        ("an entry missing the frontend digest is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "digests.frontend is None", None,
+         _manifest(_entry(digests={"api": digests["api"]}))),
+        ("an uppercase digest is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "digests.api is 'sha256:" + "A" * 64, None,
+         _manifest(_entry(digests={**digests, "api": "sha256:" + "A" * 64}))),
+        ("a digest with no sha256: prefix is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "digests.frontend is '" + "b" * 64, None,
+         _manifest(_entry(digests={**digests, "frontend": "b" * 64}))),
+        ("an api image at the registry root, outside release/, is refused", "0.16.0", SHA, ok,
+         TAGS, 1, "images.api is 'masterly.azurecr.io/api:v0.140.0', not an image under", None,
+         _manifest(_entry(images={**images, "api": "masterly.azurecr.io/api:v0.140.0"}))),
+        ("a frontend image in another registry is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "images.frontend is 'example.invalid/release/frontend:v0.150.0'", None,
+         _manifest(_entry(
+             images={**images, "frontend": "example.invalid/release/frontend:v0.150.0"}))),
+        ("an image nested deeper under release/ is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "images.api is 'masterly.azurecr.io/release/mirror/api:v0.140.0'", None,
+         _manifest(_entry(images={**images,
+                                  "api": "masterly.azurecr.io/release/mirror/api:v0.140.0"}))),
+        ("an image under another role's repository is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "images.frontend is 'masterly.azurecr.io/release/api:v0.140.0'", None,
+         _manifest(_entry(images={**images, "frontend": images["api"]}))),
+        ("an entry with no images is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "images.api is None", None, _manifest(_entry(images=None))),
+        ("a manifest that is not JSON is refused", "0.16.0", SHA, ok, TAGS, 1,
+         "MANIFEST.json is not JSON", None, "not json"),
         ("no runs at all is refused", "0.16.0", SHA, _payload(), TAGS, 1, "no '.github", None),
         ("a run of another commit is refused", "0.16.0", SHA, _payload(_run(head_sha=OTHER_SHA)),
          TAGS, 1, "no '.github", None),
@@ -253,19 +469,30 @@ def selftest() -> int:
     failures: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         runs_file = Path(tmp) / "runs.json"
-        tags_file = Path(tmp) / "tags.txt"
-        for name, version, commit, runs, tags, expected_exit, present, absent in scenarios:
+        tags_file = Path(tmp) / "tag-refs.txt"
+        manifest_file = Path(tmp) / "MANIFEST.json"
+        existing_file = Path(tmp) / "existing.txt"
+        for scenario in scenarios:
+            name, version, commit, runs, tags, expected_exit, present, absent, *rest = scenario
+            manifest = rest[0] if rest else MANIFEST
+            expected_existing = rest[1] if len(rest) > 1 else "false"
             runs_file.write_text(runs, encoding="utf-8")
             tags_file.write_text(tags, encoding="utf-8")
+            manifest_file.write_text(manifest, encoding="utf-8")
+            existing_file.unlink(missing_ok=True)
             result = subprocess.run(
                 [sys.executable, str(Path(__file__).resolve()),
                  "--version", version, "--commit", commit,
-                 "--runs", str(runs_file), "--tags", str(tags_file)],
+                 "--runs", str(runs_file), "--tags", str(tags_file),
+                 "--manifest", str(manifest_file), "--existing-out", str(existing_file)],
                 capture_output=True,
                 text=True,
                 env=dict(os.environ),
             )
             output = result.stdout + result.stderr
+            existing = (
+                existing_file.read_text(encoding="utf-8") if existing_file.exists() else None
+            )
             verdict = "ok"
             if result.returncode != expected_exit:
                 verdict = f"expected exit {expected_exit}, got {result.returncode}:\n{output}"
@@ -277,6 +504,11 @@ def selftest() -> int:
             elif expected_exit == 0 and result.stdout.strip() != present:
                 # The workflow captures stdout as the tag name, so nothing else may be on it.
                 verdict = f"stdout must be exactly {present!r}, got {result.stdout!r}"
+            elif expected_exit == 0 and existing != expected_existing:
+                # The workflow skips the tag write on `true`, so the file must say exactly that.
+                verdict = f"--existing-out must hold {expected_existing!r}, got {existing!r}"
+            elif expected_exit != 0 and existing is not None:
+                verdict = f"a refusal must write nothing to --existing-out, got {existing!r}"
             if verdict != "ok":
                 failures.append(f"{name}: {verdict}")
             print(f"  {'PASS' if verdict == 'ok' else 'FAIL'}  {name}")
@@ -291,9 +523,11 @@ def selftest() -> int:
             print(f"  - {failure}", file=sys.stderr)
         return 1
     print(
-        f"\nrelease-gate selftest — {len(scenarios)} scenarios: a green commit on main passes, and "
-        f"a malformed version or commit, an existing tag, and a commit with no finished, "
-        f"successful CI run on main are each refused."
+        f"\nrelease-gate selftest — {len(scenarios)} scenarios: a green commit on main passes, "
+        f"and passes reporting its tag already exists when the tag is at that commit; a malformed "
+        f"version or commit, a tag at another commit, a manifest entry without release images "
+        f"pinned by digest, and a commit with no finished, successful CI run on main are each "
+        f"refused."
     )
     return 0
 
@@ -303,7 +537,15 @@ def main() -> int:
     parser.add_argument("--version", help="the release: X.Y.Z or vX.Y.Z")
     parser.add_argument("--commit", help="the full SHA of the commit to tag")
     parser.add_argument("--runs", help="file holding the Actions API's ci.yml runs for the commit")
-    parser.add_argument("--tags", help="file holding the repository's tag names, one per line")
+    parser.add_argument(
+        "--tags",
+        help="file holding `git ls-remote --tags origin 'v*'` output, peeled `^{}` lines included",
+    )
+    parser.add_argument("--manifest", help="file holding the release commit's MANIFEST.json")
+    parser.add_argument(
+        "--existing-out",
+        help="file to receive 'true' if the tag already exists at the commit, else 'false'",
+    )
     parser.add_argument(
         "--selftest",
         action="store_true",
@@ -313,7 +555,8 @@ def main() -> int:
 
     if args.selftest:
         return selftest()
-    missing = [flag for flag in ("version", "commit", "runs", "tags") if not getattr(args, flag)]
+    required = ("version", "commit", "runs", "tags", "manifest")
+    missing = [flag for flag in required if not getattr(args, flag)]
     if missing:
         parser.error("required: " + ", ".join(f"--{flag}" for flag in missing))
 
@@ -325,22 +568,34 @@ def main() -> int:
                 f"{args.runs} is not JSON ({error}), so nothing can be said about CI on this "
                 f"commit. Refusing rather than assuming it passed."
             ) from None
-        tags = [
-            line.strip()
-            for line in Path(args.tags).read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-        tag, run = decide(args.version, args.commit, payload, tags)
+        try:
+            manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise GateRefused(
+                f"the release commit's MANIFEST.json is not JSON ({error}), read from "
+                f"{args.manifest}."
+            ) from None
+        tag_refs = Path(args.tags).read_text(encoding="utf-8")
+        tag, run, existing = decide(args.version, args.commit, payload, tag_refs, manifest)
     except GateRefused as reason:
         print(f"release gate refused: {reason}", file=sys.stderr)
         return 1
 
+    where = run.get("html_url") or "run " + str(run.get("id"))
+    if existing:
+        state = (
+            f"{tag} already exists at {args.commit}, so it is not created again; the release "
+            f"goes on from there"
+        )
+    else:
+        state = f"{tag} does not exist yet and may be created on {args.commit}"
     print(
-        f"release gate passed: {tag} may be created on {args.commit} — CI concluded success on "
-        f"its push to {RELEASE_BRANCH} ({run.get('html_url') or 'run ' + str(run.get('id'))}), "
-        f"and the tag does not exist yet.",
+        f"release gate passed: {state}. CI concluded success on its push to {RELEASE_BRANCH} "
+        f"({where}), and the manifest entry names release images pinned by digest.",
         file=sys.stderr,
     )
+    if args.existing_out:
+        Path(args.existing_out).write_text("true" if existing else "false", encoding="utf-8")
     print(tag)
     return 0
 
