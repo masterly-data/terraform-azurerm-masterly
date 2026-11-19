@@ -2,7 +2,8 @@
 
 Azure Container App Environment that declares **no workload profile** of its own (no dedicated
 profile; on a delegated subnet Azure adds the `Consumption` profile itself, and the module ignores
-that change). The root module's front, app and workers environments, which declare the profile,
+that change, and the `infrastructure_resource_group_name` of the `ME_` managed group Azure creates
+with it, so a plan without refresh does not replace the environment). The root module's front, app and workers environments, which declare the profile,
 use `aca-env-workload-profiles` instead. Logs are sent through **Azure Monitor**
 (`logs_destination = "azure-monitor"`): the environment does not write to a Log
 Analytics workspace itself, and does not use a workspace's shared key. The caller

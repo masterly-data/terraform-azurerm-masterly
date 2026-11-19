@@ -10,7 +10,9 @@ Logs are sent through **Azure Monitor** (`logs_destination = "azure-monitor"`), 
 caller attaches a diagnostic setting to the environment's `id` to send its apps' logs to one.
 
 It is a separate module because `aca-env-consumption` freezes `workload_profile` under
-`ignore_changes`, and a lifecycle block cannot be conditional.
+`ignore_changes`, and a lifecycle block cannot be conditional. This module ignores only
+`infrastructure_resource_group_name` (Azure sets the `ME_` managed group, and a change to that
+ForceNew attribute would replace the environment); `workload_profile` stays declared, not ignored.
 
 ## Inputs
 
