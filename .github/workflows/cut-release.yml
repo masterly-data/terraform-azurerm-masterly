@@ -8,16 +8,26 @@
 #
 #   verify  the commit is named by its full SHA and is on main; the most recent `ci` run from its
 #           push to main concluded success (which covers every ci.yml job, including `validate`,
-#           the check main's branch ruleset requires); the tag does not exist yet; and the commit's
-#           own manifest, changelog and README publish exactly this version.
+#           the check main's branch ruleset requires); the tag does not exist yet, or already
+#           exists at exactly this commit; the commit's MANIFEST.json entry for the version names
+#           release/ images, each pinned by digest; and the commit's own manifest, changelog and
+#           README publish exactly this version.
 #   images  every image the module's stable and previous channels default to for the commit's
 #           MANIFEST.json resolves in masterly.azurecr.io at the digest it records (or by tag, for
 #           an entry with no digests). Every other check here is offline, which is how 0.22.0 and
 #           0.23.0 were tagged naming builds the registry did not have. It reads with a pull-only
 #           token from the `release` Environment, runs main's copy of the script only, and reads
 #           the release commit's manifest as data. Unset, the token fails the job: never skipped.
-#   tag     creates the annotated tag on that commit through the API. Nothing is pushed from a
-#           checkout, so no credential is ever written into a working copy.
+#   tag     creates the annotated tag on that commit through the API, unless it is already there.
+#           Nothing is pushed from a checkout, so no credential is ever written into a working
+#           copy. Once the tag is seen at the commit, it sends the repository_dispatch
+#           `release-published` (version, tag, commit) to masterly-data/masterly-release-tests.
+#
+# At Stable, masterly-release-tests's promote.yml dispatches this workflow with the commit and
+# version from the signed Stable ring record (ADR 0107 §5). A run that created the tag and then
+# failed is finished by dispatching the same version and commit again: the gate passes a tag
+# already at the commit, the tag write is skipped, and release-published is sent. A tag at any
+# other commit is refused.
 #
 # What this workflow does NOT do by itself: stop a `v*` tag being pushed by hand. A tag pushed
 # from a laptop still publishes, and ci.yml's tag build still only reports on it afterwards. Making
@@ -69,7 +79,8 @@ on:
 permissions: {}
 
 # One release at a time, and never a cancelled one: a second dispatch waits, and then finds the
-# first one's tag already exists.
+# first one's tag already exists — at its commit, which only re-sends release-published, or at
+# another, which is refused.
 concurrency:
   group: cut-release
   cancel-in-progress: false
@@ -83,6 +94,7 @@ jobs:
       actions: read # the ci.yml runs for the commit
     outputs:
       tag: ${{ steps.gate.outputs.tag }}
+      existing: ${{ steps.gate.outputs.existing }} # 'true' when the tag is already at the commit
     steps:
       - name: Dispatched from main
         run: |
@@ -107,10 +119,35 @@ jobs:
       - name: The gate still refuses what it should
         run: python3 scripts/release_gate.py --selftest
 
-      # The gate: version and commit well-formed, the tag new, and CI green on the commit's push to
-      # main. `gh api -f` URL-encodes the commit into the query, so a malformed input reaches the
-      # gate — which refuses it — rather than the URL.
-      - name: CI passed on the commit's push to main, and the tag does not exist yet
+      # First, before the commit is handed to git at all: it is a full lowercase SHA (the gate's
+      # COMMIT_RE, repeated here because `git show` below reads the manifest before the gate runs),
+      # and it is on main. The input is not echoed until it has matched, so a malformed one cannot
+      # write a workflow command into the log.
+      - name: The commit is on main
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the commit input is not a full 40-character lowercase commit SHA — a branch name, a short SHA or HEAD is how a tag lands on a commit nobody meant"
+            exit 1
+          fi
+          if ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
+            echo "::error::$COMMIT is not a commit in this repository"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$COMMIT" "$GITHUB_SHA"; then
+            echo "::error::$COMMIT is not on main (main is at $GITHUB_SHA) — only a commit that merged is released"
+            exit 1
+          fi
+
+      # The gate, main's copy: version and commit well-formed, the tag new or already at exactly
+      # this commit, the commit's manifest entry naming release images pinned by digest, and CI
+      # green on the commit's push to main. The manifest is read as data with `git show`, so the
+      # rule binds a commit cut before it existed and none of the commit's code runs.
+      # `--existing-out` says whether the tag is already there (a re-run after a later step
+      # failed): the tag job then skips the write and still sends release-published.
+      - name: CI passed on the commit's push to main, and the tag is new or already at the commit
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -122,27 +159,20 @@ jobs:
           gh api -X GET "repos/$REPO/actions/workflows/ci.yml/runs" \
             -f head_sha="$COMMIT" -f event=push -f branch=main -f per_page=100 \
             > "$RUNNER_TEMP/runs.json"
-          # Public repository, so listing its tags needs no credential.
-          git ls-remote --tags --refs origin | sed 's#.*refs/tags/##' > "$RUNNER_TEMP/tags.txt"
+          git show "$COMMIT:MANIFEST.json" > "$RUNNER_TEMP/release-manifest.json"
+          # Public repository, so listing its tags needs no credential. Without --refs, so an
+          # annotated tag's peeled `^{}` line gives the commit it points at, not the tag object.
+          git ls-remote --tags origin 'v*' > "$RUNNER_TEMP/tag-refs.txt"
+          # Bare names for check_release_manifest.py --published-tags below.
+          sed -n 's#.*refs/tags/##p' "$RUNNER_TEMP/tag-refs.txt" | grep -v '\^{}$' \
+            > "$RUNNER_TEMP/tags.txt" || true
           tag="$(python3 scripts/release_gate.py --version "$VERSION" --commit "$COMMIT" \
-            --runs "$RUNNER_TEMP/runs.json" --tags "$RUNNER_TEMP/tags.txt")"
+            --runs "$RUNNER_TEMP/runs.json" --tags "$RUNNER_TEMP/tag-refs.txt" \
+            --manifest "$RUNNER_TEMP/release-manifest.json" \
+            --existing-out "$RUNNER_TEMP/existing.txt")"
+          existing="$(cat "$RUNNER_TEMP/existing.txt")"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      # The gate has already refused anything that is not a full SHA, so the commit is safe to
-      # hand to git from here on.
-      - name: The commit is on main
-        env:
-          COMMIT: ${{ inputs.commit }}
-        run: |
-          set -euo pipefail
-          if ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
-            echo "::error::$COMMIT is not a commit in this repository"
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$COMMIT" "$GITHUB_SHA"; then
-            echo "::error::$COMMIT is not on main (main is at $GITHUB_SHA) — only a commit that merged is released"
-            exit 1
-          fi
+          echo "existing=$existing" >> "$GITHUB_OUTPUT"
 
       # The same checks ci.yml runs on the tag build, run here against the release commit's own
       # tree and its own copies of the scripts — so the tag build that follows asks nothing this
@@ -214,8 +244,11 @@ jobs:
           RELEASE_ACR_TOKEN_PASSWORD: ${{ secrets.RELEASE_ACR_TOKEN_PASSWORD }}
         run: python3 scripts/check_release_images.py --manifest "$RUNNER_TEMP/release-manifest.json"
 
+  # The one job that mints write tokens: the tag token for this repository and the dispatch token
+  # for masterly-release-tests. It checks nothing out, so no code from the release commit's tree —
+  # or from anywhere else — runs while either token is in scope.
   tag:
-    name: Create the tag
+    name: Create the tag and announce the release
     needs: [verify, images]
     runs-on: ubuntu-latest
     # A maintainer restricts this Environment to main and may add a required reviewer; until then
@@ -226,9 +259,18 @@ jobs:
       contents: write # create the tag, on the GITHUB_TOKEN path only
       actions: write # dispatch ci.yml on the new tag, on the GITHUB_TOKEN path only
     steps:
+      - name: Dispatched from main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::dispatch this workflow from main, not $GITHUB_REF — the release tokens are minted only by a run dispatched from main"
+            exit 1
+          fi
+
+      # On a re-run whose tag is already at the commit, no tag token is minted and nothing is
+      # written: the run goes straight to confirming the tag and sending release-published.
       - name: Mint the release App's token
         id: app
-        if: ${{ vars.RELEASE_APP_CLIENT_ID != '' }}
+        if: ${{ vars.RELEASE_APP_CLIENT_ID != '' && needs.verify.outputs.existing == 'false' }}
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
@@ -236,7 +278,11 @@ jobs:
           # This repository only, and only what creating a tag needs.
           permission-contents: write
 
+      # Only when the gate reported the tag absent. A tag at another commit never gets here: the
+      # gate refused it, naming both commits, and this job did not start.
       - name: Create the annotated tag on the release commit
+        id: create
+        if: ${{ needs.verify.outputs.existing == 'false' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           VIA_APP: ${{ steps.app.outputs.token != '' }}
@@ -266,9 +312,62 @@ jobs:
       # check and the GitHub Release page — is started explicitly. A tag an App created has
       # already started it, and dispatching again would only run it twice.
       - name: Start the tag build (GITHUB_TOKEN path only)
-        if: ${{ steps.app.outputs.token == '' }}
+        if: ${{ steps.create.outcome == 'success' && steps.app.outputs.token == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.verify.outputs.tag }}
         run: gh workflow run ci.yml --ref "$TAG"
+
+      # Whether this run created the tag or found it, release-published goes out only once the tag
+      # is seen at exactly the commit. Every step above must have succeeded to get here.
+      - name: The tag is at the release commit
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          # The peeled `^{}` line is the commit an annotated tag points at; a lightweight tag has
+          # only its own line. The pattern ends in `*` so the `^{}` line matches it too; awk keeps
+          # only this tag's two refs.
+          at="$(git ls-remote --tags "https://github.com/$REPO.git" "$TAG*" |
+            awk -v ref="refs/tags/$TAG" '$2 == ref "^{}" { peeled = $1 } $2 == ref { named = $1 }
+              END { print (peeled != "" ? peeled : named) }')"
+          if [ "$at" != "$COMMIT" ]; then
+            echo "::error::$TAG is at '${at:-nothing}', not at $COMMIT — release-published is not sent"
+            exit 1
+          fi
+
+      # A second token from the same App (or the App named by the RELEASE_DISPATCH_APP_* settings),
+      # scoped to masterly-release-tests only, with only what a repository_dispatch needs. No `if:`:
+      # with no App configured this fails, and re-dispatching once it is configured is safe.
+      - name: Mint the dispatch token for masterly-release-tests
+        id: dispatch-app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_DISPATCH_APP_CLIENT_ID || vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_DISPATCH_APP_PRIVATE_KEY || secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: masterly-data
+          repositories: masterly-release-tests
+          permission-contents: write
+
+      # The payload is exactly version (X.Y.Z), tag (vX.Y.Z) and commit (the full SHA), which
+      # masterly-release-tests's registry-boundary.yml matches on. `-f` keeps each a string.
+      - name: Send release-published to masterly-release-tests
+        env:
+          GH_TOKEN: ${{ steps.dispatch-app.outputs.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          gh api repos/masterly-data/masterly-release-tests/dispatches \
+            -f event_type=release-published \
+            -f "client_payload[version]=${TAG#v}" \
+            -f "client_payload[tag]=$TAG" \
+            -f "client_payload[commit]=$COMMIT" > /dev/null
+          {
+            echo "### release-published sent to masterly-release-tests"
+            echo
+            echo "version \`${TAG#v}\`, tag \`$TAG\`, commit \`$COMMIT\`"
+          } >> "$GITHUB_STEP_SUMMARY"

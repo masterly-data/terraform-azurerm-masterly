@@ -20,10 +20,11 @@ full commit SHA, and creates the tag only when all of these hold:
 
 | Check | Where |
 |---|---|
+| The commit is a full 40-character lowercase SHA and is on `main`, checked before the commit is handed to anything else | the `verify` job's first step, `git merge-base --is-ancestor` |
 | The version is `X.Y.Z` and the commit is a full 40-character SHA | `scripts/release_gate.py` |
-| The tag does not exist yet | `scripts/release_gate.py` |
+| The tag does not exist yet, or already exists at exactly this commit; a tag at any other commit is refused, naming both commits. The commit an annotated tag points at is read from its peeled `^{}` line of `git ls-remote --tags origin 'v*'` | `scripts/release_gate.py` |
+| The commit's `MANIFEST.json` has an entry for the version whose `images.api` and `images.frontend` are under `masterly.azurecr.io/release/` and whose `digests.api` and `digests.frontend` are each `sha256:` plus 64 lowercase hex | `scripts/release_gate.py`, main's copy, reading the commit's file as data |
 | The most recent `ci` run from the commit's push to `main` concluded success, which covers every job in `ci.yml` | `scripts/release_gate.py` |
-| The commit is on `main` | `git merge-base --is-ancestor` |
 | The commit's `MANIFEST.json`, `CHANGELOG.md` and README publish exactly this version | `scripts/check_release_manifest.py --tag`, `scripts/release_notes.py`, run against the commit's own tree |
 | Every other version the commit's `MANIFEST.json` lists already has its tag, so the file at the new tag names only published versions | `scripts/check_release_manifest.py --tag --published-tags` |
 | Every default image of the stable and previous channels of the commit's `MANIFEST.json` resolves in `masterly.azurecr.io` at the digest it records (or by tag, for an entry with no digests) | `scripts/check_release_images.py`, main's copy, in the `images` job with the `release` Environment's pull-only token |
@@ -32,6 +33,36 @@ full commit SHA, and creates the tag only when all of these hold:
 `python3 scripts/check_release_images.py --selftest` shows the image check refusing a missing
 image, a moved tag and a missing or refused credential against a fake registry. CI runs both on
 every pull request.
+
+## Who dispatches it, and what it announces
+
+At Stable, `promote.yml` in `masterly-data/masterly-release-tests` dispatches `cut-release` from
+`main` with the commit and the version from the signed Stable ring record (ADR 0107 §5). The
+owner's approval of that step is the `production` Environment on `promote.yml`, not anything here
+(ADR 0107 §6). A maintainer can still run it by hand with the same two inputs, and the same checks
+gate it.
+
+Once the tag is at the commit, the `tag` job sends a `repository_dispatch` to
+`masterly-data/masterly-release-tests`:
+
+- `event_type`: `release-published`
+- `client_payload.version`: the version, `X.Y.Z` (no leading `v`)
+- `client_payload.tag`: the tag, `vX.Y.Z`
+- `client_payload.commit`: the full 40-character SHA the tag points at
+
+Nothing else is in the payload. It is sent only after a step that reads the tag back with
+`git ls-remote` finds it at exactly that commit, and never when an earlier step or job failed. The
+token that sends it is a second token of the release App, minted in the `tag` job with
+`owner: masterly-data`, `repositories: masterly-release-tests` and `permission-contents: write`,
+which is what `repository_dispatch` needs and nothing more. The `tag` job checks out nothing, so no
+code from the release commit, or from anywhere else, runs while either token is in scope.
+
+**A re-run at the same commit is safe.** If a run creates the tag and then fails (the dispatch
+token cannot be minted, or the dispatch call fails), dispatch `cut-release` again with the same
+version and commit. The gate finds the tag already at that commit and passes, reporting it; the
+`tag` job then mints no tag token, makes no tag or ref write, and goes on to confirm the tag and
+send `release-published`. Every other check still runs again. A tag at another commit is still
+refused, so a re-run cannot move or recreate a published tag.
 
 ## At Stable: the evidence
 
@@ -199,8 +230,9 @@ job" and in the 0.24.0 changelog entry with what the run showed.
 
 On its own, the workflow is the documented path, not an enforced one: without further settings,
 GitHub accepts a `v*` tag pushed from anyone's checkout, and that tag publishes. Three repository
-settings close that. They are applied by a maintainer, because a workflow cannot grant itself the
-right to be the only thing that tags.
+settings close that (steps 1-3), and step 4 lets `promote.yml` drive the workflow at Stable.
+They are applied by a maintainer, because a workflow cannot grant itself the right to be the only
+thing that tags.
 
 **Status: applied 2026-11-05** (MAS-4139; the workflow itself is MAS-274). The GitHub App
 `masterly-module-release` (app ID 5629013), the `release` Environment and the ruleset
@@ -219,7 +251,9 @@ starts `ci.yml`'s tag build, which publishes the GitHub Release page.
 - Webhook inactive; no events subscribed.
 - Repository permissions: **Contents: read and write**. Nothing else is added. Metadata: read is
   GitHub's mandatory default for every App, not an added permission.
-- Installed on this repository only.
+- Installed on this repository, and for the Stable path also on `masterly-release-tests` (step 4,
+  still owed). The workflow scopes each token it mints to one of them: the tag token to this
+  repository, the dispatch token to `masterly-release-tests`.
 
 ### 2. The `release` Environment
 
@@ -229,6 +263,10 @@ The workflow's `images` and `tag` jobs run in an Environment named `release`. Co
   another branch cannot reach the App's key or the registry token. Set this before either secret.
 - **Environment secret** `RELEASE_APP_PRIVATE_KEY`: the App's private key.
 - **Environment variable** `RELEASE_APP_CLIENT_ID`: the App's client ID.
+- Optionally, **Environment variable** `RELEASE_DISPATCH_APP_CLIENT_ID` and **Environment secret**
+  `RELEASE_DISPATCH_APP_PRIVATE_KEY`: another App's, used only for the `release-published`
+  dispatch, when `masterly-module-release` is not installed on `masterly-release-tests`. Unset,
+  the release App sends it.
 - **Environment variable** `RELEASE_ACR_TOKEN_NAME` and **Environment secret**
   `RELEASE_ACR_TOKEN_PASSWORD`: the repository-scoped ACR token `pull-ci-cut-release` on the
   `pull-product-images` scope map, and its password. That scope map pulls `release/api` and
@@ -275,6 +313,26 @@ gh api -X POST repos/masterly-data/terraform-azurerm-masterly/rulesets --input r
 being moved to another commit or removed, which would leave the registry's version and the
 repository's tag describing different code. Apply it after step 2: from then on the
 `GITHUB_TOKEN` path is refused by GitHub, which is intended.
+
+### 4. The grants for the Stable path
+
+**Status: owed by the owner** after the change that added the dispatch merges (split from
+MAS-5007). Until both are in place, `promote.yml` cannot start `cut-release`, and a run started by
+hand creates the tag and then fails at the dispatch token; dispatching it again once the grants
+exist finishes it (above, "A re-run at the same commit is safe").
+
+1. **The dispatch to `masterly-release-tests`.** Install `masterly-module-release` on
+   `masterly-release-tests` too, keeping its one permission, Contents: read and write. Or create
+   another App with that permission, install it on `masterly-release-tests` only, and set its
+   client ID and key as `RELEASE_DISPATCH_APP_CLIENT_ID` and `RELEASE_DISPATCH_APP_PRIVATE_KEY` on
+   the `release` Environment.
+2. **`promote.yml` starting `cut-release`.** Install the App that `masterly-release-tests`'s
+   `promote.yml` dispatches with on this repository with **Actions: read and write**, which is
+   what `workflow_dispatch` needs. That App needs no Contents write here: the tag is still created
+   only by `masterly-module-release`, the `release-tags` ruleset's only bypass.
+
+The `release-tags` ruleset, the `release` Environment's protection rules and the first two steps
+above do not change.
 
 ## Verifying
 

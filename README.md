@@ -1426,10 +1426,11 @@ Tagging, later and separately:
 6. Read the open live checks in
    [docs/releasing.md](docs/releasing.md#live-checks-before-the-next-tag): a version is not
    tagged while one is open for a change it carries. Then wait for `main`'s CI run on the
-   candidate's commit to pass, and run the **cut-release**
-   workflow (Actions → cut-release → Run workflow, from `main`) with the version and the
-   candidate commit's full SHA. That commit may be behind `main`'s head, and every other version
-   its manifest lists must already be tagged. Do not create the tag by hand.
+   candidate's commit to pass. At Stable, `promote.yml` in `masterly-release-tests` runs the
+   **cut-release** workflow from `main` with the version and the candidate commit's full SHA from
+   the signed Stable ring record (ADR 0107 §5); run by hand (Actions → cut-release → Run workflow,
+   from `main`) it takes the same two inputs. That commit may be behind `main`'s head, and every
+   other version its manifest lists must already be tagged. Do not create the tag by hand.
 7. After the registry publishes the version, the public
    [self-hosted docs](https://masterlydata.com/docs/self-hosted/install/) adopt it — and the
    install page's upgrade notes ("Coming from module N.x") are rewritten for the new release as
@@ -1449,10 +1450,20 @@ Tagging, later and separately:
 A tag on this repository is the release: the Terraform Registry publishes the version from its own
 webhook the moment the tag appears, and a published version cannot be withdrawn, only superseded.
 So the checks that can refuse a release have to run before the tag exists. `cut-release`
-(`.github/workflows/cut-release.yml`) creates the tag only after `scripts/release_gate.py` finds
-that the most recent CI run from the commit's push to `main` concluded success and that the tag
-does not exist yet, that the commit is on `main`, and that the commit's own manifest, changelog
-and README publish exactly this version.
+(`.github/workflows/cut-release.yml`) creates the tag only after it finds that the commit is a
+full SHA on `main`, and `scripts/release_gate.py` finds that the most recent CI run from the
+commit's push to `main` concluded success, that the tag does not exist at any other commit, and
+that the commit's `MANIFEST.json` entry for the version names `masterly.azurecr.io/release/` images
+with a `digests.api` and `digests.frontend` (`sha256:` plus 64 lowercase hex); and that the
+commit's own manifest, changelog and README publish exactly this version.
+
+Once the tag is at the commit, `cut-release` sends the `repository_dispatch` event
+`release-published` to `masterly-data/masterly-release-tests`, with `client_payload` holding
+`version` (`X.Y.Z`), `tag` (`vX.Y.Z`) and `commit` (the full SHA). It is sent by a second token of
+the release App, scoped to that repository with Contents: write only, and never when an earlier
+step failed. Dispatching the same version and commit again is safe: when the tag is already at
+that commit the run writes no tag and sends `release-published`, which is how a run that failed
+after creating the tag is finished. A tag at another commit is refused, naming both commits.
 
 `cut-release` also refuses the tag until every default image of the stable and previous channels
 resolves in `masterly.azurecr.io`: the images an install of the release pulls when it leaves
