@@ -1703,3 +1703,59 @@ run "retire_refused_with_egress_firewall" {
 
   expect_failures = [var.egress_firewall]
 }
+
+# The provider's ForceNew and DiffSuppressFunc never run under mock providers, so a plan cannot
+# reproduce the replacement of an environment whose state predates Azure's Consumption profile.
+# Pin the configuration text instead: each environment resource freezes exactly the attributes
+# below, and none of the create-time inputs whose change must still replace the environment.
+run "aca_environments_ignore_only_the_azure_set_resource_group" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = jsonencode([
+      for s in split(",", regex(
+        "ignore_changes\\s*=\\s*\\[([^\\]]*)\\]",
+        regex(
+          "(?s)resource \"azurerm_container_app_environment\" \"this\" \\{(.*?)\\n\\}",
+          replace(file("${path.module}/modules/aca-env-consumption/main.tf"), "/#[^\\n]*/", "")
+        )[0]
+      )[0]) : trimspace(s)
+    ]) == jsonencode(["workload_profile", "infrastructure_resource_group_name"])
+    error_message = "aca-env-consumption's environment must have exactly ignore_changes = [workload_profile, infrastructure_resource_group_name]: without the second, a plan on state that predates Azure's Consumption profile replaces the environment."
+  }
+
+  assert {
+    condition = jsonencode([
+      for s in split(",", regex(
+        "ignore_changes\\s*=\\s*\\[([^\\]]*)\\]",
+        regex(
+          "(?s)resource \"azurerm_container_app_environment\" \"this\" \\{(.*?)\\n\\}",
+          replace(file("${path.module}/modules/aca-env-workload-profiles/main.tf"), "/#[^\\n]*/", "")
+        )[0]
+      )[0]) : trimspace(s)
+    ]) == jsonencode(["infrastructure_resource_group_name"])
+    error_message = "aca-env-workload-profiles' environment must have exactly ignore_changes = [infrastructure_resource_group_name], and must not ignore workload_profile, which it declares."
+  }
+
+  assert {
+    condition = alltrue([
+      for m in ["aca-env-consumption", "aca-env-workload-profiles"] : alltrue([
+        for n in ["infrastructure_subnet_id", "internal_load_balancer_enabled", "name", "location", "resource_group_name"] :
+        !contains([
+          for s in split(",", regex(
+            "ignore_changes\\s*=\\s*\\[([^\\]]*)\\]",
+            regex(
+              "(?s)resource \"azurerm_container_app_environment\" \"this\" \\{(.*?)\\n\\}",
+              replace(file("${path.module}/modules/${m}/main.tf"), "/#[^\\n]*/", "")
+            )[0]
+          )[0]) : trimspace(s)
+        ], n)
+      ])
+    ])
+    error_message = "An environment's ignore_changes must not hide a change to infrastructure_subnet_id, internal_load_balancer_enabled, name, location or resource_group_name: each of those must still plan a replacement."
+  }
+}

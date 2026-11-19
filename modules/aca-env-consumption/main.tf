@@ -59,7 +59,14 @@ resource "azurerm_container_app_environment" "this" {
     # environments after creation (API-side drift); a plan would then try to strip it.
     # Freeze it — the module declares no workload profile of its own either way (the profiles
     # Azure lists are read below, when the caller asks).
-    ignore_changes = [workload_profile]
+    #
+    # infrastructure_resource_group_name: Azure creates the ME_<env>_<rg>_<location> managed group
+    # together with that profile, and the attribute is Optional + ForceNew in azurerm. The provider
+    # suppresses its diff only when workload_profile is non-empty, which this module never
+    # declares, so a plan whose state predates the profile (for example -refresh=false just after
+    # the first apply) would plan "ME_… -> null # forces replacement" and recreate the environment
+    # and everything in it. The module never sets it, so ignoring it loses no configuration.
+    ignore_changes = [workload_profile, infrastructure_resource_group_name]
   }
 }
 

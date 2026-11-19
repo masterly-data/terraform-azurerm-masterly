@@ -5,12 +5,13 @@
 #
 # A module of its own rather than a switch on aca-env-consumption: that module freezes
 # workload_profile under ignore_changes, and a lifecycle block cannot be conditional, so an
-# environment that declares its profile cannot share the resource with one that does not.
+# environment that declares its profile cannot share the resource with one that does not. This
+# module's own ignore_changes covers infrastructure_resource_group_name only, never workload_profile.
 
 locals {
   # The Consumption profile only. Azure adds this profile itself to an environment on a delegated
-  # subnet; declaring it keeps a plan from trying to strip it, without the ignore_changes the
-  # sibling module needs. Dedicated profiles are not offered yet.
+  # subnet; declaring it keeps a plan from trying to strip it, without the workload_profile
+  # ignore_changes the sibling module needs. Dedicated profiles are not offered yet.
   workload_profiles = [
     {
       name                  = "Consumption"
@@ -65,4 +66,14 @@ resource "azurerm_container_app_environment" "this" {
   }
 
   tags = var.tags
+
+  lifecycle {
+    # Defensive. Azure creates the ME_<env>_<rg>_<location> managed group with the profile, and
+    # infrastructure_resource_group_name is Optional + ForceNew in azurerm; the provider
+    # suppresses its diff only when workload_profile is non-empty. The declared Consumption
+    # profile normally does that, so this changes nothing today; it keeps a plan on stale state
+    # from replacing the environment if that ever stops holding. workload_profile is NOT
+    # ignored: this module declares it.
+    ignore_changes = [infrastructure_resource_group_name]
+  }
 }
