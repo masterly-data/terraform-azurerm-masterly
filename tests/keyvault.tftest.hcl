@@ -446,6 +446,113 @@ run "production_in_vnet_apply_keeps_the_vault_closed" {
   }
 }
 
+# Threat: Terraform destroys a dependent before its dependency. A secret that does not depend on the
+# vault's private endpoint and DNS link can be deleted after them, when the vault (which has no
+# public path) answers 403 ForbiddenByConnection. `terraform test` cannot read depends_on, so this
+# reads the configuration, comments stripped, and checks EVERY azurerm_key_vault_secret block, so
+# a secret added later without the edges fails. The trailing commas keep a name from matching a
+# longer one. The length check keeps a regex that matches nothing from passing.
+run "vault_secrets_depend_on_the_private_path" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = length(regexall("(?s)resource \"azurerm_key_vault_secret\" \"[a-z_]+\" \\{.*?\\n\\}", file("${path.module}/keyvault.tf"))) >= 3
+    error_message = "keyvault.tf should hold at least the install, migrate_api_role_password and migrate_workers_role_password secrets; the block regex found fewer."
+  }
+
+  assert {
+    condition = alltrue([
+      for block in regexall("(?s)resource \"azurerm_key_vault_secret\" \"[a-z_]+\" \\{.*?\\n\\}", file("${path.module}/keyvault.tf")) :
+      alltrue([
+        for ref in [
+          "azurerm_role_assignment.kv_secrets_officer_deployer,",
+          "azurerm_private_endpoint.key_vault,",
+          "azurerm_private_dns_zone_virtual_network_link.key_vault,",
+        ] :
+        strcontains(replace(regex("(?s)depends_on = \\[([^\\]]*)\\]", block)[0], "/#[^\\n]*/", ""), ref)
+      ])
+    ])
+    error_message = "Every azurerm_key_vault_secret must depend on the deployer's secrets-officer grant, the vault's private endpoint and its DNS link, so a destroy deletes it while the private path still exists."
+  }
+}
+
+# The new edges point at counted resources. With an injected central zone there is one endpoint
+# and no link; a dependency on a count-0 resource is valid, so the secrets still plan.
+run "production_with_injected_zone_still_plans_the_secrets" {
+  command = plan
+
+  variables {
+    mode                          = "production"
+    identity_binding              = "oidc"
+    oidc_allowed_issuers          = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                 = "api-client-id"
+    oidc_jwks_uri                 = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                = "bff-client-id"
+    oidc_client_secret            = "s3cret"
+    oidc_authority                = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri             = "https://app.example.com/api/auth/callback"
+    license_token                 = "eyJ.fake.jwt"
+    license_public_jwk            = "{\"kty\":\"EC\"}"
+    initial_owner_email           = "owner@example.com"
+    enable_key_vault              = true
+    enable_redis                  = true
+    redis_offering                = "cache"
+    enable_workers                = true
+    api_max_replicas              = 3
+    external_database_url         = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    key_vault_deployer_ip_rules   = []
+    key_vault_deployer_in_vnet    = true
+    key_vault_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.key_vault) == 1 &&
+      length(azurerm_private_dns_zone_virtual_network_link.key_vault) == 0 &&
+      length(azurerm_private_dns_zone.key_vault) == 0
+    )
+    error_message = "An injected central zone plans one private endpoint, and no VNet link and no zone of the module's own."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_key_vault_secret.install) > 0 &&
+      toset(keys(azurerm_key_vault_secret.install)) == toset(local.install_secret_names)
+    )
+    error_message = "The install secrets must still plan, one per install_secret_names, when the endpoint's DNS link is absent."
+  }
+}
+
+# Demo has a public vault and no endpoint: both counted edges are empty and the secrets plan.
+run "demo_key_vault_plans_the_secrets_without_an_endpoint" {
+  command = plan
+
+  variables {
+    enable_key_vault      = true
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.key_vault) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.key_vault) == 0
+    )
+    error_message = "Demo plans no private endpoint and no DNS link for the vault."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_key_vault_secret.install) > 0 &&
+      toset(keys(azurerm_key_vault_secret.install)) == toset(local.install_secret_names)
+    )
+    error_message = "The install secrets must still plan, one per install_secret_names, in demo."
+  }
+}
+
 # Key Vault rejects /31 and /32 prefixes outright, and a rule it rejects is a rule that admits
 # nothing — the failure would surface as an apply-time 400, or worse, as a firewall that looks
 # configured and lets no one through.
@@ -1393,6 +1500,29 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
     values = {
       id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.KeyVault/vaults/kv-masterly-test"
       vault_uri = "https://kv-masterly-test.vault.azure.net/"
+    }
+  }
+
+  # Every secret depends on the vault's private endpoint and DNS link, so the apply writes them
+  # too; the endpoint, the link and the zone group parse the ID of what they are placed in.
+  override_resource {
+    target = azurerm_virtual_network.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/virtualNetworks/vnet-masterly"
+    }
+  }
+
+  override_resource {
+    target = azurerm_subnet.private_endpoints
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-pe"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.key_vault
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
     }
   }
 
