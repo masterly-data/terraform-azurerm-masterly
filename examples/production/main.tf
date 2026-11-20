@@ -145,14 +145,14 @@ module "masterly" {
 
   # --- Data plane -----------------------------------------------------------------
   # Bring your own Postgres, or leave external_database_url null for the starter server.
-  # production refuses a burstable SKU and requires HA and >= 14 days of backups on the
-  # provisioned server.
+  # production refuses a burstable SKU and requires >= 14 days of backups on the provisioned
+  # server; zone-redundant HA is optional (postgres_zone_redundant_ha below).
   external_database_url             = var.external_database_url
   external_database_admin_url       = var.external_database_admin_url # the migrate job's DSN; null reuses the one above
   migrations                        = var.migrations                  # "job" runs migrations in caj-migrate (backend > v0.135.0)
   migrate_byo_database_secret_names = var.migrate_byo_database_secret_names
   postgres_sku_name                 = "GP_Standard_D2ds_v5"
-  postgres_zone_redundant_ha        = true
+  postgres_zone_redundant_ha        = true # optional, off by default: a synchronous standby in another zone (docs/scaling.md)
   postgres_backup_retention_days    = 14
 
   # --- Egress ---------------------------------------------------------------------

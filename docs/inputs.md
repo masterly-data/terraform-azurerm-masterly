@@ -148,7 +148,7 @@ In `variables-core.tf`.
 |---|---|---|---|
 | `external_database_url` | `string, sensitive` | `null` | BYO-DB: the install-level SQLAlchemy async DSN (postgresql+asyncpg://…) of the customer's own Postgres (role needs CREATEDB — the api creates one database per Masterly Environment, ADR 0003). |
 | `external_database_admin_url` | `string, sensitive` | `null` | BYO-DB only: a second DSN to the same database, for a role allowed to run schema migrations and create databases (ADR 0065, amended). |
-| `capacity_profile` | `string` | `null` | Sizes the install's services together: the Postgres SKU, its built-in pooler (postgres_pgbouncer) and zone-redundant HA, and the minimum replicas of ca-api, ca-frontend and ca-workers. |
+| `capacity_profile` | `string` | `null` | Sizes the install's services together: the Postgres SKU, its built-in pooler (postgres_pgbouncer), and the minimum replicas of ca-api, ca-frontend and ca-workers. |
 | `postgres_sku_name` | `string` | `null` | Postgres Flexible Server SKU. |
 | `postgres_server_parameters` | `map(string)` | `{}` | Postgres server parameters to set on the starter Flexible Server, as name => value (for example { max_connections = "400" }). |
 | `postgres_pgbouncer` | `bool` | `null` | Turn on the Flexible Server's built-in PgBouncer in transaction mode (ADR 0003). |
@@ -158,7 +158,7 @@ In `variables-core.tf`.
 | `postgres_version` | `string` | `"16"` | PostgreSQL major version. |
 | `postgres_backup_retention_days` | `number` | `7` | Backup retention of the provisioned Postgres server (7-35 days). |
 | `postgres_geo_redundant_backup` | `bool` | `null` | Geo-redundant backups for the provisioned Postgres server, which copy its backups to the Azure region paired with var.location. |
-| `postgres_zone_redundant_ha` | `bool` | `null` | Zone-redundant high availability for the provisioned Postgres server (standby in another AZ, same region). |
+| `postgres_zone_redundant_ha` | `bool` | `false` | Zone-redundant high availability for the provisioned Postgres server: a synchronous standby in another availability zone of the same region, which Azure fails over to with no data loss. |
 | `postgres_private_dns_zone_id` | `string` | `null` | Resource ID of an existing privatelink.postgres.database.azure.com private DNS zone (hub-and-spoke landing zones that centralize private DNS and deny zone creation in spokes). |
 | `api_max_replicas` | `number` | `1` | Maximum api replicas. |
 | `api_min_replicas` | `number` | `null` | Minimum api replicas. |

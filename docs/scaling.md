@@ -163,23 +163,26 @@ clients.
 never changes the topology: it adds no app, environment or subnet, and it turns nothing on that
 the install does not run.
 
-| Profile | Postgres SKU | Built-in pooler | Zone-redundant HA | Service Bus tier | Minimum replicas api / frontend / workers |
-|---|---|---|---|---|---|
-| `small` (evaluation only) | `B_Standard_B1ms` | off | off | Standard | 1 / 1 / 1 |
-| `standard` | `GP_Standard_D2ds_v5` | on | on | Standard | 2 / 1 / 1 |
-| `enterprise` | `GP_Standard_D4ds_v5` | on | on | Premium (chosen by you, see below) | 2 / 2 / 2 |
+| Profile | Postgres SKU | Built-in pooler | Service Bus tier | Minimum replicas api / frontend / workers |
+|---|---|---|---|---|
+| `small` (evaluation only) | `B_Standard_B1ms` | off | Standard | 1 / 1 / 1 |
+| `standard` | `GP_Standard_D2ds_v5` | on | Standard | 2 / 1 / 1 |
+| `enterprise` | `GP_Standard_D4ds_v5` | on | Premium (chosen by you, see below) | 2 / 2 / 2 |
+
+**No profile turns on zone-redundant HA.** It is `postgres_zone_redundant_ha` alone, off by
+default on every profile and in every mode (ADR 0120, 2026-11-20 amendment); see
+[Zone-redundant HA](#zone-redundant-ha) below.
 
 Each value resolves in this order: the input set explicitly (`postgres_sku_name`,
-`postgres_pgbouncer`, `postgres_zone_redundant_ha`, `servicebus_sku`, `api_min_replicas`,
+`postgres_pgbouncer`, `servicebus_sku`, `api_min_replicas`,
 `frontend_min_replicas`, `workers_min_replicas`), then the profile's, then the input's earlier
 default. Leaving `capacity_profile` unset (the default) therefore changes nothing on an existing
-install: `B_Standard_B1ms`, no pooler, no HA, Service Bus Standard and minimum replicas 1 / 1 / 1,
+install: `B_Standard_B1ms`, no pooler, Service Bus Standard and minimum replicas 1 / 1 / 1,
 as before. Every guard judges the resolved value, so `mode = "production"` refuses a burstable
-SKU, HA off or a replica floor of 0 however it was reached. On the provisioned server, a burstable
-SKU set explicitly under `standard` or `enterprise` is refused in any mode until the pooler and HA
-are set off too
-(`postgres_pgbouncer = false`, `postgres_zone_redundant_ha = false`): Azure offers neither on
-burstable SKUs.
+SKU or a replica floor of 0 however it was reached. On the provisioned server, a burstable SKU set
+explicitly under `standard` or `enterprise` is refused in any mode until the pooler is set off too
+(`postgres_pgbouncer = false`), and `postgres_zone_redundant_ha = true` is refused on a burstable
+SKU: Azure offers neither on burstable SKUs.
 
 - **`small` is refused in `mode = "production"`**, whatever the other inputs say.
 - **With `external_database_url`** the profile's Postgres values do not apply: there is no server
@@ -202,12 +205,40 @@ Standard, and `enterprise` with `enable_service_bus = true` is refused at plan u
 existing Standard namespace unchanged. `mode = "production"` requires `servicebus_sku` with Service
 Bus on whatever the profile.
 
+### Zone-redundant HA
+
+`postgres_zone_redundant_ha = true` gives the starter Postgres server a synchronous standby in
+another availability zone, which Azure fails over to in about two minutes with no data loss. It is
+off by default on every profile and in `mode = "production"`, because by default the install's
+Container Apps environments are not zone-redundant: a zone failure can take the apps down whatever Postgres does,
+so the standby protects the data more than it protects uptime, at twice the server's compute.
+
+Without it, a zone failure is recovered by a point-in-time restore into another zone. Azure
+documents up to 5 minutes of data loss, and downtime from minutes to hours depending on the data's
+size. What that means for the profiles' recovery objectives (ADR 0120 §4):
+
+| Profile | Objective (data loss / downtime) | Without HA |
+|---|---|---|
+| `small` | 1 hour / 24 hours | holds |
+| `standard` | 15 minutes / 4 hours | data loss holds; downtime holds once a restore drill on your data's size fits 4 hours |
+| `enterprise` | near zero / 1 hour | does not hold: set `postgres_zone_redundant_ha = true` |
+
+`mode = "production"` with `capacity_profile = "enterprise"` and HA off plans, with a warning
+(`enterprise_production_without_postgres_ha`). HA needs a General Purpose or Memory Optimized SKU
+and a region with availability zones. With `external_database_url` the input is ignored: your
+database's availability is yours.
+
+**Upgrading from a version where `standard` or `enterprise` turned HA on.** An install that set
+the profile and left `postgres_zone_redundant_ha` unset plans removing its standby (an in-place
+update that restarts the server). Set `postgres_zone_redundant_ha = true` before upgrading to keep
+it.
+
 ### Changing the profile on an existing install
 
-- **The Postgres server is updated in place, never replaced.** A profile reaches only the SKU,
-  HA and the pooler parameters; it never reaches the server's name, version, administrator login,
+- **The Postgres server is updated in place, never replaced.** A profile reaches only the SKU
+  and the pooler parameters; it never reaches the server's name, version, administrator login,
   zone or geo-redundant backup, any of which would replace the server and its databases.
-- **A SKU change or turning on HA restarts the server.** Both are in-place updates, but Azure
+- **A SKU change, or turning HA on or off, restarts the server.** Both are in-place updates, but Azure
   restarts the server to apply them, so plan the change in a maintenance window.
 - **The pooler needs an api image that carries MAS-1615.** Moving to `standard` or `enterprise`
   turns on the built-in PgBouncer unless `postgres_pgbouncer = false` is set, and the apps roll to
@@ -224,6 +255,8 @@ ADR 0120 §4 states a recovery point and recovery time objective per profile:
 | `standard` | 15 min / 4 h |
 | `enterprise` | near zero / 1 h |
 
-**Unverified.** These are the objectives each profile is sized for. The restore and failover
+**Unverified.** These are the objectives each profile is sized for with zone-redundant HA on, and,
+for enterprise's downtime through a zone failure, with zone-redundant environments too; without HA,
+see [Zone-redundant HA](#zone-redundant-ha). The restore and failover
 drills that would show an install meeting them have not been run, and this section will say what
 they showed once they have.

@@ -97,7 +97,8 @@ Terraform is the thing writing them.
 The first apply creates roughly 40 resources. Three worth checking before you approve:
 
 - **Postgres** — `GP_Standard_D2ds_v5` with zone-redundant HA is two servers' worth of
-  compute. Confirm your vCore quota covers it; a fresh subscription commonly starts at 0.
+  compute. HA is optional and off by default; this example turns it on, and removing the line
+  halves the Postgres compute. Confirm your vCore quota covers it; a fresh subscription commonly starts at 0.
 - **`redis_offering`** — this example sets `"managed"`. If you already run an Azure Cache
   for Redis and mean to keep it, set `"cache"`; applying `"managed"` over it plans a
   destroy of your running session store.

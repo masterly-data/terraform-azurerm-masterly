@@ -591,7 +591,7 @@ variable "external_database_admin_url" {
 variable "capacity_profile" {
   type        = string
   default     = null
-  description = "Sizes the install's services together: the Postgres SKU, its built-in pooler (postgres_pgbouncer) and zone-redundant HA, and the minimum replicas of ca-api, ca-frontend and ca-workers. \"small\" (evaluation only; mode=production refuses it): B_Standard_B1ms, no pooler, no HA, minimum replicas 1/1/1. \"standard\": GP_Standard_D2ds_v5, pooler and HA on, 2/1/1. \"enterprise\": GP_Standard_D4ds_v5, pooler and HA on, 2/2/2, sized for Service Bus Premium. A profile never changes the topology, never raises a maximum replica count, and never chooses a Service Bus tier: enterprise with enable_service_bus = true needs servicebus_sku set, because moving an existing namespace to or from Premium replaces it. Each sized input set explicitly wins over the profile, and the profile's Postgres values do not apply with external_database_url. Null (default) changes nothing: every input keeps its earlier default. Changing the Postgres SKU or turning on HA updates the server in place but restarts it, so plan the change in a maintenance window; the pooler needs an api image that carries MAS-1615. See docs/scaling.md."
+  description = "Sizes the install's services together: the Postgres SKU, its built-in pooler (postgres_pgbouncer), and the minimum replicas of ca-api, ca-frontend and ca-workers. \"small\" (evaluation only; mode=production refuses it): B_Standard_B1ms, no pooler, minimum replicas 1/1/1. \"standard\": GP_Standard_D2ds_v5, pooler on, 2/1/1. \"enterprise\": GP_Standard_D4ds_v5, pooler on, 2/2/2, sized for Service Bus Premium. A profile never changes the topology, never raises a maximum replica count, and never chooses a Service Bus tier: enterprise with enable_service_bus = true needs servicebus_sku set, because moving an existing namespace to or from Premium replaces it. Each sized input set explicitly wins over the profile, and the profile's Postgres values do not apply with external_database_url. Null (default) changes nothing: every input keeps its earlier default. No profile turns on zone-redundant HA: that is postgres_zone_redundant_ha alone, off by default. Changing the Postgres SKU updates the server in place but restarts it, so plan the change in a maintenance window; the pooler needs an api image that carries MAS-1615. See docs/scaling.md."
 
   # coalesce() keeps the check total for null; the explicit != "" refuses an empty string, which
   # an unset TF_VAR_ or a rendered template produces, rather than reading it as unset.
@@ -602,7 +602,7 @@ variable "capacity_profile" {
 
   validation {
     condition     = var.mode != "production" || var.capacity_profile != "small"
-    error_message = "capacity_profile = \"small\" is for evaluation only, and mode = \"production\" refuses it whatever the other inputs say: it sizes a burstable Postgres server with no HA. Set \"standard\" or \"enterprise\", or leave capacity_profile unset and size each input yourself."
+    error_message = "capacity_profile = \"small\" is for evaluation only, and mode = \"production\" refuses it whatever the other inputs say: it sizes a burstable Postgres server, which production refuses. Set \"standard\" or \"enterprise\", or leave capacity_profile unset and size each input yourself."
   }
 }
 
@@ -731,24 +731,16 @@ variable "postgres_geo_redundant_backup" {
 
 variable "postgres_zone_redundant_ha" {
   type        = bool
-  default     = null
-  description = "Zone-redundant high availability for the provisioned Postgres server (standby in another AZ, same region). Unset (null), capacity_profile decides (on for standard and enterprise, off for small), and with no profile it is off, the earlier default. Requires a General Purpose or Memory Optimized SKU — not supported on the burstable default, and refused at plan on a burstable (B_*) SKU. Required by mode=production on the provisioned starter server."
-
-  # Production requires an HA standby on the provisioned starter server (ADR 0066). Pairs
-  # with the non-burstable SKU guard above — both must be satisfied together. BYO-DB owns
-  # its own availability posture, so this only bites when the module provisions Postgres.
-  # Judged on the resolved value (main.tf), so the unset default cannot slip past it.
-  validation {
-    condition     = var.mode != "production" || var.external_database_url != null || coalesce(var.postgres_zone_redundant_ha, local.capacity_postgres.postgres_zone_redundant_ha)
-    error_message = "mode=production requires zone-redundant HA on the provisioned starter server: set postgres_zone_redundant_ha = true (with a General Purpose or Memory Optimized postgres_sku_name), or capacity_profile \"standard\" or \"enterprise\" with postgres_zone_redundant_ha unset, or bring your own HA database via external_database_url."
-  }
+  default     = false
+  nullable    = false
+  description = "Zone-redundant high availability for the provisioned Postgres server: a synchronous standby in another availability zone of the same region, which Azure fails over to with no data loss. False (the default) on every capacity_profile and in every mode, including production (ADR 0120, 2026-11-20 amendment): without it, a zone failure is recovered by a point-in-time restore, which Azure documents as up to 5 minutes of data loss and minutes to hours of downtime depending on the data's size. By default the install's Container Apps environments are not zone-redundant, so the standby protects the data more than it protects uptime. Turn it on for near-zero data loss, which the enterprise profile's recovery objectives assume (the plan warns when mode=production runs capacity_profile \"enterprise\" without it). It doubles the server's compute, needs a General Purpose or Memory Optimized postgres_sku_name (refused at plan on a burstable B_* SKU), and needs a region with availability zones. Turning it on or off updates the server in place but restarts it. Ignored with external_database_url, whose availability is yours."
 
   # Azure refuses zone-redundant HA on a burstable SKU at apply; refuse it at plan, judged on the
-  # resolved HA and SKU, since standard and enterprise turn HA on by default. Production is left
-  # to the burstable-SKU guard on postgres_sku_name, which already refuses any B_* SKU there.
+  # resolved SKU, which capacity_profile may have chosen. Production is left to the burstable-SKU
+  # guard on postgres_sku_name, which already refuses any B_* SKU there.
   validation {
-    condition     = var.mode == "production" || var.external_database_url != null || !coalesce(var.postgres_zone_redundant_ha, local.capacity_postgres.postgres_zone_redundant_ha) || !can(regex("^B_", local.postgres_sku_name))
-    error_message = "Zone-redundant HA (postgres_zone_redundant_ha = true, or capacity_profile \"standard\" or \"enterprise\" with postgres_zone_redundant_ha unset) is refused on a burstable (B_*) postgres_sku_name: Azure does not offer HA on burstable SKUs. Set postgres_sku_name to a General Purpose (GP_*) or Memory Optimized (MO_*) SKU, or set postgres_zone_redundant_ha = false."
+    condition     = var.mode == "production" || var.external_database_url != null || !var.postgres_zone_redundant_ha || !can(regex("^B_", local.postgres_sku_name))
+    error_message = "postgres_zone_redundant_ha = true is refused on a burstable (B_*) postgres_sku_name: Azure does not offer HA on burstable SKUs. Set postgres_sku_name to a General Purpose (GP_*) or Memory Optimized (MO_*) SKU (or capacity_profile \"standard\" or \"enterprise\"), or leave postgres_zone_redundant_ha false."
   }
 }
 
