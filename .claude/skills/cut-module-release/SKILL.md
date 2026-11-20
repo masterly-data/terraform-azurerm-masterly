@@ -34,7 +34,9 @@ creates afterwards is release notes, not a release step.
    it is not a gate: a tag whose checks fail simply gets no Release page.
 3. Update `MANIFEST.json` (the image pair the reference install had applied at tagging; the contract
    is `docs/release-manifest.md`) and regenerate the README release table with
-   `python3 scripts/check_release_manifest.py --write`. Never hand-edit the table.
+   `python3 scripts/check_release_manifest.py --write`. Never hand-edit the table. The version's entry
+   names `masterly.azurecr.io/release/` images and records `digests.api` and `digests.frontend`:
+   `cut-release` refuses an entry without them.
 4. Check every claim about application behaviour with `check-app-behaviour-claim`.
 5. Run `validate-module-change`.
 6. Hand off: state the version and the full commit SHA to dispatch `cut-release` with, and that a live
@@ -45,8 +47,12 @@ creates afterwards is release notes, not a release step.
 
 ## How the gate works
 
-`cut-release.yml` (MAS-274, owner decision 2026-09-09) creates the tag only after
-`scripts/release_gate.py` finds the commit's `ci` run on `main` green and the tag new, the commit on
-`main`, and the commit's manifest, changelog and README publishing that version. It gates its own path
-only. Release-please is deliberately not used: the version is a release decision, not computed from
-commit messages.
+`cut-release.yml` (MAS-274, owner decision 2026-09-09) creates the tag only after it finds the commit a
+full SHA on `main`, and `scripts/release_gate.py` finds the commit's `ci` run on `main` green, the tag
+absent or already at exactly that commit, and the commit's manifest entry naming release images pinned
+by digest; and the commit's manifest, changelog and README publish that version. A tag already at the
+commit is not written again; a tag at another commit is refused. Once the tag is at the commit it sends
+`release-published` (version, tag, commit) to `masterly-release-tests`. At Stable, that repository's
+`promote.yml` dispatches it (ADR 0107 §5); see `docs/releasing.md`. It gates its own path only.
+Release-please is deliberately not used: the version is a release decision, not computed from commit
+messages.
