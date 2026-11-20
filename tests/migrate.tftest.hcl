@@ -10,6 +10,13 @@ mock_provider "random" {
   }
 }
 mock_provider "azapi" {}
+mock_provider "time" {
+  mock_resource "time_sleep" {
+    defaults = {
+      id = "2026-01-01T00:00:00Z"
+    }
+  }
+}
 
 variables {
   location         = "swedencentral"
@@ -1346,7 +1353,7 @@ mock_provider "azurerm" {
 # A live branch plan is still required before release (validate-module-change).
 run "before_migrate_job_uses_previous_defaults" {
   command   = apply
-  providers = { azurerm = azurerm.upgrade, random = random, azapi = azapi }
+  providers = { azurerm = azurerm.upgrade, random = random, azapi = azapi, time = time }
 
   variables {
     migrations         = "start"
@@ -1370,7 +1377,7 @@ run "before_migrate_job_uses_previous_defaults" {
 
 run "migrate_job_preserves_the_existing_install" {
   command   = plan
-  providers = { azurerm = azurerm.upgrade, random = random, azapi = azapi }
+  providers = { azurerm = azurerm.upgrade, random = random, azapi = azapi, time = time }
 
   variables {
     migrations         = "job"
@@ -1556,6 +1563,7 @@ run "external_database_admin_url_reaches_only_the_migrate_job" {
     azurerm = azurerm.upgrade
     random  = random
     azapi   = azapi
+    time    = time
   }
   variables {
     enable_key_vault            = true
@@ -1604,6 +1612,7 @@ run "migrate_app_role_secrets_are_read_one_by_one" {
     azurerm = azurerm.upgrade
     random  = random
     azapi   = azapi
+    time    = time
   }
 
   override_resource {

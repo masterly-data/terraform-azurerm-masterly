@@ -613,12 +613,20 @@ a test install first, and read every plan before you apply it.
    hub creates the private DNS records for the internal ones from it.
 2. **Move `ca-workers` and `caj-migrate`.** Set `workers_environment = "workers"`. With
    `migrations = "job"`, also set `migrate_job_environment = "workers"`. Each is replaced under
-   the same name in the workers environment. The pipeline pauses until the new `ca-workers` runs,
-   and the apply starts one more execution of `caj-migrate`. Both start on the module's api image,
-   so run CD's release again afterwards. Neither has ingress, so no address changes.
+   the same name in the workers environment. The apply waits 180 seconds between deleting each
+   old workload and creating the new one, because Azure still holds the old name pending deletion
+   and refuses an immediate create. Each workload is down for that wait, on top of the time it
+   takes to start. The pipeline pauses until the new `ca-workers` runs, and the apply starts one
+   more execution of `caj-migrate`. Both start on the module's api image, so run CD's release
+   again afterwards. Neither has ingress, so no address changes. If Azure still refuses the
+   create with `FailedIdentityOperation` (409 "pending delete", or 400 "not found"), the workload
+   stays down until you re-run the same apply, which completes it.
 3. **Move `ca-frontend`, `ca-edge` and `ca-api` together.** Set `frontend_environment = "front"`,
    `edge_environment = "front"` and `api_environment = "app"` in one apply. That apply replaces
-   the three apps, with downtime between destroy and create. What changes:
+   the three apps, with downtime between destroy and create. The apply waits 180 seconds between
+   deleting each old app and creating the new one, and each app is down for that wait on top of
+   its start. If Azure still refuses a create with `FailedIdentityOperation` (409 or 400), that
+   app stays down until you re-run the same apply, which completes it. What changes:
    - **The FQDNs.** `ca-frontend` and `ca-edge` get new Container Apps FQDNs under the front
      environment's default domain, and with them `frontend_url` and `edge_url`. `ca-api` gets
      one under the app environment's. Anything that holds the old URLs needs the new ones: your

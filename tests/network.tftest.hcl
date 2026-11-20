@@ -13,6 +13,13 @@ mock_provider "azurerm" {
 }
 mock_provider "random" {}
 mock_provider "azapi" {}
+mock_provider "time" {
+  mock_resource "time_sleep" {
+    defaults = {
+      id = "2026-01-01T00:00:00Z"
+    }
+  }
+}
 
 variables {
   location         = "swedencentral"
@@ -1931,7 +1938,7 @@ mock_provider "azurerm" {
 # the read's result.
 run "egress_firewall_next_hop_attaches_the_route_table_to_snet_aca_only" {
   command   = apply
-  providers = { azurerm = azurerm.egress, random = random, azapi = azapi }
+  providers = { azurerm = azurerm.egress, random = random, azapi = azapi, time = time }
 
   variables {
     ingress_allowed_cidrs      = ["203.0.113.7/32"]
@@ -1982,7 +1989,7 @@ run "egress_firewall_next_hop_attaches_the_route_table_to_snet_aca_only" {
 # the association is refused.
 run "egress_firewall_is_refused_when_azure_lists_no_workload_profile" {
   command   = plan
-  providers = { azurerm = azurerm.egress, random = random, azapi = azapi }
+  providers = { azurerm = azurerm.egress, random = random, azapi = azapi, time = time }
 
   variables {
     ingress_allowed_cidrs      = ["203.0.113.7/32"]

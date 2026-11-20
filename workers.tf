@@ -21,7 +21,7 @@ variable "workers_environment" {
   type        = string
   default     = "runtime"
   nullable    = false
-  description = "Which Container Apps environment ca-workers runs in. \"runtime\" (default): aca-<name_prefix> on snet-aca, where it has always run; the default plans no change. \"workers\": the workers environment of ADR 0120, aca-<name_prefix>-workers on snet-workers, internal and with no inbound caller (docs/networking.md, \"The environment subnets\"). ca-workers keeps its identity, env, secrets and scale rule, and still has no ingress. Changing it replaces ca-workers under the same name: the pipeline pauses until the new app's first replica runs, and the new app starts on the module's api image, not the digest CD last rolled, so run CD's release again afterwards. The plan refuses \"workers\" on an install without the workers environment (environment_subnet_ids has no workers subnet, as on an injected network without workers_subnet_id), and with egress_firewall set: egress_firewall attaches its route table to snet-aca only, so the environment subnets get no route table from it and ca-workers' egress would bypass your firewall. On an injected network egress_firewall is refused anyway, so the plan cannot check forced tunnelling there: your platform team must attach the hub's route table (0.0.0.0/0 to the firewall) to workers_subnet_id before you set \"workers\", or ca-workers' egress bypasses your firewall."
+  description = "Which Container Apps environment ca-workers runs in. \"runtime\" (default): aca-<name_prefix> on snet-aca, where it has always run; the default plans no change. \"workers\": the workers environment of ADR 0120, aca-<name_prefix>-workers on snet-workers, internal and with no inbound caller (docs/networking.md, \"The environment subnets\"). ca-workers keeps its identity, env, secrets and scale rule, and still has no ingress. Changing it replaces ca-workers under the same name, with a wait of 180 seconds between deleting the old app and creating the new one, so that Azure finishes the delete: the pipeline pauses until the new app's first replica runs, and the new app starts on the module's api image, not the digest CD last rolled, so run CD's release again afterwards. The plan refuses \"workers\" on an install without the workers environment (environment_subnet_ids has no workers subnet, as on an injected network without workers_subnet_id), and with egress_firewall set: egress_firewall attaches its route table to snet-aca only, so the environment subnets get no route table from it and ca-workers' egress would bypass your firewall. On an injected network egress_firewall is refused anyway, so the plan cannot check forced tunnelling there: your platform team must attach the hub's route table (0.0.0.0/0 to the firewall) to workers_subnet_id before you set \"workers\", or ca-workers' egress bypasses your firewall."
 
   validation {
     condition     = contains(["runtime", "workers"], var.workers_environment)
@@ -159,9 +159,9 @@ module "workers" {
   name                = "ca-workers"
   resource_group_name = azurerm_resource_group.aca.name
   # aca-<prefix>, or the workers environment with workers_environment = "workers". A change
-  # replaces the app: Azure does not move a Container App between environments. aca-<prefix> is
-  # read through one() (environment.tf), as it may be retired.
-  environment_id = var.workers_environment == "workers" ? module.environments["workers"].id : local.aca_environment_id
+  # replaces the app: Azure does not move a Container App between environments. The id is built in
+  # environment.tf, where the move's wait (time_sleep.environment_move) reads it too.
+  environment_id = local.workers_environment_id
   image          = local.api_image # the same image as the api; only the command differs
 
   acr_login_server           = local.registry_server
@@ -250,6 +250,7 @@ module "workers" {
     azurerm_subnet_route_table_association.aca,
     # In the workers environment, its subnet's NSG is in place first, as for the environment.
     azurerm_subnet_network_security_group_association.environment,
+    time_sleep.environment_move["workers"],
   ]
 }
 

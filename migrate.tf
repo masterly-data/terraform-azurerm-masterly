@@ -27,7 +27,7 @@ variable "migrate_job_environment" {
   type        = string
   default     = "runtime"
   nullable    = false
-  description = "With migrations = \"job\": which Container Apps environment the migrate job (caj-migrate) runs in. \"runtime\" (default): aca-<name_prefix> on snet-aca, where it has always run; the default plans no change. \"workers\": the workers environment of ADR 0120, aca-<name_prefix>-workers on snet-workers, internal and with no inbound caller (docs/networking.md, \"The environment subnets\"). The job keeps its identity, id-<prefix>-migrate, and its env and secrets, and a job has no ingress. Changing it replaces caj-migrate under the same name: the new job starts on the module's api image, not the digest CD last rolled, so run CD's release again afterwards, and the apply starts one more execution of it (migrate_start). The plan refuses \"workers\" on an install without the workers environment (environment_subnet_ids has no workers subnet, as on an injected network without workers_subnet_id), and with egress_firewall set: egress_firewall attaches its route table to snet-aca only, so the environment subnets get no route table from it and the job's egress would bypass your firewall. On an injected network egress_firewall is refused anyway, so the plan cannot check forced tunnelling there: your platform team must attach the hub's route table (0.0.0.0/0 to the firewall) to workers_subnet_id before you set \"workers\", or the job's egress bypasses your firewall."
+  description = "With migrations = \"job\": which Container Apps environment the migrate job (caj-migrate) runs in. \"runtime\" (default): aca-<name_prefix> on snet-aca, where it has always run; the default plans no change. \"workers\": the workers environment of ADR 0120, aca-<name_prefix>-workers on snet-workers, internal and with no inbound caller (docs/networking.md, \"The environment subnets\"). The job keeps its identity, id-<prefix>-migrate, and its env and secrets, and a job has no ingress. Changing it replaces caj-migrate under the same name, with a wait of 180 seconds between deleting the old job and creating the new one, so that Azure finishes the delete: the new job starts on the module's api image, not the digest CD last rolled, so run CD's release again afterwards, and the apply starts one more execution of it (migrate_start). The plan refuses \"workers\" on an install without the workers environment (environment_subnet_ids has no workers subnet, as on an injected network without workers_subnet_id), and with egress_firewall set: egress_firewall attaches its route table to snet-aca only, so the environment subnets get no route table from it and the job's egress would bypass your firewall. On an injected network egress_firewall is refused anyway, so the plan cannot check forced tunnelling there: your platform team must attach the hub's route table (0.0.0.0/0 to the firewall) to workers_subnet_id before you set \"workers\", or the job's egress bypasses your firewall."
 
   validation {
     condition     = contains(["runtime", "workers"], var.migrate_job_environment)
@@ -167,9 +167,9 @@ resource "azurerm_container_app_job" "migrate" {
   location            = var.location
   resource_group_name = azurerm_resource_group.aca.name
   # aca-<prefix>, or the workers environment with migrate_job_environment = "workers". A change
-  # replaces the job, and so starts it once more (migrate_start). aca-<prefix> is read through
-  # one() (environment.tf), as it may be retired.
-  container_app_environment_id = var.migrate_job_environment == "workers" ? module.environments["workers"].id : local.aca_environment_id
+  # replaces the job, and so starts it once more (migrate_start). The id is built in
+  # environment.tf, where the move's wait (time_sleep.environment_move) reads it too.
+  container_app_environment_id = local.migrate_job_environment_id
 
   # An execution that has not finished in 30 minutes is stopped; the next one starts over.
   replica_timeout_in_seconds = 1800
@@ -303,6 +303,7 @@ resource "azurerm_container_app_job" "migrate" {
     azurerm_subnet_route_table_association.aca,
     # In the workers environment, its subnet's NSG is in place first, as for the environment.
     azurerm_subnet_network_security_group_association.environment,
+    time_sleep.environment_move["migrate"],
   ]
 }
 

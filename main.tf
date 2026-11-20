@@ -1507,6 +1507,7 @@ module "api" {
     # route, not Azure's default path (network.tf). Without egress_firewall the association has
     # no instance, so nothing changes.
     azurerm_subnet_route_table_association.aca,
+    time_sleep.environment_move["api"],
   ]
 }
 
@@ -1655,5 +1656,6 @@ module "frontend" {
     azurerm_private_dns_zone_virtual_network_link.registry,
     # With egress_firewall, the first pull takes the firewall's route, as on the api.
     azurerm_subnet_route_table_association.aca,
+    time_sleep.environment_move["frontend"],
   ]
 }
