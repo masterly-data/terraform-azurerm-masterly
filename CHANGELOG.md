@@ -25,6 +25,208 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-20
+
+### Added
+
+- **`deployed_switches` input.** A list over `assets`, `media`, `extensions` and `replica`, written to `ca-api` and `ca-workers` as `MASTERLY_DEPLOYED_SWITCHES`, comma-separated in the order given, so an install can declare durably which deployment switches it has (api `v0.136.0` and later read it). The default, `[]`, sets nothing, so an existing install plans no change. A name outside the four, or a repeated name, is refused at plan.
+- **The front, app and workers environment subnets (ADR 0120).** On a network the module builds, three subnets delegated to `Microsoft.App/environments`, `snet-front`, `snet-app` and `snet-workers`, sit beside `snet-aca` for the workload-profiles environments the apps will move into. Each has its own network security group ending in deny-all-inbound: the front admits TCP 80 and 443 from `Internet`, or from `VirtualNetwork` with `aca_internal_load_balancer = true`; the app subnet admits HTTPS from the front subnet only; the workers subnet admits no caller. All three carry the Container Apps platform rules. The private-endpoint subnet's group admits the app and workers subnets on the data-plane ports, and never the front subnet. New inputs `front_subnet_prefix`, `app_subnet_prefix` and `workers_subnet_prefix` (all three or none, each /27 or larger, inside `vnet_address_space` and clear of every other subnet); with none set, a first VNet prefix of /21 or larger derives the /24s at index 5, 6 and 7. New outputs `environment_subnet_ids` and `environment_subnet_prefixes`. docs/networking.md, "The environment subnets", has the rules and the spoke sizes.
+- **`front_subnet_id`, `app_subnet_id` and `workers_subnet_id` for an injected network.** All three or none, three different subnets that are neither `aca_subnet_id` nor `private_endpoints_subnet_id`, in `aca_subnet_id`'s VNet; the plan refuses anything else. The module attaches no network security group to them; docs/networking.md gives the baseline they should carry.
+- **`edge` input: ca-edge, an Envoy machine entry point, off by default.** Set, it runs `ca-edge` in the install's Container App Environment (ADR 0120 §2) as its own identity, `id-<prefix>-edge`: published HTTPS-only on `ingress_allowed_cidrs` (an empty list is refused at plan), it forwards `/v1` and `/mcp` to `ca-api` and answers every other path with 404. It removes `x-jwt-payload` and the `X-MS-CLIENT-PRINCIPAL*` headers, refuses a declared body over `edge.max_request_body_bytes` (10 MiB by default) with 413, keeps streamed MCP and server-sent-events responses open, has no admin interface, runs as the image's unprivileged `envoy` user rather than root, and logs no query string or credential header. It does **no authentication yet**: the `Authorization` header reaches `ca-api` unchanged, and `ca-api` checks it. The image defaults to the upstream `envoyproxy/envoy` v1.40.2 on Docker Hub, pinned by digest; `edge.image` takes a mirror, which must carry a digest, and a change rolls the app. Its identity gets AcrPull only for an image on the install's registry, and no other role. New outputs `edge_url` and `edge_identity_principal_id`. Unset (the default), an install plans no change. docs/networking.md covers the allowlist, the egress to Docker Hub or your mirror, and running the edge behind an Application Gateway.
+- **ca-edge rate limits, per bearer token and per client address.** With `edge` set, requests to `/v1` and `/mcp` are limited to `edge.rate_limit_per_token` (600 by default) per `Authorization` header value and `edge.rate_limit_per_client` (1800 by default) per client address in each `edge.rate_limit_interval_seconds` (60 by default; each a whole number, the limits from 1 to 1000000 and the interval from 1 to 3600 seconds). The per-client limit holds a caller to its cap however many tokens it rotates through; a request without an `Authorization` header is held to it alone. A request over either limit is answered 429 with a `Retry-After` header of the interval in seconds; the 413 and 404 answers are never limited. The client address is the one the Container Apps ingress reports in `X-Forwarded-For` (exactly one trusted hop), and the header reaches `ca-api` unchanged. The limits are kept on each replica, with no Redis and no rate-limit service (ADR 0120 §5), so the effective limit is the configured limit times the running replicas (1 to 3), counted separately for `/v1` and `/mcp`. The token is a key in Envoy's memory only, never in the configuration, the plan, a log or a metric name. Behind an Application Gateway every client shares the gateway's address, and so one per-client bucket: docs/networking.md says how to size it.
+- **`edge_custom_domain` input: ca-edge on your own hostname, off by default.** The same shape and rules as `frontend_custom_domain` (a bare lowercase hostname, the certificate's versionless Key Vault secret id, and the id of the vault that holds it), for the hostname your SDK and MCP clients call. Set, the module creates `id-<prefix>-edge-cert`, an identity attached to the Container App Environment and to no app, grants it Key Vault Secrets User on that one secret, adds the certificate to the environment as a Key Vault reference read as that identity (the key never passes through Terraform, and a certificate renewed in the vault is picked up without an apply), and binds the hostname to `ca-edge` by SNI, without changing its ingress, allowlist or HTTPS-only setting. `ca-edge`'s own identity never reads the certificate. `edge_url` becomes `https://<hostname>`, and the environment's identities are now both certificate identities, each only with its input. The plan refuses it without `edge`, and with `frontend_custom_domain`'s hostname. The `asuid.<hostname>` TXT record (`custom_domain_verification_id`) must exist before the apply that sets it; docs/networking.md lists it, the A or CNAME record and the Key Vault reachability. Unset (the default), an install plans no change.
+- `enable_bff_dpop_key` (default `false`): the module generates the BFF's DPoP key, an EC P-256 key
+  handed to `ca-frontend` alone as `MASTERLY_BFF_DPOP_KEY` (PKCS#8 PEM), the env names and format
+  the frontend reads as of masterly-application-frontend commit 9defc3a7b09b. It rotates every 90
+  days at the first apply after the period ends, and for 60 minutes after each rotation the
+  outgoing key stays on `ca-frontend` as `MASTERLY_BFF_DPOP_KEY_PREVIOUS`, so sessions bound to it
+  survive the change. Applying at least monthly keeps the slots about 90 days apart. If a slot
+  expires inside the other slot's overlap, the older key's overlap is shortened to the gap
+  between rotations; the key current just before the second rotation becomes `_PREVIOUS`.
+  If both slots expire before the next apply, both keys are replaced together without retaining
+  the outgoing key, and users must sign in again once. With `enable_key_vault` the key is a Key
+  Vault secret per slot (`install-bff-dpop-key-a`, `-b`) that `ca-frontend` reads as its own identity,
+  which holds Key Vault Secrets User on those secrets alone; without it, a Container App secret
+  on `ca-frontend`.
+  The private key is held in Terraform state, and with the vault on the apps identity's app
+  secrets role on the vault can read it. `ca-api`, `ca-workers` and `caj-migrate` are unchanged.
+  The key takes effect with the first frontend release after v0.145.0, and the api's session
+  binding and DPoP replay cache arrive with the first api release after v0.137.0. The input is
+  off by default, so installs on 0.24.0's images are unaffected apart from the two new required
+  providers below. docs/identity.md, "The BFF's DPoP key".
+- `frontend_environment`, `edge_environment` and `api_environment` (default `"aca"` each) choose
+  where `ca-frontend`, `ca-edge` and `ca-api` run (ADR 0120 §4-§5). With the defaults, an install
+  plans no change. The three move together: either all three stay `"aca"`, or
+  `frontend_environment = "front"`, `edge_environment = "front"` and `api_environment = "app"`.
+  Any other mix is refused at plan, as is a placement on an install that has no front and app
+  environments.
+- With the apps moved, `ca-frontend` and `ca-edge` call `ca-api` at
+  `https://ca-api.<app environment default domain>` and verify its certificate. The BFF's
+  `MASTERLY_API_BASE_URL` uses that address. The edge's Envoy cluster connects on 443 through an
+  upstream TLS context: the host as SNI, the chain checked against the image's CA bundle, and the
+  certificate's DNS name matched. `ca-api` in the app environment, which is always internal, takes
+  VNet-only ingress and refuses plain HTTP. `api_ingress_external = true` is refused there.
+  The name resolves through the app environment's private DNS zone. With
+  `environment_private_dns_enabled = false`, your hub must create that zone and its record.
+- With `ca-frontend` on the front environment and the Key Vault private endpoint on, the
+  private-endpoint NSG gains one rule, `allow-key-vault-from-front-subnet`. It admits the front
+  subnet to the endpoint's own address (/32) on TCP 443 only, so the front reaches no database,
+  Redis or Service Bus. `ca-frontend` still reads only its own secrets, as its own identity.
+- `modules/aca-env-workload-profiles` takes `identity_ids` and outputs `identity_ids` and
+  `custom_domain_verification_id`, as `modules/aca-env-consumption` does.
+  `modules/aca-container-app` outputs `environment_id`.
+- **`builtin_auth_recovery_until` input.** The recovery fallback for `builtin_auth`: an RFC 3339 UTC time, at most 60 minutes after the plan, until which `ca-frontend`'s built-in authentication is turned off, so the application's own sign-in (and its break-glass path) is reachable when the Entra sign-in at the platform is not. It is refused at plan without `builtin_auth`, without a network restriction in front of the frontend (a non-empty `ingress_allowed_cidrs`, `frontend_ingress_external = false` or `aca_internal_load_balancer = true`), beyond 60 minutes, or when it is not an RFC 3339 UTC time. The gate comes back at the first plan and apply after the time, and a plan that still sets a passed time warns (`builtin_auth_recovery_window_has_expired`). It changes nothing on `ca-api`. Unset (the default), an existing install plans no change to its auth configuration.
+- **An activity-log alert on `ca-frontend`'s auth configuration.** With `builtin_auth` set, the module creates `alert-<prefix>-frontend-auth-config-write`, which fires on every `Microsoft.App/containerApps/authConfigs/write` on `ca-frontend` (the recovery fallback's disable and restore, and a change made outside Terraform) and notifies the install's action group like the other alerts. An install with `builtin_auth` set plans one new resource.
+- **`capacity_profile`: `small`, `standard` or `enterprise` sizes the install's services together (ADR 0120 §4).** It sets the Postgres SKU, the built-in pooler, zone-redundant HA and the minimum replicas of ca-api, ca-frontend and ca-workers: `small` is `B_Standard_B1ms`, no pooler, no HA, 1/1/1; `standard` is `GP_Standard_D2ds_v5`, pooler and HA on, 2/1/1; `enterprise` is `GP_Standard_D4ds_v5`, pooler and HA on, 2/2/2. A profile never changes the topology and never raises a maximum: set `api_max_replicas` (with `enable_redis`) and `workers_max_replicas` to at least the floor. `mode = "production"` refuses `small`. A profile never chooses a Service Bus tier, because moving an existing namespace to or from Premium replaces it: `enterprise` with `enable_service_bus = true` is refused until `servicebus_sku` is set, to `"Premium"` (enterprise's tier) or to `"Standard"` to keep an existing namespace. With `external_database_url` the profile's Postgres values do not apply. docs/scaling.md, "Capacity profiles", has the values, the recovery objectives each profile is sized for (not yet verified by drills), and what a change does to a running server.
+- `scripts/check_customer_summary.py`, and a `release-metadata` step that runs its `--selftest` and
+  then the check: every `customer-summary/X.Y.Z.json` must match the contract and a key of
+  `MANIFEST.json`, and no string in it may name an internal host, a private-link name, an `msly-*`
+  resource or a storage URL, or a security finding beyond counts by severity.
+- **`egress_firewall` input: forced-tunnel egress through your firewall.** Set `next_hop_ip` to your firewall's private IPv4 address and the module creates `rt-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, with BGP route propagation kept on; or set `route_table_id` and it attaches your own route table unchanged. Either way the table goes on `snet-aca` only, never on `snet-private-endpoints`, whose traffic stays inside the VNet. Refused at plan with both or neither field set, with a next hop that is not one IPv4 address, with injected subnets (the hub's route table there is the platform team's to attach), with public ingress (`aca_internal_load_balancer = false`: Microsoft documents forced tunnelling only for an internal environment behind an Application Gateway), and on a Consumption-only environment, where Azure ignores the route (for a new environment that half of the check runs at apply). `ca-api`, `ca-frontend`, `ca-workers` and `caj-migrate` are created after the route table is attached, so their first pull and outbound call go through the firewall. The default, null, attaches nothing, so an existing install plans no change.
+- **`egress_route` output.** The route table in effect on `snet-aca` and the next-hop address; null when `egress_firewall` is unset.
+- **`modules/aca-env-consumption`: `read_workload_profiles` input and `workload_profile_names` output**, Azure's own list of the environment's workload profiles, read with azapi only when asked. The nested module now declares the `Azure/azapi` provider, which the root module already requires.
+- `scripts/release_evidence.py`: turns a version's customer summary into release-note text. It runs
+  the customer-summary contract check first and refuses on any failure, then renders the ring
+  dates, gates passed, upgrade versions, performance per profile against the baseline version and
+  the security counts. `--write` puts the block into the version's `CHANGELOG.md` section, and
+  `--check`, run by `release-metadata`, fails on a hand-edited block, a summary with no block or
+  a block with no summary. `--compose` and `--post-tag` build the release body (the tag's
+  changelog section followed by the block). The new `release-evidence` workflow edits the Release
+  body when a summary is pushed to `main`, and the tag build's `release` job composes the same
+  body, so a re-run keeps the evidence. Neither pushes to `main`.
+- `retire_runtime_environment` (default `false`) deletes `aca-<name_prefix>` once nothing runs in
+  it (ADR 0120). The plan refuses `true` while anything the module places is still on
+  `aca-<name_prefix>`, and its message names each thing left:
+  - `ca-frontend`, `ca-edge` or `ca-api` with its placement input at `"aca"`, and the
+    custom-domain certificates that follow them;
+  - `ca-workers` with `workers_environment = "runtime"` (with `enable_workers`);
+  - `caj-migrate` with `migrations = "job"` and `migrate_job_environment = "runtime"`.
+
+  Retiring does not lift the `egress_firewall` refusal: with everything moved, `egress_firewall`
+  is still refused.
+- **`workers_environment` and `migrate_job_environment` inputs (default `"runtime"`): `ca-workers` and `caj-migrate` can run in the workers environment (ADR 0120 §4).** Each takes `"runtime"`, `aca-<prefix>` on `snet-aca` as before, or `"workers"`, `aca-<prefix>-workers` on `snet-workers`, which is internal and admits no inbound caller. `workers_environment` moves `ca-workers` only, and `migrate_job_environment` (with `migrations = "job"`) moves `caj-migrate` only. A moved workload keeps its identity (`ca-workers` its own or the apps identity as before, `caj-migrate` only `id-<prefix>-migrate`), its env, its secrets and, for `ca-workers`, its scale rule; `ca-workers` still has no ingress and a job has none. In the workers environment, each waits for the environment subnets' network security group associations.
+- **Two plan-time refusals for either input set to `"workers"`.** On an install without the workers environment (`environment_subnet_ids` has no workers subnet, as on an injected network without `workers_subnet_id`), the plan is refused, naming the input. With `egress_firewall` set it is refused too: `egress_firewall` attaches its route table to `snet-aca` only, so the environment subnets get no route table from it and the moved workload's egress would bypass your firewall. On an injected network `egress_firewall` is refused anyway, so the plan cannot see forced tunnelling there: your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to `workers_subnet_id` before either input is set to `"workers"`.
+- The nested module `modules/aca-container-app` gains five outputs: `environment_id`, `ingress_enabled`, `env_value_sha256` (a SHA-256 of each plain env value, by name, never the value), `env_secret_refs` and `secret_refs` (each vault reference's secret and identity).
+- **The front, app and workers Container Apps environments (ADR 0120 §4-§5), created beside `aca-<prefix>` with no app moved.** On an install with environment subnets (the `environment_subnet_ids` output), the module creates three workload-profiles environments, `aca-<prefix>-front`, `aca-<prefix>-app` and `aca-<prefix>-workers`, one on each of `snet-front`, `snet-app` and `snet-workers` (or the injected `front_subnet_id`, `app_subnet_id` and `workers_subnet_id`). Each declares the `Consumption` workload profile, encrypts traffic between its apps, and sends its console and system logs to the install's workspace through its own diagnostic setting, `diag-<prefix>-aca-front`, `-aca-app` and `-aca-workers`. The app and workers environments always have an internal load balancer, and no input changes that. The front is internal exactly when `aca_internal_load_balancer` is true, and public when it is false, so an install that is private today gets no public front. An install whose `environment_subnet_ids` are all null (a VNet smaller than /21 with no environment prefixes, or an injected network without the three subnet ids) gets none of them. The environments come from a new nested module, `modules/aca-env-workload-profiles`.
+- **`environment_private_dns_enabled` input (default `true`).** For each internal new environment the module creates a private DNS zone in `rg-<prefix>-aca` named the environment's default domain, a `*` A record to its static IP, and a link to the install's VNet (on an injected network, the VNet of `aca_subnet_id`) with auto-registration off, so the environment's apps resolve inside the VNet. An external front gets none. Set it `false` where your platform team owns DNS: the module then creates no zone, record or link.
+- **`container_app_environments` output**, keyed `front`, `app` and `workers`: each environment's `id`, `default_domain`, `static_ip_address` and whether it is `internal`, for a hub that creates the DNS records itself. A key is null where the install has no such environment.
+
+### Changed
+
+- Internal refactor: the network, the environment, the identities and the auth boundary's secrets and locals move out of `main.tf` into `network.tf`, `environment.tf`, `identity.tf` and `auth.tf`. No input, output or resource address changes, so an install plans no change.
+- `MANIFEST.json` and its release check accept the per-role release images `migrate`,
+  `worker_core` and `worker_integration` beside `api` and `frontend`, as
+  `<registry>/release/<role>:<tag>` with `digests.<role>` (an addition within `schema_version` 1,
+  documented in `docs/release-manifest.md`). The check now refuses any other `images` key, a
+  per-role image with no `digests`, and an image value carrying `@sha256:`.
+- Internal refactor: the root `variables.tf` and `outputs.tf` are split into `variables-<concern>.tf` and `outputs-<concern>.tf` files, one beside each concern's `.tf` file, with `variables-core.tf` and `outputs-core.tf` for the rest. Inputs and outputs only moved files: no input, output or resource changes, so an install plans no change. `docs/inputs.md` groups the inputs by the new files.
+- **Upgrading.** On an install that builds its own network from a /21 or larger, the plan creates the three subnets, their groups and associations, and updates `nsg-<name_prefix>-private-endpoints` in place with two rules. `snet-aca`, its group and rules, the private-endpoint subnet and their associations keep their addresses, names and prefixes, and nothing is replaced. If you created subnets of your own in the VNet's `.5.0/24` to `.7.0/24` of the first prefix, set the three prefixes to free ranges before you apply. A VNet smaller than /21, or explicit runtime and private-endpoint prefixes that cover those ranges, plans no change until the three prefixes are set; an injected install plans no change until the three ids are set.
+- The module now requires the `hashicorp/tls` (`~> 4.0`) and `hashicorp/time` (`~> 0.12`)
+  providers, in every configuration that uses it, including one that leaves
+  `enable_bff_dpop_key` off. `terraform init` installs them; an air-gapped install must add both
+  to its provider mirror before upgrading. Neither takes configuration or credentials.
+- The descriptions of `api_max_replicas` and `enable_redis` name Azure Managed Redis
+  (`redis_offering = "managed"`) as the target of the api's DPoP replay cache, and say the
+  in-memory cache is allowed on one api replica only, and that the cache arrives with the first
+  api release after v0.137.0. The refusal of `api_max_replicas > 1` without `enable_redis` is
+  unchanged.
+- Setting the three inputs REPLACES `ca-frontend`, `ca-edge` and `ca-api`, a destroy then create
+  with downtime. Their FQDNs change, and with them `frontend_url` and `edge_url`. The
+  custom-domain certificates and custom domains are created again on the front environment, and
+  the certificate identities move from `aca-<name_prefix>` to it.
+  `custom_domain_verification_id` then reads the front environment's, so the `asuid.<hostname>`
+  TXT records must carry the new value before the apply that moves the apps. Plan the move on a
+  test install first.
+- On an injected network (`aca_subnet_id` and `private_endpoints_subnet_id`), the module creates
+  no private-endpoint NSG. Before moving `ca-frontend` to the front environment, the hub must
+  admit the front subnet to the Key Vault private endpoint on TCP 443, or the frontend cannot
+  resolve its vault secret references.
+- `egress_firewall` is refused with any of the three apps off `"aca"`. The route table is attached
+  to snet-aca only, and the front and app environment subnets get no route table, so the moved
+  apps' egress would not be forced.
+- `frontend_environment = "front"` is refused with `registry_private_endpoint = true`, on either
+  network shape. `ca-frontend` pulls its image from the front subnet, and the front subnet may
+  reach only the Key Vault private endpoint, not the registry's, so the pull would fail.
+- **`postgres_sku_name`, `postgres_pgbouncer`, `postgres_zone_redundant_ha`, `api_min_replicas`, `frontend_min_replicas` and `workers_min_replicas` default to null.** Unset, each takes the value of `capacity_profile`, and with no profile its earlier default (`B_Standard_B1ms`, false, false, 1, 1, 1), so an install that sets no profile plans no change. A value set explicitly still wins. Every validation on these inputs, including the production guards, judges the resolved value.
+- **Zone-redundant HA on a burstable (`B_*`) SKU is refused at plan.** Azure refused it at apply already. Since `standard` and `enterprise` turn HA on, a burstable `postgres_sku_name` set under either now needs `postgres_zone_redundant_ha = false` as well.
+- **Upgrading.** Nothing changes until you set `capacity_profile`. Moving an existing install to `standard` or `enterprise` updates the Postgres server in place (it is never replaced) but restarts it for the SKU change and for HA, so do it in a maintenance window. It also turns on the built-in PgBouncer unless `postgres_pgbouncer = false` is set, which needs an api image that carries MAS-1615: roll the api image first.
+- Internal tooling and contributor docs: a change adds a changelog fragment, `changelog.d/<short-name>.md`, instead of editing `## [Unreleased]`, which stays empty. The release-preparation commit runs `scripts/fold_changelog.py X.Y.Z YYYY-MM-DD`, which folds the fragments into the version's section and deletes them. `scripts/check_release_manifest.py` refuses an entry under Unreleased, and `--tag` refuses a tree that still has a fragment. No input, output or resource changes, so an install plans no change.
+- Internal CI: the module's formatting, validation and mock-provider tests now run on Terraform 1.10.5 and on 1.12.2, the version the install template's Azure DevOps pipelines pin. No input, output or resource changes, so an install plans no change.
+- `cut-release` is the Stable path (ADR 0107 §5): `promote.yml` in `masterly-release-tests`
+  dispatches it with the commit and version from the signed Stable ring record. It now refuses a
+  version whose `MANIFEST.json` entry at the commit does not name `masterly.azurecr.io/release/`
+  images with a `digests.api` and `digests.frontend`, so no version is tagged naming its images by
+  tag alone. A tag that already exists at exactly the given commit is no longer refused: the run
+  writes no tag and goes on, so a run that failed after creating the tag is finished by dispatching
+  it again. A tag at another commit is still refused, now naming both commits. Once the tag is at
+  the commit, the workflow sends the `repository_dispatch` `release-published` (version, tag,
+  commit) to `masterly-release-tests`, with a second App token scoped to that repository.
+- **docs/networking.md, "Egress"**, rewritten for forced tunnelling: `egress_firewall` on an internal environment the module builds, the hub's route table on injected subnets, the Microsoft Learn finding (2026-11-14) behind refusing it with public ingress, and a table of every destination the Container Apps subnet reaches outside the VNet, with what reaches it and what fails when the firewall drops it. The outbound-NSG advice for a Consumption-only environment is gone: every environment the module builds is a workload-profiles environment (ADR 0104).
+- **The release check accepts a root-path api or frontend image in an older entry with a `known_issue`.** `scripts/check_release_manifest.py` allows `<registry>/api:<tag>` or `<registry>/frontend:<tag>` beside the never-published exception, only in an entry other than `latest` that records a `known_issue`. The newest release, a per-role image, and any other repository (`candidate/api`) are still refused, each pinned by a `--selftest` case.
+- With `retire_runtime_environment` unset, an upgrade plans **no change**. `aca-<name_prefix>`
+  and its diagnostic setting only move to indexed addresses, through two `moved` blocks:
+  `module.aca_env` to `module.aca_env[0]`, and `azurerm_monitor_diagnostic_setting.aca_env` to
+  `azurerm_monitor_diagnostic_setting.aca_env[0]`. Nothing is destroyed or created.
+- With `retire_runtime_environment = true` and everything moved, the plan destroys
+  `aca-<name_prefix>` (`module.aca_env[0]`) and `diag-<name_prefix>-aca-env`
+  (`azurerm_monitor_diagnostic_setting.aca_env[0]`), and nothing else. The `aca_environment_id`
+  output is then null; it is kept, so callers that read it still plan.
+- Azure deletes an environment with every app and job in it, and the module cannot see what you
+  created there yourself. Check `aca-<name_prefix>` for your own apps and jobs before you set the
+  input.
+- `snet-aca`, its NSG, the private-endpoint rule from it and `aca_subnet_id` stay. Setting the
+  input back to `false` creates a new, empty `aca-<name_prefix>`.
+- `scripts/check_runtime_env.py` and `scripts/check_release_manifest.py` check their internal
+  invariants with explicit errors instead of `assert`, so running them under `python -O` (which
+  strips asserts) no longer skips those checks. Their output and exit codes are unchanged.
+- Internal refactor: the module's plan tests move from one file into one file per concern under `tests/` (`network.tftest.hcl`, `keyvault.tftest.hcl`, `postgres.tftest.hcl` and the rest), with their shared azurerm mock data in `tests/mocks/install/`. The same 438 runs pass, unchanged. No input, output or resource changes.
+- **Upgrading plans nothing with the defaults.** Both inputs default to `"runtime"`, so `ca-workers` and `caj-migrate` stay on `aca-<prefix>` and plan no change.
+- **Setting either input (or setting it back) replaces the workload.** Azure does not move a Container App or a job between environments, so the plan destroys `ca-workers` or `caj-migrate` and creates it again under the same name. While `ca-workers` is replaced, the pipeline pauses: no job runs until the new app's first replica starts. The new app or job is created on the module's api image (the release channel's, or `api_image`), not the digest CD last rolled, so run CD's release again after the apply to roll it to the current digest. A replaced `caj-migrate` also starts one more execution at apply (`migrate_start` is replaced with the job).
+- `migrate_start` is now also replaced when the job's id changes, so a replaced job always runs once at apply.
+- **No app moves in this version.** `ca-api`, `ca-frontend`, `ca-workers`, `ca-edge`, `caj-migrate` and the custom-domain certificate stay on `aca-<prefix>`, and `module.aca_env` and its diagnostic setting `diag-<prefix>-aca-env` plan no change. Upgrading an install that has environment subnets plans the three new environments, their three diagnostic settings, and for each internal one a zone, a record and a link; on an injected spoke the link needs permission to link a zone to the spoke VNet, or set `environment_private_dns_enabled = false`. The three environment subnets still get no route table from `egress_firewall`.
+
+### Fixed
+
+- **The environment's diagnostic setting no longer shows a change on every plan.** `diag-<name_prefix>-aca-env` set `log_analytics_destination_type = "Dedicated"`, which Azure does not keep on a Container Apps environment (it reads back null), so every refreshing plan on 0.18.0 or later showed `+ log_analytics_destination_type = "Dedicated"` as an in-place update. The module no longer sets it. An existing install's next plan shows no change to `diag-<name_prefix>-aca-env`, and the console and system logs keep landing in the same `ContainerAppConsoleLogs` and `ContainerAppSystemLogs` tables. The Key Vault setting is unchanged.
+- **A plan without refresh no longer replaces the Container Apps environment.** Azure adds a `Consumption` workload profile and its managed resource group `ME_<env>_<rg>_<location>` to a VNet-integrated environment after it is created, and the provider plans to replace the environment (`infrastructure_resource_group_name = "ME_…" -> null # forces replacement`) when the state predates that profile, as with `-refresh=false` just after the first apply. A replacement would take the apps, the migrate job, the diagnostic settings and the alert scopes with it, and give the environment a new default domain. The environment modules now ignore changes to `infrastructure_resource_group_name`, which the module never sets. A plan without refresh, or with state from before Azure added the profile, no longer plans to replace the environment, and an existing install's refreshing plan shows no change.
+- **A production destroy run from inside the network now deletes the Key Vault secrets before the vault's private endpoint and DNS link.** Nothing ordered the secrets (`azurerm_key_vault_secret.install`, `migrate_api_role_password` and `migrate_workers_role_password`) after the endpoint, so a destroy could remove the endpoint first and every secret delete then failed with 403 `ForbiddenByConnection`, because a production vault has no public path. Each secret now depends on the private endpoint and the DNS link, so on destroy the secrets go first and on apply they are written after the endpoint exists. Demo, and production with `key_vault_private_dns_zone_id` set (no module-owned link), plan as before. The change adds ordering only: no attribute, network rule or role changes, and upgrading replaces no secret.
+- **Sign-in through the frontend no longer fails on api releases after v0.137.0.** Those releases bind every interactive session to the BFF's DPoP key and, on `mode = "demo"` or `"production"`, refuse every session's proof with 401 unless `MASTERLY_DPOP_INTERNAL_ORIGIN` names the origin the BFF calls the api on. The module did not set it, so every sign-in failed and the frontend reported "Your identity is not yet provisioned for this install". `ca-api` now gets `MASTERLY_DPOP_INTERNAL_ORIGIN` from the same value as `ca-frontend`'s `MASTERLY_API_BASE_URL`: `http://ca-api`, or `https://ca-api.<app environment default domain>` with `api_environment = "app"`. `ca-workers`, which reads the api's environment, gets it too and does not act on it. Service-account callers send no proof and were not affected. Upgrading updates `ca-api` and `ca-workers` in place with the new environment variable, which rolls a new revision of each.
+- **MANIFEST.json: `0.15.0` and `0.16.0` name their images where they are.** Their builds (api `v0.133.2`/`v0.133.5`, frontend `v0.138.2`/`v0.139.0`) were never published under `release/`: they exist only at the registry root, `masterly.azurecr.io/api:<tag>` and `masterly.azurecr.io/frontend:<tag>`, and are unsigned. Both entries now name those root-path references with the same tags, and each records a `known_issue` saying so and to move to `0.18.0` or later. An install pinned to either pair should move. No other entry changes, and `latest` and the channel defaults do not move.
+
+### Security
+
+- **MANIFEST.json: `0.22.0` and `0.23.0` record a `known_issue`.** Both releases pin `masterly.azurecr.io/release/api:v0.135.0` (`sha256:00b0c775ff83cd4b1d0a9c79e9290d3166f471b5576f43e4272ab0d031a9ed04`) and `masterly.azurecr.io/release/frontend:v0.143.0` (`sha256:e1e59d896125ee033a461297b9c36b57507320d7cb8c4b0897011aa7066e6a2b`). A Trivy scan on 2026-11-08 found known HIGH-severity vulnerabilities with a fix available in both images: 2 in the api image and 10 in the frontend image. An install on either release, or one that pins either image, should move to `0.24.0` (api `v0.137.0`, frontend `v0.145.0`). Because the `previous` channel skips a release with a `known_issue`, it no longer selects `0.22.0` or `0.23.0`. No image, digest or `latest` changes.
+- Installs on release_channel = "previous" should move to 0.24.0.
+
+### Documentation
+
+- `docs/data-plane.md` now says how a production destroy handles the Postgres Entra administrators. With `database_auth = "entra"`, `terraform destroy` removes the administrator before the server and stops with Postgres error `2BP01`, because the administrator's role owns objects in the database. The module does not change; the step is left to the operator: run `terraform state list`, `terraform state rm` the administrator addresses it shows (`apps[0]` under `migrations = "start"`, `migrate[0]` under `"job"`, none with `"password"` or `external_database_url`) immediately before a full destroy, and `terraform import` the administrator back if the destroy is abandoned before the server is deleted.
+- `docs/customer-summary.md`: the schema 1 contract for the redacted customer summary published
+  beside the release manifest.
+- `docs/releasing.md` and the README's "Cutting a release": who dispatches `cut-release` at
+  Stable, what `release-published` carries, why a re-run at the same commit is safe, and the
+  owner's grants for the Stable path.
+- The README's long-form feature docs moved to their own files: Identity to `docs/identity.md`, Data plane to `docs/data-plane.md`, Scaling to `docs/scaling.md`, and Networking (the landing-zone notes, the API's public address and transport security) into `docs/networking.md`. The README keeps each `##` heading with a pointer, and the departures from Azure's recommended baseline stay in it. The Diagnostics + alerts section stays in the README for now. The README holds no input table: `docs/inputs.md` is the input reference, and `scripts/check_inputs_reference.py` now fails on a README table row for a declared input.
+- `docs/customer-summary.md`: a version's summary is read from `main`, is added after the tag and
+  never appears in the tagged tree. `docs/releasing.md` and the README's "Cutting a release" gain
+  the "At Stable" step.
+- **docs/release-manifest.md** names both exceptions to the `release/` rule in the field table, "The image path" and "Compatibility", and says where each range of entries has its images: `0.22.0` and later under `release/` from release, `0.18.0` to `0.21.0` under `release/` by backfill, `0.17.0`'s api never published, and `0.15.0`/`0.16.0` only at the root, unsigned.
+- `docs/networking.md`, "Retiring the runtime environment" under "Upgrading an existing install",
+  gives the upgrade as four applies in order:
+  1. the environment subnets and environments;
+  2. `ca-workers` and `caj-migrate`;
+  3. `ca-frontend`, `ca-edge` and `ca-api` together;
+  4. the retirement.
+
+  It says what each move changes: the FQDNs, `frontend_url` and `edge_url`, the OIDC redirect URI
+  to register, and the `asuid` TXT and routing records to set before the apply. It also covers
+  how SDK and API clients reach the API through `ca-edge`, the one Key Vault rule (443, /32) a hub
+  adds for the front subnet, and the `egress_firewall` refusal. "The environment subnets" no
+  longer says a later version retires `snet-aca` with the apps' move: this version retires the
+  environment only.
+- docs/networking.md, "The environment subnets", says which workloads can be placed in the workers environment (`ca-workers` and `caj-migrate`), with which inputs, that `egress_firewall` refuses it, and that on an injected network the hub's route table must be on `workers_subnet_id` first.
+- Comments, descriptions and docs no longer call the install's environment "Consumption-only": every environment the module builds sits on a delegated subnet, on which Azure adds the `Consumption` workload profile. The `egress_firewall` refusal still describes an environment that reports no workload profile. docs/networking.md, "The environment subnets", describes the three environments and their private DNS.
+
 ## [0.24.0] - 2026-11-10
 
 Released against api `v0.137.0` and frontend `v0.145.0`, the pair Masterly's own install applied.
