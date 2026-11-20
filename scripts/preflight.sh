@@ -265,6 +265,11 @@ fi
 # --- 4. Container Apps. Environment-scoped quota does not exist until the environment does.
 
 head2 "Container Apps"
+manual "Availability zones in $LOCATION, if you set environment_zone_redundant = true
+        (optional, off by default): Azure makes a Container Apps environment zone-redundant
+        only in a region with availability zones, and fixes it when it creates the
+        environment, so check before the first apply. Sweden Central has them.
+        https://learn.microsoft.com/azure/reliability/availability-zones-region-support"
 if [[ "$MODE" == "production" ]]; then
   echo "  peak request: 3.0 vCPU / 6 GiB at api_max_replicas=2 (3.5 / 7 at 3)"
 else

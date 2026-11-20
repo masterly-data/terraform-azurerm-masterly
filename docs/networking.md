@@ -491,15 +491,18 @@ an app keeps running when one zone fails (ADR 0120, 2026-11-20 amendment). It is
 
 - **Choose it when you create the install.** Azure fixes zone redundancy when it creates an
   environment. Turning it on later replaces all three environments and every app in them: the
-  apps' FQDNs change, a custom domain's certificate and binding are created again, and the apps
-  start on the module's images until CD's release runs again.
+  apps' FQDNs change, a custom domain's certificate and binding are created again on the new front
+  environment, and the apps start on the module's images until CD's release runs again. The new
+  front environment has a new `custom_domain_verification_id`: update the `asuid` TXT record to it
+  before the apply, as for a move of `frontend_environment`, or the binding fails.
 - **It needs a region with availability zones**, and the environment subnets need no extra size:
   [the subnet sizes above](#the-environment-subnets) hold.
 - **An app needs two replicas to run in two zones.** The plan warns
   (`environment_zone_redundancy_needs_two_replicas`) when `ca-api`, `ca-frontend` or `ca-workers`
   runs in one of the three environments with a minimum below two. `capacity_profile =
-  "enterprise"` sets two for all three. `ca-edge` runs at least one replica and scales out under
-  load.
+  "enterprise"` sets two for all three. `ca-edge` is not counted: its minimum is fixed at one
+  replica, so it can run in a single zone and stop with it until it scales out again. No input
+  changes that today; an install whose machine clients must survive a zone failure should know it.
 - **It covers the three environments only.** Apps still on `aca-<name_prefix>` are not
   zone-redundant: move them first (`frontend_environment`, `edge_environment`, `api_environment`,
   `workers_environment`).

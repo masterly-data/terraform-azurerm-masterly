@@ -236,7 +236,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "environment" {
 
 # A zone-redundant environment spreads an app's replicas across zones only when it has two or
 # more. A warning, not a refusal: one replica still runs, in one zone. ca-edge's floor is fixed at
-# one and is not counted; it scales out under load.
+# one and no input changes it, so it is not counted; docs/networking.md states the gap.
 locals {
   zone_redundant_single_replica_apps = var.environment_zone_redundant ? compact([
     var.api_environment != "aca" && local.api_min_replicas < 2 ? "ca-api (api_min_replicas = ${local.api_min_replicas})" : "",

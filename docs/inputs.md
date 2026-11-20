@@ -259,7 +259,7 @@ In `variables-environment.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `environment_private_dns_enabled` | `bool` | `true` | Whether the module creates the private DNS that resolves the front, app and workers Container Apps environments inside the VNet. |
-| `environment_zone_redundant` | `bool` | `false` | Whether the front, app and workers Container Apps environments are zone-redundant: Azure spreads each environment's infrastructure and its apps' replicas across the region's availability zones, so an app keeps running... |
+| `environment_zone_redundant` | `bool` | `false` |  |
 | `retire_runtime_environment` | `bool` | `false` | Whether to delete aca-<name_prefix>, the Container Apps environment the apps ran in before the front, app and workers environments, once nothing runs in it. |
 
 ## Images and registry pull credential
