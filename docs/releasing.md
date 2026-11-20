@@ -64,6 +64,14 @@ version and commit. The gate finds the tag already at that commit and passes, re
 send `release-published`. Every other check still runs again. A tag at another commit is still
 refused, so a re-run cannot move or recreate a published tag.
 
+Re-running the failed run itself works too, whether all jobs or only the failed ones. "Re-run
+failed jobs" does not run `verify` again and replays its outputs from the earlier attempt, which
+may still say the tag is absent. So the `tag` job does not rely on them: before it writes
+anything, it reads where the tag is now, skips the write when the tag is at the commit, and
+refuses when it is at another. Until 2026-11-20 it relied on `verify`'s output, and re-running
+only the failed `tag` job after 0.25.0's tag was created failed with `Reference already exists`.
+That run wrote nothing.
+
 ## At Stable: the evidence
 
 The tag stays on the tested candidate, unchanged. The evidence that a version passed its rings
