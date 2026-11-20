@@ -1,0 +1,7 @@
+### Added
+
+- **`ca-edge` now has the diagnostic setting and the availability alerts the other apps have.** An install with `edge` set creates, on its next apply and with no variable changed, `diag-<name_prefix>-edge` (an `AllMetrics` diagnostic setting, metrics only), `alert-<name_prefix>-edge-unavailable` (severity 0, in every mode, whatever `enable_diagnostics` says), `alert-<name_prefix>-edge-5xx` (with diagnostics on) and `alert-<name_prefix>-edge-silent` (with app availability diagnostics on, the production default). Before this, an edge outage, or an Envoy answering 503 because it cannot reach `ca-api`, paged nobody, although `ca-edge` is the only way in for REST, SDK and MCP callers once `ca-api` is internal. In production this adds one more `AllMetrics` stream to your workspace's ingest and one more log search rule billed per evaluation to your Azure bill; `enable_app_availability_diagnostics = false` turns those two off and keeps `edge-unavailable`. `edge-5xx` also counts the api's 5xx that Envoy passes through. `app-not-ready` does not cover `ca-edge`: Envoy writes no readiness line.
+
+### Changed
+
+- **`ca-edge` declares TCP liveness and readiness probes on its listener port (8080).** Azure applied default TCP probes already; they are now stated and tuned (the readiness failure budget allows a slow Envoy start). Envoy's admin interface stays unconfigured and the route list is unchanged. The next apply rolls a new `ca-edge` revision.

@@ -824,6 +824,186 @@ run "injected_action_group_is_used_with_diagnostics_off" {
   }
 }
 
+# --- ca-edge (edge set) --------------------------------------------------------------------
+# ca-edge is the machine entry point; it gets the same diagnostic setting and alerts as the other
+# apps, under the same gates. target_resource_id, the alerts' scopes, the silent rule's query and
+# the routing to the module's action group carry computed ids, which a plan against the mock
+# cannot know: tests/edge_availability_routing.tftest.hcl asserts them in an apply.
+#
+# The first run is production with neither gate set, so it shows that the production defaults give
+# ca-edge its setting and all three alerts.
+
+run "edge_gets_a_metrics_only_diagnostic_setting_and_all_three_alerts" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      contains(keys(azurerm_monitor_diagnostic_setting.app), "edge") &&
+      azurerm_monitor_diagnostic_setting.app["edge"].name == "diag-masterly-edge" &&
+      length(azurerm_monitor_diagnostic_setting.app["edge"].enabled_metric) == 1 &&
+      one([for m in azurerm_monitor_diagnostic_setting.app["edge"].enabled_metric : m.category]) == "AllMetrics" &&
+      length(azurerm_monitor_diagnostic_setting.app["edge"].enabled_log) == 0
+    )
+    error_message = "ca-edge's diagnostic setting must be diag-<prefix>-edge, send AllMetrics and no log category (its console log already reaches the workspace through the environment's setting)."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.app_unavailable["edge"].name == "alert-masterly-edge-unavailable" &&
+      azurerm_monitor_metric_alert.app_unavailable["edge"].severity == 0 &&
+      azurerm_monitor_metric_alert.app_unavailable["edge"].criteria[0].metric_namespace == "Microsoft.App/containerapps" &&
+      azurerm_monitor_metric_alert.app_unavailable["edge"].criteria[0].metric_name == "Replicas" &&
+      azurerm_monitor_metric_alert.app_unavailable["edge"].criteria[0].aggregation == "Maximum" &&
+      azurerm_monitor_metric_alert.app_unavailable["edge"].criteria[0].operator == "LessThan" &&
+      azurerm_monitor_metric_alert.app_unavailable["edge"].criteria[0].threshold == 1 &&
+      strcontains(azurerm_monitor_metric_alert.app_unavailable["edge"].description, "machine access (REST, SDK and MCP) is DOWN")
+    )
+    error_message = "edge-unavailable must be a severity 0 Replicas Maximum < 1 alert whose description names machine access as what is down."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.app_5xx["edge"].name == "alert-masterly-edge-5xx" &&
+      azurerm_monitor_metric_alert.app_5xx["edge"].severity == 1 &&
+      azurerm_monitor_metric_alert.app_5xx["edge"].criteria[0].metric_namespace == azurerm_monitor_metric_alert.app_5xx["api"].criteria[0].metric_namespace &&
+      azurerm_monitor_metric_alert.app_5xx["edge"].criteria[0].metric_name == "Requests" &&
+      azurerm_monitor_metric_alert.app_5xx["edge"].criteria[0].aggregation == "Total" &&
+      azurerm_monitor_metric_alert.app_5xx["edge"].criteria[0].operator == "GreaterThan" &&
+      azurerm_monitor_metric_alert.app_5xx["edge"].criteria[0].threshold == 5 &&
+      one([for d in azurerm_monitor_metric_alert.app_5xx["edge"].criteria[0].dimension : d.name]) == "statusCodeCategory" &&
+      one([for d in azurerm_monitor_metric_alert.app_5xx["edge"].criteria[0].dimension : one(d.values)]) == "5xx" &&
+      azurerm_monitor_metric_alert.app_5xx["edge"].frequency == azurerm_monitor_metric_alert.app_5xx["api"].frequency &&
+      azurerm_monitor_metric_alert.app_5xx["edge"].window_size == azurerm_monitor_metric_alert.app_5xx["api"].window_size
+    )
+    error_message = "edge-5xx must have the api's criteria: Requests, Total, GreaterThan 5, statusCodeCategory 5xx, severity 1."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["edge"].name == "alert-masterly-edge-silent" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["edge"].severity == 0 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["edge"].criteria[0].time_aggregation_method == "Count" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["edge"].criteria[0].operator == "LessThan" &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["edge"].criteria[0].threshold == 1 &&
+      azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["edge"].criteria[0].failing_periods[0].number_of_evaluation_periods == 1 &&
+      strcontains(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["edge"].description, "machine access (REST, SDK and MCP) is DOWN")
+    )
+    error_message = "edge-silent must fire on an empty result (Count < 1, one period) and say machine access is what is down."
+  }
+}
+
+# The availability alert does not need diagnostics; the 5xx, silent rule and setting do.
+run "edge_unavailable_exists_with_diagnostics_off" {
+  command = plan
+
+  variables {
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_diagnostics    = false
+    alert_email           = null
+  }
+
+  assert {
+    condition = (
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "edge") &&
+      !contains(keys(azurerm_monitor_metric_alert.app_5xx), "edge") &&
+      !contains(keys(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent), "edge") &&
+      !contains(keys(azurerm_monitor_diagnostic_setting.app), "edge")
+    )
+    error_message = "With diagnostics off, ca-edge must keep edge-unavailable and get no edge-5xx, edge-silent or diagnostic setting."
+  }
+}
+
+run "edge_with_app_availability_diagnostics_off_keeps_unavailable_and_5xx" {
+  command = plan
+
+  variables {
+    edge                                = {}
+    ingress_allowed_cidrs               = ["203.0.113.7/32"]
+    enable_diagnostics                  = true
+    enable_app_availability_diagnostics = false
+  }
+
+  assert {
+    condition = (
+      contains(keys(azurerm_monitor_metric_alert.app_unavailable), "edge") &&
+      contains(keys(azurerm_monitor_metric_alert.app_5xx), "edge") &&
+      !contains(keys(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent), "edge") &&
+      !contains(keys(azurerm_monitor_diagnostic_setting.app), "edge")
+    )
+    error_message = "With enable_app_availability_diagnostics = false, ca-edge must get no diagnostic setting and no edge-silent rule, and keep edge-unavailable."
+  }
+}
+
+# Every edge alert routes to a given action group when no alert_email is set. With alert_email set,
+# the routing to the module's own group is asserted in tests/edge_availability_routing.tftest.hcl.
+run "edge_alerts_route_to_the_action_group" {
+  command = plan
+
+  variables {
+    edge                                = {}
+    ingress_allowed_cidrs               = ["203.0.113.7/32"]
+    enable_diagnostics                  = true
+    enable_app_availability_diagnostics = true
+    alert_email                         = null
+    alert_action_group_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ops/providers/microsoft.insights/actionGroups/ag-ops"
+  }
+
+  assert {
+    condition = (
+      contains([for a in azurerm_monitor_metric_alert.app_unavailable["edge"].action : a.action_group_id], var.alert_action_group_id) &&
+      contains([for a in azurerm_monitor_metric_alert.app_5xx["edge"].action : a.action_group_id], var.alert_action_group_id) &&
+      contains(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent["edge"].action[0].action_groups, var.alert_action_group_id)
+    )
+    error_message = "edge-unavailable, edge-5xx and edge-silent must each route to the action group."
+  }
+}
+
+# edge unset: no edge key anywhere, as before.
+run "edge_unset_adds_no_edge_alerts_or_setting" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs               = ["203.0.113.7/32"]
+    enable_diagnostics                  = true
+    enable_app_availability_diagnostics = true
+  }
+
+  assert {
+    condition = (
+      !contains(keys(azurerm_monitor_diagnostic_setting.app), "edge") &&
+      !contains(keys(azurerm_monitor_metric_alert.app_unavailable), "edge") &&
+      !contains(keys(azurerm_monitor_metric_alert.app_5xx), "edge") &&
+      !contains(keys(azurerm_monitor_scheduled_query_rules_alert_v2.app_silent), "edge")
+    )
+    error_message = "Without edge, no edge key may appear in the diagnostic settings or the app alerts."
+  }
+}
+
 # --- The production notification-target refusal -------------------------------------------
 
 run "production_without_a_notification_target_is_refused" {

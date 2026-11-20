@@ -290,7 +290,7 @@ In `diagnostics.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `enable_diagnostics` | `bool` | `null` | Wire the data-plane resources' diagnostic settings, the saturation and load alerts and the postgres-silent alert to the install's Log Analytics workspace. |
-| `enable_app_availability_diagnostics` | `bool` | `null` | Send the platform metrics of ca-api, ca-frontend and ca-workers (AllMetrics) to the install's Log Analytics workspace, and alert when an app stops sending them: one log search rule per app, <app>-silent, which fires o... |
+| `enable_app_availability_diagnostics` | `bool` | `null` | Send the platform metrics of ca-api, ca-frontend, ca-workers (with enable_workers) and ca-edge (with edge) (AllMetrics) to the install's Log Analytics workspace, and alert when an app stops sending them: one log searc... |
 | `alert_email` | `string` | `null` | Email address that receives the install's alerts (creates an action group, in every mode and whatever enable_diagnostics says). |
 | `alert_action_group_id` | `string` | `null` | Resource ID of an existing Azure Monitor action group to route alerts to (e.g. a shared ops group / a PagerDuty webhook group). |
 | `alerts_routed_externally` | `bool` | `false` | Escape hatch for the production notification-target check. |
