@@ -244,7 +244,7 @@ else
             Portal > Help + support > New support request
             Issue type   Service and subscription limits (quotas)
             Quota type   Azure Database for PostgreSQL flexible server
-            Details      Location $LOCATION / Series Ddsv5 / New Quota 4
+            Details      Location $LOCATION / Series Ddsv5 / New Quota 2 (4 with HA)
           FOUR if you set postgres_zone_redundant_ha = true, two without it:
           GP_Standard_D2ds_v5 is a 2-vCore SKU, and the optional zone-redundant standby
           is real compute that Azure provisions and maintains beside it.
