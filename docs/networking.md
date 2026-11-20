@@ -754,8 +754,9 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
   and `ca-api` does not redirect it. No response from the edge carries `ca-api`'s hostname in a
   `Location`: when `ca-api` answers with a redirect naming the host the edge forwards to
   (`http://ca-api`, or `https://ca-api.<app environment domain>`; any letter case, any port), the
-  edge rewrites it relative to its own address, such as `/v1/x/`; a result that would begin with
-  `//` or `/\` (another host) is left as it was. Any other `Location` is passed on unchanged.
+  edge rewrites it relative to its own address, such as `/v1/x/`, or removes it when it cannot be
+  made relative (a result that would begin with `//` or `/\`, or a malformed port). A `Location`
+  naming any other host, `http://ca-api.example` included, is passed on unchanged.
 - **No identity headers.** The edge removes `x-jwt-payload`, `X-MS-CLIENT-PRINCIPAL`,
   `-ID`, `-IDP` and `-NAME` from every request, and drops any header with an underscore in its
   name, so a caller cannot hand `ca-api` a statement of who it is.

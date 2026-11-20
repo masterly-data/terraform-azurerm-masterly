@@ -676,6 +676,9 @@ run "edge_rewrites_bare_mcp_and_upstream_locations" {
       strcontains(local.edge_location_rewrite_lua, "\"https://ca-api\"") &&
       strcontains(local.edge_location_rewrite_lua, "string.lower(location)") &&
       strcontains(local.edge_location_rewrite_lua, "headers:replace(\"location\", rest)") &&
+      strcontains(local.edge_location_rewrite_lua, "if rest == nil then\n    return\n  end") &&
+      strcontains(local.edge_location_rewrite_lua, "elseif first ~= \"/\" then") &&
+      length(regexall("headers:remove\\(\"location\"\\)", local.edge_location_rewrite_lua)) == 2 &&
       length(regexall("(?i)body|envoy_on_request|%|authorization", local.edge_location_rewrite_lua)) == 0
     )
     error_message = "Between the rate limiter and the router, a Lua filter must rewrite only a response Location naming ca-api's upstream host, case-insensitively, and read no body. Any other Location is left as it is."

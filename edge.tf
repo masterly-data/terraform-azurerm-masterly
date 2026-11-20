@@ -220,8 +220,10 @@ locals {
   # A redirect from ca-api names the host the edge sends upstream (http://ca-api, or
   # https://ca-api.<app domain>), which a client cannot reach. The response filter turns such a
   # Location, scheme and host in any case and with an optional port, into a reference relative
-  # to the edge. Any other Location, and a result that would start with // or /\ (another
-  # host), is left as it was. Headers only: no body is read, so nothing is buffered.
+  # to the edge. A result that would start with // or /\ (another host), or a malformed port, has
+  # the Location removed rather than sent on with the upstream host. A Location whose host only
+  # starts with the upstream host (http://ca-api.evil) is another host and is left as it was, like
+  # any other Location. Headers only: no body is read, so nothing is buffered.
   edge_location_rewrite_lua = <<-LUA
     function envoy_on_response(response_handle)
       local headers = response_handle:headers()
@@ -240,13 +242,12 @@ locals {
       if rest == nil then
         return
       end
+      local had_port = false
       if string.sub(rest, 1, 1) == ":" then
+        had_port = true
         local i = 2
         while i <= #rest and string.byte(rest, i) >= 48 and string.byte(rest, i) <= 57 do
           i = i + 1
-        end
-        if i == 2 then
-          return
         end
         rest = string.sub(rest, i)
       end
@@ -254,10 +255,14 @@ locals {
       if rest == "" or first == "?" or first == "#" then
         rest = "/" .. rest
       elseif first ~= "/" then
+        if had_port then
+          headers:remove("location")
+        end
         return
       end
       local second = string.byte(rest, 2)
       if second == 47 or second == 92 then
+        headers:remove("location")
         return
       end
       headers:replace("location", rest)

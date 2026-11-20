@@ -5,5 +5,6 @@
   `/mcp` works with or without the trailing slash. Any redirect `ca-api` does send whose `Location`
   names the internal host the edge forwards to (`http://ca-api`, or `https://ca-api.<app environment
   domain>` with `api_environment = "app"`) is rewritten to a reference relative to the edge, never
-  to the caller's Host; other `Location` values are unchanged. No input or output changes; with
+  to the caller's Host, or removed when it cannot be made relative; other `Location` values are
+  unchanged. No input or output changes; with
   `edge` set, the next apply rolls a new `ca-edge` revision.
