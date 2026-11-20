@@ -626,10 +626,59 @@ run "edge_forwards_to_ca_api_in_app_over_verified_tls" {
     error_message = "With ca-api in app, every forwarded route's host_rewrite_literal must be ca-api.<app default domain>."
   }
 
+  # The Location rewrite names the app environment's ca-api host, from local.edge_upstream_host.
+  assert {
+    condition = (
+      strcontains(local.edge_location_rewrite_lua, "\"https://ca-api.app-3c4d.swedencentral.azurecontainerapps.io\"") &&
+      strcontains(local.edge_location_rewrite_lua, "\"http://ca-api.app-3c4d.swedencentral.azurecontainerapps.io\"") &&
+      !strcontains(local.edge_location_rewrite_lua, "\"http://ca-api\"")
+    )
+    error_message = "With ca-api in app, the Location rewrite must match ca-api.<app default domain>, not the same-environment name."
+  }
+
   # The stat prefixes stay the two the edge always had: the TLS context adds none.
   assert {
     condition     = toset(flatten(regexall("\"stat_prefix\":\"([^\"]*)\"", jsonencode(local.edge_envoy_config)))) == toset(["edge", "edge_rate_limit"])
     error_message = "The upstream TLS context must add no stat prefix."
+  }
+}
+
+# Threat: the edge discloses ca-api's internal host, and a bare /mcp is redirected to it. Exactly /mcp
+# is forwarded as /mcp/ on the mcp route only, and a Location naming the upstream host is made
+# relative by a response-headers-only Lua filter keyed to local.edge_upstream_host.
+run "edge_rewrites_bare_mcp_and_upstream_locations" {
+  command = plan
+
+  variables {
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      one([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.route.regex_rewrite if r.name == "mcp"]) == { pattern = { regex = "^/mcp$" }, substitution = "/mcp/" } &&
+      can(regex(local.edge_mcp_bare_path_rewrite.pattern.regex, "/mcp")) &&
+      !can(regex(local.edge_mcp_bare_path_rewrite.pattern.regex, "/mcp/")) &&
+      !can(regex(local.edge_mcp_bare_path_rewrite.pattern.regex, "/mcp/x")) &&
+      !can(regex(local.edge_mcp_bare_path_rewrite.pattern.regex, "/mcpx")) &&
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : length(setintersection(keys(r.route), ["regex_rewrite", "prefix_rewrite", "path_rewrite_policy"])) == 0 if contains(keys(r), "route") && r.name != "mcp"])
+    )
+    error_message = "Only the mcp route may rewrite the path, and only exactly /mcp to /mcp/."
+  }
+
+  assert {
+    condition = (
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters[1] == {
+        name         = "envoy.filters.http.lua"
+        typed_config = { "@type" = "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua", default_source_code = { inline_string = local.edge_location_rewrite_lua } }
+      } &&
+      strcontains(local.edge_location_rewrite_lua, "\"http://ca-api\"") &&
+      strcontains(local.edge_location_rewrite_lua, "\"https://ca-api\"") &&
+      strcontains(local.edge_location_rewrite_lua, "string.lower(location)") &&
+      strcontains(local.edge_location_rewrite_lua, "headers:replace(\"location\", rest)") &&
+      length(regexall("(?i)body|envoy_on_request|%|authorization", local.edge_location_rewrite_lua)) == 0
+    )
+    error_message = "Between the rate limiter and the router, a Lua filter must rewrite only a response Location naming ca-api's upstream host, case-insensitively, and read no body. Any other Location is left as it is."
   }
 }
 
@@ -714,12 +763,14 @@ run "edge_refuses_oversized_bodies_and_does_not_cut_streams" {
   # HTTP filters, and the only per-route filter configuration is the rate limiter's, on v1 and mcp.
   assert {
     condition = (
-      [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.local_ratelimit", "envoy.filters.http.router"] &&
+      [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.local_ratelimit", "envoy.filters.http.lua", "envoy.filters.http.router"] &&
       alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : tolist(keys(r.typed_per_filter_config)) == tolist(["envoy.filters.http.local_ratelimit"]) if contains(keys(r), "typed_per_filter_config")]) &&
       [for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name if contains(keys(r), "typed_per_filter_config")] == ["v1", "mcp"] &&
-      !strcontains(jsonencode(local.edge_envoy_config), "envoy.filters.http.buffer")
+      !strcontains(jsonencode(local.edge_envoy_config), "envoy.filters.http.buffer") &&
+      !strcontains(local.edge_location_rewrite_lua, "body") &&
+      !strcontains(local.edge_location_rewrite_lua, "envoy_on_request")
     )
-    error_message = "No envoy.filters.http.buffer filter may apply to the forwarded routes: the HTTP filters must be local_ratelimit then the router, and only v1 and mcp may carry per-route configuration, the rate limiter's."
+    error_message = "No envoy.filters.http.buffer filter may apply to the forwarded routes: the HTTP filters must be local_ratelimit, the header-only Lua Location rewrite, then the router, and only v1 and mcp may carry per-route configuration, the rate limiter's."
   }
 
   # No total cap on a forwarded request, and a finite idle timeout instead.
@@ -878,14 +929,14 @@ run "edge_rate_limits_v1_and_mcp_per_token_and_per_client" {
   # stat_prefix is set there, so Envoy enables it for no request a route does not turn it on for.
   assert {
     condition = (
-      [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.local_ratelimit", "envoy.filters.http.router"] &&
+      [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.local_ratelimit", "envoy.filters.http.lua", "envoy.filters.http.router"] &&
       reverse(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters)[0].name == "envoy.filters.http.router" &&
       local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters[0].typed_config == {
         "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
         stat_prefix = "edge_rate_limit"
       }
     )
-    error_message = "The HTTP filters must be envoy.filters.http.local_ratelimit (disabled at the filter level: stat_prefix only) followed by envoy.filters.http.router, last."
+    error_message = "The HTTP filters must be envoy.filters.http.local_ratelimit (disabled at the filter level: stat_prefix only) then the Lua Location rewrite, then envoy.filters.http.router, last."
   }
 
   # v1 and mcp each produce a per-token descriptor (the Authorization header's value, key "token")
