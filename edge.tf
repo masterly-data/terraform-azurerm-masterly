@@ -497,9 +497,9 @@ resource "azurerm_container_app" "edge" {
         failure_count_threshold = 3
       }
 
-      # Readiness keeps a replica out of rotation until the listener is up. The failure budget is
-      # generous (10 s apart, 10 failures, about 100 s after a 5 s initial delay) so a first image
-      # pull from Docker Hub does not leave the app unready.
+      # Readiness keeps a replica out of rotation until the listener is up; a failure never
+      # restarts it. The failure budget is generous (10 s apart, 10 failures, about 100 s after a
+      # 5 s initial delay) so a slow Envoy start does not leave the app unready.
       readiness_probe {
         transport               = "TCP"
         port                    = local.edge_port

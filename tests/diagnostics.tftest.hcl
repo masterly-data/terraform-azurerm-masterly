@@ -826,17 +826,38 @@ run "injected_action_group_is_used_with_diagnostics_off" {
 
 # --- ca-edge (edge set) --------------------------------------------------------------------
 # ca-edge is the machine entry point; it gets the same diagnostic setting and alerts as the other
-# apps, under the same gates. target_resource_id and the silent rule's query carry the app's id,
-# which a plan against the mock cannot know, so they are not asserted here.
+# apps, under the same gates. target_resource_id, the alerts' scopes, the silent rule's query and
+# the routing to the module's action group carry computed ids, which a plan against the mock
+# cannot know: tests/edge_availability_routing.tftest.hcl asserts them in an apply.
+#
+# The first run is production with neither gate set, so it shows that the production defaults give
+# ca-edge its setting and all three alerts.
 
 run "edge_gets_a_metrics_only_diagnostic_setting_and_all_three_alerts" {
   command = plan
 
   variables {
-    edge                                = {}
-    ingress_allowed_cidrs               = ["203.0.113.7/32"]
-    enable_diagnostics                  = true
-    enable_app_availability_diagnostics = true
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 3
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
   }
 
   assert {
@@ -938,7 +959,8 @@ run "edge_with_app_availability_diagnostics_off_keeps_unavailable_and_5xx" {
   }
 }
 
-# Every edge alert routes to the notification target.
+# Every edge alert routes to a given action group when no alert_email is set. With alert_email set,
+# the routing to the module's own group is asserted in tests/edge_availability_routing.tftest.hcl.
 run "edge_alerts_route_to_the_action_group" {
   command = plan
 
