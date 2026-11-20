@@ -722,6 +722,20 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
   [Transport security](#transport-security)). Every other path is answered `404` by the edge
   itself. Routing reads the normalized path, so `/v1/../x` is `/x` and answered `404`; a path
   with an encoded slash or backslash is refused.
+- **The ca-serve routes, still answered by `ca-api`.** ADR 0120 §2 sends the replica-eligible
+  reads (ADR 0112) to `ca-serve` and everything else to `ca-api`. The module renders that route
+  set now: `edge-serve-routes.json` at the module root lists the reads the backend marks
+  `x-masterly-serve`, as its `docs/contract/edge-routes.json` publishes them at the backend
+  release the file names (`source.ref`). Each entry becomes a route of its own, after the `413`
+  guards and before `/v1`, matched on the method exactly and on the path (a `{var}` in a path
+  matches one segment without a `:`). Every one of them is **still forwarded to `ca-api`**, with
+  the same Host, timeout and rate limits as `/v1`, so no request is answered differently; when
+  `ca-serve` passes its gate, moving these reads to it changes only the cluster they forward to.
+  A request no serve route matches, another method or another path under `/v1`, takes the `/v1`
+  route as before. The list is read from the module's own files at plan time, never fetched, and
+  `scripts/check_edge_serve_routes.py` holds it to reads (`GET`, `HEAD`, `POST`) under `/v1/`.
+  The routes are part of the Envoy configuration, so applying a module version that adds them or
+  changes them **rolls a new `ca-edge` revision**.
 - **No identity headers.** The edge removes `x-jwt-payload`, `X-MS-CLIENT-PRINCIPAL`,
   `-ID`, `-IDP` and `-NAME` from every request, and drops any header with an underscore in its
   name, so a caller cannot hand `ca-api` a statement of who it is.
@@ -738,6 +752,8 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
   over. A request without an `Authorization` header is held to the per-client limit only. A
   request over either limit is answered **`429` with a `Retry-After` header** of the interval in
   seconds (logged with response flag `RL`); the `413` and `404` answers are never limited. The
+  ca-serve routes are `/v1` requests and share `/v1`'s limiter: one budget per token and per
+  client across them and the rest of `/v1`, not one per route. The
   client address is the one the Container Apps ingress reports: the edge trusts exactly that one
   `X-Forwarded-For` hop, so a caller cannot choose its own address, and passes the header on to
   `ca-api` unchanged. The token is a key in Envoy's memory only, never in the configuration, the
@@ -745,11 +761,11 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
 - **Limits are kept per replica.** Each `ca-edge` replica counts on its own, with no shared
   state: no Redis and no rate-limit service (ADR 0120 §5). `ca-edge` runs 1 to 3 replicas
   (`max_replicas = 3`), so the effective limit is the configured limit times the replicas
-  running: between 1 and 3 times the setting. `/v1` and `/mcp` are also counted separately. Set
-  the limits for one replica, and expect a caller to be refused at the configured limit only
-  while one replica runs. A replica keeps buckets for up to 1000 distinct tokens and 1000 client
-  addresses on each path, dropping the least recently seen; a dropped token's count starts
-  afresh, and the per-client limit still holds.
+  running: between 1 and 3 times the setting. `/v1` (the ca-serve routes included) and `/mcp`
+  are also counted separately. Set the limits for one replica, and expect a caller to be refused
+  at the configured limit only while one replica runs. A replica keeps buckets for up to 1000
+  distinct tokens and 1000 client addresses for `/v1` and again for `/mcp`, dropping the least
+  recently seen; a dropped token's count starts afresh, and the per-client limit still holds.
 - **No control plane, no secrets.** Envoy's admin interface is not configured. The whole Envoy
   configuration travels in the container's arguments (`args`), visible in the plan, and holds
   nothing secret; a change to it rolls a new revision. Because it is passed as arguments, the
