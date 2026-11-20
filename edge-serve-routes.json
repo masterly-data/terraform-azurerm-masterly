@@ -1,0 +1,26 @@
+{
+  "source": {
+    "repository": "masterly-application-backend",
+    "path": "docs/contract/edge-routes.json",
+    "ref": "v0.138.0"
+  },
+  "routes": [
+    { "method": "GET", "path": "/v1/catalog/products" },
+    { "method": "POST", "path": "/v1/catalog:search" },
+    { "method": "GET", "path": "/v1/consume/products/{product_id}" },
+    { "method": "GET", "path": "/v1/consume/products/{product_id}/changes" },
+    { "method": "GET", "path": "/v1/consume/products/{product_id}:export" },
+    { "method": "POST", "path": "/v1/consume/products/{product_id}:read" },
+    { "method": "GET", "path": "/v1/data-products/{product_id}/lineage" },
+    { "method": "GET", "path": "/v1/dq/issues" },
+    { "method": "GET", "path": "/v1/dq/results" },
+    { "method": "GET", "path": "/v1/dq/summary" },
+    { "method": "GET", "path": "/v1/golden" },
+    { "method": "POST", "path": "/v1/golden:dq-counts" },
+    { "method": "POST", "path": "/v1/golden:facets" },
+    { "method": "POST", "path": "/v1/golden:search" },
+    { "method": "GET", "path": "/v1/lineage/graph" },
+    { "method": "GET", "path": "/v1/notifications/summary" },
+    { "method": "GET", "path": "/v1/tasks/summary" }
+  ]
+}

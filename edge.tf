@@ -1,9 +1,10 @@
 # The opt-in machine entry point, ca-edge (ADR 0120 §2): an Envoy proxy the module configures,
 # published on the same CIDR allowlist as the frontend, that forwards /v1 and /mcp to ca-api and
-# answers every other path itself. It has no database, vault, queue or cache access and makes no
-# authorization decision: the Authorization header reaches ca-api unchanged and ca-api checks it.
-# The edge does no authentication of its own yet. It limits the rate of requests per bearer token
-# and per client address, counted on each replica.
+# answers every other path itself. Within /v1 it routes the ca-serve reads (edge-serve-routes.json)
+# on their own routes, which still go to ca-api. It has no database, vault, queue or cache access
+# and makes no authorization decision: the Authorization header reaches ca-api unchanged and ca-api
+# checks it. The edge does no authentication of its own yet. It limits the rate of requests per
+# bearer token and per client address, counted on each replica.
 #
 # Declared as its own azurerm_container_app rather than through modules/aca-container-app,
 # because that module ignores image drift (CD owns the api and frontend images) and nothing
@@ -18,7 +19,7 @@ variable "edge" {
     rate_limit_interval_seconds = optional(number, 60)
   })
   default     = null
-  description = "Run ca-edge for SDK and MCP clients: 429 with Retry-After over rate_limit_per_token (600) or rate_limit_per_client (1800) per rate_limit_interval_seconds (60) per replica, so limits multiply by 1 to 3 running replicas. It is the machine entry point, off by default: an Envoy proxy for the Python SDK and MCP clients, published on the same CIDR allowlist as the frontend (ingress_allowed_cidrs, which must not be empty), that forwards /v1 and /mcp to ca-api and answers every other path with 404. Unset, the install plans exactly as before this input existed. It does no authentication yet: it forwards the caller's Authorization header to ca-api unchanged, and ca-api checks it. It removes the identity headers ca-api could otherwise be handed (x-jwt-payload and X-MS-CLIENT-PRINCIPAL*) and holds streamed responses open. It runs as its own identity, id-<prefix>-edge, with no role but AcrPull, and that only when its image is on the install's registry. image: the Envoy image, pinned by digest (registry/repository[:tag]@sha256:<64 hex>); null uses the upstream envoyproxy/envoy image on Docker Hub the module pins. Set it to a mirror in your own registry when the environment cannot reach Docker Hub. max_request_body_bytes: a request whose Content-Length is larger is answered 413 at the edge (default 10485760, 10 MiB; from 1024 to 1073741824). A body sent without a Content-Length streams through. rate_limit_per_token: the requests one bearer token (the Authorization header's value) may send to /v1 and /mcp per interval (default 600; from 1 to 1000000). A request without an Authorization header is held only to the per-client limit. rate_limit_per_client: the requests one client address may send per interval, whatever tokens it uses, so rotating tokens does not get round the per-token limit (default 1800; from 1 to 1000000). The client address is the caller's address as the Container Apps ingress reports it. rate_limit_interval_seconds: the interval both limits count over, in whole seconds (default 60; from 1 to 3600). A request over either limit is answered 429 with a Retry-After header of the interval in seconds. The limits are counted on each replica, with no shared state, and separately for /v1 and /mcp: with ca-edge at 1 to 3 replicas, the effective limit is the configured limit times the running replicas. docs/networking.md has the network requirements."
+  description = "Run ca-edge for SDK and MCP clients: 429 with Retry-After over rate_limit_per_token (600) or rate_limit_per_client (1800) per rate_limit_interval_seconds (60) per replica, so limits multiply by 1 to 3 running replicas. It is the machine entry point, off by default: an Envoy proxy for the Python SDK and MCP clients, published on the same CIDR allowlist as the frontend (ingress_allowed_cidrs, which must not be empty), that forwards /v1 and /mcp to ca-api and answers every other path with 404. Unset, the install plans exactly as before this input existed. It does no authentication yet: it forwards the caller's Authorization header to ca-api unchanged, and ca-api checks it. It removes the identity headers ca-api could otherwise be handed (x-jwt-payload and X-MS-CLIENT-PRINCIPAL*) and holds streamed responses open. It runs as its own identity, id-<prefix>-edge, with no role but AcrPull, and that only when its image is on the install's registry. image: the Envoy image, pinned by digest (registry/repository[:tag]@sha256:<64 hex>); null uses the upstream envoyproxy/envoy image on Docker Hub the module pins. Set it to a mirror in your own registry when the environment cannot reach Docker Hub. max_request_body_bytes: a request whose Content-Length is larger is answered 413 at the edge (default 10485760, 10 MiB; from 1024 to 1073741824). A body sent without a Content-Length streams through. rate_limit_per_token: the requests one bearer token (the Authorization header's value) may send to /v1 and /mcp per interval (default 600; from 1 to 1000000). A request without an Authorization header is held only to the per-client limit. rate_limit_per_client: the requests one client address may send per interval, whatever tokens it uses, so rotating tokens does not get round the per-token limit (default 1800; from 1 to 1000000). The client address is the caller's address as the Container Apps ingress reports it. rate_limit_interval_seconds: the interval both limits count over, in whole seconds (default 60; from 1 to 3600). A request over either limit is answered 429 with a Retry-After header of the interval in seconds. The limits are counted on each replica, with no shared state, and separately for /v1 (the ca-serve read routes under it counted with it, as they are /v1 requests) and for /mcp: with ca-edge at 1 to 3 replicas, the effective limit is the configured limit times the running replicas. docs/networking.md has the network requirements."
 
   # A conditional, not `||`: before Terraform 1.12 both sides of `||` are evaluated, and the
   # right side reads attributes of a null object when the input is unset (as builtin_auth).
@@ -184,11 +185,14 @@ locals {
     }
   }
 
-  # local_ratelimit turned on, for the v1 and mcp routes only; the filter itself is off (below), so
-  # the 413 and 404 answers are never limited. Each descriptor has an empty value: a bucket per
-  # distinct token and per distinct client address, made as they are seen. The descriptors match
-  # every forwarded request (each has a client address), so the route's own bucket is never
-  # consumed; it is set to the per-client limit regardless.
+  # local_ratelimit turned on; the filter itself is off (below). Set once on the virtual host, where
+  # it is one limiter, with one set of buckets, for every route without its own: v1 and the serve
+  # routes, so the serve routes draw on the /v1 budget rather than adding to it. mcp carries its own
+  # copy, a limiter of its own, and the 413 and 404 routes carry edge_rate_limit_off, so those
+  # answers are never limited. Each descriptor has an empty value: a bucket per distinct token and
+  # per distinct client address, made as they are seen. The descriptors match every forwarded
+  # request (each has a client address), so the limiter's own bucket is never consumed; it is set
+  # to the per-client limit regardless.
   edge_rate_limit_per_route = {
     "envoy.filters.http.local_ratelimit" = {
       "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
@@ -216,6 +220,50 @@ locals {
       }]
     }
   }
+
+  # The limiter off, on a route that answers itself: the most specific configuration wins, so these
+  # routes do not take the virtual host's. Envoy requires a bucket in any route's configuration; it
+  # is never consumed, as the filter is enabled for no request here.
+  edge_rate_limit_off = {
+    "envoy.filters.http.local_ratelimit" = {
+      "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
+      stat_prefix = "edge_rate_limit"
+      filter_enabled = {
+        runtime_key   = "edge_rate_limit_off"
+        default_value = { numerator = 0, denominator = "HUNDRED" }
+      }
+      token_bucket = local.edge_rate_limit_bucket.client
+    }
+  }
+
+  # The ca-serve routes (ADR 0120 §2): the reads ADR 0112 makes replica-eligible, which the backend
+  # marks x-masterly-serve and publishes as docs/contract/edge-routes.json. edge-serve-routes.json
+  # pins that list at one backend release, and is read here from the module's own files: nothing is
+  # fetched at plan. scripts/check_edge_serve_routes.py holds it to reads (GET, HEAD, POST) under
+  # /v1/, in a character set that needs no regex escaping. Re-pinning it is an edit to the file.
+  edge_serve_routes = jsondecode(file("${path.module}/edge-serve-routes.json")).routes
+
+  # The cluster the serve routes go to: ca-api, until ca-serve passes its gate. Moving the reads to
+  # ca-serve then changes this cluster and nothing else.
+  edge_serve_cluster = local.edge_upstream
+
+  # One route per entry, matched on the method exactly and on the path: exactly for a literal path
+  # (the query string is not part of the match), or by an anchored regex where each {var} matches
+  # one segment without a ':', so GET .../{product_id} does not also match .../x:read. A request
+  # that matches none of them, another method or another path, falls through to the v1 route, to
+  # ca-api as before. Each route is the forwarded route, so Host, timeout and rate-limit descriptors
+  # are the v1 route's.
+  edge_serve_route_list = [for r in local.edge_serve_routes : {
+    name = "serve-${r.method} ${r.path}"
+    match = merge(
+      { headers = [{ name = ":method", string_match = { exact = r.method } }] },
+      concat(
+        [for p in [r.path] : { path = p } if !strcontains(p, "{")],
+        [for p in [r.path] : { safe_regex = { regex = "^${replace(p, "/\\{[a-z_]+\\}/", "[^/:]+")}$" } } if strcontains(p, "{")],
+      )...
+    )
+    route = merge(local.edge_forwarded_route, { cluster = local.edge_serve_cluster })
+  }]
 
   # ca-api serves MCP at /mcp/ and answers a bare /mcp with a redirect. The mcp route rewrites
   # exactly /mcp (the path only; the query string is kept) so the client never sees it.
@@ -360,59 +408,70 @@ locals {
                   # since Envoy 1.36.
                   request_body_buffer_limit = local.edge_max_request_body_bytes
 
+                  # The rate limiter for every route without its own: v1 and the serve routes,
+                  # one limiter and one /v1 budget between them.
+                  typed_per_filter_config = local.edge_rate_limit_per_route
+
                   # First match wins. A declared body over the limit is refused before routing,
                   # without buffering it (no buffer filter). The range's end is exclusive and
                   # is the int64 maximum, quoted so it does not pass through a double on the
                   # way to the proto. A value of 19 digits or more (10^18 and up, including
                   # what does not fit an int64 and so never matches a range) is refused by the
-                  # second route. Then /v1 and /mcp (and paths under them, not /v1x) go to
-                  # ca-api, and everything else is answered here.
-                  routes = [
-                    {
-                      name = "request-too-large"
-                      match = {
-                        prefix = "/"
-                        headers = [{
-                          name        = "content-length"
-                          range_match = { start = local.edge_max_request_body_bytes + 1, end = "9223372036854775807" }
-                        }]
-                      }
-                      direct_response = { status = 413 }
-                    },
-                    {
-                      name = "request-too-large-beyond-int64"
-                      match = {
-                        prefix = "/"
-                        headers = [{
-                          name         = "content-length"
-                          string_match = { safe_regex = { regex = "^[0-9]{19,}$" } }
-                        }]
-                      }
-                      direct_response = { status = 413 }
-                    },
-                    {
-                      name                    = "v1"
-                      match                   = { path_separated_prefix = "/v1" }
-                      route                   = local.edge_forwarded_route
-                      typed_per_filter_config = local.edge_rate_limit_per_route
-                    },
-                    {
-                      name                    = "mcp"
-                      match                   = { path_separated_prefix = "/mcp" }
-                      route                   = merge(local.edge_forwarded_route, { regex_rewrite = local.edge_mcp_bare_path_rewrite })
-                      typed_per_filter_config = local.edge_rate_limit_per_route
-                    },
-                    {
-                      name            = "not-found"
-                      match           = { prefix = "/" }
-                      direct_response = { status = 404 }
-                    },
-                  ]
+                  # second route. Then the serve routes, then /v1 and /mcp (and paths under
+                  # them, not /v1x) go to ca-api, and everything else is answered here.
+                  routes = concat(
+                    [
+                      {
+                        name = "request-too-large"
+                        match = {
+                          prefix = "/"
+                          headers = [{
+                            name        = "content-length"
+                            range_match = { start = local.edge_max_request_body_bytes + 1, end = "9223372036854775807" }
+                          }]
+                        }
+                        direct_response         = { status = 413 }
+                        typed_per_filter_config = local.edge_rate_limit_off
+                      },
+                      {
+                        name = "request-too-large-beyond-int64"
+                        match = {
+                          prefix = "/"
+                          headers = [{
+                            name         = "content-length"
+                            string_match = { safe_regex = { regex = "^[0-9]{19,}$" } }
+                          }]
+                        }
+                        direct_response         = { status = 413 }
+                        typed_per_filter_config = local.edge_rate_limit_off
+                      },
+                    ],
+                    local.edge_serve_route_list,
+                    [
+                      {
+                        name  = "v1"
+                        match = { path_separated_prefix = "/v1" }
+                        route = local.edge_forwarded_route
+                      },
+                      {
+                        name                    = "mcp"
+                        match                   = { path_separated_prefix = "/mcp" }
+                        route                   = merge(local.edge_forwarded_route, { regex_rewrite = local.edge_mcp_bare_path_rewrite })
+                        typed_per_filter_config = local.edge_rate_limit_per_route
+                      },
+                      {
+                        name                    = "not-found"
+                        match                   = { prefix = "/" }
+                        direct_response         = { status = 404 }
+                        typed_per_filter_config = local.edge_rate_limit_off
+                      },
+                    ],
+                  )
                 }]
               }
 
               # The rate limiter first, off here (Envoy enables it for no request unless told to)
-              # and turned on by the v1 and mcp routes' own configuration; then the Location
+              # and turned on by the virtual host's configuration and mcp's own; then the Location
               # rewrite (response headers only, no body); the router last.
               http_filters = [
                 {
