@@ -86,6 +86,10 @@ locals {
   # not root, and could not bind a lower port.
   edge_port = 8080
 
+  # ca-edge's replica floor, read by the app and by the availability alerts in diagnostics.tf so
+  # the two cannot drift. Fixed, not an input: the edge is the only way in for machine callers.
+  edge_min_replicas = 1
+
   # Requests declaring a body larger than this get 413 at the edge, before ca-api sees them.
   edge_max_request_body_bytes = local.edge_enabled ? var.edge.max_request_body_bytes : 10485760
 
@@ -464,7 +468,7 @@ resource "azurerm_container_app" "edge" {
   }
 
   template {
-    min_replicas = 1
+    min_replicas = local.edge_min_replicas
     max_replicas = 3
 
     container {
@@ -478,6 +482,31 @@ resource "azurerm_container_app" "edge" {
       # would replace the image's entrypoint (/docker-entrypoint.sh), which drops from root to the
       # unprivileged envoy user before starting Envoy, and the public proxy would run as root.
       args = ["envoy", "--config-yaml", jsonencode(local.edge_envoy_config)]
+
+      # TCP probes on the listener port, stated rather than left to Azure's defaults so they are
+      # tuned and tested. TCP, not HTTP, on purpose: an HTTP probe needs a health route on the
+      # public listener or Envoy's admin interface, and either is an unauthenticated surface on
+      # the allowlisted ingress. Neither exists, so the route list stays as it is.
+      #
+      # Liveness restarts a replica whose listener has stopped accepting connections: a probe
+      # every 10 s, 3 failures in a row (30 s) before the restart.
+      liveness_probe {
+        transport               = "TCP"
+        port                    = local.edge_port
+        interval_seconds        = 10
+        failure_count_threshold = 3
+      }
+
+      # Readiness keeps a replica out of rotation until the listener is up. The failure budget is
+      # generous (10 s apart, 10 failures, about 100 s after a 5 s initial delay) so a first image
+      # pull from Docker Hub does not leave the app unready.
+      readiness_probe {
+        transport               = "TCP"
+        port                    = local.edge_port
+        interval_seconds        = 10
+        failure_count_threshold = 10
+        initial_delay           = 5
+      }
     }
   }
 

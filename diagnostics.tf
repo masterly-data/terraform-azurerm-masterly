@@ -26,7 +26,7 @@ variable "enable_diagnostics" {
 variable "enable_app_availability_diagnostics" {
   type        = bool
   default     = null
-  description = "Send the platform metrics of ca-api, ca-frontend and ca-workers (AllMetrics) to the install's Log Analytics workspace, and alert when an app stops sending them: one log search rule per app, <app>-silent, which fires on an app that has been deleted, stopped or torn down — the case the <app>-unavailable metric alerts cannot see, because a metric alert with no data does not fire. The metrics are continuous ingest into your workspace, and each rule is billed per evaluation, so this adds a standing cost to your Azure bill. Null (default) = on in mode=production, off otherwise. Set false to turn both off. Set true to turn them on outside production; true needs diagnostics on (enable_diagnostics, which defaults to on in mode=production). The rule is created only for an app with a replica floor of at least 1."
+  description = "Send the platform metrics of ca-api, ca-frontend, ca-workers (with enable_workers) and ca-edge (with edge) (AllMetrics) to the install's Log Analytics workspace, and alert when an app stops sending them: one log search rule per app, <app>-silent, which fires on an app that has been deleted, stopped or torn down — the case the <app>-unavailable metric alerts cannot see, because a metric alert with no data does not fire. The metrics are continuous ingest into your workspace, and each rule is billed per evaluation, so this adds a standing cost to your Azure bill. Null (default) = on in mode=production, off otherwise. Set false to turn both off. Set true to turn them on outside production; true needs diagnostics on (enable_diagnostics, which defaults to on in mode=production). The rule is created only for an app with a replica floor of at least 1."
 
   validation {
     condition     = var.enable_app_availability_diagnostics != true || coalesce(var.enable_diagnostics, var.mode == "production")
@@ -167,11 +167,13 @@ locals {
   # the variable's validation refuses true with diagnostics off rather than ignoring it.
   app_availability_diagnostics_enabled = local.diagnostics_enabled && coalesce(var.enable_app_availability_diagnostics, var.mode == "production")
 
-  # Every Container App the install runs gets the diagnostic setting. Static keys, so the map's
-  # shape is known at plan even though the ids are not.
+  # Every Container App the install runs (ca-api, ca-frontend, ca-workers and ca-edge) gets the
+  # diagnostic setting. Static keys, so the map's shape is known at plan even though the ids are
+  # not.
   app_metrics_apps = local.app_availability_diagnostics_enabled ? merge(
     { api = module.api.id, frontend = module.frontend.id },
     var.enable_workers ? { workers = module.workers[0].id } : {},
+    local.edge_enabled ? { edge = azurerm_container_app.edge[0].id } : {},
   ) : {}
 
   # The absence rule only for an app with a replica floor, for the reason app_unavailable is
@@ -180,7 +182,7 @@ locals {
   # night.
   app_silent_apps = {
     for app, id in local.app_metrics_apps : app => id
-    if lookup({ api = local.api_min_replicas, frontend = local.frontend_min_replicas, workers = local.workers_min_replicas }, app) >= 1
+    if lookup({ api = local.api_min_replicas, frontend = local.frontend_min_replicas, workers = local.workers_min_replicas, edge = local.edge_min_replicas }, app) >= 1
   }
 
   # Which apps get a replica-availability alert. See the alert itself for why an app that is
@@ -189,16 +191,19 @@ locals {
     local.api_min_replicas >= 1 ? { api = module.api.id } : {},
     local.frontend_min_replicas >= 1 ? { frontend = module.frontend.id } : {},
     var.enable_workers && local.workers_min_replicas >= 1 ? { workers = module.workers[0].id } : {},
+    local.edge_enabled && local.edge_min_replicas >= 1 ? { edge = azurerm_container_app.edge[0].id } : {},
   )
 
   # Which apps emit the readiness signal the wedged-replica alert reads. Both serving apps do
   # and only they: ca-workers has no ingress, no /readyz and no probes (workers.tf), so there is
   # no failing probe for it to write a line about. Named from the module outputs rather than
   # retyped, so a rename of either app cannot leave the query filtering on a name that no longer
-  # exists — the failure mode where an alert stays green because it matches nothing.
+  # exists — the failure mode where an alert stays green because it matches nothing. ca-edge is
+  # not here either: Envoy writes no `readiness check failed` line, so the rule would have
+  # nothing to read.
   readiness_alertable_apps = [module.api.name, module.frontend.name]
 
-  # What a missing replica MEANS, per app. The severity is the same for all three — this
+  # What a missing replica MEANS, per app. The severity is the same for all four — this
   # module's severity band marks ABSENCE, not "HTTP is down" — but the sentence an operator
   # reads at 03:00 should not claim the install is unreachable when what actually stopped is
   # the pipeline behind it. The api and the frontend take the install off the air; ca-workers
@@ -207,6 +212,7 @@ locals {
     api      = "this install is DOWN, not merely under strain"
     frontend = "this install is DOWN, not merely under strain"
     workers  = "the async pipeline has STOPPED — ingest runs, scans, materialization and the fleet snapshot loop make no progress, while the install keeps answering requests as if nothing were wrong"
+    edge     = "machine access (REST, SDK and MCP) is DOWN, while the browser app may still answer"
   }
 
   # --- The connections alert's denominator ---
@@ -560,13 +566,18 @@ resource "azurerm_monitor_metric_alert" "redis_memory" {
   tags = local.tags
 }
 
-# Container Apps 5xx — the api and frontend are serving server errors. Split by app so the
-# alert names the culprit.
+# Container Apps 5xx — the api, frontend and (with edge set) ca-edge are serving server errors.
+# Split by app so the alert names the culprit. ca-edge's count includes the api's 5xx that Envoy
+# passes through, so an api 5xx spike fires both api-5xx and edge-5xx; the edge alert alone
+# catches Envoy's own 503s, for example when ca-api is unreachable.
 resource "azurerm_monitor_metric_alert" "app_5xx" {
-  for_each = local.diagnostics_enabled ? {
-    api      = module.api.id
-    frontend = module.frontend.id
-  } : {}
+  for_each = local.diagnostics_enabled ? merge(
+    {
+      api      = module.api.id
+      frontend = module.frontend.id
+    },
+    local.edge_enabled ? { edge = azurerm_container_app.edge[0].id } : {},
+  ) : {}
 
   name                = "alert-${var.name_prefix}-${each.key}-5xx"
   resource_group_name = azurerm_resource_group.aca.name
@@ -1061,7 +1072,8 @@ resource "azurerm_monitor_metric_alert" "postgres_unavailable" {
 #    line is the better source precisely because it is the application's own conclusion rather
 #    than the platform's retry count.
 #
-# What is still not covered — an app with no readiness probe at all (ca-workers), and a wedge
+# What is still not covered — an app with no readiness probe at all (ca-workers), an app that
+# writes no readiness line (ca-edge: Envoy has a TCP probe but logs none), and a wedge
 # that clears inside the rule's window — is disclosed in the README rather than implied.
 resource "azurerm_monitor_metric_alert" "app_unavailable" {
   for_each = local.availability_alertable_apps
@@ -1363,7 +1375,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "postgres_silent" {
 # no `TimeGenerated` (Azure refuses more, with a 400), the 45-minute window that absorbs log
 # ingestion delay, and the rule being filed with the workspace it queries.
 #
-# One rule per app rather than one rule over three: a single query can say "some app is
+# One rule per app rather than one rule over all of them: a single query can say "some app is
 # silent" only by naming the apps it expects and anti-joining, which is a different idiom, and
 # one incident per app is what an operator needs anyway — they do not share a cause.
 #

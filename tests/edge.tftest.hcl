@@ -838,6 +838,37 @@ run "edge_has_no_admin_interface" {
     condition     = !contains(keys(local.edge_envoy_config), "admin") && !strcontains(jsonencode(local.edge_envoy_config), "\"admin\"")
     error_message = "The Envoy bootstrap must configure no admin interface."
   }
+
+  # The probes are TCP, so no health route was added to the public listener.
+  assert {
+    condition = (
+      length(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes) == 5 &&
+      toset([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name]) == toset(["request-too-large", "request-too-large-beyond-int64", "v1", "mcp", "not-found"])
+    )
+    error_message = "The public listener must keep exactly its five routes (request-too-large, request-too-large-beyond-int64, v1, mcp, not-found); no health route."
+  }
+}
+
+run "edge_probes_tcp_on_the_listener_port" {
+  command = plan
+
+  variables {
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      length(azurerm_container_app.edge[0].template[0].container[0].liveness_probe) == 1 &&
+      azurerm_container_app.edge[0].template[0].container[0].liveness_probe[0].transport == "TCP" &&
+      azurerm_container_app.edge[0].template[0].container[0].liveness_probe[0].port == local.edge_port &&
+      length(azurerm_container_app.edge[0].template[0].container[0].readiness_probe) == 1 &&
+      azurerm_container_app.edge[0].template[0].container[0].readiness_probe[0].transport == "TCP" &&
+      azurerm_container_app.edge[0].template[0].container[0].readiness_probe[0].port == local.edge_port &&
+      local.edge_port == 8080
+    )
+    error_message = "ca-edge must declare TCP liveness and readiness probes on its listener port (8080)."
+  }
 }
 
 # Ordering: with egress_firewall, ca-edge's first pull from Docker Hub already takes the firewall's

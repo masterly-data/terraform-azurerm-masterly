@@ -643,13 +643,15 @@ availability alerts and the action group are not part of that switch; see below:
   and [provider features](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/guides/features-block)
   documentation.
 - **App availability diagnostics** — an `AllMetrics` diagnostic setting on `ca-api`,
-  `ca-frontend` and `ca-workers`, and one absence alert per app, `<app>-silent`. See
+  `ca-frontend`, `ca-workers` and, with `edge` set, `ca-edge`, and one absence alert per app,
+  `<app>-silent`. See
   "App availability diagnostics" below: it is on by default in production only, it has its own
   opt-out, and it adds a standing cost to your Azure bill.
 - **Saturation alerts** — the install is under strain. Postgres storage nearly full, B-series
   CPU-credit exhaustion (burstable installs only), Redis memory nearly full, Redis key evictions
   (which under the no-eviction policy mean the policy has been changed out from under the
-  install, not that the cache is small), and `ca-api` / `ca-frontend` 5xx. Severity 1–2.
+  install, not that the cache is small), and `ca-api` / `ca-frontend` (and, with `edge` set,
+  `ca-edge`) 5xx. Severity 1–2.
 - **Load alerts** — the install is running out of headroom, before that becomes an outage:
   Postgres CPU, connections and IOPS, `ca-api` latency, `ca-workers` memory, and dead-lettered
   job messages on Service Bus. Severity 2 (1 for dead letters). Every threshold is an input;
@@ -753,12 +755,15 @@ This is controlled by `enable_app_availability_diagnostics`:
 
 It is part of the diagnostics surface and never outlives it: with `enable_diagnostics = false`
 there are no app diagnostic settings and no `<app>-silent` rules, whatever this input says. Every
-Container App the install runs gets the diagnostic setting; `<app>-silent` is created only for an
-app whose `min_replicas` is 1 or more, because an app at zero replicas by design publishes nothing.
+Container App the install runs gets the diagnostic setting, `ca-edge` included when `edge` is
+set; `<app>-silent` is created only for an app whose `min_replicas` is 1 or more, because an app
+at zero replicas by design publishes nothing. `ca-edge`'s floor is fixed at 1, so it always has
+one. The diagnostic setting sends metrics only: `ca-edge`'s console log already reaches the
+workspace through the environment's setting.
 
 **It costs money, continuously.** The metrics are ingested into your workspace every minute for
 as long as the apps run, and your Azure subscription pays for that ingest and its retention. Each
-`<app>-silent` rule is also billed, per rule, by its 10-minute evaluation frequency. Three apps'
+`<app>-silent` rule is also billed, per rule, by its 10-minute evaluation frequency. The apps'
 platform metrics are low volume, but the cost starts on the first apply of the module version
 that carries this, with no variable changed. Set `enable_app_availability_diagnostics = false` to
 keep the previous behaviour; the `<app>-unavailable` alerts stay either way.
@@ -818,15 +823,20 @@ precise about how far they reach.
 |---|---|---|
 | Database reports itself down | `postgres-unavailable` | Reads the platform's own `is_db_alive`. Fastest signal here: 5-minute window. Created in every mode for the starter server; it does not need `enable_diagnostics`. |
 | Database stopped, deleted, or its telemetry broke | `postgres-silent` | Needs `enable_diagnostics` (it reads the metrics the Postgres diagnostic setting sends). Fires on the **absence** of metrics — the case a metric alert cannot see, because a metric alert with no data does not fire. It pages after 45 minutes of silence, within one 10-minute evaluation, deliberately. On a brand-new install it can fire once before the first metrics land; it clears itself when they do. |
-| An app has no running replica | `<app>-unavailable` | One per Container App the install runs — `api`, `frontend` and, with `enable_workers`, `workers`. Only created for an app whose `min_replicas` is 1 or more, and in every mode, whatever `enable_diagnostics` says. Counts replicas, not readiness — the alert below is what reads readiness. |
+| An app has no running replica | `<app>-unavailable` | One per Container App the install runs — `api`, `frontend` and, with `enable_workers`, `workers` and, with `edge`, `edge` (always created, its floor is fixed at 1; when it fires, machine access over REST, SDK and MCP is down while the browser app may still answer). Only created for an app whose `min_replicas` is 1 or more, and in every mode, whatever `enable_diagnostics` says. Counts replicas, not readiness — the alert below is what reads readiness. |
 | An app is gone: deleted, its environment torn down, or its revision deprovisioned | `<app>-silent` | Fires on the **absence** of the app's metrics in the workspace, the case `<app>-unavailable` cannot see, because a gone app publishes no `Replicas` value. One per Container App with a replica floor of 1 or more, when app availability diagnostics are on (the production default; see "App availability diagnostics"). It pages after 45 minutes of silence, within one 10-minute evaluation. Like `postgres-silent`, it can fire once on a brand-new install before the first metrics land, and clears itself when they do. |
 | An app is running but never becomes ready | `app-not-ready` | One rule for both serving apps, split by app name. `ca-api` and `ca-frontend` each log one line per **failing** readiness probe (and nothing on a passing one); the rule fires when an app has failed readiness in at least 30 of the last 60 minutes, so ~30–40 minutes to page. That is the case `<app>-unavailable` structurally cannot see — an unready replica is never routed to, but it still counts as a replica. A cold start legitimately fails readiness for minutes at a time, which is why the bar is half an hour rather than a single failure. Created in every mode; it does not need `enable_diagnostics`. |
 | The async pipeline has no worker running | `workers-unavailable` | The same alert, and the one nothing else in the set can stand in for: `ca-workers` has no ingress, so it emits no requests and `<app>-5xx` is blind to it by construction. Without this, a dead workers app is silent — the install keeps answering, the queue keeps growing, and the first signal is somebody asking why yesterday's ingest never landed. |
-| Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. |
+| Storage, memory, CPU credits, evictions, 5xx | the saturation alerts | Need the resource up and, for 5xx, traffic flowing. With `edge` set, `edge-5xx` counts the api's 5xx that Envoy passes through as well as Envoy's own 503s, so an api 5xx spike fires both `api-5xx` and `edge-5xx`; `edge-5xx` alone means Envoy cannot reach `ca-api`. |
 | Headroom running out: database CPU, connections, IOPS; api latency; worker memory; dead-lettered job messages | the load alerts | Need the resource up and publishing; the latency rule also needs traffic (at least 50 requests in 15 minutes). |
 
 Not detected, and no alert here should be read as covering it:
 
+- **A `ca-edge` that is listening but cannot forward, or is unready.** `app-not-ready` covers
+  only `ca-api` and `ca-frontend`: Envoy writes no `readiness check failed` line, so that rule
+  would have nothing to read. `ca-edge`'s TCP probes pass while its listener is up, so an Envoy
+  that cannot reach `ca-api` pages only through `edge-5xx`, which needs `enable_diagnostics` and
+  more than five errors in its window.
 - **A serving app that is unready for less than half an hour.** `app-not-ready` covers the
   sustained case — the wedged replica that `<app>-unavailable` reads as a healthy 1 — but it is
   deliberately slow, because a cold start fails readiness legitimately for minutes at a time and
