@@ -124,6 +124,31 @@ locals {
   edge_environment_id     = var.edge_environment == "aca" ? local.aca_environment_id : try(module.environments[var.edge_environment].id, local.aca_environment_id)
   api_environment_id      = var.api_environment == "aca" ? local.aca_environment_id : try(module.environments[var.api_environment].id, local.aca_environment_id)
 
+  # ca-workers and caj-migrate: aca-<prefix>, or the workers environment. Read by the workload and
+  # by its environment_move sleep below, so the two can never disagree. try() keeps a missing
+  # workers environment from erroring where the workload does not exist; its own refusal reports it.
+  workers_environment_id     = var.workers_environment == "workers" ? try(module.environments["workers"].id, local.aca_environment_id) : local.aca_environment_id
+  migrate_job_environment_id = var.migrate_job_environment == "workers" ? try(module.environments["workers"].id, local.aca_environment_id) : local.aca_environment_id
+
+  # How long a moved workload stays deleted before it is created again. A move replaces the Container
+  # App or job under the same name, and Azure still holds the old one's identity pending deletion
+  # when Terraform creates the new one: 409 or 400 FailedIdentityOperation. On STG, 2026-11-20, both
+  # moves failed on the first apply (test-install #49 and #50) and a retry a few minutes later
+  # applied cleanly; 180s is a first guess from that, to be measured by the first test-install move
+  # after release. It is a destroy wait, so a fresh install is not slowed.
+  environment_move_wait = "180s"
+
+  # The workloads that exist, each with the environment id it runs in. A move changes that id.
+  environment_move_workloads = merge(
+    {
+      api      = local.api_environment_id
+      frontend = local.frontend_environment_id
+    },
+    var.enable_workers ? { workers = local.workers_environment_id } : {},
+    local.migrate_job ? { migrate = local.migrate_job_environment_id } : {},
+    local.edge_enabled ? { edge = local.edge_environment_id } : {},
+  )
+
   # What the module still places on aca-<prefix>; retire_runtime_environment is refused while any
   # is left (variables-environment.tf). The certificates follow ca-frontend and ca-edge, so they
   # leave with them. ca-workers counts only with enable_workers, caj-migrate only with
@@ -198,6 +223,20 @@ resource "azurerm_monitor_diagnostic_setting" "environment" {
   enabled_log {
     category = "ContainerAppSystemLogs"
   }
+}
+
+# The wait between deleting a moved workload and creating it again (local.environment_move_wait).
+# Each workload lists its sleep in depends_on, so a move runs: destroy the workload, destroy the
+# sleep (it waits), create the sleep, create the workload. The trigger is the environment id and
+# nothing else, so only a move replaces a sleep. Terraform applies a keyed depends_on to the whole
+# resource, so a workload also waits for the other sleeps' recreation; they run in parallel.
+resource "time_sleep" "environment_move" {
+  for_each = local.environment_move_workloads
+
+  triggers = {
+    environment_id = each.value
+  }
+  destroy_duration = local.environment_move_wait
 }
 
 # An internal environment's default domain resolves nowhere until a private DNS zone of that

@@ -25,6 +25,13 @@ mock_provider "random" {
   }
 }
 mock_provider "azapi" {}
+mock_provider "time" {
+  mock_resource "time_sleep" {
+    defaults = {
+      id = "2026-01-01T00:00:00Z"
+    }
+  }
+}
 
 variables {
   location       = "swedencentral"

@@ -17,6 +17,13 @@ mock_provider "azurerm" {
 }
 mock_provider "random" {}
 mock_provider "azapi" {}
+mock_provider "time" {
+  mock_resource "time_sleep" {
+    defaults = {
+      id = "2026-01-01T00:00:00Z"
+    }
+  }
+}
 
 mock_provider "azurerm" {
   alias  = "applied"
@@ -1101,6 +1108,7 @@ run "edge_applied_with_one_digest" {
     azurerm = azurerm.applied
     random  = random
     azapi   = azapi
+    time    = time
   }
 
   variables {
@@ -1153,6 +1161,7 @@ run "edge_new_digest_is_planned_onto_the_app" {
     azurerm = azurerm.applied
     random  = random
     azapi   = azapi
+    time    = time
   }
 
   variables {
@@ -1177,6 +1186,7 @@ run "edge_applied_with_the_default_configuration" {
     azurerm = azurerm.applied
     random  = random
     azapi   = azapi
+    time    = time
   }
 
   variables {
@@ -1218,6 +1228,7 @@ run "edge_configuration_change_is_planned_onto_the_args" {
     azurerm = azurerm.applied
     random  = random
     azapi   = azapi
+    time    = time
   }
 
   variables {

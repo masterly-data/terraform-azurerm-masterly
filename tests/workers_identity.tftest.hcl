@@ -35,6 +35,13 @@ mock_provider "azurerm" {
 }
 mock_provider "random" {}
 mock_provider "azapi" {}
+mock_provider "time" {
+  mock_resource "time_sleep" {
+    defaults = {
+      id = "2026-01-01T00:00:00Z"
+    }
+  }
+}
 
 # The same distinct principals for every run that does not name its own.
 override_module {

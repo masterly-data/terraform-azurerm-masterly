@@ -45,7 +45,8 @@ terraform {
     # The BFF's DPoP key (auth.tf, enable_bff_dpop_key): tls generates the EC P-256 key and time
     # rotates it every 90 days. Required by every configuration that uses the module, including
     # one that leaves enable_bff_dpop_key off, so an air-gapped install mirrors both with azurerm,
-    # random and azapi. Neither takes any provider configuration or credential.
+    # random and azapi. Neither takes any provider configuration or credential. time also holds
+    # the wait before a moved workload is created again (environment.tf, environment_move).
     tls = {
       source  = "hashicorp/tls"
       version = "~> 4.0"
