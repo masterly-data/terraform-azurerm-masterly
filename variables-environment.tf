@@ -55,7 +55,7 @@ variable "environment_zone_redundant" {
   # Read at plan: the environment keys depend on the subnet inputs only (environment.tf).
   validation {
     condition     = !var.environment_zone_redundant || length(local.container_app_environment_keys) == 3
-    error_message = "environment_zone_redundant = true applies to the front, app and workers environments, and this install does not have all three: environment_subnet_ids has no environment subnets. On an injected network set front_subnet_id, app_subnet_id and workers_subnet_id; on a network the module builds set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix, or use a VNet of /21 or larger. Or leave environment_zone_redundant false."
+    error_message = "environment_zone_redundant = true applies to the front, app and workers environments, and this install does not have all three: environment_subnet_ids is missing one or more of the front, app and workers subnets. On an injected network set front_subnet_id, app_subnet_id and workers_subnet_id; on a network the module builds set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix, or use a VNet of /21 or larger. Or leave environment_zone_redundant false."
   }
 }
 
