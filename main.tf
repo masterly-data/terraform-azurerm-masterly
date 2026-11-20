@@ -628,7 +628,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
 check "enterprise_production_without_postgres_ha" {
   assert {
     condition     = !(var.mode == "production" && var.capacity_profile == "enterprise" && nonsensitive(local.provision_postgres) && !local.postgres_zone_redundant_ha)
-    error_message = "capacity_profile = \"enterprise\" in mode = \"production\" runs the starter Postgres server without zone-redundant HA. The enterprise profile's recovery objectives (near-zero data loss, an hour of downtime) assume it: without it, a zone failure is recovered by a point-in-time restore, with up to 5 minutes of data loss and downtime that grows with the data's size. Set postgres_zone_redundant_ha = true to meet them, or accept a restore's objectives."
+    error_message = "capacity_profile = \"enterprise\" in mode = \"production\" runs the starter Postgres server without zone-redundant HA. The enterprise profile's recovery objectives (near-zero data loss, an hour of downtime) assume it: without it, a zone failure is recovered by a point-in-time restore, with up to 5 minutes of data loss and downtime that grows with the data's size. Set postgres_zone_redundant_ha = true to meet them, or accept a restore's objectives. The 1-hour downtime through a zone failure also needs the apps in zone-redundant environments (environment_zone_redundant), at two replicas or more."
   }
 }
 

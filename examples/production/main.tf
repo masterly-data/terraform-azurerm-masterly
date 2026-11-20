@@ -170,6 +170,12 @@ module "masterly" {
   api_max_replicas      = 3
   frontend_min_replicas = 1
 
+  # Zone redundancy of the front, app and workers environments: create-time only, so decide it
+  # when you create the install. It covers apps moved to those environments (frontend_environment
+  # = "front", edge_environment = "front", api_environment = "app", workers_environment =
+  # "workers") at two replicas or more; see docs/networking.md, "Zone redundancy".
+  # environment_zone_redundant = true
+
   # Per-replica size. Unlisted apps keep the module's default of 0.5 vCPU / 1Gi; the api gets
   # 1 vCPU / 2Gi in production, where it carries every interactive request.
   app_resources = {

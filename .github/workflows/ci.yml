@@ -305,6 +305,35 @@ jobs:
       - name: docs/inputs.md lists every input, grouped as the .tf files are
         run: python3 scripts/check_inputs_reference.py
 
+  # edge-serve-routes.json is the ca-serve route set ca-edge renders (edge.tf): the reads the
+  # backend marks x-masterly-serve, pinned at one backend release. Every entry becomes a route on
+  # the public machine entry point, so this job holds the file to reads (GET, HEAD, POST) under
+  # /v1/, sorted and without duplicates, in a path character set that needs no regex escaping,
+  # with a pinned source ref. It reads the file only, never the backend: re-pinning is an edit to
+  # the file, reviewed like code. MAS-4704.
+  #
+  # The selftest runs FIRST, for the reason the other checkers' do: it fails unless each bad list
+  # (a path outside /v1/, a write method, a duplicate, an unsorted list, a bad character or
+  # {var}, a missing source ref) is still rejected. Standard library only, no network: safe on a
+  # pull request from a fork.
+  edge-serve-routes:
+    name: The ca-serve route list holds only reads under /v1/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: The check still rejects a write, a loose path or an unpinned source
+        run: python3 scripts/check_edge_serve_routes.py --selftest
+
+      - name: edge-serve-routes.json lists only reads under /v1/, in the source's order
+        run: python3 scripts/check_edge_serve_routes.py
+
   # The GitHub Release page for a tag, with that version's CHANGELOG.md section as its body. The
   # module version is the one customer-facing version (ADR 0062), and this page is where a reader
   # looks for what it changed. MAS-258.

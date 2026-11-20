@@ -26,8 +26,9 @@
 # At Stable, masterly-release-tests's promote.yml dispatches this workflow with the commit and
 # version from the signed Stable ring record (ADR 0107 §5). A run that created the tag and then
 # failed is finished by dispatching the same version and commit again: the gate passes a tag
-# already at the commit, the tag write is skipped, and release-published is sent. A tag at any
-# other commit is refused.
+# already at the commit, the tag write is skipped, and release-published is sent. Re-running all
+# jobs or only the failed ones works too: the tag job reads where the tag is itself before writing.
+# A tag at any other commit is refused.
 #
 # What this workflow does NOT do by itself: stop a `v*` tag being pushed by hand. A tag pushed
 # from a laptop still publishes, and ci.yml's tag build still only reports on it afterwards. Making
@@ -146,7 +147,8 @@ jobs:
       # green on the commit's push to main. The manifest is read as data with `git show`, so the
       # rule binds a commit cut before it existed and none of the commit's code runs.
       # `--existing-out` says whether the tag is already there (a re-run after a later step
-      # failed): the tag job then skips the write and still sends release-published.
+      # failed), for the run's own record. The tag job does not act on it: a re-run of only the
+      # failed jobs replays this output from the earlier attempt, so that job reads the tag itself.
       - name: CI passed on the commit's push to main, and the tag is new or already at the commit
         id: gate
         env:
@@ -266,11 +268,41 @@ jobs:
             exit 1
           fi
 
-      # On a re-run whose tag is already at the commit, no tag token is minted and nothing is
-      # written: the run goes straight to confirming the tag and sending release-published.
+      # Where the tag is now, read by this job rather than taken from verify's `existing` output.
+      # "Re-run failed jobs" runs this job again but reuses verify's outputs from the earlier
+      # attempt, which can say "absent" about a tag that attempt went on to create. Trusting
+      # that output made such a re-run try to create the tag again and fail with "Reference
+      # already exists" (0.25.0, 2026-11-20). A tag at another commit is still refused here,
+      # as verify refuses it.
+      - name: Where the tag is now
+        id: now
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          # The peeled `^{}` line is the commit an annotated tag points at; a lightweight tag has
+          # only its own line. The pattern ends in `*` so the `^{}` line matches it too; awk keeps
+          # only this tag's two refs.
+          at="$(git ls-remote --tags "https://github.com/$REPO.git" "$TAG*" |
+            awk -v ref="refs/tags/$TAG" '$2 == ref "^{}" { peeled = $1 } $2 == ref { named = $1 }
+              END { print (peeled != "" ? peeled : named) }')"
+          if [ -z "$at" ]; then
+            echo "existing=false" >> "$GITHUB_OUTPUT"
+          elif [ "$at" = "$COMMIT" ]; then
+            echo "$TAG is already at $COMMIT, so it is not written again; release-published is still sent"
+            echo "existing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::$TAG is at $at, not at $COMMIT — a published tag is never moved"
+            exit 1
+          fi
+
+      # When the tag is already at the commit, no tag token is minted and nothing is written:
+      # the run goes straight to confirming the tag and sending release-published.
       - name: Mint the release App's token
         id: app
-        if: ${{ vars.RELEASE_APP_CLIENT_ID != '' && needs.verify.outputs.existing == 'false' }}
+        if: ${{ vars.RELEASE_APP_CLIENT_ID != '' && steps.now.outputs.existing == 'false' }}
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
@@ -278,11 +310,11 @@ jobs:
           # This repository only, and only what creating a tag needs.
           permission-contents: write
 
-      # Only when the gate reported the tag absent. A tag at another commit never gets here: the
-      # gate refused it, naming both commits, and this job did not start.
+      # Only when the tag is absent now. A tag at another commit never gets here: verify or the
+      # step above refused it, naming both commits.
       - name: Create the annotated tag on the release commit
         id: create
-        if: ${{ needs.verify.outputs.existing == 'false' }}
+        if: ${{ steps.now.outputs.existing == 'false' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           VIA_APP: ${{ steps.app.outputs.token != '' }}
