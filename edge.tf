@@ -213,6 +213,62 @@ locals {
     }
   }
 
+  # ca-api serves MCP at /mcp/ and answers a bare /mcp with a redirect. The mcp route rewrites
+  # exactly /mcp (the path only; the query string is kept) so the client never sees it.
+  edge_mcp_bare_path_rewrite = { pattern = { regex = "^/mcp$" }, substitution = "/mcp/" }
+
+  # A redirect from ca-api names the host the edge sends upstream (http://ca-api, or
+  # https://ca-api.<app domain>), which a client cannot reach. The response filter turns such a
+  # Location, scheme and host in any case and with an optional port, into a reference relative
+  # to the edge. A result that would start with // or /\ (another host), or a malformed port, has
+  # the Location removed rather than sent on with the upstream host. A Location whose host only
+  # starts with the upstream host (http://ca-api.evil) is another host and is left as it was, like
+  # any other Location. Headers only: no body is read, so nothing is buffered.
+  edge_location_rewrite_lua = <<-LUA
+    function envoy_on_response(response_handle)
+      local headers = response_handle:headers()
+      local location = headers:get("location")
+      if location == nil then
+        return
+      end
+      local lowered = string.lower(location)
+      local rest = nil
+      for _, origin in ipairs({ "http://${lower(local.edge_upstream_host)}", "https://${lower(local.edge_upstream_host)}" }) do
+        if string.sub(lowered, 1, #origin) == origin then
+          rest = string.sub(location, #origin + 1)
+          break
+        end
+      end
+      if rest == nil then
+        return
+      end
+      local had_port = false
+      if string.sub(rest, 1, 1) == ":" then
+        had_port = true
+        local i = 2
+        while i <= #rest and string.byte(rest, i) >= 48 and string.byte(rest, i) <= 57 do
+          i = i + 1
+        end
+        rest = string.sub(rest, i)
+      end
+      local first = string.sub(rest, 1, 1)
+      if rest == "" or first == "?" or first == "#" then
+        rest = "/" .. rest
+      elseif first ~= "/" then
+        if had_port then
+          headers:remove("location")
+        end
+        return
+      end
+      local second = string.byte(rest, 2)
+      if second == 47 or second == 92 then
+        headers:remove("location")
+        return
+      end
+      headers:replace("location", rest)
+    end
+  LUA
+
   # The whole Envoy bootstrap, passed to Envoy in the container's args (below). Nothing in it is
   # secret, and nothing in it may be: it is visible in the plan and on the app's revision.
   edge_envoy_config = {
@@ -339,7 +395,7 @@ locals {
                     {
                       name                    = "mcp"
                       match                   = { path_separated_prefix = "/mcp" }
-                      route                   = local.edge_forwarded_route
+                      route                   = merge(local.edge_forwarded_route, { regex_rewrite = local.edge_mcp_bare_path_rewrite })
                       typed_per_filter_config = local.edge_rate_limit_per_route
                     },
                     {
@@ -352,13 +408,21 @@ locals {
               }
 
               # The rate limiter first, off here (Envoy enables it for no request unless told to)
-              # and turned on by the v1 and mcp routes' own configuration; the router last.
+              # and turned on by the v1 and mcp routes' own configuration; then the Location
+              # rewrite (response headers only, no body); the router last.
               http_filters = [
                 {
                   name = "envoy.filters.http.local_ratelimit"
                   typed_config = {
                     "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
                     stat_prefix = "edge_rate_limit"
+                  }
+                },
+                {
+                  name = "envoy.filters.http.lua"
+                  typed_config = {
+                    "@type"             = "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua"
+                    default_source_code = { inline_string = local.edge_location_rewrite_lua }
                   }
                 },
                 {

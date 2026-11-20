@@ -749,7 +749,14 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
   (`http://ca-api`, encrypted underneath by the environment, as in
   [Transport security](#transport-security)). Every other path is answered `404` by the edge
   itself. Routing reads the normalized path, so `/v1/../x` is `/x` and answered `404`; a path
-  with an encoded slash or backslash is refused.
+  with an encoded slash or backslash is refused. A request to exactly `/mcp` is forwarded as
+  `/mcp/` (the query string is kept), so `/mcp` is accepted with or without the trailing slash
+  and `ca-api` does not redirect it. No response from the edge carries `ca-api`'s hostname in a
+  `Location`: when `ca-api` answers with a redirect naming the host the edge forwards to
+  (`http://ca-api`, or `https://ca-api.<app environment domain>`; any letter case, any port), the
+  edge rewrites it relative to its own address, such as `/v1/x/`, or removes it when it cannot be
+  made relative (a result that would begin with `//` or `/\`, or a malformed port). A `Location`
+  naming any other host, `http://ca-api.example` included, is passed on unchanged.
 - **No identity headers.** The edge removes `x-jwt-payload`, `X-MS-CLIENT-PRINCIPAL`,
   `-ID`, `-IDP` and `-NAME` from every request, and drops any header with an underscore in its
   name, so a caller cannot hand `ca-api` a statement of who it is.
