@@ -173,6 +173,7 @@ module "environments" {
   location                       = var.location
   infrastructure_subnet_id       = local.env_subnet_ids[each.key]
   internal_load_balancer_enabled = local.container_app_environment_internal[each.key]
+  zone_redundancy_enabled        = var.environment_zone_redundant
   # The certificate identities, only on the environment the frontend and the edge run in.
   identity_ids = local.environment_certificate_identity_ids[each.key]
   tags         = local.tags
@@ -231,4 +232,22 @@ resource "azurerm_private_dns_zone_virtual_network_link" "environment" {
   virtual_network_id   = local.virtual_network_id
   registration_enabled = false
   tags                 = local.tags
+}
+
+# A zone-redundant environment spreads an app's replicas across zones only when it has two or
+# more. A warning, not a refusal: one replica still runs, in one zone. ca-edge's floor is fixed at
+# one and is not counted; it scales out under load.
+locals {
+  zone_redundant_single_replica_apps = var.environment_zone_redundant ? compact([
+    var.api_environment != "aca" && local.api_min_replicas < 2 ? "ca-api (api_min_replicas = ${local.api_min_replicas})" : "",
+    var.frontend_environment != "aca" && local.frontend_min_replicas < 2 ? "ca-frontend (frontend_min_replicas = ${local.frontend_min_replicas})" : "",
+    var.enable_workers && var.workers_environment == "workers" && local.workers_min_replicas < 2 ? "ca-workers (workers_min_replicas = ${local.workers_min_replicas})" : "",
+  ]) : []
+}
+
+check "environment_zone_redundancy_needs_two_replicas" {
+  assert {
+    condition     = length(local.zone_redundant_single_replica_apps) == 0
+    error_message = "environment_zone_redundant is on, but these apps run in a zone-redundant environment with fewer than two replicas, so each runs in one zone and stops if that zone fails: ${join("; ", local.zone_redundant_single_replica_apps)}. Raise each minimum to at least 2 (capacity_profile \"enterprise\" sets 2 for all three)."
+  }
 }

@@ -45,6 +45,11 @@ resource "azurerm_container_app_environment" "this" {
   # the detail and the az query that checks the second.
   mutual_tls_enabled = var.mutual_tls_enabled
 
+  # SELF-HOSTED EXTENSION: spread the environment and its apps' replicas across the region's
+  # availability zones. CREATE-TIME ONLY: Azure fixes it when it creates the environment, so
+  # changing it REPLACES the environment and every app in it.
+  zone_redundancy_enabled = var.zone_redundancy_enabled
+
   # SELF-HOSTED EXTENSION: user-assigned identities on the environment itself, which it uses
   # to read certificates from Key Vault (the root's custom-domain.tf, when the frontend and the
   # edge run on the front environment). Empty by default, which renders no block, so an

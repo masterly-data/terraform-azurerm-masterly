@@ -46,6 +46,19 @@ variable "environment_private_dns_enabled" {
   description = "Whether the module creates the private DNS that resolves the front, app and workers Container Apps environments inside the VNet. True (the default): for each of them that is internal (app and workers always, the front when aca_internal_load_balancer is true), the module creates a private DNS zone in rg-<name_prefix>-aca named the environment's default domain, a wildcard (*) A record to the environment's static IP, and a link from the zone to the install's VNet (on an injected network, the VNet of aca_subnet_id) with auto-registration off. Without such a zone the apps in an internal environment cannot be reached by name. Set false when your platform team owns DNS: the module then creates no zone, record or link, and the container_app_environments output gives each environment's default_domain and static_ip_address for the records your hub creates. Azure assigns the default domain when it creates the environment, so the zone cannot be created ahead of the install."
 }
 
+variable "environment_zone_redundant" {
+  type        = bool
+  default     = false
+  nullable    = false
+  description = "Whether the front, app and workers Container Apps environments are zone-redundant: Azure spreads each environment's infrastructure and its apps' replicas across the region's availability zones, so an app keeps running when one zone fails (ADR 0120, 2026-11-20 amendment). False (the default) plans no change. Azure fixes this when it creates an environment, so changing it on an existing install REPLACES all three environments and every app in them: the apps' FQDNs change, a frontend or edge custom domain's certificate and binding are created again, and the apps start on the module's images until CD's release runs again. Turn it on when you create an install, or plan the replacement in a maintenance window. It needs a region with availability zones, and an app needs at least two replicas to run in two zones: the plan warns (environment_zone_redundancy_needs_two_replicas) when ca-api, ca-frontend or ca-workers runs in one of these environments with a minimum below two (api_min_replicas, frontend_min_replicas, workers_min_replicas, or capacity_profile). ca-edge runs at least one replica and scales out under load. It covers only the three environments, not aca-<name_prefix>, so move the apps there (frontend_environment, edge_environment, api_environment, workers_environment). For an install that must survive a zone failure, set postgres_zone_redundant_ha too: the database is in one zone otherwise. Refused on an install without the three environments."
+
+  # Read at plan: the environment keys depend on the subnet inputs only (environment.tf).
+  validation {
+    condition     = !var.environment_zone_redundant || length(local.container_app_environment_keys) == 3
+    error_message = "environment_zone_redundant = true applies to the front, app and workers environments, and this install has none: environment_subnet_ids has no environment subnets. On an injected network set front_subnet_id, app_subnet_id and workers_subnet_id; on a network the module builds set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix, or use a VNet of /21 or larger. Or leave environment_zone_redundant false."
+  }
+}
+
 # Removes aca-<prefix> once every workload has moved off it. The subnet it ran on, snet-aca, its
 # NSG and aca_subnet_id stay: only the environment and its diagnostic setting go.
 variable "retire_runtime_environment" {

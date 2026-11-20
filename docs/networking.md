@@ -483,6 +483,31 @@ an empty list admits everyone. To filter at the network instead, put the front b
 Application Gateway with `aca_internal_load_balancer = true`: the rule then admits
 `VirtualNetwork` only.
 
+### Zone redundancy
+
+`environment_zone_redundant = true` makes the front, app and workers environments zone-redundant:
+Azure spreads each environment and its apps' replicas across the region's availability zones, so
+an app keeps running when one zone fails (ADR 0120, 2026-11-20 amendment). It is off by default.
+
+- **Choose it when you create the install.** Azure fixes zone redundancy when it creates an
+  environment. Turning it on later replaces all three environments and every app in them: the
+  apps' FQDNs change, a custom domain's certificate and binding are created again, and the apps
+  start on the module's images until CD's release runs again.
+- **It needs a region with availability zones**, and the environment subnets need no extra size:
+  [the subnet sizes above](#the-environment-subnets) hold.
+- **An app needs two replicas to run in two zones.** The plan warns
+  (`environment_zone_redundancy_needs_two_replicas`) when `ca-api`, `ca-frontend` or `ca-workers`
+  runs in one of the three environments with a minimum below two. `capacity_profile =
+  "enterprise"` sets two for all three. `ca-edge` runs at least one replica and scales out under
+  load.
+- **It covers the three environments only.** Apps still on `aca-<name_prefix>` are not
+  zone-redundant: move them first (`frontend_environment`, `edge_environment`, `api_environment`,
+  `workers_environment`).
+- **The database is the other half.** Without `postgres_zone_redundant_ha = true` the Postgres
+  server is in one zone, and a zone failure is recovered by a point-in-time restore whatever the
+  apps do ([docs/scaling.md](scaling.md#zone-redundant-ha)). An install that must survive a zone
+  failure sets both.
+
 ### Topology 3: what your own subnets should carry
 
 On an injected spoke the module creates no NSG and associates none. A subnet holds exactly one,

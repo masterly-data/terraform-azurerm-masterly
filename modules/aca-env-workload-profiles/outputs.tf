@@ -65,3 +65,8 @@ output "custom_domain_verification_id" {
   sensitive   = true
   description = "The value of the asuid.<hostname> TXT record Azure checks before it binds a custom domain to an app in this environment."
 }
+
+output "zone_redundancy_enabled" {
+  description = "Whether the environment is zone-redundant. Create-time only: a change replaces the environment."
+  value       = azurerm_container_app_environment.this.zone_redundancy_enabled
+}

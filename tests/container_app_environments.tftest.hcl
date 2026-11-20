@@ -1759,3 +1759,109 @@ run "aca_environments_ignore_only_the_azure_set_resource_group" {
     error_message = "An environment's ignore_changes must not hide a change to infrastructure_subnet_id, internal_load_balancer_enabled, name, location or resource_group_name: each of those must still plan a replacement."
   }
 }
+
+# --- Zone redundancy (ADR 0120, 2026-11-20 amendment) -----------------------------------------
+# Off by default: Azure fixes it at creation, so a changed default would replace every
+# environment on upgrade.
+run "environment_zone_redundancy_off_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = alltrue([for k in ["front", "app", "workers"] : !module.environments[k].zone_redundancy_enabled])
+    error_message = "With environment_zone_redundant unset, no environment may be zone-redundant."
+  }
+}
+
+# On, with every app placed in the three environments at two replicas: all three environments
+# are zone-redundant and the replica warning stays quiet.
+run "environment_zone_redundancy_on_with_two_replicas" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    environment_zone_redundant = true
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+    enable_workers             = true
+    workers_environment        = "workers"
+    enable_redis               = true
+    redis_offering             = "cache"
+    api_min_replicas           = 2
+    api_max_replicas           = 2
+    frontend_min_replicas      = 2
+    workers_min_replicas       = 2
+    workers_max_replicas       = 2
+  }
+
+  assert {
+    condition     = alltrue([for k in ["front", "app", "workers"] : module.environments[k].zone_redundancy_enabled])
+    error_message = "environment_zone_redundant = true must make the front, app and workers environments zone-redundant."
+  }
+
+  assert {
+    condition     = length(local.zone_redundant_single_replica_apps) == 0
+    error_message = "With every placed app at two replicas, the replica warning must name nothing."
+  }
+}
+
+# Threat: zone redundancy believed to protect an app that runs one replica in one zone. The
+# warning names each placed app below two replicas, and the plan still succeeds.
+run "environment_zone_redundancy_warns_on_single_replica_apps" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    environment_zone_redundant = true
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+    enable_workers             = true
+    workers_environment        = "workers"
+  }
+
+  expect_failures = [check.environment_zone_redundancy_needs_two_replicas]
+
+  assert {
+    condition = local.zone_redundant_single_replica_apps == tolist([
+      "ca-api (api_min_replicas = 1)",
+      "ca-frontend (frontend_min_replicas = 1)",
+      "ca-workers (workers_min_replicas = 1)",
+    ])
+    error_message = "The warning must name ca-api, ca-frontend and ca-workers at their floor of 1."
+  }
+}
+
+# Apps left on aca-<prefix> are not in a zone-redundant environment, so they are not counted.
+run "environment_zone_redundancy_ignores_apps_on_the_runtime_environment" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    environment_zone_redundant = true
+  }
+
+  assert {
+    condition     = length(local.zone_redundant_single_replica_apps) == 0
+    error_message = "Apps on aca-<prefix> must not be named by the zone-redundancy replica warning."
+  }
+}
+
+# Refused without the three environments: there is nothing for it to apply to.
+run "environment_zone_redundancy_refused_without_the_environments" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs           = ["203.0.113.7/32"]
+    vnet_address_space              = ["10.30.0.0/22"]
+    aca_subnet_prefix               = "10.30.0.0/23"
+    private_endpoints_subnet_prefix = "10.30.2.0/24"
+    environment_zone_redundant      = true
+  }
+
+  expect_failures = [var.environment_zone_redundant]
+}

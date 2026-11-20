@@ -46,3 +46,11 @@ variable "identity_ids" {
   default     = []
   description = "User-assigned identity ids to attach to the environment itself, not to any app in it. The environment uses them to read certificates from Key Vault. Empty (the default) attaches none."
 }
+
+# SELF-HOSTED EXTENSION: zone redundancy (ADR 0120, 2026-11-20 amendment).
+variable "zone_redundancy_enabled" {
+  type        = bool
+  default     = false
+  nullable    = false
+  description = "Spread the environment and its apps' replicas across the region's availability zones. False by default. CREATE-TIME ONLY: changing it replaces the environment and every app in it. Needs a region with availability zones."
+}
