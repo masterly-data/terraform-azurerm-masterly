@@ -4,4 +4,4 @@
 
 ### Changed
 
-- **`ca-edge` declares TCP liveness and readiness probes on its listener port (8080).** Azure applied default TCP probes already; they are now stated and tuned (the readiness failure budget allows a first image pull). Envoy's admin interface stays unconfigured and the route list is unchanged. The next apply rolls a new `ca-edge` revision.
+- **`ca-edge` declares TCP liveness and readiness probes on its listener port (8080).** Azure applied default TCP probes already; they are now stated and tuned (the readiness failure budget allows a slow Envoy start). Envoy's admin interface stays unconfigured and the route list is unchanged. The next apply rolls a new `ca-edge` revision.
