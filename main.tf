@@ -293,44 +293,40 @@ locals {
   # it (servicebus_sku's validation refuses enterprise with Service Bus on and no tier chosen).
   capacity_profiles = {
     small = {
-      postgres_sku_name          = "B_Standard_B1ms"
-      postgres_pgbouncer         = false
-      postgres_zone_redundant_ha = false
-      servicebus_sku             = "Standard"
-      api_min_replicas           = 1
-      frontend_min_replicas      = 1
-      workers_min_replicas       = 1
+      postgres_sku_name     = "B_Standard_B1ms"
+      postgres_pgbouncer    = false
+      servicebus_sku        = "Standard"
+      api_min_replicas      = 1
+      frontend_min_replicas = 1
+      workers_min_replicas  = 1
     }
     standard = {
-      postgres_sku_name          = "GP_Standard_D2ds_v5"
-      postgres_pgbouncer         = true
-      postgres_zone_redundant_ha = true
-      servicebus_sku             = "Standard"
-      api_min_replicas           = 2
-      frontend_min_replicas      = 1
-      workers_min_replicas       = 1
+      postgres_sku_name     = "GP_Standard_D2ds_v5"
+      postgres_pgbouncer    = true
+      servicebus_sku        = "Standard"
+      api_min_replicas      = 2
+      frontend_min_replicas = 1
+      workers_min_replicas  = 1
     }
     enterprise = {
-      postgres_sku_name          = "GP_Standard_D4ds_v5"
-      postgres_pgbouncer         = true
-      postgres_zone_redundant_ha = true
-      servicebus_sku             = "Premium"
-      api_min_replicas           = 2
-      frontend_min_replicas      = 2
-      workers_min_replicas       = 2
+      postgres_sku_name     = "GP_Standard_D4ds_v5"
+      postgres_pgbouncer    = true
+      servicebus_sku        = "Premium"
+      api_min_replicas      = 2
+      frontend_min_replicas = 2
+      workers_min_replicas  = 2
     }
   }
 
   # With capacity_profile unset, each input's default from before profiles existed, so an install
   # that sets no profile plans no change.
   capacity_profile_unset = {
-    postgres_sku_name          = "B_Standard_B1ms"
-    postgres_pgbouncer         = false
-    postgres_zone_redundant_ha = false
-    servicebus_sku             = "Standard"
-    api_min_replicas           = 1
-    frontend_min_replicas      = 1
-    workers_min_replicas       = 1
+    postgres_sku_name     = "B_Standard_B1ms"
+    postgres_pgbouncer    = false
+    servicebus_sku        = "Standard"
+    api_min_replicas      = 1
+    frontend_min_replicas = 1
+    workers_min_replicas  = 1
   }
 
   # lookup() rather than an index: a refused capacity_profile ("" or a misspelling) is reported
@@ -347,7 +343,7 @@ locals {
   capacity_postgres          = nonsensitive(local.provision_postgres) ? local.capacity : local.capacity_profile_unset
   postgres_sku_name          = var.postgres_sku_name != null ? var.postgres_sku_name : local.capacity_postgres.postgres_sku_name
   postgres_pgbouncer         = var.postgres_pgbouncer != null ? var.postgres_pgbouncer : local.capacity_postgres.postgres_pgbouncer
-  postgres_zone_redundant_ha = var.postgres_zone_redundant_ha != null ? var.postgres_zone_redundant_ha : local.capacity_postgres.postgres_zone_redundant_ha
+  postgres_zone_redundant_ha = var.postgres_zone_redundant_ha # not sized by a profile (ADR 0120, 2026-11-20 amendment)
   api_min_replicas           = var.api_min_replicas != null ? var.api_min_replicas : local.capacity.api_min_replicas
   frontend_min_replicas      = var.frontend_min_replicas != null ? var.frontend_min_replicas : local.capacity.frontend_min_replicas
   workers_min_replicas       = var.workers_min_replicas != null ? var.workers_min_replicas : local.capacity.workers_min_replicas
@@ -623,6 +619,16 @@ resource "azurerm_postgresql_flexible_server" "this" {
       high_availability[0].standby_availability_zone,
       geo_redundant_backup_enabled,
     ]
+  }
+}
+
+# The enterprise profile's recovery objectives (ADR 0120 §4: near-zero data loss, an hour of
+# downtime) assume the zone-redundant standby, which no profile turns on (2026-11-20 amendment).
+# A warning, not a refusal: running without it is the customer's choice, made knowingly.
+check "enterprise_production_without_postgres_ha" {
+  assert {
+    condition     = !(var.mode == "production" && var.capacity_profile == "enterprise" && nonsensitive(local.provision_postgres) && !local.postgres_zone_redundant_ha)
+    error_message = "capacity_profile = \"enterprise\" in mode = \"production\" runs the starter Postgres server without zone-redundant HA. The enterprise profile's recovery objectives (near-zero data loss, an hour of downtime) assume it: without it, a zone failure is recovered by a point-in-time restore, with up to 5 minutes of data loss and downtime that grows with the data's size. Set postgres_zone_redundant_ha = true to meet them, or accept a restore's objectives."
   }
 }
 

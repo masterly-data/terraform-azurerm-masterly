@@ -183,12 +183,11 @@ run "profile_standard_sizes" {
   assert {
     condition = (
       azurerm_postgresql_flexible_server.this[0].sku_name == "GP_Standard_D2ds_v5" &&
-      length(azurerm_postgresql_flexible_server.this[0].high_availability) == 1 &&
-      azurerm_postgresql_flexible_server.this[0].high_availability[0].mode == "ZoneRedundant" &&
+      length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0 &&
       length(azurerm_postgresql_flexible_server_configuration.pgbouncer) == 3 &&
       azurerm_postgresql_flexible_server_configuration.pgbouncer["pgbouncer.enabled"].value == "true"
     )
-    error_message = "standard must plan GP_Standard_D2ds_v5 with zone-redundant HA and the pgbouncer parameters."
+    error_message = "standard must plan GP_Standard_D2ds_v5 and the pgbouncer parameters, with no zone-redundant HA: no profile turns it on."
   }
 
   assert {
@@ -233,12 +232,11 @@ run "profile_enterprise_sizes" {
   assert {
     condition = (
       azurerm_postgresql_flexible_server.this[0].sku_name == "GP_Standard_D4ds_v5" &&
-      length(azurerm_postgresql_flexible_server.this[0].high_availability) == 1 &&
-      azurerm_postgresql_flexible_server.this[0].high_availability[0].mode == "ZoneRedundant" &&
+      length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0 &&
       length(azurerm_postgresql_flexible_server_configuration.pgbouncer) == 3 &&
       azurerm_postgresql_flexible_server_configuration.pgbouncer["pgbouncer.enabled"].value == "true"
     )
-    error_message = "enterprise must plan GP_Standard_D4ds_v5 with zone-redundant HA and the pgbouncer parameters."
+    error_message = "enterprise must plan GP_Standard_D4ds_v5 and the pgbouncer parameters, with no zone-redundant HA: no profile turns it on."
   }
 
   assert {
@@ -422,7 +420,9 @@ run "explicit_postgres_pgbouncer_wins_over_the_profile" {
   }
 }
 
-run "explicit_postgres_zone_redundant_ha_wins_over_the_profile" {
+# No profile turns HA on (ADR 0120, 2026-11-20 amendment); postgres_zone_redundant_ha = true does,
+# under any profile with a non-burstable SKU.
+run "explicit_postgres_zone_redundant_ha_turns_ha_on_under_a_profile" {
   command = plan
 
   variables {
@@ -431,12 +431,15 @@ run "explicit_postgres_zone_redundant_ha_wins_over_the_profile" {
     redis_offering             = "cache"
     api_max_replicas           = 2
     capacity_profile           = "enterprise"
-    postgres_zone_redundant_ha = false
+    postgres_zone_redundant_ha = true
   }
 
   assert {
-    condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
-    error_message = "postgres_zone_redundant_ha = false must win over enterprise's HA."
+    condition = (
+      length(azurerm_postgresql_flexible_server.this[0].high_availability) == 1 &&
+      azurerm_postgresql_flexible_server.this[0].high_availability[0].mode == "ZoneRedundant"
+    )
+    error_message = "postgres_zone_redundant_ha = true under enterprise must plan a ZoneRedundant standby."
   }
 }
 
@@ -545,8 +548,9 @@ run "production_refuses_a_resolved_burstable_sku" {
   expect_failures = [var.postgres_sku_name]
 }
 
-# Production with HA unset and no profile resolves HA off.
-run "production_refuses_resolved_ha_off" {
+# Production does not require zone-redundant HA (ADR 0120, 2026-11-20 amendment): HA unset and
+# no profile plans the starter server with no standby.
+run "production_plans_with_ha_unset" {
   command = plan
 
   variables {
@@ -573,10 +577,13 @@ run "production_refuses_resolved_ha_off" {
     postgres_backup_retention_days = 14
   }
 
-  expect_failures = [var.postgres_zone_redundant_ha]
+  assert {
+    condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
+    error_message = "Production no longer requires zone-redundant HA: with HA unset and no profile, the starter server must plan with no standby."
+  }
 }
 
-# standard satisfies both Postgres production guards with nothing else set, so the three runs
+# standard satisfies the Postgres production guards with nothing else set, so the three runs
 # after this one each fail on their replica floor alone.
 run "production_standard_plans_with_the_sku_and_ha_unset" {
   command = plan
@@ -608,10 +615,83 @@ run "production_standard_plans_with_the_sku_and_ha_unset" {
   assert {
     condition = (
       azurerm_postgresql_flexible_server.this[0].sku_name == "GP_Standard_D2ds_v5" &&
-      length(azurerm_postgresql_flexible_server.this[0].high_availability) == 1 &&
+      length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0 &&
       module.api.scale.min_replicas == 2
     )
-    error_message = "standard in production must plan GP_Standard_D2ds_v5 with HA and an api floor of 2."
+    error_message = "standard in production must plan GP_Standard_D2ds_v5 with no HA (off by default) and an api floor of 2."
+  }
+}
+
+# The enterprise profile's recovery objectives assume the standby, so production on enterprise
+# without it warns (a check, not a refusal) and plans; with HA on, it plans with no warning.
+run "production_enterprise_without_ha_warns" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 2
+    workers_max_replicas  = 2
+
+    capacity_profile               = "enterprise"
+    postgres_backup_retention_days = 14
+  }
+
+  expect_failures = [check.enterprise_production_without_postgres_ha]
+
+  assert {
+    condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
+    error_message = "enterprise in production without HA must still plan, with no standby."
+  }
+}
+
+run "production_enterprise_with_ha_does_not_warn" {
+  command = plan
+
+  variables {
+    mode                  = "production"
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "cache"
+    enable_workers        = true
+    api_max_replicas      = 2
+    workers_max_replicas  = 2
+
+    capacity_profile               = "enterprise"
+    postgres_backup_retention_days = 14
+    postgres_zone_redundant_ha     = true
+  }
+
+  assert {
+    condition     = azurerm_postgresql_flexible_server.this[0].high_availability[0].mode == "ZoneRedundant"
+    error_message = "enterprise in production with postgres_zone_redundant_ha = true must plan a ZoneRedundant standby."
   }
 }
 
@@ -708,8 +788,7 @@ run "production_refuses_a_workers_floor_of_zero_under_a_profile" {
   expect_failures = [var.workers_min_replicas]
 }
 
-# standard turns the pooler on; a burstable SKU set explicitly cannot carry it. HA is set off so
-# only the pooler guard is left to refuse it.
+# standard turns the pooler on; a burstable SKU set explicitly cannot carry it.
 run "profile_pooler_refused_on_an_explicit_burstable_sku" {
   command = plan
 
@@ -726,19 +805,20 @@ run "profile_pooler_refused_on_an_explicit_burstable_sku" {
   expect_failures = [var.postgres_pgbouncer]
 }
 
-# standard turns HA on; a burstable SKU set explicitly cannot carry it, in evaluation mode too.
+# HA set on over a burstable SKU set explicitly under standard is refused, in evaluation mode too.
 # The pooler is set off so only the HA guard is left to refuse it.
 run "profile_ha_refused_on_an_explicit_burstable_sku" {
   command = plan
 
   variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    enable_redis          = true
-    redis_offering        = "cache"
-    api_max_replicas      = 2
-    capacity_profile      = "standard"
-    postgres_sku_name     = "B_Standard_B2s"
-    postgres_pgbouncer    = false
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    enable_redis               = true
+    redis_offering             = "cache"
+    api_max_replicas           = 2
+    capacity_profile           = "standard"
+    postgres_sku_name          = "B_Standard_B2s"
+    postgres_pgbouncer         = false
+    postgres_zone_redundant_ha = true
   }
 
   expect_failures = [var.postgres_zone_redundant_ha]
@@ -831,7 +911,7 @@ run "production_refuses_an_explicit_burstable_sku_under_standard" {
   expect_failures = [var.postgres_sku_name]
 }
 
-run "production_refuses_explicit_ha_off_under_standard" {
+run "production_plans_explicit_ha_off_under_standard" {
   command = plan
 
   variables {
@@ -859,7 +939,10 @@ run "production_refuses_explicit_ha_off_under_standard" {
     postgres_backup_retention_days = 14
   }
 
-  expect_failures = [var.postgres_zone_redundant_ha]
+  assert {
+    condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
+    error_message = "postgres_zone_redundant_ha = false under standard in production must plan with no standby."
+  }
 }
 
 # A profile does not raise a maximum: standard's api floor of 2 over the default maximum of 1.

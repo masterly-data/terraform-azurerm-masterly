@@ -152,7 +152,7 @@ module "masterly" {
   migrations                        = var.migrations                  # "job" runs migrations in caj-migrate (backend > v0.135.0)
   migrate_byo_database_secret_names = var.migrate_byo_database_secret_names
   postgres_sku_name                 = "GP_Standard_D2ds_v5"
-  postgres_zone_redundant_ha        = true
+  postgres_zone_redundant_ha        = true # optional, off by default: a synchronous standby in another zone (docs/scaling.md)
   postgres_backup_retention_days    = 14
 
   # --- Egress ---------------------------------------------------------------------

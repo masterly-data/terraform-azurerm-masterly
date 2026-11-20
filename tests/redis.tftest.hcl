@@ -411,8 +411,8 @@ run "redis_managed_eviction_alert_aggregates_correctly" {
     enable_workers       = true
     api_max_replicas     = 2
     # BYO-DB, matching production_mode_full_wiring_plans: it opts out of the starter server's
-    # production floors (GP sku, 14-day backups, zone-redundant HA), which are irrelevant to a
-    # Redis alert and would otherwise be three more lines of unrelated setup.
+    # production floors (GP sku, 14-day backups), which are irrelevant to a
+    # Redis alert and would otherwise be more lines of unrelated setup.
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
   }
 

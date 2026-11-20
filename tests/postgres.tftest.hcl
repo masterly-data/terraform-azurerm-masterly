@@ -483,7 +483,7 @@ run "postgres_pgbouncer_refused_with_an_operator_pgbouncer_key" {
 }
 
 # mode=production on the PROVISIONED starter server: the data-plane defaults must be
-# production-grade (non-burstable SKU + zone-redundant HA + >=14d retention). This exercises
+# production-grade (non-burstable SKU + >=14d retention; HA is optional). This exercises
 # the starter-server path (no external_database_url), unlike the BYO-DB wiring test above.
 run "production_starter_postgres_grade_plans" {
   command = plan
@@ -712,8 +712,9 @@ run "production_short_retention_is_rejected" {
   expect_failures = [var.postgres_backup_retention_days]
 }
 
-# Guard: mode=production refuses the starter server without zone-redundant HA.
-run "production_no_ha_is_rejected" {
+# mode=production does not require zone-redundant HA (ADR 0120, 2026-11-20 amendment): a
+# production starter server with HA unset plans with no standby.
+run "production_without_ha_plans" {
   command = plan
 
   variables {
@@ -737,10 +738,13 @@ run "production_no_ha_is_rejected" {
     api_max_replicas               = 2
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_backup_retention_days = 14
-    # postgres_zone_redundant_ha stays false -> refused
+    # postgres_zone_redundant_ha stays false (the default) -> plans, no standby
   }
 
-  expect_failures = [var.postgres_zone_redundant_ha]
+  assert {
+    condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
+    error_message = "A production starter server with postgres_zone_redundant_ha unset must plan with no high_availability block."
+  }
 }
 
 # --- Geo-redundant backup on the starter Postgres server (MAS-1087) ----------------------

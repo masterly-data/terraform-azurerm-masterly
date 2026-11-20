@@ -252,8 +252,8 @@ else
           Do not hunt for your current limit first: Azure publishes no read path for this
           provider, so the ticket IS the read path."
   if [[ "$MODE" == "production" ]]; then
-    manual "Zone-redundant HA availability in $LOCATION. Production forces
-            postgres_zone_redundant_ha = true on the starter server, and Azure offers it only
+    manual "Zone-redundant HA availability in $LOCATION, if you set
+            postgres_zone_redundant_ha = true (optional, off by default): Azure offers it only
             in availability-zone regions. There is nothing to pre-file: check the regions
             table below, and if the region is marked as temporarily blocked for new
             zone-redundant deployments the documented remedy is a DIFFERENT REGION, not a
