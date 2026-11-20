@@ -209,8 +209,8 @@ Bus on whatever the profile.
 
 `postgres_zone_redundant_ha = true` gives the starter Postgres server a synchronous standby in
 another availability zone, which Azure fails over to in about two minutes with no data loss. It is
-off by default on every profile and in `mode = "production"`, because the install's Container Apps
-environments are not zone-redundant: a zone failure can take the apps down whatever Postgres does,
+off by default on every profile and in `mode = "production"`, because by default the install's
+Container Apps environments are not zone-redundant: a zone failure can take the apps down whatever Postgres does,
 so the standby protects the data more than it protects uptime, at twice the server's compute.
 
 Without it, a zone failure is recovered by a point-in-time restore into another zone. Azure
@@ -255,6 +255,8 @@ ADR 0120 §4 states a recovery point and recovery time objective per profile:
 | `standard` | 15 min / 4 h |
 | `enterprise` | near zero / 1 h |
 
-**Unverified.** These are the objectives each profile is sized for. The restore and failover
+**Unverified.** These are the objectives each profile is sized for with zone-redundant HA on, and,
+for enterprise's downtime through a zone failure, with zone-redundant environments too; without HA,
+see [Zone-redundant HA](#zone-redundant-ha). The restore and failover
 drills that would show an install meeting them have not been run, and this section will say what
 they showed once they have.

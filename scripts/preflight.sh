@@ -245,22 +245,21 @@ else
             Issue type   Service and subscription limits (quotas)
             Quota type   Azure Database for PostgreSQL flexible server
             Details      Location $LOCATION / Series Ddsv5 / New Quota 4
-          FOUR, not two: GP_Standard_D2ds_v5 is a 2-vCore SKU and production forces a
-          zone-redundant standby that Azure provisions and maintains as real compute.
+          FOUR if you set postgres_zone_redundant_ha = true, two without it:
+          GP_Standard_D2ds_v5 is a 2-vCore SKU, and the optional zone-redundant standby
+          is real compute that Azure provisions and maintains beside it.
           It is FREE — quota adjustment is subscription management, supported on every plan
           including one with no paid support, so nothing blocks filing it immediately.
           Do not hunt for your current limit first: Azure publishes no read path for this
           provider, so the ticket IS the read path."
-  if [[ "$MODE" == "production" ]]; then
-    manual "Zone-redundant HA availability in $LOCATION, if you set
-            postgres_zone_redundant_ha = true (optional, off by default): Azure offers it only
-            in availability-zone regions. There is nothing to pre-file: check the regions
-            table below, and if the region is marked as temporarily blocked for new
-            zone-redundant deployments the documented remedy is a DIFFERENT REGION, not a
-            form. Sweden Central is listed as available with no block marker, but that table
-            is edited without notice — re-read it the morning you commit to a region.
-            https://learn.microsoft.com/azure/postgresql/overview#azure-regions"
-  fi
+  manual "Zone-redundant HA availability in $LOCATION, if you set
+          postgres_zone_redundant_ha = true (optional, off by default): Azure offers it only
+          in availability-zone regions. There is nothing to pre-file: check the regions
+          table below, and if the region is marked as temporarily blocked for new
+          zone-redundant deployments the documented remedy is a DIFFERENT REGION, not a
+          form. Sweden Central is listed as available with no block marker, but that table
+          is edited without notice — re-read it the morning you commit to a region.
+          https://learn.microsoft.com/azure/postgresql/overview#azure-regions"
 fi
 
 # --- 4. Container Apps. Environment-scoped quota does not exist until the environment does.

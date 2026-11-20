@@ -145,8 +145,8 @@ module "masterly" {
 
   # --- Data plane -----------------------------------------------------------------
   # Bring your own Postgres, or leave external_database_url null for the starter server.
-  # production refuses a burstable SKU and requires HA and >= 14 days of backups on the
-  # provisioned server.
+  # production refuses a burstable SKU and requires >= 14 days of backups on the provisioned
+  # server; zone-redundant HA is optional (postgres_zone_redundant_ha below).
   external_database_url             = var.external_database_url
   external_database_admin_url       = var.external_database_admin_url # the migrate job's DSN; null reuses the one above
   migrations                        = var.migrations                  # "job" runs migrations in caj-migrate (backend > v0.135.0)
