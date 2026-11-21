@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-139 inputs in 29 groups.
+140 inputs in 29 groups.
 
 ## Groups
 
@@ -34,7 +34,7 @@ each one that is missing.
 - [Images and registry pull credential](#images-and-registry-pull-credential) (6)
 - [Key Vault database secret names](#key-vault-database-secret-names) (1)
 - [Diagnostics and alerts](#diagnostics-and-alerts) (12)
-- [Edge proxy](#edge-proxy) (1)
+- [Edge proxy](#edge-proxy) (2)
 - [Email](#email) (2)
 - [Database and Redis authentication](#database-and-redis-authentication) (2)
 - [Key Vault](#key-vault) (7)
@@ -309,6 +309,7 @@ In `edge.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `edge` | `object(...)` | `null` | Run ca-edge for SDK and MCP clients: 429 with Retry-After over rate_limit_per_token (600) or rate_limit_per_client (1800) per rate_limit_interval_seconds (60) per replica, so limits multiply by 1 to 3 running replicas. |
+| `edge_ingress_allowed_cidrs` | `list(string)` | `null` | CIDRs allowed to reach ca-edge, when they differ from the frontend's. |
 
 ## Email
 
