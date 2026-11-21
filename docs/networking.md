@@ -825,7 +825,7 @@ adds either way is a narrower door:
 ### Token validation at the edge (`edge.jwt_authn`)
 
 `edge.jwt_authn` is **off by default** (null). Set it, for example
-`edge = { jwt_authn = { audiences = ["api://masterly-api", "api://masterly-mcp"] } }`, and
+`edge = { jwt_authn = { audiences = ["<API client ID>", "<MCP server client ID>"] } }`, and
 `ca-edge` validates the caller's bearer token itself before `ca-api` sees the request (ADR 0117,
 ADR 0120 §2), on every forwarded route: `/v1`, the ca-serve routes under it, and `/mcp`.
 
@@ -842,10 +842,13 @@ ADR 0120 §2), on every forwarded route: `/v1`, the ca-serve routes under it, an
   `https://login.microsoftonline.com/<that tenant>/discovery/v2.0/keys`, which is what
   `oidc_tenant_id` sets them both to. A second issuer, another identity provider or a multitenant
   (`organizations`) authority is refused while `edge.jwt_authn` is set.
-- **Audiences.** `edge.jwt_authn.audiences` lists the `aud` values a token may carry, typically
-  the API's and the MCP server's application ID URIs or client IDs. It must not be empty, and no
-  entry may be empty, so a token the tenant issued for another resource, Microsoft Graph for
-  example, is refused.
+- **Audiences.** `edge.jwt_authn.audiences` lists the `aud` values a token may carry: the API's
+  and the MCP server's application (client) IDs, the GUIDs. An Entra v2.0 access token always
+  carries the client ID of the API it was issued for as `aud`, never its application ID URI
+  (`api://...`), so an `api://` entry here matches no token and every request is answered `401`.
+  For the API it is the value `ca-api` checks, `oidc_audience` (by default `oidc_client_id`). It
+  must not be empty, and no entry may be empty, so a token the tenant issued for another resource,
+  Microsoft Graph for example, is refused.
 - **The signing keys.** `ca-edge` fetches them itself from `login.microsoftonline.com` on **443**
   over TLS it verifies (the image's CA bundle, and a certificate that must name that host), when
   it starts and every 10 minutes after. That host is in
