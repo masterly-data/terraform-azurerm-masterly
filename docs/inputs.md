@@ -231,7 +231,7 @@ In `variables-builtin-auth.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `builtin_auth` | `object(...)` | `null` | Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on ca-frontend, and on ca-api with builtin_auth_api: a gate at the platform, in front of the application's own sign-in. |
-| `builtin_auth_api` | `bool` | `false` | Turns on Container Apps built-in authentication on ca-api (ADR 0120 §2), admitting only ca-frontend's and ca-edge's workload identities. |
+| `builtin_auth_api` | `bool` | `false` | Built-in authentication on ca-api, off by default; callers request the audience builtin_auth.client_id, and turning it on before ca-frontend and ca-edge send that token refuses every BFF call, as on 2026-10-22. |
 | `builtin_auth_recovery_until` | `string` | `null` | The recovery fallback for builtin_auth: an RFC 3339 UTC time (for example 2026-11-14T15:30:00Z) until which ca-frontend's built-in authentication is turned off, so that a browser reaches the application's own sign-in... |
 
 ## Custom domain

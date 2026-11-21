@@ -66,12 +66,16 @@ variable "builtin_auth_api" {
   default     = false
   nullable    = false
   description = <<-EOT
-    Turns on Container Apps built-in authentication on ca-api (ADR 0120 §2), admitting only
-    ca-frontend's and ca-edge's workload identities. ca-api then admits only a token issued to
+    Built-in authentication on ca-api, off by default; callers request the audience
+    builtin_auth.client_id, and turning it on before ca-frontend and ca-edge send that token
+    refuses every BFF call, as on 2026-10-22.
+
+    True turns on Container Apps built-in authentication on ca-api (ADR 0120 §2), admitting only
+    ca-frontend's and ca-edge's workload identities: ca-api then admits only a token issued to
     the user-assigned identity id-<name_prefix>-frontend or, with edge set,
     id-<name_prefix>-edge, and answers 401 to everything else, on every path, with no redirect.
-    False (the default) leaves ca-api
-    ungated at the platform, as before this input existed. It requires builtin_auth: the gate
+    False (the default) leaves ca-api ungated at the platform, as before this input existed.
+    It requires builtin_auth: the gate
     validates tokens against builtin_auth's registration, so a caller requests a token for the
     audience builtin_auth.client_id (or api://<client_id>). A browser sign-in token for that same
     registration is refused, because the registration itself is not an allowed application.

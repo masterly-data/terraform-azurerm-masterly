@@ -179,12 +179,13 @@ import {
 ```
 
 **Upgrading from 0.19.0 or 0.19.1.** Those versions also configured `ca-api`. Unless you set
-`builtin_auth_api = true`, the first plan on this version destroys that one resource, `module.masterly.azapi_resource.builtin_auth["api"]`
-(the api's `authConfigs/current`), and changes nothing else: the frontend's configuration, both apps
-and their secrets stay as they are. If your configuration still has the `for_each` import block
-those versions documented, with `"api"` in it, narrow it to the frontend as above or delete it
-first: an import block for `["api"]` names an instance this version no longer has, and the plan
-fails. An install that configured built-in auth on `ca-api` by hand and never imported it keeps
+`builtin_auth_api = true`, the first plan on this version destroys that one resource,
+`module.masterly.azapi_resource.builtin_auth["api"]` (the api's `authConfigs/current`), and
+changes nothing else: the frontend's configuration, both apps and their secrets stay as they are.
+If your configuration still has the `for_each` import block those versions documented, with
+`"api"` in it, narrow it to the frontend as above or delete it first: without
+`builtin_auth_api = true`, an import block for `["api"]` names an instance this version does not
+have, and the plan fails. An install that configured built-in auth on `ca-api` by hand and never imported it keeps
 that configuration; remove it in the portal (the app's **Authentication** page) if you want the
 api reached without it.
 
@@ -202,8 +203,8 @@ break-glass path. Set it to an RFC 3339 UTC time, such as `2026-11-14T15:30:00Z`
   `frontend_ingress_external = false`, or `aca_internal_load_balancer = true`. It is also refused
   without `builtin_auth`.
 - **The frontend only.** It changes nothing on `ca-api`: its ingress, its environment and its
-  authentication, the gate `builtin_auth_api` turns on included, stay as they are. Relaxing the api's own sign-in check during an Entra outage is
-  not set by this input.
+  authentication, the gate `builtin_auth_api` turns on included, stay as they are. Relaxing the
+  api's own sign-in check during an Entra outage is not set by this input.
 - **Restored at the next plan, not at the time itself.** Terraform does not run on its own: the
   gate comes back at the first plan and apply after the time has passed. Run that apply as soon
   as the window ends. A plan that still sets a passed time turns the gate back on and warns
