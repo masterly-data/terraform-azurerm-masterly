@@ -104,26 +104,56 @@ environment.
 
 `identity_binding` decides how the **application** signs a caller in. `builtin_auth` adds a
 second, independent gate at the **platform**: Container Apps built-in authentication (often
-called EasyAuth) with Microsoft Entra ID, on `ca-frontend` only. A browser without an Entra
-sign-in for your tenant is redirected to Entra sign-in before it reaches the frontend, and a user
-who passes it still has to sign in to the application, which decides the member and their
-roles. Neither layer relies on the other. Unset (the default), the module configures none.
+called EasyAuth) with Microsoft Entra ID, on `ca-frontend`, and on `ca-api` once you turn on
+`builtin_auth_api`. A browser without an Entra sign-in for your tenant is redirected to Entra
+sign-in before it reaches the frontend, and a user who passes it still has to sign in to the
+application, which decides the member and their roles. Neither layer relies on the other. Unset
+(the default), the module configures none.
 
 | App | Unauthenticated request | Who is admitted |
 |---|---|---|
 | `ca-frontend` | Redirected to Entra sign-in | Users of `tenant_id` signing in through `client_id`. `frontend_excluded_paths` (empty by default) are served without sign-in. |
-| `ca-api` | Not gated | The module configures no built-in auth on the api. |
+| `ca-api`, `builtin_auth_api = false` (the default) | Not gated | The module configures no built-in auth on the api. |
+| `ca-api`, `builtin_auth_api = true` | `401`, on every path, with no redirect | Tokens for the audience `client_id` issued to `ca-frontend`'s workload identity (`id-<prefix>-frontend`) and, with `edge` set, `ca-edge`'s (`id-<prefix>-edge`). Nothing else: not a browser sign-in through `client_id`, and no other identity of the install. No path is excluded. |
 
-The module gates the frontend only. The api is reached internally: the frontend's server-side
-calls go to `ca-api` inside the Container Apps environment, and the module puts no platform gate
-on it; the application authenticates its callers as `identity_binding` sets. With
-`api_ingress_external = true` the api is also published to `ingress_allowed_cidrs`, and this gate
-does not cover it there either; a plan that sets both warns through the check
-`builtin_auth_does_not_gate_the_published_api`, on every plan while both are set.
+Without `builtin_auth_api` the module gates the frontend only. The api is reached internally: the
+frontend's server-side calls go to `ca-api` inside the Container Apps environment, and the module
+puts no platform gate on it; the application authenticates its callers as `identity_binding`
+sets. With `api_ingress_external = true` the api is also published to `ingress_allowed_cidrs`,
+and this gate does not cover it there either; a plan that sets both warns through the check
+`builtin_auth_does_not_gate_the_published_api`, on every plan while both are set and
+`builtin_auth_api` is not.
 
 `api_allowed_applications` and `api_allowed_audiences` configured a gate on `ca-api` in 0.19.0
-and 0.19.1. They are deprecated and ignored: a plan that sets either succeeds and warns
-(`builtin_auth_api_entries_are_ignored`). Remove them from `builtin_auth`.
+and 0.19.1. They are deprecated and ignored, and `builtin_auth_api` does not read them: a plan
+that sets either succeeds and warns (`builtin_auth_api_entries_are_ignored`). Remove them from
+`builtin_auth`.
+
+#### The api's gate (`builtin_auth_api`)
+
+`builtin_auth_api = true` (ADR 0120 §2) puts the platform gate on `ca-api` too. It validates
+tokens against `builtin_auth`'s registration, so it requires `builtin_auth`, and a caller requests
+its token for the audience `builtin_auth.client_id` (or `api://<client_id>`). Only `ca-frontend`'s
+and `ca-edge`'s workload identities are allowed applications: a browser's ID token for the same
+registration carries that audience but is refused, because the registration itself is not one of
+them. Every other request gets `401`; no path is excluded: a path that must be reached without
+this token, such as a webhook, is for `ca-edge`'s proxy in front of the api to exempt, never for
+the api's gate. The application still authenticates every caller as `identity_binding` sets.
+
+- **Off by default. Turn it on only after the callers send their token.** With it on, `ca-api`
+  refuses every request that does not carry `ca-frontend`'s or `ca-edge`'s workload-identity
+  token. On a `ca-frontend` or `ca-edge` release that does not yet send that token, every call the
+  frontend's server makes on a user's behalf is refused, and the application is unusable until the
+  switch is turned off again, as happened with 0.19.x on 2026-10-22. Upgrade both apps to releases
+  that send it first, then turn this on.
+- **Nothing else moves.** `ca-api` carries `builtin_auth_client_secret` whenever `builtin_auth` is
+  set, so turning the switch on or off changes neither app, only the api's `authConfigs/current`
+  (`module.masterly.azapi_resource.builtin_auth["api"]`, the address 0.19.0 and 0.19.1 used).
+- **The recovery fallback does not turn it off.** `builtin_auth_recovery_until` acts on
+  `ca-frontend`'s gate alone.
+- **A hand-made configuration is imported once.** An install that configured built-in auth on
+  `ca-api` by hand imports it in the first apply that sets `builtin_auth_api`, as for the frontend
+  below, with `["api"]` and the api's `authConfigs/current`.
 
 To set it up, use an app registration in your tenant (one you already use for built-in auth is
 fine; the module takes over its configuration):
@@ -133,8 +163,8 @@ fine; the module takes over its configuration):
 2. Add a client secret and pass it as `builtin_auth_client_secret`. The module stores it as the
    Container App secret `microsoft-provider-authentication-secret` (a Key Vault reference with
    `enable_key_vault`), the name Azure gives it. It is on `ca-frontend`, which uses it, and also
-   on `ca-api`, which carried it while 0.19.0 and 0.19.1 gated the api and keeps it so that
-   upgrading changes neither app.
+   on `ca-api`, which uses it with `builtin_auth_api` and carries it either way, so that turning
+   the switch on or off, or upgrading from 0.19.0 or 0.19.1, changes neither app.
 3. Set `builtin_auth = { tenant_id = "...", client_id = "..." }`.
 
 An install that already configured built-in auth on the frontend by hand imports that
@@ -148,8 +178,8 @@ import {
 }
 ```
 
-**Upgrading from 0.19.0 or 0.19.1.** Those versions also configured `ca-api`. The first plan on
-this version destroys that one resource, `module.masterly.azapi_resource.builtin_auth["api"]`
+**Upgrading from 0.19.0 or 0.19.1.** Those versions also configured `ca-api`. Unless you set
+`builtin_auth_api = true`, the first plan on this version destroys that one resource, `module.masterly.azapi_resource.builtin_auth["api"]`
 (the api's `authConfigs/current`), and changes nothing else: the frontend's configuration, both apps
 and their secrets stay as they are. If your configuration still has the `for_each` import block
 those versions documented, with `"api"` in it, narrow it to the frontend as above or delete it
@@ -172,7 +202,7 @@ break-glass path. Set it to an RFC 3339 UTC time, such as `2026-11-14T15:30:00Z`
   `frontend_ingress_external = false`, or `aca_internal_load_balancer = true`. It is also refused
   without `builtin_auth`.
 - **The frontend only.** It changes nothing on `ca-api`: its ingress, its environment and its
-  authentication stay as they are. Relaxing the api's own sign-in check during an Entra outage is
+  authentication, the gate `builtin_auth_api` turns on included, stay as they are. Relaxing the api's own sign-in check during an Entra outage is
   not set by this input.
 - **Restored at the next plan, not at the time itself.** Terraform does not run on its own: the
   gate comes back at the first plan and apply after the time has passed. Run that apply as soon

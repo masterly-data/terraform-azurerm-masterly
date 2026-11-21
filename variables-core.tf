@@ -310,7 +310,7 @@ variable "builtin_auth_client_secret" {
   type        = string
   default     = null
   sensitive   = true
-  description = "Client secret of builtin_auth.client_id's app registration. Stored as the Container App secret `microsoft-provider-authentication-secret` (a Key Vault reference with enable_key_vault), the name Azure itself gives it, on ca-frontend, whose built-in auth uses it, and on ca-api, which carried it while 0.19.0 and 0.19.1 gated the api and keeps it so that upgrading changes neither app. Rotate by adding a new secret on the registration, applying with it, then deleting the old one."
+  description = "Client secret of builtin_auth.client_id's app registration. Stored as the Container App secret `microsoft-provider-authentication-secret` (a Key Vault reference with enable_key_vault), the name Azure itself gives it, on ca-frontend, whose built-in auth uses it, and on ca-api, whose built-in auth uses it with builtin_auth_api = true. ca-api carries it whenever builtin_auth is set, gated or not, so that turning builtin_auth_api on or off, or upgrading from 0.19.0 or 0.19.1, changes neither app. Rotate by adding a new secret on the registration, applying with it, then deleting the old one."
 }
 
 variable "breakglass_secret_hash" {
@@ -908,7 +908,7 @@ variable "private_endpoints_subnet_id" {
 variable "api_ingress_external" {
   type        = bool
   default     = false
-  description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session. Set true only when something outside the environment must call /v1 directly — the Python SDK, a customer's own pipeline, an integration — and narrow it with ingress_allowed_cidrs, which is applied to the api whenever this is true — an empty list is refused at plan, because empty means unrestricted in Azure. builtin_auth does not gate the api, and a plan that sets both warns. On an internal environment (aca_internal_load_balancer) `external` still means \"reachable from the VNet\", not from the internet."
+  description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session. Set true only when something outside the environment must call /v1 directly — the Python SDK, a customer's own pipeline, an integration — and narrow it with ingress_allowed_cidrs, which is applied to the api whenever this is true — an empty list is refused at plan, because empty means unrestricted in Azure. builtin_auth does not gate the api unless builtin_auth_api = true, and a plan that sets builtin_auth and this without builtin_auth_api warns. On an internal environment (aca_internal_load_balancer) `external` still means \"reachable from the VNet\", not from the internet."
 }
 
 # Where ca-frontend, ca-edge and ca-api run (ADR 0120 §4-§5). The three move together or not at all. The callers reach the api by its short app name inside

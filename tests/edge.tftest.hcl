@@ -1102,13 +1102,15 @@ run "edge_has_no_admin_interface" {
     error_message = "The Envoy bootstrap must configure no admin interface."
   }
 
-  # The probes are TCP, so no health route was added to the public listener.
+  # The probes are TCP, so no health route was added to the public listener: its routes are the
+  # five fixed ones and one per entry of edge-serve-routes.json, and nothing else.
   assert {
     condition = (
-      length(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes) == 5 &&
-      toset([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name]) == toset(["request-too-large", "request-too-large-beyond-int64", "v1", "mcp", "not-found"])
+      length(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes) == 5 + length(local.edge_serve_routes) &&
+      toset([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name if !startswith(r.name, "serve-")]) == toset(["request-too-large", "request-too-large-beyond-int64", "v1", "mcp", "not-found"]) &&
+      toset([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name if startswith(r.name, "serve-")]) == toset([for r in local.edge_serve_routes : "serve-${r.method} ${r.path}"])
     )
-    error_message = "The public listener must keep exactly its five routes (request-too-large, request-too-large-beyond-int64, v1, mcp, not-found); no health route."
+    error_message = "The public listener must keep exactly its five routes (request-too-large, request-too-large-beyond-int64, v1, mcp, not-found) and one per edge-serve-routes.json entry; no health route."
   }
 }
 

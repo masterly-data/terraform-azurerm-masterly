@@ -390,6 +390,14 @@ Before you turn it on:
 Who signs in, `ca-frontend` on your own domain and the built-in authentication are documented in
 [docs/identity.md](docs/identity.md).
 
+- **Built-in authentication on `ca-api` (`builtin_auth_api`) is off by default.** With
+  `builtin_auth` set, `builtin_auth_api = true` makes `ca-api` answer `401`, on every path, to any
+  request without a token issued to `ca-frontend`'s or `ca-edge`'s workload identity; callers
+  request it for the audience `builtin_auth.client_id`. Turn it on only after the `ca-frontend`
+  and `ca-edge` releases you run send that token: before then it refuses every call the frontend's
+  server makes, as on 2026-10-22. See
+  [docs/identity.md](docs/identity.md#the-apis-gate-builtin_auth_api).
+
 ## Data plane (ADR 0065)
 
 The data plane's resources, how the apps authenticate to them, the migrate job and trusting a
