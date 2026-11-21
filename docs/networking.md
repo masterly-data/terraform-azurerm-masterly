@@ -831,8 +831,10 @@ ADR 0120 §2), on every forwarded route: `/v1`, the ca-serve routes under it, an
 
 - **What passes.** A token in the `Authorization` header (`Bearer <token>`, not a query
   parameter), signed by a key at `oidc_jwks_uri`, unexpired, issued by `oidc_allowed_issuers` and
-  carrying one of `edge.jwt_authn.audiences` in its `aud` claim. Anything else, a request with no
-  token included, is answered **`401` by the edge** and never reaches `ca-api`. The `413` and
+  carrying one of `edge.jwt_authn.audiences` in its `aud` claim. Anything else is refused by the
+  edge and never reaches `ca-api`: a token that is otherwise valid but carries none of the
+  audiences is answered **`403`**, and anything else, a request with no token included, is
+  answered **`401`**. The `413` and
   `404` answers are given without reading a token. A token that passes reaches `ca-api`
   unchanged, and `ca-api` still checks it; the decoded token is never forwarded as a header, and
   `x-jwt-payload` is still removed from every request. The access log holds no token.
@@ -845,10 +847,11 @@ ADR 0120 §2), on every forwarded route: `/v1`, the ca-serve routes under it, an
 - **Audiences.** `edge.jwt_authn.audiences` lists the `aud` values a token may carry: the API's
   and the MCP server's application (client) IDs, the GUIDs. An Entra v2.0 access token always
   carries the client ID of the API it was issued for as `aud`, never its application ID URI
-  (`api://...`), so an `api://` entry here matches no token and every request is answered `401`.
+  (`api://...`), so an `api://` entry here matches no token and every request with a valid token
+  is answered `403`.
   For the API it is the value `ca-api` checks, `oidc_audience` (by default `oidc_client_id`). It
   must not be empty, and no entry may be empty, so a token the tenant issued for another resource,
-  Microsoft Graph for example, is refused.
+  Microsoft Graph for example, is refused with `403`.
 - **The signing keys.** `ca-edge` fetches them itself from `login.microsoftonline.com` on **443**
   over TLS it verifies (the image's CA bundle, and a certificate that must name that host), when
   it starts and every 10 minutes after. That host is in

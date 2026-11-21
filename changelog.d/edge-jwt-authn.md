@@ -5,7 +5,8 @@
   `{ audiences = [...] }` and `ca-edge` validates the bearer token in the `Authorization` header on
   `/v1` (the ca-serve routes included) and `/mcp` before forwarding: signed by the install's Entra
   tenant's keys, unexpired, issued by that one tenant and carrying one of `audiences`. A request
-  with no token or a token that fails is answered `401` by the edge and never reaches `ca-api`; a
+  with no token or a token that fails is refused by the edge and never reaches `ca-api` (`403`
+  for a valid token whose `aud` is not in `audiences`, `401` for anything else); a
   token that passes reaches `ca-api` unchanged, and `ca-api` still checks it. The edge trusts
   exactly one issuer: with `edge.jwt_authn` set, the plan is refused unless
   `oidc_allowed_issuers` is the single `https://login.microsoftonline.com/<tenant GUID>/v2.0` and
