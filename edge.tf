@@ -3,8 +3,11 @@
 # answers every other path itself. Within /v1 it routes the ca-serve reads (edge-serve-routes.json)
 # on their own routes, which still go to ca-api. It has no database, vault, queue or cache access
 # and makes no authorization decision: the Authorization header reaches ca-api unchanged and ca-api
-# checks it. The edge does no authentication of its own yet. It limits the rate of requests per
-# bearer token and per client address, counted on each replica.
+# checks it. With edge.jwt_authn unset (the default) the edge does no authentication of its own.
+# With it set, the edge validates the bearer token on every forwarded route (ADR 0117, ADR 0120
+# §2) before ca-api sees the request: signed by the install's Entra tenant, whose keys it fetches
+# itself, issued by that one tenant and for one of the configured audiences. It limits the rate
+# of requests per bearer token and per client address, counted on each replica.
 #
 # Declared as its own azurerm_container_app rather than through modules/aca-container-app,
 # because that module ignores image drift (CD owns the api and frontend images) and nothing
@@ -17,9 +20,12 @@ variable "edge" {
     rate_limit_per_token        = optional(number, 600)
     rate_limit_per_client       = optional(number, 1800)
     rate_limit_interval_seconds = optional(number, 60)
+    jwt_authn = optional(object({
+      audiences = list(string)
+    }))
   })
   default     = null
-  description = "Run ca-edge for SDK and MCP clients: 429 with Retry-After over rate_limit_per_token (600) or rate_limit_per_client (1800) per rate_limit_interval_seconds (60) per replica, so limits multiply by 1 to 3 running replicas. It is the machine entry point, off by default: an Envoy proxy for the Python SDK and MCP clients, published on the same CIDR allowlist as the frontend (ingress_allowed_cidrs, which must not be empty), that forwards /v1 and /mcp to ca-api and answers every other path with 404. Unset, the install plans exactly as before this input existed. It does no authentication yet: it forwards the caller's Authorization header to ca-api unchanged, and ca-api checks it. It removes the identity headers ca-api could otherwise be handed (x-jwt-payload and X-MS-CLIENT-PRINCIPAL*) and holds streamed responses open. It runs as its own identity, id-<prefix>-edge, with no role but AcrPull, and that only when its image is on the install's registry. image: the Envoy image, pinned by digest (registry/repository[:tag]@sha256:<64 hex>); null uses the upstream envoyproxy/envoy image on Docker Hub the module pins. Set it to a mirror in your own registry when the environment cannot reach Docker Hub. max_request_body_bytes: a request whose Content-Length is larger is answered 413 at the edge (default 10485760, 10 MiB; from 1024 to 1073741824). A body sent without a Content-Length streams through. rate_limit_per_token: the requests one bearer token (the Authorization header's value) may send to /v1 and /mcp per interval (default 600; from 1 to 1000000). A request without an Authorization header is held only to the per-client limit. rate_limit_per_client: the requests one client address may send per interval, whatever tokens it uses, so rotating tokens does not get round the per-token limit (default 1800; from 1 to 1000000). The client address is the caller's address as the Container Apps ingress reports it. rate_limit_interval_seconds: the interval both limits count over, in whole seconds (default 60; from 1 to 3600). A request over either limit is answered 429 with a Retry-After header of the interval in seconds. The limits are counted on each replica, with no shared state, and separately for /v1 (the ca-serve read routes under it counted with it, as they are /v1 requests) and for /mcp: with ca-edge at 1 to 3 replicas, the effective limit is the configured limit times the running replicas. docs/networking.md has the network requirements."
+  description = "Run ca-edge for SDK and MCP clients: 429 with Retry-After over rate_limit_per_token (600) or rate_limit_per_client (1800) per rate_limit_interval_seconds (60) per replica, so limits multiply by 1 to 3 running replicas. It is the machine entry point, off by default: an Envoy proxy for the Python SDK and MCP clients, published on the same CIDR allowlist as the frontend (ingress_allowed_cidrs, which must not be empty), that forwards /v1 and /mcp to ca-api and answers every other path with 404. Unset, the install plans exactly as before this input existed. With jwt_authn unset (the default) it does no authentication: it forwards the caller's Authorization header to ca-api unchanged, and ca-api checks it. With jwt_authn set it also validates that token itself first (below). It removes the identity headers ca-api could otherwise be handed (x-jwt-payload and X-MS-CLIENT-PRINCIPAL*) and holds streamed responses open. It runs as its own identity, id-<prefix>-edge, with no role but AcrPull, and that only when its image is on the install's registry. image: the Envoy image, pinned by digest (registry/repository[:tag]@sha256:<64 hex>); null uses the upstream envoyproxy/envoy image on Docker Hub the module pins. Set it to a mirror in your own registry when the environment cannot reach Docker Hub. max_request_body_bytes: a request whose Content-Length is larger is answered 413 at the edge (default 10485760, 10 MiB; from 1024 to 1073741824). A body sent without a Content-Length streams through. rate_limit_per_token: the requests one bearer token (the Authorization header's value) may send to /v1 and /mcp per interval (default 600; from 1 to 1000000). A request without an Authorization header is held only to the per-client limit. rate_limit_per_client: the requests one client address may send per interval, whatever tokens it uses, so rotating tokens does not get round the per-token limit (default 1800; from 1 to 1000000). The client address is the caller's address as the Container Apps ingress reports it. rate_limit_interval_seconds: the interval both limits count over, in whole seconds (default 60; from 1 to 3600). A request over either limit is answered 429 with a Retry-After header of the interval in seconds. The limits are counted on each replica, with no shared state, and separately for /v1 (the ca-serve read routes under it counted with it, as they are /v1 requests) and for /mcp: with ca-edge at 1 to 3 replicas, the effective limit is the configured limit times the running replicas. jwt_authn: null (the default) leaves the edge without authentication of its own. Set it to { audiences = [...] } and ca-edge validates the bearer token in the Authorization header on /v1 (the ca-serve routes included) and /mcp before forwarding: signed by a key at oidc_jwks_uri, which ca-edge fetches itself from login.microsoftonline.com on 443 (through egress_firewall when that is set), unexpired, issued by oidc_allowed_issuers and carrying one of audiences in its aud claim. A request with no token, or a token that fails any of those checks, is answered 401 by the edge and never reaches ca-api; a valid token reaches ca-api unchanged, and ca-api still checks it. It trusts exactly one issuer, the install's Entra tenant: with jwt_authn set, the plan is refused unless oidc_allowed_issuers is the single entry https://login.microsoftonline.com/<tenant GUID>/v2.0 and oidc_jwks_uri is https://login.microsoftonline.com/<that tenant>/discovery/v2.0/keys, as oidc_tenant_id sets them both. audiences: the aud values a token may carry, typically the API's and the MCP server's application ID URIs or client IDs; at least one, none empty. Changing jwt_authn rolls a new ca-edge revision. docs/networking.md has the network requirements."
 
   # A conditional, not `||`: before Terraform 1.12 both sides of `||` are evaluated, and the
   # right side reads attributes of a null object when the input is unset (as builtin_auth).
@@ -64,6 +70,18 @@ variable "edge" {
       var.edge.rate_limit_interval_seconds <= 3600
     )
     error_message = "edge.rate_limit_interval_seconds must be a whole number of seconds from 1 to 3600 (one hour)."
+  }
+
+  # An empty list would accept a token for any audience the tenant issues, Microsoft Graph's
+  # included; an empty entry names no application.
+  validation {
+    condition = var.edge == null ? true : (
+      var.edge.jwt_authn == null ? true : (
+        try(length(var.edge.jwt_authn.audiences), 0) > 0 &&
+        alltrue([for a in try(tolist(var.edge.jwt_authn.audiences), []) : try(trimspace(a), "") != ""])
+      )
+    )
+    error_message = "edge.jwt_authn.audiences must list at least one audience, and none may be empty: the API's and the MCP server's application ID URIs or client IDs, the aud values a token must carry to pass the edge."
   }
 }
 
@@ -155,6 +173,107 @@ locals {
     "x-ms-client-principal-idp",
     "x-ms-client-principal-name",
   ]
+
+  # Token validation at the edge (ADR 0117, ADR 0120 §2), on only with edge.jwt_authn set. A
+  # conditional, not `&&`, for the reason the variable's validations give.
+  edge_jwt_authn_enabled   = local.edge_enabled ? var.edge.jwt_authn != null : false
+  edge_jwt_authn_audiences = local.edge_jwt_authn_enabled ? var.edge.jwt_authn.audiences : []
+
+  # The one issuer the edge trusts: the install's Entra tenant, read from the same value ca-api
+  # trusts (MASTERLY_OIDC_ALLOWED_ISSUERS). The tenant is null unless the whole value is a single
+  # https://login.microsoftonline.com/<tenant GUID>/v2.0, and the signing keys must then be that
+  # tenant's own; the preconditions on azurerm_container_app.edge refuse anything else. Each is
+  # read with try(), so a refused value fails there rather than here.
+  edge_jwt_authn_tenant            = try(regex("^https://login\\.microsoftonline\\.com/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/v2\\.0$", local.oidc_allowed_issuers)[0], null)
+  edge_jwt_authn_expected_jwks_uri = local.edge_jwt_authn_tenant == null ? null : "https://login.microsoftonline.com/${local.edge_jwt_authn_tenant}/discovery/v2.0/keys"
+
+  # One provider, and one requirement naming it that every forwarded route refers to.
+  edge_jwt_authn_provider    = "entra"
+  edge_jwt_authn_requirement = "entra"
+
+  # The cluster the signing keys are fetched through, and the host it connects to on 443: the
+  # host of oidc_jwks_uri, which the preconditions hold to login.microsoftonline.com.
+  edge_jwks_cluster = "entra-jwks"
+  edge_jwks_host    = try(regex("^https://([^/:?#]+)", local.oidc_jwks_uri)[0], "")
+
+  # The filter, between the rate limiter and the Lua Location rewrite. Only the Authorization
+  # header's bearer token is read (no access_token query parameter, Envoy's other default). The
+  # token is forwarded to ca-api as it came (forward), and the decoded payload is never forwarded
+  # as a header (no forward_payload_header); x-jwt-payload stays among the stripped headers. The
+  # keys are fetched when the listener starts and refreshed in the background (async_fetch), so
+  # no request waits on the fetch. No rule allows a missing or failed token anywhere: a route
+  # without the requirement below is not validated, and the routes that answer themselves (413,
+  # 404) are the only ones without it.
+  edge_jwt_authn_http_filters = local.edge_jwt_authn_enabled ? [{
+    name = "envoy.filters.http.jwt_authn"
+    typed_config = {
+      "@type" = "type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication"
+      providers = {
+        (local.edge_jwt_authn_provider) = {
+          issuer       = local.oidc_allowed_issuers
+          audiences    = local.edge_jwt_authn_audiences
+          from_headers = [{ name = local.edge_credential_header, value_prefix = "Bearer " }]
+          forward      = true
+          remote_jwks = {
+            http_uri = {
+              uri     = local.oidc_jwks_uri
+              cluster = local.edge_jwks_cluster
+              timeout = "5s"
+            }
+            cache_duration = "600s"
+            async_fetch    = {}
+          }
+        }
+      }
+      requirement_map = {
+        (local.edge_jwt_authn_requirement) = { provider_name = local.edge_jwt_authn_provider }
+      }
+    }
+  }] : []
+
+  # The per-route reference to that requirement, keyed by the filter's name so it sits beside the
+  # rate limiter's entry rather than replacing it: v1 and the serve routes carry this alone and
+  # still take the virtual host's limiter.
+  edge_jwt_authn_per_route = local.edge_jwt_authn_enabled ? [{
+    "envoy.filters.http.jwt_authn" = {
+      "@type"          = "type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.PerRouteConfig"
+      requirement_name = local.edge_jwt_authn_requirement
+    }
+  }] : []
+
+  # The keys' host on 443 over TLS the edge verifies, as the cross-environment ca-api cluster
+  # does: the image's CA bundle, and a certificate that must name the host.
+  edge_jwks_clusters = local.edge_jwt_authn_enabled ? [{
+    name              = local.edge_jwks_cluster
+    type              = "LOGICAL_DNS"
+    connect_timeout   = "5s"
+    dns_lookup_family = "V4_ONLY"
+    load_assignment = {
+      cluster_name = local.edge_jwks_cluster
+      endpoints = [{
+        lb_endpoints = [{
+          endpoint = {
+            address = {
+              socket_address = { address = local.edge_jwks_host, port_value = 443 }
+            }
+          }
+        }]
+      }]
+    }
+    transport_socket = {
+      name = "envoy.transport_sockets.tls"
+      typed_config = {
+        "@type" = "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext"
+        sni     = local.edge_jwks_host
+        common_tls_context = {
+          validation_context = {
+            trusted_ca                    = { filename = "/etc/ssl/certs/ca-certificates.crt" }
+            match_typed_subject_alt_names = [{ san_type = "DNS", matcher = { exact = local.edge_jwks_host } }]
+          }
+        }
+      }
+    }
+  }] : []
 
   edge_forwarded_route = {
     cluster              = local.edge_upstream
@@ -264,6 +383,14 @@ locals {
     )
     route = merge(local.edge_forwarded_route, { cluster = local.edge_serve_cluster })
   }]
+
+  # With edge.jwt_authn set, each forwarded route (the serve routes, v1, mcp) also requires a
+  # valid token. Added by an expanded list, so unset a route has no typed_per_filter_config key
+  # it did not have before.
+  edge_serve_route_list_authn = [for r in local.edge_serve_route_list : merge(
+    r,
+    [for c in local.edge_jwt_authn_per_route : { typed_per_filter_config = c }]...
+  )]
 
   # ca-api serves MCP at /mcp/ and answers a bare /mcp with a redirect. The mcp route rewrites
   # exactly /mcp (the path only; the query string is kept) so the client never sees it.
@@ -446,18 +573,21 @@ locals {
                         typed_per_filter_config = local.edge_rate_limit_off
                       },
                     ],
-                    local.edge_serve_route_list,
+                    local.edge_serve_route_list_authn,
                     [
-                      {
-                        name  = "v1"
-                        match = { path_separated_prefix = "/v1" }
-                        route = local.edge_forwarded_route
-                      },
+                      merge(
+                        {
+                          name  = "v1"
+                          match = { path_separated_prefix = "/v1" }
+                          route = local.edge_forwarded_route
+                        },
+                        [for c in local.edge_jwt_authn_per_route : { typed_per_filter_config = c }]...
+                      ),
                       {
                         name                    = "mcp"
                         match                   = { path_separated_prefix = "/mcp" }
                         route                   = merge(local.edge_forwarded_route, { regex_rewrite = local.edge_mcp_bare_path_rewrite })
-                        typed_per_filter_config = local.edge_rate_limit_per_route
+                        typed_per_filter_config = merge(local.edge_rate_limit_per_route, local.edge_jwt_authn_per_route...)
                       },
                       {
                         name                    = "not-found"
@@ -471,38 +601,46 @@ locals {
               }
 
               # The rate limiter first, off here (Envoy enables it for no request unless told to)
-              # and turned on by the virtual host's configuration and mcp's own; then the Location
-              # rewrite (response headers only, no body); the router last.
-              http_filters = [
-                {
-                  name = "envoy.filters.http.local_ratelimit"
-                  typed_config = {
-                    "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
-                    stat_prefix = "edge_rate_limit"
-                  }
-                },
-                {
-                  name = "envoy.filters.http.lua"
-                  typed_config = {
-                    "@type"             = "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua"
-                    default_source_code = { inline_string = local.edge_location_rewrite_lua }
-                  }
-                },
-                {
-                  name = "envoy.filters.http.router"
-                  typed_config = {
-                    "@type" = "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
-                  }
-                },
-              ]
+              # and turned on by the virtual host's configuration and mcp's own; with
+              # edge.jwt_authn set, the token validation, so a caller is limited before its token
+              # is checked; then the Location rewrite (response headers only, no body); the router
+              # last.
+              http_filters = concat(
+                [
+                  {
+                    name = "envoy.filters.http.local_ratelimit"
+                    typed_config = {
+                      "@type"     = "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit"
+                      stat_prefix = "edge_rate_limit"
+                    }
+                  },
+                ],
+                local.edge_jwt_authn_http_filters,
+                [
+                  {
+                    name = "envoy.filters.http.lua"
+                    typed_config = {
+                      "@type"             = "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua"
+                      default_source_code = { inline_string = local.edge_location_rewrite_lua }
+                    }
+                  },
+                  {
+                    name = "envoy.filters.http.router"
+                    typed_config = {
+                      "@type" = "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                    }
+                  },
+                ],
+              )
             }
           }]
         }]
       }]
 
       # merge() with an expanded list: the transport socket is added only across environments,
-      # and the default cluster has no transport_socket key at all.
-      clusters = [merge(
+      # and the default cluster has no transport_socket key at all. With edge.jwt_authn set, the
+      # signing keys' cluster follows.
+      clusters = concat([merge(
         {
           name              = local.edge_upstream
           type              = "LOGICAL_DNS"
@@ -522,7 +660,7 @@ locals {
           }
         },
         [for socket in local.edge_upstream_transport_socket : { transport_socket = socket }]...
-      )]
+      )], local.edge_jwks_clusters)
     }
   }
 }
@@ -649,6 +787,21 @@ resource "azurerm_container_app" "edge" {
     precondition {
       condition     = !(local.edge_image_on_registry && local.registry_token_mode)
       error_message = "edge.image is on the install's registry, which this install pulls from with a registry token; ca-edge pulls only as its own identity (AcrPull) or anonymously. Mirror the Envoy image to a registry ca-edge's identity can pull from, or leave edge.image unset for the upstream image."
+    }
+
+    # Threat: a widened or mistyped issuer list. The edge trusts one issuer, the install's Entra
+    # tenant; a second entry, another identity provider or a multitenant authority would let
+    # tokens from outside the install through.
+    precondition {
+      condition     = !local.edge_jwt_authn_enabled ? true : local.edge_jwt_authn_tenant != null
+      error_message = "edge.jwt_authn trusts exactly one issuer, the install's Entra tenant: oidc_allowed_issuers must be the single entry https://login.microsoftonline.com/<tenant GUID>/v2.0, with no comma. Set oidc_tenant_id (which sets it) and leave oidc_allowed_issuers unset, or leave edge.jwt_authn unset."
+    }
+
+    # Threat: keys from anywhere but that tenant. A token signed by a key the edge was pointed at
+    # would validate, whoever signed it.
+    precondition {
+      condition     = !local.edge_jwt_authn_enabled ? true : (local.edge_jwt_authn_expected_jwks_uri != null && local.oidc_jwks_uri == local.edge_jwt_authn_expected_jwks_uri)
+      error_message = "edge.jwt_authn fetches the signing keys from oidc_jwks_uri, which must be the trusted tenant's own: https://login.microsoftonline.com/<the tenant in oidc_allowed_issuers>/discovery/v2.0/keys. Set oidc_tenant_id (which sets it) and leave oidc_jwks_uri unset, or leave edge.jwt_authn unset."
     }
   }
 
