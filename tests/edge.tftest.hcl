@@ -1143,13 +1143,20 @@ run "edge_has_no_admin_interface" {
     error_message = "The Envoy bootstrap must configure no admin interface."
   }
 
-  # The probes are TCP, so no health route was added to the public listener.
+  # The probes are TCP, so no health route was added to the public listener. Its routes are its
+  # five fixed ones plus one serve route per entry of edge-serve-routes.json (ADR 0120 §2), each a
+  # read under /v1/, and nothing else: no health, admin or other route (MAS-5191).
   assert {
     condition = (
-      length(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes) == 5 &&
-      toset([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name]) == toset(["request-too-large", "request-too-large-beyond-int64", "v1", "mcp", "not-found"])
+      toset([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name]) == setunion(
+        toset(["request-too-large", "request-too-large-beyond-int64", "v1", "mcp", "not-found"]),
+        toset([for r in jsondecode(file("${path.module}/edge-serve-routes.json")).routes : "serve-${r.method} ${r.path}"])
+      ) &&
+      length(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes) == 5 + length(jsondecode(file("${path.module}/edge-serve-routes.json")).routes) &&
+      alltrue([for r in jsondecode(file("${path.module}/edge-serve-routes.json")).routes : startswith(r.path, "/v1/") && contains(["GET", "HEAD", "POST"], r.method)]) &&
+      length([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name if strcontains(lower(r.name), "health") || strcontains(lower(r.name), "admin")]) == 0
     )
-    error_message = "The public listener must keep exactly its five routes (request-too-large, request-too-large-beyond-int64, v1, mcp, not-found); no health route."
+    error_message = "The public listener must carry exactly its five fixed routes (request-too-large, request-too-large-beyond-int64, v1, mcp, not-found) plus one serve route per read in edge-serve-routes.json, each under /v1/; no health or admin route."
   }
 }
 
