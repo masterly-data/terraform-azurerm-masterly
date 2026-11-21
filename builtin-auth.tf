@@ -44,6 +44,7 @@ locals {
       unauthenticated_action      = "RedirectToLoginPage"
       redirect_to_provider        = "azureactivedirectory"
       excluded_paths              = var.builtin_auth.frontend_excluded_paths
+      forward_proxy               = var.builtin_auth.forward_proxy
       allowed_applications        = [var.builtin_auth.client_id]
       allowed_additional_audience = []
     }
@@ -99,7 +100,9 @@ resource "azapi_resource" "builtin_auth" {
   parent_id = each.value.app_id
 
   body = {
-    properties = {
+    # httpSettings only when forward_proxy is set: an unset attribute leaves the body exactly as
+    # earlier versions wrote it, so an install that does not set it plans no change.
+    properties = merge({
       platform = {
         enabled = !local.builtin_auth_recovery_open
       }
@@ -123,7 +126,15 @@ resource "azapi_resource" "builtin_auth" {
           }
         }
       }
-    }
+      }, each.value.forward_proxy == null ? {} : {
+      httpSettings = {
+        forwardProxy = merge(
+          { convention = each.value.forward_proxy.convention },
+          each.value.forward_proxy.custom_host_header_name == null ? {} : { customHostHeaderName = each.value.forward_proxy.custom_host_header_name },
+          each.value.forward_proxy.custom_proto_header_name == null ? {} : { customProtoHeaderName = each.value.forward_proxy.custom_proto_header_name },
+        )
+      }
+    })
   }
 }
 

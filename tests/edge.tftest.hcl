@@ -147,6 +147,47 @@ run "edge_with_an_empty_allowlist_is_refused" {
   expect_failures = [azurerm_container_app.edge]
 }
 
+# --- Its own allowlist (edge_ingress_allowed_cidrs) -------------------------------------------
+
+run "edge_takes_its_own_allowlist_when_set" {
+  command = plan
+
+  variables {
+    edge                       = {}
+    ingress_allowed_cidrs      = ["198.51.100.0/24"]
+    edge_ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = tolist([for r in azurerm_container_app.edge[0].ingress[0].ip_security_restriction : r.ip_address_range]) == tolist(["203.0.113.7/32"])
+    error_message = "With edge_ingress_allowed_cidrs set, ca-edge's IP restrictions must be exactly that list, not ingress_allowed_cidrs."
+  }
+}
+
+run "edge_with_its_own_empty_allowlist_is_refused" {
+  command = plan
+
+  variables {
+    edge                       = {}
+    ingress_allowed_cidrs      = ["198.51.100.0/24"]
+    edge_ingress_allowed_cidrs = []
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+run "edge_allowlist_entry_that_is_not_an_address_is_refused" {
+  command = plan
+
+  variables {
+    edge                       = {}
+    ingress_allowed_cidrs      = ["198.51.100.0/24"]
+    edge_ingress_allowed_cidrs = ["not-a-cidr"]
+  }
+
+  expect_failures = [var.edge_ingress_allowed_cidrs]
+}
+
 # --- The image -------------------------------------------------------------------------------
 
 run "edge_default_image_is_pinned_by_digest" {

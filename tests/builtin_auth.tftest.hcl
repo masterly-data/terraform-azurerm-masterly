@@ -937,3 +937,113 @@ run "builtin_auth_alert_routes_to_a_given_action_group" {
     error_message = "With alert_action_group_id set, the auth-configuration alert must route to it."
   }
 }
+
+# --- Behind a reverse proxy (builtin_auth.forward_proxy) ----------------------------------------
+# Unset, the body is the one builtin_auth_gates_the_frontend_only pins, so an install that does not
+# set it plans no change.
+
+run "builtin_auth_forward_proxy_standard_reads_x_forwarded_host" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id     = "11111111-1111-1111-1111-111111111111"
+      client_id     = "22222222-2222-2222-2222-222222222222"
+      forward_proxy = { convention = "Standard" }
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition = jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.httpSettings) == jsonencode({
+      forwardProxy = { convention = "Standard" }
+    })
+    error_message = "forward_proxy = { convention = \"Standard\" } must set httpSettings.forwardProxy.convention to Standard, with no custom header names."
+  }
+
+  assert {
+    condition = (
+      azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.unauthenticatedClientAction == "RedirectToLoginPage" &&
+      azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == true
+    )
+    error_message = "forward_proxy must change nothing else in the gate."
+  }
+}
+
+run "builtin_auth_forward_proxy_custom_names_its_headers" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+      forward_proxy = {
+        convention               = "Custom"
+        custom_host_header_name  = "X-Original-Host"
+        custom_proto_header_name = "X-Original-Proto"
+      }
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition = jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.httpSettings) == jsonencode({
+      forwardProxy = {
+        convention            = "Custom"
+        customHostHeaderName  = "X-Original-Host"
+        customProtoHeaderName = "X-Original-Proto"
+      }
+    })
+    error_message = "forward_proxy with convention Custom must name both headers in httpSettings.forwardProxy."
+  }
+}
+
+run "builtin_auth_forward_proxy_unknown_convention_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id     = "11111111-1111-1111-1111-111111111111"
+      client_id     = "22222222-2222-2222-2222-222222222222"
+      forward_proxy = { convention = "NoProxy" }
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  expect_failures = [var.builtin_auth]
+}
+
+run "builtin_auth_forward_proxy_custom_without_a_header_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id     = "11111111-1111-1111-1111-111111111111"
+      client_id     = "22222222-2222-2222-2222-222222222222"
+      forward_proxy = { convention = "Custom" }
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  expect_failures = [var.builtin_auth]
+}
+
+run "builtin_auth_forward_proxy_standard_with_a_custom_header_is_refused" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id     = "11111111-1111-1111-1111-111111111111"
+      client_id     = "22222222-2222-2222-2222-222222222222"
+      forward_proxy = { convention = "Standard", custom_host_header_name = "X-Original-Host" }
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  expect_failures = [var.builtin_auth]
+}
