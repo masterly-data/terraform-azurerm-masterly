@@ -4,8 +4,14 @@
 # Every expected value here is a literal, so this file states what the switch plans off and on,
 # and a change that moves either has to change this file. Between them the runs compare ca-api's
 # and ca-frontend's auth configurations, ca-api's allowed applications exactly, and the
-# container app settings of ca-api, ca-frontend and ca-edge, which turning the switch on must not
+# container app bodies of ca-api, ca-frontend and ca-edge, which turning the switch on must not
 # move: ca-api already carries the built-in auth client secret whenever builtin_auth is set.
+#
+# The container app bodies: for ca-api and ca-frontend, everything modules/aca-container-app
+# exposes (name, environment, image, registry, size, scale, identity, ingress, env names and
+# value digests, probes, secrets and mounts), the same literal off and on; the rest of their
+# arguments are in main.tf and that module, neither of which reads builtin_auth_api. For ca-edge,
+# every configured attribute of azurerm_container_app.edge, its Envoy configuration by digest.
 #
 # Applies, in their own file, for the reasons tests/workers_identity_unchanged.tftest.hcl gives:
 # the identities' client ids and the apps' ids are computed, so at plan they are unknown on
@@ -147,70 +153,130 @@ run "builtin_auth_api_off_gates_the_frontend_only" {
     error_message = "With builtin_auth_api unset and the api internal, the frontend's configuration must name ca-frontend, and the published-api warning must not fire."
   }
 
+  # The rest of ca-api's and ca-frontend's arguments are in main.tf and the app module: neither
+  # reads the switch, so it cannot reach them.
   assert {
     condition = (
-      module.api.ingress_external == false &&
-      module.api.ingress_allow_insecure == true &&
-      jsonencode(module.api.ingress_allowed_ip_ranges) == jsonencode([]) &&
-      jsonencode(module.api.user_assigned_identity_ids) == jsonencode(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"]) &&
-      nonsensitive(jsonencode(module.api.env_names)) == jsonencode([
-        "MASTERLY_ALLOWED_REGIONS",
-        "MASTERLY_DPOP_INTERNAL_ORIGIN",
-        "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS",
-        "MASTERLY_IDENTITY_BINDING",
-        "MASTERLY_INSTALL_ID",
-        "MASTERLY_MODE",
-        "MASTERLY_ORG_ID",
-        "MASTERLY_REGION",
-      ]) &&
-      jsonencode(local.api_env) == jsonencode({
-        MASTERLY_ALLOWED_REGIONS               = "eu"
-        MASTERLY_DPOP_INTERNAL_ORIGIN          = "http://ca-api"
-        MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = "7"
-        MASTERLY_IDENTITY_BINDING              = "dev"
-        MASTERLY_INSTALL_ID                    = "test"
-        MASTERLY_MODE                          = "demo"
-        MASTERLY_ORG_ID                        = "org_test"
-        MASTERLY_REGION                        = "eu"
-      }) &&
-      jsonencode(local.api_env_secret_refs) == jsonencode({
-        MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret"
-        MASTERLY_DATABASE_URL      = "database-url"
-        MASTERLY_SESSION_SECRET    = "session-secret"
-      }) &&
-      jsonencode(sort(module.api.value_secret_names)) == jsonencode([
-        "bff-shared-secret",
-        "database-url",
-        "microsoft-provider-authentication-secret",
-        "session-secret",
-      ]) &&
-      length(module.api.vault_backed_secret_names) == 0
+      length(regexall("builtin_auth_api", file("${path.module}/main.tf"))) == 0 &&
+      length(regexall("builtin_auth_api", file("${path.module}/modules/aca-container-app/main.tf"))) == 0
     )
-    error_message = "With builtin_auth_api unset, ca-api's ingress, identity, env and secrets must be as before this input existed, the built-in auth client secret included."
+    error_message = "main.tf and modules/aca-container-app/main.tf must not read builtin_auth_api."
   }
 
   assert {
-    condition = (
-      module.frontend.ingress_external == true &&
-      module.frontend.ingress_allow_insecure == false &&
-      jsonencode(module.frontend.ingress_allowed_ip_ranges) == jsonencode(["203.0.113.7/32"]) &&
-      jsonencode(module.frontend.user_assigned_identity_ids) == jsonencode(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"]) &&
-      jsonencode(local.frontend_env) == jsonencode({
-        MASTERLY_ALLOW_DEV_BINDING = "true"
-        MASTERLY_API_BASE_URL      = "http://ca-api"
-        MASTERLY_IDP_BINDING       = "dev"
-        MASTERLY_REGION            = "eu"
-      }) &&
-      jsonencode(local.frontend_env_secret_refs) == jsonencode({
-        MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret"
-      }) &&
-      jsonencode(sort(module.frontend.value_secret_names)) == jsonencode([
-        "bff-shared-secret",
-        "microsoft-provider-authentication-secret",
-      ]) &&
-      length(module.frontend.vault_backed_secret_names) == 0
-    )
-    error_message = "With builtin_auth_api unset, ca-frontend's ingress, identity, env and secrets must be as before this input existed."
+    condition = nonsensitive(jsonencode({
+      name                       = module.api.name
+      environment_id             = module.api.environment_id
+      image                      = module.api.image
+      registry                   = module.api.registry
+      cpu                        = module.api.cpu
+      memory                     = module.api.memory
+      scale                      = module.api.scale
+      user_assigned_identity_ids = module.api.user_assigned_identity_ids
+      ingress_enabled            = module.api.ingress_enabled
+      ingress_external           = module.api.ingress_external
+      ingress_allow_insecure     = module.api.ingress_allow_insecure
+      ingress_allowed_ip_ranges  = module.api.ingress_allowed_ip_ranges
+      env_names                  = module.api.env_names
+      env_value_sha256           = module.api.env_value_sha256
+      env_secret_refs            = module.api.env_secret_refs
+      readiness_probe            = module.api.readiness_probe
+      liveness_probe             = module.api.liveness_probe
+      value_secret_names         = sort(module.api.value_secret_names)
+      vault_backed_secret_names  = module.api.vault_backed_secret_names
+      secret_ref_identity_ids    = module.api.secret_ref_identity_ids
+      secret_refs                = module.api.secret_refs
+      secret_file_mounts         = module.api.secret_file_mounts
+      })) == jsonencode({
+      name                       = "ca-api"
+      environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      image                      = "masterly.azurecr.io/release/api:v0.0.0"
+      registry                   = null
+      cpu                        = 0.5
+      memory                     = "1Gi"
+      scale                      = { min_replicas = 1, max_replicas = 1, termination_grace_period_seconds = null, custom_scale_rules = [] }
+      user_assigned_identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"]
+      ingress_enabled            = true
+      ingress_external           = false
+      ingress_allow_insecure     = true
+      ingress_allowed_ip_ranges  = []
+      env_names                  = ["MASTERLY_ALLOWED_REGIONS", "MASTERLY_DPOP_INTERNAL_ORIGIN", "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS", "MASTERLY_IDENTITY_BINDING", "MASTERLY_INSTALL_ID", "MASTERLY_MODE", "MASTERLY_ORG_ID", "MASTERLY_REGION"]
+      env_value_sha256 = {
+        MASTERLY_ALLOWED_REGIONS               = sha256("eu")
+        MASTERLY_DPOP_INTERNAL_ORIGIN          = sha256("http://ca-api")
+        MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = sha256("7")
+        MASTERLY_IDENTITY_BINDING              = sha256("dev")
+        MASTERLY_INSTALL_ID                    = sha256("test")
+        MASTERLY_MODE                          = sha256("demo")
+        MASTERLY_ORG_ID                        = sha256("org_test")
+        MASTERLY_REGION                        = sha256("eu")
+      }
+      env_secret_refs           = { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret", MASTERLY_DATABASE_URL = "database-url", MASTERLY_SESSION_SECRET = "session-secret" }
+      readiness_probe           = { path = "/readyz", initial_delay = 5, interval_seconds = 10, timeout = 8, failure_count_threshold = 48, success_count_threshold = 1 }
+      liveness_probe            = { path = "/healthz", initial_delay = 5, interval_seconds = 20, timeout = 10, failure_count_threshold = 24 }
+      value_secret_names        = ["bff-shared-secret", "database-url", "microsoft-provider-authentication-secret", "session-secret"]
+      vault_backed_secret_names = []
+      secret_ref_identity_ids   = []
+      secret_refs               = {}
+      secret_file_mounts        = {}
+    })
+    error_message = "With builtin_auth_api unset, ca-api's container app must be as before this input existed, the built-in auth client secret included."
+  }
+
+  assert {
+    condition = nonsensitive(jsonencode({
+      name                       = module.frontend.name
+      environment_id             = module.frontend.environment_id
+      image                      = module.frontend.image
+      registry                   = module.frontend.registry
+      cpu                        = module.frontend.cpu
+      memory                     = module.frontend.memory
+      scale                      = module.frontend.scale
+      user_assigned_identity_ids = module.frontend.user_assigned_identity_ids
+      ingress_enabled            = module.frontend.ingress_enabled
+      ingress_external           = module.frontend.ingress_external
+      ingress_allow_insecure     = module.frontend.ingress_allow_insecure
+      ingress_allowed_ip_ranges  = module.frontend.ingress_allowed_ip_ranges
+      env_names                  = module.frontend.env_names
+      env_value_sha256           = module.frontend.env_value_sha256
+      env_secret_refs            = module.frontend.env_secret_refs
+      readiness_probe            = module.frontend.readiness_probe
+      liveness_probe             = module.frontend.liveness_probe
+      value_secret_names         = sort(module.frontend.value_secret_names)
+      vault_backed_secret_names  = module.frontend.vault_backed_secret_names
+      secret_ref_identity_ids    = module.frontend.secret_ref_identity_ids
+      secret_refs                = module.frontend.secret_refs
+      secret_file_mounts         = module.frontend.secret_file_mounts
+      })) == jsonencode({
+      name                       = "ca-frontend"
+      environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      image                      = "masterly.azurecr.io/release/frontend:v0.0.0"
+      registry                   = null
+      cpu                        = 0.5
+      memory                     = "1Gi"
+      scale                      = { min_replicas = 1, max_replicas = 3, termination_grace_period_seconds = null, custom_scale_rules = [] }
+      user_assigned_identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"]
+      ingress_enabled            = true
+      ingress_external           = true
+      ingress_allow_insecure     = false
+      ingress_allowed_ip_ranges  = ["203.0.113.7/32"]
+      env_names                  = ["MASTERLY_ALLOW_DEV_BINDING", "MASTERLY_API_BASE_URL", "MASTERLY_IDP_BINDING", "MASTERLY_REGION"]
+      env_value_sha256 = {
+        MASTERLY_ALLOW_DEV_BINDING = sha256("true")
+        MASTERLY_API_BASE_URL      = sha256("http://ca-api")
+        MASTERLY_IDP_BINDING       = sha256("dev")
+        MASTERLY_REGION            = sha256("eu")
+      }
+      env_secret_refs           = { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret" }
+      readiness_probe           = { path = "/api/readyz", initial_delay = 5, interval_seconds = 10, timeout = 8, failure_count_threshold = 48, success_count_threshold = 1 }
+      liveness_probe            = { path = "/api/healthz", initial_delay = null, interval_seconds = null, timeout = null, failure_count_threshold = null }
+      value_secret_names        = ["bff-shared-secret", "microsoft-provider-authentication-secret"]
+      vault_backed_secret_names = []
+      secret_ref_identity_ids   = []
+      secret_refs               = {}
+      secret_file_mounts        = {}
+    })
+    error_message = "With builtin_auth_api unset, ca-frontend's container app must be as before this input existed."
   }
 }
 
@@ -230,55 +296,97 @@ run "builtin_auth_api_off_leaves_the_edge_unchanged" {
     error_message = "With builtin_auth_api unset and edge set, built-in auth must still configure ca-frontend only."
   }
 
+  # Every configured attribute of ca-edge; Azure's computed ones (fqdn, the identity's principal,
+  # a TCP probe's path) are left out. The Envoy configuration, the third argument, is compared by
+  # its SHA-256: the literal is the digest of the configuration this version renders, and the file
+  # it is built in reads no builtin_auth_api, so the switch cannot reach it.
   assert {
-    condition = jsonencode({
-      name     = azurerm_container_app.edge[0].name
-      identity = [for i in azurerm_container_app.edge[0].identity : { type = i.type, identity_ids = i.identity_ids }]
+    condition = nonsensitive(jsonencode({
+      name                         = azurerm_container_app.edge[0].name
+      resource_group_name          = azurerm_container_app.edge[0].resource_group_name
+      container_app_environment_id = azurerm_container_app.edge[0].container_app_environment_id
+      revision_mode                = azurerm_container_app.edge[0].revision_mode
+      tags                         = azurerm_container_app.edge[0].tags
+      secret                       = length(azurerm_container_app.edge[0].secret)
+      registry                     = azurerm_container_app.edge[0].registry
+      identity                     = [for i in azurerm_container_app.edge[0].identity : { type = i.type, identity_ids = i.identity_ids }]
       ingress = [for i in azurerm_container_app.edge[0].ingress : {
         external_enabled           = i.external_enabled
         target_port                = i.target_port
+        exposed_port               = i.exposed_port
+        transport                  = i.transport
         allow_insecure_connections = i.allow_insecure_connections
-        ip_security_restriction    = [for r in i.ip_security_restriction : { name = r.name, ip_address_range = r.ip_address_range, action = r.action }]
+        client_certificate_mode    = i.client_certificate_mode
+        session_affinity_enabled   = i.session_affinity_enabled
+        cors                       = i.cors
+        custom_domain              = i.custom_domain
+        traffic_weight             = i.traffic_weight
+        ip_security_restriction    = i.ip_security_restriction
       }]
       template = [for t in azurerm_container_app.edge[0].template : {
-        min_replicas = t.min_replicas
-        max_replicas = t.max_replicas
+        min_replicas   = t.min_replicas
+        max_replicas   = t.max_replicas
+        init_container = t.init_container
+        volume         = t.volume
         container = [for c in t.container : {
-          name   = c.name
-          image  = c.image
-          cpu    = c.cpu
-          memory = c.memory
-          args   = slice(c.args, 0, 2)
-          env    = length(c.env)
+          name            = c.name
+          image           = c.image
+          cpu             = c.cpu
+          memory          = c.memory
+          command         = c.command
+          args            = [for index, a in c.args : index == 2 ? sha256(a) : a]
+          env             = c.env
+          volume_mounts   = c.volume_mounts
+          startup_probe   = c.startup_probe
+          liveness_probe  = [for p in c.liveness_probe : { transport = p.transport, port = p.port, host = p.host, header = p.header, initial_delay = p.initial_delay, interval_seconds = p.interval_seconds, timeout = p.timeout, failure_count_threshold = p.failure_count_threshold }]
+          readiness_probe = [for p in c.readiness_probe : { transport = p.transport, port = p.port, host = p.host, header = p.header, initial_delay = p.initial_delay, interval_seconds = p.interval_seconds, timeout = p.timeout, failure_count_threshold = p.failure_count_threshold, success_count_threshold = p.success_count_threshold }]
         }]
       }]
-      }) == jsonencode({
-      name     = "ca-edge"
-      identity = [{ type = "UserAssigned", identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-edge"] }]
+      })) == jsonencode({
+      name                         = "ca-edge"
+      resource_group_name          = "rg-masterly-aca"
+      container_app_environment_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      revision_mode                = "Single"
+      tags                         = { install-id = "test", org-id = "org_test" }
+      secret                       = 0
+      registry                     = []
+      identity                     = [{ type = "UserAssigned", identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-edge"] }]
       ingress = [{
         external_enabled           = true
         target_port                = 8080
+        exposed_port               = null
+        transport                  = null
         allow_insecure_connections = false
-        ip_security_restriction    = [{ name = "allow-0", ip_address_range = "203.0.113.7/32", action = "Allow" }]
+        client_certificate_mode    = null
+        session_affinity_enabled   = null
+        cors                       = []
+        custom_domain              = []
+        traffic_weight             = [{ label = null, latest_revision = true, percentage = 100, revision_suffix = null }]
+        ip_security_restriction    = [{ action = "Allow", description = null, ip_address_range = "203.0.113.7/32", name = "allow-0" }]
       }]
       template = [{
-        min_replicas = 1
-        max_replicas = 3
+        min_replicas   = 1
+        max_replicas   = 3
+        init_container = []
+        volume         = []
         container = [{
-          name   = "ca-edge"
-          image  = "docker.io/envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb"
-          cpu    = 0.25
-          memory = "0.5Gi"
-          args   = ["envoy", "--config-yaml"]
-          env    = 0
+          name            = "ca-edge"
+          image           = "docker.io/envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb"
+          cpu             = 0.25
+          memory          = "0.5Gi"
+          command         = null
+          args            = ["envoy", "--config-yaml", "3fa7977ce66aca883eb804fdedca8966a2af34be7b369f6566d398cd512d3c15"]
+          env             = []
+          volume_mounts   = []
+          startup_probe   = []
+          liveness_probe  = [{ transport = "TCP", port = 8080, host = null, header = [], initial_delay = null, interval_seconds = 10, timeout = null, failure_count_threshold = 3 }]
+          readiness_probe = [{ transport = "TCP", port = 8080, host = null, header = [], initial_delay = 5, interval_seconds = 10, timeout = null, failure_count_threshold = 10, success_count_threshold = null }]
         }]
       }]
     })
-    error_message = "With builtin_auth_api unset, ca-edge's identity, ingress and container must be as before this input existed."
+    error_message = "With builtin_auth_api unset, ca-edge's container app, its Envoy configuration included, must be as before this input existed."
   }
 
-  # The Envoy configuration is the third argument; the file it is built in reads no
-  # builtin_auth_api, so the switch cannot reach it.
   assert {
     condition = (
       azurerm_container_app.edge[0].template[0].container[0].args[2] == jsonencode(local.edge_envoy_config) &&
@@ -399,8 +507,8 @@ run "builtin_auth_api_on_admits_only_the_frontend_identity" {
     error_message = "With builtin_auth_api = true, the published-api warning must not fire."
   }
 
-  # Turning the switch on changes nothing else: the frontend's configuration and both apps are
-  # the literals of the off run.
+  # Turning the switch on changes nothing else: the frontend's configuration and both container
+  # apps are the literals of the off run.
   assert {
     condition = jsonencode(azapi_resource.builtin_auth["frontend"].body) == jsonencode({
       properties = {
@@ -433,69 +541,119 @@ run "builtin_auth_api_on_admits_only_the_frontend_identity" {
   }
 
   assert {
-    condition = (
-      module.api.ingress_external == false &&
-      module.api.ingress_allow_insecure == true &&
-      jsonencode(module.api.ingress_allowed_ip_ranges) == jsonencode([]) &&
-      jsonencode(module.api.user_assigned_identity_ids) == jsonencode(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"]) &&
-      nonsensitive(jsonencode(module.api.env_names)) == jsonencode([
-        "MASTERLY_ALLOWED_REGIONS",
-        "MASTERLY_DPOP_INTERNAL_ORIGIN",
-        "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS",
-        "MASTERLY_IDENTITY_BINDING",
-        "MASTERLY_INSTALL_ID",
-        "MASTERLY_MODE",
-        "MASTERLY_ORG_ID",
-        "MASTERLY_REGION",
-      ]) &&
-      jsonencode(local.api_env) == jsonencode({
-        MASTERLY_ALLOWED_REGIONS               = "eu"
-        MASTERLY_DPOP_INTERNAL_ORIGIN          = "http://ca-api"
-        MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = "7"
-        MASTERLY_IDENTITY_BINDING              = "dev"
-        MASTERLY_INSTALL_ID                    = "test"
-        MASTERLY_MODE                          = "demo"
-        MASTERLY_ORG_ID                        = "org_test"
-        MASTERLY_REGION                        = "eu"
-      }) &&
-      jsonencode(local.api_env_secret_refs) == jsonencode({
-        MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret"
-        MASTERLY_DATABASE_URL      = "database-url"
-        MASTERLY_SESSION_SECRET    = "session-secret"
-      }) &&
-      jsonencode(sort(module.api.value_secret_names)) == jsonencode([
-        "bff-shared-secret",
-        "database-url",
-        "microsoft-provider-authentication-secret",
-        "session-secret",
-      ]) &&
-      length(module.api.vault_backed_secret_names) == 0
-    )
-    error_message = "Turning builtin_auth_api on must leave ca-api's ingress, identity, env and secrets as they are with the switch off."
+    condition = nonsensitive(jsonencode({
+      name                       = module.api.name
+      environment_id             = module.api.environment_id
+      image                      = module.api.image
+      registry                   = module.api.registry
+      cpu                        = module.api.cpu
+      memory                     = module.api.memory
+      scale                      = module.api.scale
+      user_assigned_identity_ids = module.api.user_assigned_identity_ids
+      ingress_enabled            = module.api.ingress_enabled
+      ingress_external           = module.api.ingress_external
+      ingress_allow_insecure     = module.api.ingress_allow_insecure
+      ingress_allowed_ip_ranges  = module.api.ingress_allowed_ip_ranges
+      env_names                  = module.api.env_names
+      env_value_sha256           = module.api.env_value_sha256
+      env_secret_refs            = module.api.env_secret_refs
+      readiness_probe            = module.api.readiness_probe
+      liveness_probe             = module.api.liveness_probe
+      value_secret_names         = sort(module.api.value_secret_names)
+      vault_backed_secret_names  = module.api.vault_backed_secret_names
+      secret_ref_identity_ids    = module.api.secret_ref_identity_ids
+      secret_refs                = module.api.secret_refs
+      secret_file_mounts         = module.api.secret_file_mounts
+      })) == jsonencode({
+      name                       = "ca-api"
+      environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      image                      = "masterly.azurecr.io/release/api:v0.0.0"
+      registry                   = null
+      cpu                        = 0.5
+      memory                     = "1Gi"
+      scale                      = { min_replicas = 1, max_replicas = 1, termination_grace_period_seconds = null, custom_scale_rules = [] }
+      user_assigned_identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"]
+      ingress_enabled            = true
+      ingress_external           = false
+      ingress_allow_insecure     = true
+      ingress_allowed_ip_ranges  = []
+      env_names                  = ["MASTERLY_ALLOWED_REGIONS", "MASTERLY_DPOP_INTERNAL_ORIGIN", "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS", "MASTERLY_IDENTITY_BINDING", "MASTERLY_INSTALL_ID", "MASTERLY_MODE", "MASTERLY_ORG_ID", "MASTERLY_REGION"]
+      env_value_sha256 = {
+        MASTERLY_ALLOWED_REGIONS               = sha256("eu")
+        MASTERLY_DPOP_INTERNAL_ORIGIN          = sha256("http://ca-api")
+        MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = sha256("7")
+        MASTERLY_IDENTITY_BINDING              = sha256("dev")
+        MASTERLY_INSTALL_ID                    = sha256("test")
+        MASTERLY_MODE                          = sha256("demo")
+        MASTERLY_ORG_ID                        = sha256("org_test")
+        MASTERLY_REGION                        = sha256("eu")
+      }
+      env_secret_refs           = { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret", MASTERLY_DATABASE_URL = "database-url", MASTERLY_SESSION_SECRET = "session-secret" }
+      readiness_probe           = { path = "/readyz", initial_delay = 5, interval_seconds = 10, timeout = 8, failure_count_threshold = 48, success_count_threshold = 1 }
+      liveness_probe            = { path = "/healthz", initial_delay = 5, interval_seconds = 20, timeout = 10, failure_count_threshold = 24 }
+      value_secret_names        = ["bff-shared-secret", "database-url", "microsoft-provider-authentication-secret", "session-secret"]
+      vault_backed_secret_names = []
+      secret_ref_identity_ids   = []
+      secret_refs               = {}
+      secret_file_mounts        = {}
+    })
+    error_message = "Turning builtin_auth_api on must leave ca-api's container app as it is with the switch off."
   }
 
   assert {
-    condition = (
-      module.frontend.ingress_external == true &&
-      module.frontend.ingress_allow_insecure == false &&
-      jsonencode(module.frontend.ingress_allowed_ip_ranges) == jsonencode(["203.0.113.7/32"]) &&
-      jsonencode(module.frontend.user_assigned_identity_ids) == jsonencode(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"]) &&
-      jsonencode(local.frontend_env) == jsonencode({
-        MASTERLY_ALLOW_DEV_BINDING = "true"
-        MASTERLY_API_BASE_URL      = "http://ca-api"
-        MASTERLY_IDP_BINDING       = "dev"
-        MASTERLY_REGION            = "eu"
-      }) &&
-      jsonencode(local.frontend_env_secret_refs) == jsonencode({
-        MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret"
-      }) &&
-      jsonencode(sort(module.frontend.value_secret_names)) == jsonencode([
-        "bff-shared-secret",
-        "microsoft-provider-authentication-secret",
-      ]) &&
-      length(module.frontend.vault_backed_secret_names) == 0
-    )
-    error_message = "Turning builtin_auth_api on must leave ca-frontend's ingress, identity, env and secrets as they are with the switch off."
+    condition = nonsensitive(jsonencode({
+      name                       = module.frontend.name
+      environment_id             = module.frontend.environment_id
+      image                      = module.frontend.image
+      registry                   = module.frontend.registry
+      cpu                        = module.frontend.cpu
+      memory                     = module.frontend.memory
+      scale                      = module.frontend.scale
+      user_assigned_identity_ids = module.frontend.user_assigned_identity_ids
+      ingress_enabled            = module.frontend.ingress_enabled
+      ingress_external           = module.frontend.ingress_external
+      ingress_allow_insecure     = module.frontend.ingress_allow_insecure
+      ingress_allowed_ip_ranges  = module.frontend.ingress_allowed_ip_ranges
+      env_names                  = module.frontend.env_names
+      env_value_sha256           = module.frontend.env_value_sha256
+      env_secret_refs            = module.frontend.env_secret_refs
+      readiness_probe            = module.frontend.readiness_probe
+      liveness_probe             = module.frontend.liveness_probe
+      value_secret_names         = sort(module.frontend.value_secret_names)
+      vault_backed_secret_names  = module.frontend.vault_backed_secret_names
+      secret_ref_identity_ids    = module.frontend.secret_ref_identity_ids
+      secret_refs                = module.frontend.secret_refs
+      secret_file_mounts         = module.frontend.secret_file_mounts
+      })) == jsonencode({
+      name                       = "ca-frontend"
+      environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      image                      = "masterly.azurecr.io/release/frontend:v0.0.0"
+      registry                   = null
+      cpu                        = 0.5
+      memory                     = "1Gi"
+      scale                      = { min_replicas = 1, max_replicas = 3, termination_grace_period_seconds = null, custom_scale_rules = [] }
+      user_assigned_identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend"]
+      ingress_enabled            = true
+      ingress_external           = true
+      ingress_allow_insecure     = false
+      ingress_allowed_ip_ranges  = ["203.0.113.7/32"]
+      env_names                  = ["MASTERLY_ALLOW_DEV_BINDING", "MASTERLY_API_BASE_URL", "MASTERLY_IDP_BINDING", "MASTERLY_REGION"]
+      env_value_sha256 = {
+        MASTERLY_ALLOW_DEV_BINDING = sha256("true")
+        MASTERLY_API_BASE_URL      = sha256("http://ca-api")
+        MASTERLY_IDP_BINDING       = sha256("dev")
+        MASTERLY_REGION            = sha256("eu")
+      }
+      env_secret_refs           = { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret" }
+      readiness_probe           = { path = "/api/readyz", initial_delay = 5, interval_seconds = 10, timeout = 8, failure_count_threshold = 48, success_count_threshold = 1 }
+      liveness_probe            = { path = "/api/healthz", initial_delay = null, interval_seconds = null, timeout = null, failure_count_threshold = null }
+      value_secret_names        = ["bff-shared-secret", "microsoft-provider-authentication-secret"]
+      vault_backed_secret_names = []
+      secret_ref_identity_ids   = []
+      secret_refs               = {}
+      secret_file_mounts        = {}
+    })
+    error_message = "Turning builtin_auth_api on must leave ca-frontend's container app as it is with the switch off."
   }
 }
 
@@ -526,50 +684,90 @@ run "builtin_auth_api_on_admits_the_frontend_and_edge_identities" {
   }
 
   assert {
-    condition = jsonencode({
-      name     = azurerm_container_app.edge[0].name
-      identity = [for i in azurerm_container_app.edge[0].identity : { type = i.type, identity_ids = i.identity_ids }]
+    condition = nonsensitive(jsonencode({
+      name                         = azurerm_container_app.edge[0].name
+      resource_group_name          = azurerm_container_app.edge[0].resource_group_name
+      container_app_environment_id = azurerm_container_app.edge[0].container_app_environment_id
+      revision_mode                = azurerm_container_app.edge[0].revision_mode
+      tags                         = azurerm_container_app.edge[0].tags
+      secret                       = length(azurerm_container_app.edge[0].secret)
+      registry                     = azurerm_container_app.edge[0].registry
+      identity                     = [for i in azurerm_container_app.edge[0].identity : { type = i.type, identity_ids = i.identity_ids }]
       ingress = [for i in azurerm_container_app.edge[0].ingress : {
         external_enabled           = i.external_enabled
         target_port                = i.target_port
+        exposed_port               = i.exposed_port
+        transport                  = i.transport
         allow_insecure_connections = i.allow_insecure_connections
-        ip_security_restriction    = [for r in i.ip_security_restriction : { name = r.name, ip_address_range = r.ip_address_range, action = r.action }]
+        client_certificate_mode    = i.client_certificate_mode
+        session_affinity_enabled   = i.session_affinity_enabled
+        cors                       = i.cors
+        custom_domain              = i.custom_domain
+        traffic_weight             = i.traffic_weight
+        ip_security_restriction    = i.ip_security_restriction
       }]
       template = [for t in azurerm_container_app.edge[0].template : {
-        min_replicas = t.min_replicas
-        max_replicas = t.max_replicas
+        min_replicas   = t.min_replicas
+        max_replicas   = t.max_replicas
+        init_container = t.init_container
+        volume         = t.volume
         container = [for c in t.container : {
-          name   = c.name
-          image  = c.image
-          cpu    = c.cpu
-          memory = c.memory
-          args   = slice(c.args, 0, 2)
-          env    = length(c.env)
+          name            = c.name
+          image           = c.image
+          cpu             = c.cpu
+          memory          = c.memory
+          command         = c.command
+          args            = [for index, a in c.args : index == 2 ? sha256(a) : a]
+          env             = c.env
+          volume_mounts   = c.volume_mounts
+          startup_probe   = c.startup_probe
+          liveness_probe  = [for p in c.liveness_probe : { transport = p.transport, port = p.port, host = p.host, header = p.header, initial_delay = p.initial_delay, interval_seconds = p.interval_seconds, timeout = p.timeout, failure_count_threshold = p.failure_count_threshold }]
+          readiness_probe = [for p in c.readiness_probe : { transport = p.transport, port = p.port, host = p.host, header = p.header, initial_delay = p.initial_delay, interval_seconds = p.interval_seconds, timeout = p.timeout, failure_count_threshold = p.failure_count_threshold, success_count_threshold = p.success_count_threshold }]
         }]
       }]
-      }) == jsonencode({
-      name     = "ca-edge"
-      identity = [{ type = "UserAssigned", identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-edge"] }]
+      })) == jsonencode({
+      name                         = "ca-edge"
+      resource_group_name          = "rg-masterly-aca"
+      container_app_environment_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      revision_mode                = "Single"
+      tags                         = { install-id = "test", org-id = "org_test" }
+      secret                       = 0
+      registry                     = []
+      identity                     = [{ type = "UserAssigned", identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-edge"] }]
       ingress = [{
         external_enabled           = true
         target_port                = 8080
+        exposed_port               = null
+        transport                  = null
         allow_insecure_connections = false
-        ip_security_restriction    = [{ name = "allow-0", ip_address_range = "203.0.113.7/32", action = "Allow" }]
+        client_certificate_mode    = null
+        session_affinity_enabled   = null
+        cors                       = []
+        custom_domain              = []
+        traffic_weight             = [{ label = null, latest_revision = true, percentage = 100, revision_suffix = null }]
+        ip_security_restriction    = [{ action = "Allow", description = null, ip_address_range = "203.0.113.7/32", name = "allow-0" }]
       }]
       template = [{
-        min_replicas = 1
-        max_replicas = 3
+        min_replicas   = 1
+        max_replicas   = 3
+        init_container = []
+        volume         = []
         container = [{
-          name   = "ca-edge"
-          image  = "docker.io/envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb"
-          cpu    = 0.25
-          memory = "0.5Gi"
-          args   = ["envoy", "--config-yaml"]
-          env    = 0
+          name            = "ca-edge"
+          image           = "docker.io/envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb"
+          cpu             = 0.25
+          memory          = "0.5Gi"
+          command         = null
+          args            = ["envoy", "--config-yaml", "3fa7977ce66aca883eb804fdedca8966a2af34be7b369f6566d398cd512d3c15"]
+          env             = []
+          volume_mounts   = []
+          startup_probe   = []
+          liveness_probe  = [{ transport = "TCP", port = 8080, host = null, header = [], initial_delay = null, interval_seconds = 10, timeout = null, failure_count_threshold = 3 }]
+          readiness_probe = [{ transport = "TCP", port = 8080, host = null, header = [], initial_delay = 5, interval_seconds = 10, timeout = null, failure_count_threshold = 10, success_count_threshold = null }]
         }]
       }]
     })
-    error_message = "Turning builtin_auth_api on must leave ca-edge's identity, ingress and container as they are with the switch off."
+    error_message = "Turning builtin_auth_api on must leave ca-edge's container app, its Envoy configuration included, as it is with the switch off."
   }
 
   assert {

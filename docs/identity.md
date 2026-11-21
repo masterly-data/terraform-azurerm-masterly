@@ -182,12 +182,14 @@ import {
 `builtin_auth_api = true`, the first plan on this version destroys that one resource,
 `module.masterly.azapi_resource.builtin_auth["api"]` (the api's `authConfigs/current`), and
 changes nothing else: the frontend's configuration, both apps and their secrets stay as they are.
-If your configuration still has the `for_each` import block those versions documented, with
-`"api"` in it, narrow it to the frontend as above or delete it first: without
-`builtin_auth_api = true`, an import block for `["api"]` names an instance this version does not
-have, and the plan fails. An install that configured built-in auth on `ca-api` by hand and never imported it keeps
-that configuration; remove it in the portal (the app's **Authentication** page) if you want the
-api reached without it.
+Set `builtin_auth_api = true` to keep it only once ca-frontend and ca-edge send their
+workload-identity token; before that it refuses every BFF call (see
+[The api's gate](#the-apis-gate-builtin_auth_api)). If your configuration still has the
+`for_each` import block those versions documented, with `"api"` in it, narrow it to the frontend
+as above or delete it first: without `builtin_auth_api = true`, an import block for `["api"]`
+names an instance this version does not have, and the plan fails. An install that configured
+built-in auth on `ca-api` by hand and never imported it keeps that configuration; remove it in
+the portal (the app's **Authentication** page) if you want the api reached without it.
 
 #### Recovery fallback: turning the frontend gate off (`builtin_auth_recovery_until`)
 
