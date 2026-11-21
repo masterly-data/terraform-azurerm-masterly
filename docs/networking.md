@@ -316,8 +316,12 @@ routes by `Host`), so whatever builds an absolute URL from `Host` sees the wrong
   addresses; for Front Door, the IPv4 prefixes of the `AzureFrontDoor.Backend` service tag
   (Container Apps IP restrictions take CIDRs, not service tags; the
   `azurerm_network_service_tags` data source reads them). Those addresses are shared by every
-  Front Door profile in Azure, so they say "a Front Door", not "your Front Door": check
-  `X-Azure-FDID` as well where the application supports it.
+  Front Door profile in Azure, so they say "a Front Door", not "your Front Door". Set
+  `front_door_id` to your profile's id (`az afd profile show ... --query frontDoorId`), and
+  `ca-frontend` refuses with `403 FRONT_DOOR_REQUIRED` every request whose `X-Azure-FDID` is not
+  exactly that id. The health probes' `/api/healthz` and `/api/readyz` are exempt, because the
+  platform calls them on the replica directly. `/.auth/*` is not covered, because built-in
+  authentication answers it before the container sees the request.
 
 Machines need not go through the proxy. `edge_ingress_allowed_cidrs` gives `ca-edge` its own
 allowlist, so SDK and MCP clients keep reaching it directly from your networks while the

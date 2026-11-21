@@ -988,6 +988,17 @@ variable "public_api_url" {
   }
 }
 
+variable "front_door_id" {
+  type        = string
+  default     = null
+  description = "The id of the Azure Front Door profile in front of ca-frontend: its resource_guid, which Front Door stamps on every request it relays as X-Azure-FDID and overwrites whatever a client sent (`az afd profile show -g <group> --profile-name <name> --query frontDoorId -o tsv`). Set, ca-frontend refuses with 403 FRONT_DOOR_REQUIRED every request that does not carry exactly this id, except the health probes' /api/healthz and /api/readyz. This is what makes an allowlist of Front Door's addresses mean YOUR Front Door: those addresses are shared by every profile in Azure. Set it only once every request reaches ca-frontend through that profile, or the app refuses its users. /.auth/* is answered by Container Apps' built-in authentication before the container, so it is not covered. Needs a frontend image that reads MASTERLY_FRONT_DOOR_ID (masterly-application-frontend, MAS-5188); an older image ignores it. Null (the default) sets nothing, exactly as before this input existed. See docs/networking.md, \"Behind a reverse proxy\"."
+
+  validation {
+    condition     = var.front_door_id == null || can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.front_door_id))
+    error_message = "front_door_id must be a Front Door profile's id, a GUID such as 6c1a9f0e-2b4d-4e8a-9f3c-0d7e5b1a2c3f, or null."
+  }
+}
+
 variable "frontend_ingress_external" {
   type        = bool
   default     = true
