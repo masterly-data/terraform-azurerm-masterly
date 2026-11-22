@@ -205,7 +205,7 @@ URL.
 | Microsoft Entra ID for managed identities (`login.microsoftonline.com`, service tag `AzureActiveDirectory`; part of the set above) | Always: the apps' identities get tokens for the registry (`managed_identity` and `customer_registry` modes), Key Vault references (`enable_key_vault`), and Postgres and Redis with `database_auth = "entra"` | Every pull, secret reference or database sign-in that uses an identity fails: a new revision has no ready replica, or the apps cannot open their database connection |
 | The image registry: its login server (`masterly.azurecr.io` by default, or `registry_location`) and its data endpoint (`<registry>.<region>.data.azurecr.io` with dedicated data endpoints, otherwise the registry's `*.blob.core.windows.net` storage; see [Configure rules to access an Azure container registry behind a firewall](https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules)) | Always, **unless** `registry_private_endpoint = true`, which keeps pulls on the registry's private endpoint in the VNet | The image pull fails: a new revision (a fresh install, an upgrade or a restart onto a new replica) has no ready replica, and `ContainerAppSystemLogs` records the failed pull |
 | Docker Hub (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`) | `edge` set with `edge.image` unset: `ca-edge` pulls the upstream Envoy image anonymously | `ca-edge`'s image pull fails, so its revision has no ready replica. Mirror the image instead (see [Where the edge's image comes from](#where-the-edges-image-comes-from)) |
-| Your identity provider's issuer and its endpoints: the discovery document under `oidc_authority`, the token endpoint it names, and the signing keys at `oidc_jwks_uri` (all `https://login.microsoftonline.com/<tenant>/...` when only `oidc_tenant_id` is set) | `identity_binding = "oidc"`: `ca-frontend`'s BFF signs users in against the authority, and `ca-api` fetches the signing keys. With `builtin_auth`, Azure's built-in authentication on `ca-frontend` reaches the same IdP | With the token endpoint or discovery document unreachable, sign-in fails with an error after the IdP redirects back. With the keys unreachable, `ca-api` cannot validate a token, so authenticated requests are refused |
+| Your identity provider's issuer and its endpoints: the discovery document under `oidc_authority`, the token endpoint it names, and the signing keys at `oidc_jwks_uri` (all `https://login.microsoftonline.com/<tenant>/...` when only `oidc_tenant_id` is set) | `identity_binding = "oidc"`: `ca-frontend`'s BFF signs users in against the authority, and `ca-api` fetches the signing keys. With `builtin_auth`, Azure's built-in authentication on `ca-frontend` reaches the same IdP. With `edge.jwt_authn` set, `ca-edge` itself also fetches the signing keys at `oidc_jwks_uri`, from `login.microsoftonline.com` on 443, through `egress_firewall` when that is set | With the token endpoint or discovery document unreachable, sign-in fails with an error after the IdP redirects back. With the keys unreachable, `ca-api` cannot validate a token, so authenticated requests are refused; with `edge.jwt_authn` set, `ca-edge` cannot either, and answers every request to `/v1` and `/mcp` with `401` |
 | Masterly's control plane: the host of `license_issuer_url` | `license_issuer_url` set (licence refresh) | Licence refresh fails. After seven days without a successful refresh the install is read-only: reads, exports and sign-in continue, writes are refused, until refresh succeeds again |
 | Masterly's control plane: the host of `telemetry_url` | `telemetry_url` set (fleet telemetry) | Usage reports do not reach the control plane. Licence refresh is a separate call (ADR 0074) and is not affected |
 | Azure Monitor (service tag `AzureMonitor`) | Always: the environment sends the apps' console and system logs through Azure Monitor (`logs_destination = "azure-monitor"`) | New rows stop arriving in `ContainerAppConsoleLogs` and `ContainerAppSystemLogs`, so the log-search alerts and the diagnostic bundle see nothing new while the apps keep serving |
@@ -775,9 +775,11 @@ It is **off by default**: with `edge` unset the module creates nothing for it an
 exactly as before. Set `edge = {}` to run it with the module's defaults; the `edge_url` output is
 its base URL.
 
-**It does no authentication yet.** It forwards the caller's `Authorization` header to `ca-api`
-unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published with
-`api_ingress_external = true`. What the edge adds is a narrower door:
+**With `edge.jwt_authn` unset (the default) it does no authentication.** It forwards the caller's
+`Authorization` header to `ca-api` unchanged, and `ca-api` checks it, exactly as when `ca-api`
+itself is published with `api_ingress_external = true`. With it set, the edge validates the token
+first ([Token validation at the edge](#token-validation-at-the-edge-edgejwt_authn)). What the edge
+adds either way is a narrower door:
 
 - **Public ingress, on the allowlist.** `ca-edge` is published (external ingress) on
   `ingress_allowed_cidrs`, the same list the frontend uses, HTTPS-only (`http://` is redirected,
@@ -850,6 +852,48 @@ unchanged, and `ca-api` checks it, exactly as when `ca-api` itself is published 
   other credential-carrying header.
 - **Its own identity.** `ca-edge` runs as `id-<prefix>-edge`, which holds no role on Postgres,
   Key Vault, Service Bus or Redis, and AcrPull only when its image is on the install's registry.
+
+### Token validation at the edge (`edge.jwt_authn`)
+
+`edge.jwt_authn` is **off by default** (null). Set it, for example
+`edge = { jwt_authn = { audiences = ["<API client ID>", "<MCP server client ID>"] } }`, and
+`ca-edge` validates the caller's bearer token itself before `ca-api` sees the request (ADR 0117,
+ADR 0120 §2), on every forwarded route: `/v1`, the ca-serve routes under it, and `/mcp`.
+
+- **What passes.** A token in the `Authorization` header (`Bearer <token>`, not a query
+  parameter), signed by a key at `oidc_jwks_uri`, unexpired, issued by `oidc_allowed_issuers` and
+  carrying one of `edge.jwt_authn.audiences` in its `aud` claim. Anything else is refused by the
+  edge and never reaches `ca-api`: a token that is otherwise valid but carries none of the
+  audiences is answered **`403`**, and anything else, a request with no token included, is
+  answered **`401`**. The `413` and
+  `404` answers are given without reading a token. A token that passes reaches `ca-api`
+  unchanged, and `ca-api` still checks it; the decoded token is never forwarded as a header, and
+  `x-jwt-payload` is still removed from every request. The access log holds no token.
+- **One issuer.** The edge trusts exactly one issuer, the install's Entra tenant: the same
+  `oidc_allowed_issuers` value `ca-api` trusts. The plan is refused unless it is the single entry
+  `https://login.microsoftonline.com/<tenant GUID>/v2.0` and `oidc_jwks_uri` is
+  `https://login.microsoftonline.com/<that tenant>/discovery/v2.0/keys`, which is what
+  `oidc_tenant_id` sets them both to. A second issuer, another identity provider or a multitenant
+  (`organizations`) authority is refused while `edge.jwt_authn` is set.
+- **Audiences.** `edge.jwt_authn.audiences` lists the `aud` values a token may carry: the API's
+  and the MCP server's application (client) IDs, the GUIDs. An Entra v2.0 access token always
+  carries the client ID of the API it was issued for as `aud`, never its application ID URI
+  (`api://...`), so an `api://` entry here matches no token and every request with a valid token
+  is answered `403`.
+  For the API it is the value `ca-api` checks, `oidc_audience` (by default `oidc_client_id`). It
+  must not be empty, and no entry may be empty, so a token the tenant issued for another resource,
+  Microsoft Graph for example, is refused with `403`.
+- **The signing keys.** `ca-edge` fetches them itself from `login.microsoftonline.com` on **443**
+  over TLS it verifies (the image's CA bundle, and a certificate that must name that host), when
+  it starts and every 10 minutes after. That host is in
+  [What your firewall must admit](#what-your-firewall-must-admit); with `egress_firewall` set, the
+  fetch goes through your firewall, which must admit it. If the keys cannot be fetched, every
+  request to `/v1` and `/mcp` is answered `401`.
+- **Rate limits are unchanged.** The limiter runs before the token is checked, so a request
+  counts whether its token passes or not, and `/v1` (the ca-serve routes included) and `/mcp`
+  keep the budgets described above.
+
+Setting or changing `edge.jwt_authn` rolls a new `ca-edge` revision.
 
 ### Where the edge's image comes from
 
