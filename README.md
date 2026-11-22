@@ -675,8 +675,16 @@ availability alerts and the action group are not part of that switch; see below:
   configuration: the recovery fallback turning the gate off or back on, a change made outside
   Terraform, or an apply that changes `builtin_auth`. Activity-log alerts take no severity. See
   [docs/identity.md](docs/identity.md#recovery-fallback-turning-the-frontend-gate-off-builtin_auth_recovery_until).
+- **API 401 alert** — with `builtin_auth_api` set, a metric alert, `api-401`, severity 1, on
+  `ca-api`'s `Requests` metric filtered to status 401: more than 20 in a 15-minute window,
+  evaluated every 5 minutes. A wrong allowed-client list on the api's gate refuses every call
+  from `ca-frontend` and `ca-edge` with a 401 and trips no health check, so the 401 count tracks
+  total traffic. The metric also counts the application's own 401s, which are occasional and sit
+  below the threshold, and 401s to a direct external caller the gate refuses. It exists only with
+  `builtin_auth_api` and does not need `enable_diagnostics`. See
+  [docs/identity.md](docs/identity.md#the-apis-gate-builtin_auth_api).
 
-The availability alerts and the module's action group do not need `enable_diagnostics`: they
+The availability alerts, the API 401 alert and the module's action group do not need `enable_diagnostics`: they
 are created in every mode. `enable_diagnostics` governs the diagnostic settings, the saturation
 and load alerts and `postgres-silent`.
 

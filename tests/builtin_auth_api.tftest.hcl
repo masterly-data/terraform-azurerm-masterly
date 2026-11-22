@@ -946,3 +946,79 @@ run "builtin_auth_api_admits_no_other_application" {
 
   expect_failures = [check.builtin_auth_api_entries_are_ignored]
 }
+
+# --- The 401 alert (builtin-auth.tf) ---------------------------------------------------------
+
+# Threat: a broken gate refuses every BFF call and nothing alerts. The alert exists exactly when
+# builtin_auth_api does, in the defaults (mode "demo", so diagnostics are off), and its name
+# follows the module's alert convention.
+run "api_401_alert_absent_with_builtin_auth_api_off" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_monitor_metric_alert.builtin_auth_api_401) == 0
+    error_message = "With builtin_auth set and builtin_auth_api off, there must be no 401 alert."
+  }
+}
+
+run "api_401_alert_planned_with_builtin_auth_api_on" {
+  command = plan
+
+  variables {
+    builtin_auth_api = true
+  }
+
+  assert {
+    condition = (
+      !local.diagnostics_enabled &&
+      length(azurerm_monitor_metric_alert.builtin_auth_api_401) == 1 &&
+      azurerm_monitor_metric_alert.builtin_auth_api_401[0].name == "alert-masterly-api-401"
+    )
+    error_message = "With builtin_auth_api on in demo mode (diagnostics off), the 401 alert must be planned as alert-masterly-api-401."
+  }
+}
+
+run "api_401_alert_planned_with_diagnostics_explicitly_off" {
+  command = plan
+
+  variables {
+    builtin_auth_api   = true
+    enable_diagnostics = false
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_metric_alert.builtin_auth_api_401) == 1
+    error_message = "The 401 alert must not depend on enable_diagnostics."
+  }
+}
+
+# The scope is ca-api's id (overridden above to a literal) and the signal is the Requests metric
+# filtered to status 401.
+run "api_401_alert_watches_ca_api_401s" {
+  command = apply
+
+  variables {
+    builtin_auth_api = true
+  }
+
+  assert {
+    condition     = jsonencode(azurerm_monitor_metric_alert.builtin_auth_api_401[0].scopes) == jsonencode([module.api.id]) && module.api.id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+    error_message = "The 401 alert must be scoped to ca-api only."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_metric_alert.builtin_auth_api_401[0].criteria[0].metric_namespace == "Microsoft.App/containerapps" &&
+      azurerm_monitor_metric_alert.builtin_auth_api_401[0].criteria[0].metric_name == "Requests" &&
+      azurerm_monitor_metric_alert.builtin_auth_api_401[0].criteria[0].dimension[0].name == "statusCode" &&
+      azurerm_monitor_metric_alert.builtin_auth_api_401[0].criteria[0].dimension[0].operator == "Include" &&
+      jsonencode(azurerm_monitor_metric_alert.builtin_auth_api_401[0].criteria[0].dimension[0].values) == jsonencode(["401"])
+    )
+    error_message = "The 401 alert must read the Requests metric filtered to statusCode 401."
+  }
+
+  assert {
+    condition     = length(trimspace(azurerm_monitor_metric_alert.builtin_auth_api_401[0].description)) > 0
+    error_message = "The 401 alert must carry a description."
+  }
+}
