@@ -135,8 +135,9 @@ run "builtin_auth_gates_the_frontend_only" {
   }
 }
 
-# With the app ids known, nothing built-in auth configures may name ca-api as its parent.
-# azapi_resource.builtin_auth is the module's only authConfigs resource.
+# With the app ids known and builtin_auth_api unset (the default), nothing built-in auth
+# configures may name ca-api as its parent. azapi_resource.builtin_auth is the module's only
+# authConfigs resource. builtin_auth_api.tftest.hcl covers the switch turned on.
 run "builtin_auth_configures_nothing_on_ca_api" {
   command = plan
 
@@ -224,8 +225,9 @@ run "builtin_auth_ignores_the_api_entries_with_a_warning" {
   expect_failures = [check.builtin_auth_api_entries_are_ignored]
 }
 
-# With the api published, builtin_auth still gates ca-frontend only, and the plan warns that
-# the published api has no platform gate.
+# With the api published and builtin_auth_api unset, builtin_auth still gates ca-frontend only,
+# and the plan warns that the published api has no platform gate. With the switch on the
+# warning does not fire (builtin_auth_api_gates_the_published_api in builtin_auth_api.tftest.hcl).
 run "builtin_auth_warns_when_the_api_is_published" {
   command = plan
 
@@ -346,6 +348,20 @@ run "builtin_auth_requires_its_client_secret" {
   }
 
   expect_failures = [var.builtin_auth]
+}
+
+# ca-api's gate validates tokens against builtin_auth's registration, so the switch without
+# builtin_auth is refused, with the message naming builtin_auth (the validation's error_message
+# in variables-builtin-auth.tf).
+run "builtin_auth_api_is_refused_without_builtin_auth" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth_api      = true
+  }
+
+  expect_failures = [var.builtin_auth_api]
 }
 
 # With the vault on, the built-in auth client secret is a vault reference like every other
