@@ -11,17 +11,20 @@ variable "builtin_auth" {
   default     = null
   description = <<-EOT
     Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on
-    ca-frontend only: a gate at the platform, in front of the application's own sign-in. Null
-    (the default) configures none, exactly as before this input existed. It is independent of
-    identity_binding: with identity_binding = "oidc" a browser signs in twice, once at the
-    platform (who may reach the frontend at all) and once in the application (which member, which
-    roles), and neither layer relies on the other.
+    ca-frontend, and on ca-api with builtin_auth_api: a gate at the platform, in front of the
+    application's own sign-in. Null (the default) configures none, exactly as before this input
+    existed. It is independent of identity_binding: with identity_binding = "oidc" a browser
+    signs in twice, once at the platform (who may reach the frontend at all) and once in the
+    application (which member, which roles), and neither layer relies on the other.
 
     - ca-frontend redirects an unauthenticated browser to Entra sign-in.
-    - ca-api is not gated. It is reached internally, by the frontend's server-side calls to
-      http://ca-api inside the Container Apps environment; the application authenticates its
-      callers as identity_binding sets. With api_ingress_external = true, ca-api is also
-      published to ingress_allowed_cidrs, without this gate, and a plan that sets both warns.
+    - ca-api is not gated unless builtin_auth_api = true (false by default). Without it, ca-api
+      is reached internally, by the frontend's server-side calls to http://ca-api inside the
+      Container Apps environment; the application authenticates its callers as identity_binding
+      sets. With api_ingress_external = true, ca-api is also published to
+      ingress_allowed_cidrs, without this gate, and a plan that sets both warns. With it, ca-api
+      answers 401 to every request without a token issued to ca-frontend's or ca-edge's
+      workload identity for this registration; see builtin_auth_api.
 
     tenant_id: the Entra tenant users sign in from (the issuer is
     https://login.microsoftonline.com/<tenant_id>/v2.0). client_id: the app registration the
@@ -32,7 +35,8 @@ variable "builtin_auth" {
     empty unless a page must be public.
 
     api_allowed_applications and api_allowed_audiences are deprecated and ignored: they configured
-    a gate on ca-api in 0.19.0 and 0.19.1. A plan that sets either warns; remove them.
+    a gate on ca-api in 0.19.0 and 0.19.1, and builtin_auth_api does not read them. A plan that
+    sets either warns; remove them.
   EOT
 
   validation {
@@ -57,6 +61,41 @@ variable "builtin_auth" {
   }
 }
 
+variable "builtin_auth_api" {
+  type        = bool
+  default     = false
+  nullable    = false
+  description = <<-EOT
+    Built-in authentication on ca-api, off by default; callers request the audience
+    builtin_auth.client_id, and turning it on before ca-frontend and ca-edge send that token
+    refuses every BFF call, as on 2026-10-22.
+
+    True turns on Container Apps built-in authentication on ca-api (ADR 0120 §2), admitting only
+    ca-frontend's and ca-edge's workload identities: ca-api then admits only a token issued to
+    the user-assigned identity id-<name_prefix>-frontend or, with edge set,
+    id-<name_prefix>-edge, and answers 401 to everything else, on every path, with no redirect.
+    False (the default) leaves ca-api ungated at the platform, as before this input existed.
+    It requires builtin_auth: the gate
+    validates tokens against builtin_auth's registration, so a caller requests a token for the
+    audience builtin_auth.client_id (or api://<client_id>). A browser sign-in token for that same
+    registration is refused, because the registration itself is not an allowed application.
+
+    Turn it on only once the ca-frontend and ca-edge releases you run send their workload-identity
+    token to ca-api. Before that, ca-api refuses every call the frontend's server makes on a
+    user's behalf, and the application is unusable until it is turned off again. Turning it on or
+    off changes neither app: ca-api carries builtin_auth_client_secret whenever builtin_auth is
+    set. builtin_auth_recovery_until never turns this gate off. The application still
+    authenticates its callers as identity_binding sets; this gate is in front of that, not
+    instead of it.
+  EOT
+
+  validation {
+    # A conditional, not `||`, for the reason given on builtin_auth's validations.
+    condition     = var.builtin_auth_api ? var.builtin_auth != null : true
+    error_message = "builtin_auth_api turns on built-in authentication on ca-api with builtin_auth's registration, so it requires builtin_auth. Set builtin_auth (and builtin_auth_client_secret), or set builtin_auth_api = false."
+  }
+}
+
 variable "builtin_auth_recovery_until" {
   type        = string
   default     = null
@@ -72,7 +111,8 @@ variable "builtin_auth_recovery_until" {
       ca-frontend: a non-empty ingress_allowed_cidrs, frontend_ingress_external = false, or
       aca_internal_load_balancer = true.
     - It turns off ca-frontend's gate only. It changes nothing on ca-api: its ingress, its
-      environment and its authentication are as without this input, and the window in which
+      environment and its authentication (the gate builtin_auth_api turns on included) are as
+      without this input, and the window in which
       ca-api's own sign-in check is relaxed during an Entra outage is not set here.
     - Terraform cannot act at the time itself: the gate comes back at the first plan and apply
       after the time has passed. A plan that still sets a passed time restores the gate and
