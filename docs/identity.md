@@ -239,8 +239,11 @@ application's own sign-in, including its break-glass path. Set it to an RFC 3339
   `alert_action_group_id`). With `builtin_auth_api`, it also creates
   `alert-<prefix>-api-auth-config-write`, which does the same for `ca-api`'s. Both exist for as
   long as their gate does, not only during a window. They fire on the disable and the restore,
-  any change made outside Terraform, and also an apply that changes `builtin_auth` or
-  `builtin_auth_api` itself; confirm each one was intended.
+  any change made outside Terraform, and also an apply that changes `builtin_auth` itself;
+  confirm each one was intended. The api's alert covers every write after it exists, not the
+  apply that turns `builtin_auth_api` on or off: turning it on creates the alert and `ca-api`'s
+  configuration in the same apply, so that first write can land before the alert does, and
+  turning it off deletes the configuration and the alert together.
 
 The configuration is written with the `Azure/azapi` provider, because azurerm has no resource
 for it; the same provider starts the [migrate job](data-plane.md#the-migrate-job) at apply. The module
