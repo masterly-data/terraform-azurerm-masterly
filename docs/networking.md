@@ -297,6 +297,37 @@ address `ca-frontend` sees is the gateway's: include the gateway subnet's range 
 per-client narrowing on the gateway. The `snet-aca` NSG admits `VirtualNetwork` on 443 on an
 internal environment, which covers a gateway in the same VNet or a peered one.
 
+## Behind a reverse proxy (Azure Front Door, a gateway)
+
+Putting a proxy in front of a public `ca-frontend`, for example Azure Front Door so that it
+issues and renews the certificate for your hostname and runs a WAF, needs three things from this
+module. Front Door typically sends the app's own default hostname as `Host` (a Container App
+routes by `Host`), so whatever builds an absolute URL from `Host` sees the wrong address:
+
+- **The application's redirects** are built from `oidc_redirect_uri`, never from the request, so
+  they need no setting. Set `oidc_redirect_uri` to `https://<your hostname>/api/auth/callback`.
+- **The platform sign-in gate** (`builtin_auth`) builds its callback from `Host` unless told
+  otherwise. Set `builtin_auth.forward_proxy = { convention = "Standard" }` so that it reads
+  `X-Forwarded-Host` instead, which Front Door sets and overwrites whatever the client sent.
+  A proxy that uses other headers takes `convention = "Custom"` with
+  `custom_host_header_name` (and `custom_proto_header_name`). Register
+  `https://<your hostname>/.auth/login/aad/callback` on the gate's app registration.
+- **Who may reach the origin.** Only the proxy should. `ingress_allowed_cidrs` holds the proxy's
+  addresses; for Front Door, the IPv4 prefixes of the `AzureFrontDoor.Backend` service tag
+  (Container Apps IP restrictions take CIDRs, not service tags; the
+  `azurerm_network_service_tags` data source reads them). Those addresses are shared by every
+  Front Door profile in Azure, so they say "a Front Door", not "your Front Door": check
+  `X-Azure-FDID` as well where the application supports it.
+
+Machines need not go through the proxy. `edge_ingress_allowed_cidrs` gives `ca-edge` its own
+allowlist, so SDK and MCP clients keep reaching it directly from your networks while the
+frontend admits only the proxy. Sending the edge through the proxy too makes its per-client rate
+limit count the proxy's addresses.
+
+**Only with the proxy in front.** `forward_proxy` trusts a header. Set it only when every request
+reaches `ca-frontend` through a proxy that overwrites that header; a client that reaches the app
+directly could choose the host the gate redirects to.
+
 ## Network security baseline
 
 Every subnet the module creates carries a network security group, and each one ends in an

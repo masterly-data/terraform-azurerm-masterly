@@ -7,6 +7,11 @@ variable "builtin_auth" {
     api_allowed_applications = optional(list(string), [])
     api_allowed_audiences    = optional(list(string), [])
     frontend_excluded_paths  = optional(list(string), [])
+    forward_proxy = optional(object({
+      convention               = string
+      custom_host_header_name  = optional(string)
+      custom_proto_header_name = optional(string)
+    }))
   })
   default     = null
   description = <<-EOT
@@ -34,6 +39,18 @@ variable "builtin_auth" {
     sign-in; every path listed is reachable by anyone ingress_allowed_cidrs admits, so leave it
     empty unless a page must be public.
 
+    forward_proxy: for ca-frontend behind a reverse proxy that replaces the Host header, such as
+    Azure Front Door or an Application Gateway sending the app's default hostname. Without it the
+    platform builds its sign-in callback from the Host it receives, which is not the address the
+    browser used, and Entra refuses the redirect URI. convention = "Standard" reads the public host
+    from X-Forwarded-Host (and the scheme from X-Forwarded-Proto), which Azure Front Door sets and
+    overwrites; "Custom" reads custom_host_header_name (and, optionally,
+    custom_proto_header_name) instead, for a proxy that uses other headers. Null (the default)
+    leaves the setting out, so the platform uses the Host header, exactly as before this attribute
+    existed. Set it only when every request reaches ca-frontend through that proxy, and the proxy
+    overwrites the header: a client that reaches ca-frontend directly chooses the host the
+    platform redirects to. See docs/networking.md, "Behind a reverse proxy".
+
     api_allowed_applications and api_allowed_audiences are deprecated and ignored: they configured
     a gate on ca-api in 0.19.0 and 0.19.1, and builtin_auth_api does not read them. A plan that
     sets either warns; remove them.
@@ -53,6 +70,24 @@ variable "builtin_auth" {
   validation {
     condition     = var.builtin_auth == null ? true : alltrue([for p in var.builtin_auth.frontend_excluded_paths : startswith(p, "/")])
     error_message = "builtin_auth.frontend_excluded_paths entries must be absolute paths starting with \"/\"."
+  }
+
+  validation {
+    # A conditional, not `||`, for the reason given on the first validation.
+    condition = var.builtin_auth == null ? true : (
+      var.builtin_auth.forward_proxy == null ? true : (
+        contains(["Standard", "Custom"], var.builtin_auth.forward_proxy.convention) && (
+          var.builtin_auth.forward_proxy.convention == "Standard" ? (
+            var.builtin_auth.forward_proxy.custom_host_header_name == null &&
+            var.builtin_auth.forward_proxy.custom_proto_header_name == null
+            ) : (
+            can(regex("^[A-Za-z0-9-]{1,64}$", coalesce(var.builtin_auth.forward_proxy.custom_host_header_name, " "))) &&
+            (var.builtin_auth.forward_proxy.custom_proto_header_name == null ? true : can(regex("^[A-Za-z0-9-]{1,64}$", var.builtin_auth.forward_proxy.custom_proto_header_name)))
+          )
+        )
+      )
+    )
+    error_message = "builtin_auth.forward_proxy.convention must be \"Standard\" (X-Forwarded-Host and X-Forwarded-Proto, with no custom header names) or \"Custom\" with custom_host_header_name set (and custom_proto_header_name optional), each a header name of letters, digits and hyphens."
   }
 
   validation {

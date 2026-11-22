@@ -1,6 +1,6 @@
 # The opt-in machine entry point, ca-edge (ADR 0120 §2): an Envoy proxy the module configures,
-# published on the same CIDR allowlist as the frontend, that forwards /v1 and /mcp to ca-api and
-# answers every other path itself. Within /v1 it routes the ca-serve reads (edge-serve-routes.json)
+# published on the frontend's CIDR allowlist, or on its own with edge_ingress_allowed_cidrs, that
+# forwards /v1 and /mcp to ca-api and answers every other path itself. Within /v1 it routes the ca-serve reads (edge-serve-routes.json)
 # on their own routes, which still go to ca-api. It has no database, vault, queue or cache access
 # and makes no authorization decision: the Authorization header reaches ca-api unchanged and ca-api
 # checks it. With edge.jwt_authn unset (the default) the edge does no authentication of its own.
@@ -83,6 +83,30 @@ variable "edge" {
     )
     error_message = "edge.jwt_authn.audiences must list at least one audience, and none may be empty: the API's and the MCP server's application (client) IDs, the aud values a token must carry to pass the edge."
   }
+}
+
+variable "edge_ingress_allowed_cidrs" {
+  type        = list(string)
+  default     = null
+  description = <<-EOT
+    CIDRs allowed to reach ca-edge, when they differ from the frontend's. Null (the default) uses
+    ingress_allowed_cidrs, as before this input existed. Set it when the frontend and the edge are
+    reached from different places: for example ca-frontend behind Azure Front Door, with
+    ingress_allowed_cidrs holding Front Door's addresses, while SDK and MCP clients reach ca-edge
+    directly from your own networks. Routing the edge through such a proxy instead makes its
+    per-client rate limit count the proxy's addresses. An empty list is refused for the same
+    reason as an empty ingress_allowed_cidrs: it means unrestricted in Azure.
+  EOT
+
+  validation {
+    condition     = var.edge_ingress_allowed_cidrs == null ? true : alltrue([for c in var.edge_ingress_allowed_cidrs : can(cidrnetmask(c)) || can(cidrhost("${c}/32", 0))])
+    error_message = "Every edge_ingress_allowed_cidrs entry must be an IPv4 address or CIDR, such as 203.0.113.7/32."
+  }
+}
+
+locals {
+  # Who may reach ca-edge: its own list when set, the frontend's otherwise (edge_ingress_allowed_cidrs).
+  edge_allowed_cidrs = var.edge_ingress_allowed_cidrs == null ? var.ingress_allowed_cidrs : var.edge_ingress_allowed_cidrs
 }
 
 locals {
@@ -719,7 +743,7 @@ resource "azurerm_container_app" "edge" {
     }
 
     dynamic "ip_security_restriction" {
-      for_each = var.ingress_allowed_cidrs
+      for_each = local.edge_allowed_cidrs
       content {
         name             = "allow-${ip_security_restriction.key}"
         ip_address_range = ip_security_restriction.value
@@ -779,8 +803,8 @@ resource "azurerm_container_app" "edge" {
     ignore_changes = [workload_profile_name]
 
     precondition {
-      condition     = length(var.ingress_allowed_cidrs) > 0
-      error_message = "edge with an empty ingress_allowed_cidrs would publish ca-edge, and /v1 and /mcp behind it, to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. List the CIDRs that may reach it (the networks your SDK and MCP clients call from), or leave edge unset."
+      condition     = length(local.edge_allowed_cidrs) > 0
+      error_message = "edge with an empty ingress_allowed_cidrs (or edge_ingress_allowed_cidrs) would publish ca-edge, and /v1 and /mcp behind it, to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. List the CIDRs that may reach it (the networks your SDK and MCP clients call from), or leave edge unset."
     }
 
     # The token credential pulls with a password held as an app secret, and ca-edge holds none.
