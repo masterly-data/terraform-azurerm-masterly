@@ -49,6 +49,23 @@ resource "azurerm_virtual_network" "this" {
       condition     = !local.env_subnet_prefixes_given || length(setintersection(local.subnet_layout_overlaps, ["front", "app", "workers"])) == 0
       error_message = "The environment subnet prefixes must not overlap each other, the runtime subnet (aca_subnet_prefix) or the private-endpoint subnet (private_endpoints_subnet_prefix); overlapping: ${join(", ", sort(local.subnet_layout_overlaps))}. Each environment's subnet carries its own inbound rules, so no two subnets may share an address."
     }
+
+    # The add-on subnets (split_processing, extensions) are refused whether explicit or derived: an
+    # add-on someone turned on must get its subnets or stop the plan, never be skipped.
+    precondition {
+      condition     = length(local.add_on_subnets_missing) == 0
+      error_message = "split_processing and extensions each need subnets of their own, and this VNet cannot derive them: ${join(", ", sort(local.add_on_subnets_missing))}. Set core_subnet_prefix and outbound_subnet_prefix (split_processing) or extension_subnet_prefix (extensions), each /27 or larger and clear of every other subnet, or use a first vnet_address_space prefix of /20 or larger, from which the module derives the /24s at index 8, 9 and 10."
+    }
+
+    precondition {
+      condition     = length(local.add_on_subnets_outside_vnet) == 0
+      error_message = "The add-on environment subnet prefixes must lie inside vnet_address_space; outside it: ${join(", ", sort(local.add_on_subnets_outside_vnet))}."
+    }
+
+    precondition {
+      condition     = length(setintersection(local.subnet_layout_overlaps, local.add_on_keys)) == 0
+      error_message = "The add-on environment subnets must not overlap each other or any other subnet of the install (snet-aca, the private-endpoint subnet, front, app and workers); overlapping: ${join(", ", sort(local.subnet_layout_overlaps))}. Each environment's subnet carries its own inbound rules, so no two subnets may share an address. Set core_subnet_prefix, outbound_subnet_prefix or extension_subnet_prefix to a free range."
+    }
   }
 }
 
@@ -279,6 +296,27 @@ resource "azurerm_network_security_group" "private_endpoints" {
     }
   }
 
+  # ADR 0120 §4: with split_processing, the core and outbound environments are the workers
+  # environment split in two, and both reach the data plane on the same ports. Beside the rules
+  # above, with priorities of their own, so an install without the add-on plans no change here. The
+  # extension subnet never appears: extension code has no database and no Masterly identity (§7).
+  dynamic "security_rule" {
+    for_each = { for k in ["core", "outbound"] : k => local.env_subnet_prefixes[k] if contains(keys(local.env_subnet_prefixes), k) }
+
+    content {
+      name                       = "allow-data-plane-from-${security_rule.key}-subnet"
+      priority                   = security_rule.key == "core" ? 140 : 150
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = local.private_endpoints_subnet_prefix
+      destination_port_ranges    = local.private_endpoint_ports
+      description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the ${security_rule.key} environment's subnet."
+    }
+  }
+
   security_rule {
     name                       = "deny-all-inbound"
     priority                   = 4000
@@ -324,6 +362,11 @@ locals {
       description = "HTTPS from the front environment's subnet only."
     }]
     workers = []
+
+    # The add-on environments (ADR 0120 §4) admit no caller: nothing they run serves a request.
+    core      = []
+    outbound  = []
+    extension = []
   }
 }
 

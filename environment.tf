@@ -95,16 +95,33 @@ locals {
   # Keyed on what is known at plan, never on a subnet id: on a network the module builds, the
   # ids are unknown until apply, and a for_each over unknown keys refuses the plan. These are
   # exactly the keys whose local.env_subnet_ids value is not null.
-  container_app_environment_keys = toset([
-    for k in ["front", "app", "workers"] : k
-    if(local.inject_network ? local.env_subnet_id_inputs[k] != null : local.create_env_subnets)
-  ])
+  # The add-on keys (core, outbound, extension) only with their add-on on (main.tf).
+  container_app_environment_keys = toset(concat(
+    [
+      for k in ["front", "app", "workers"] : k
+      if(local.inject_network ? local.env_subnet_id_inputs[k] != null : local.create_env_subnets)
+    ],
+    [
+      for k in local.add_on_keys : k
+      if(local.inject_network ? local.add_on_subnet_id_inputs[k] != null : local.create_add_on_subnets)
+    ],
+  ))
 
-  container_app_environment_internal = {
+  baseline_container_app_environment_internal = {
     front   = var.aca_internal_load_balancer
     app     = true
     workers = true
   }
+
+  # The add-on environments are always internal, as app and workers are: core reaches the data plane
+  # only, outbound calls out and is called by nothing, and extension is reached by nothing of ours.
+  add_on_container_app_environment_internal = {
+    core      = true
+    outbound  = true
+    extension = true
+  }
+
+  container_app_environment_internal = merge(local.baseline_container_app_environment_internal, local.add_on_container_app_environment_internal)
 
   # The internal environments get a private DNS zone named their default domain, unless the
   # hub owns DNS (environment_private_dns_enabled = false).
@@ -177,12 +194,17 @@ locals {
 
   # The certificate identities go on the environment that runs the app they serve, and nowhere
   # else; concat(frontend, edge), the order module.aca_env always had.
-  environment_certificate_identity_ids = {
-    for k in ["aca", "front", "app", "workers"] : k => concat(
-      var.frontend_environment == k ? module.frontend_certificate_identity[*].id : [],
-      var.edge_environment == k ? module.edge_certificate_identity[*].id : [],
-    )
-  }
+  # The add-on environments run neither app, so they carry no identity at all: in the extension
+  # environment, any identity would be a token extension code could use (ADR 0120 §7).
+  environment_certificate_identity_ids = merge(
+    {
+      for k in ["aca", "front", "app", "workers"] : k => concat(
+        var.frontend_environment == k ? module.frontend_certificate_identity[*].id : [],
+        var.edge_environment == k ? module.edge_certificate_identity[*].id : [],
+      )
+    },
+    { for k in ["core", "outbound", "extension"] : k => [] },
+  )
 
   # The environment that holds the custom-domain certificates (custom-domain.tf), for the
   # verification id the asuid TXT records carry.
@@ -198,7 +220,9 @@ module "environments" {
   location                       = var.location
   infrastructure_subnet_id       = local.env_subnet_ids[each.key]
   internal_load_balancer_enabled = local.container_app_environment_internal[each.key]
-  zone_redundancy_enabled        = var.environment_zone_redundant
+  # One choice for the baseline (ADR 0120, 2026-11-20 amendment), which core and outbound share as
+  # the workers environment split in two. The extension environment is outside it and never is.
+  zone_redundancy_enabled = each.key == "extension" ? false : var.environment_zone_redundant
   # The certificate identities, only on the environment the frontend and the edge run in.
   identity_ids = local.environment_certificate_identity_ids[each.key]
   tags         = local.tags

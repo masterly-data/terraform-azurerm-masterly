@@ -1120,6 +1120,94 @@ variable "workers_subnet_id" {
   description = "On an injected network (aca_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. Set it with front_subnet_id and app_subnet_id, or none of them. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
 }
 
+# --- Add-on environments (ADR 0120 §4) ---------------------------------------------------
+# Two add-ons beside the front, app and workers environments, never a named profile.
+# split_processing adds the core and outbound environments, extensions an extension environment of
+# its own. Each is one more workload-profiles environment on a subnet of its own, created empty:
+# which worker pools run where is a later change. They need the three baseline environments, and
+# their refusals read the network the module derives, so they are preconditions (main.tf and
+# network.tf) rather than validations here.
+
+variable "split_processing" {
+  type        = bool
+  default     = false
+  nullable    = false
+  description = "Whether the install gets the core and outbound Container Apps environments (ADR 0120 §4), each on a subnet of its own beside the front, app and workers environments. False (the default) plans no change. True adds snet-core and snet-outbound with their network security groups on a network the module builds, or runs on core_subnet_id and outbound_subnet_id on an injected network, and the environments aca-<name_prefix>-core and aca-<name_prefix>-outbound, both internal. The private-endpoint subnet admits both on the data-plane ports; neither admits any caller. Core is meant for work that needs the database and Service Bus only, outbound for work that calls your targets and model endpoints through your firewall (docs/networking.md). No app or job runs in them yet, and the workers environment stays. They follow environment_zone_redundant. Needs the three baseline environments; on a network the module builds, core_subnet_prefix and outbound_subnet_prefix, or a first VNet prefix of /20 or larger."
+}
+
+variable "extensions" {
+  type        = bool
+  default     = false
+  nullable    = false
+  description = "Whether the install gets an extension Container Apps environment of its own (ADR 0120 §4 and §7, ADR 0122 §6.2), so extension code never shares an environment with Masterly's. False (the default) plans no change. True adds snet-extension with its network security group on a network the module builds, or runs on extension_subnet_id on an injected network, and the environment aca-<name_prefix>-extension, internal, with no certificate or Masterly identity. No rule the module writes names the extension subnet as a source: the private-endpoint subnet never admits it, nor do the app, workers, core and outbound subnets. On an internal install the front and snet-aca admit VirtualNetwork on the ingress ports, which covers the extension subnet as it covers every VNet caller, so keep the extension range out of ingress_allowed_cidrs (docs/networking.md). No app or job runs in it yet. It is never zone-redundant, whatever environment_zone_redundant says. Needs the three baseline environments; on a network the module builds, extension_subnet_prefix, or a first VNet prefix of /20 or larger."
+}
+
+variable "core_subnet_prefix" {
+  type        = string
+  default     = null
+  description = "With split_processing, an explicit CIDR of the core environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 8 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when split_processing is false. Ignored when the network is injected (aca_subnet_id): set core_subnet_id instead."
+
+  validation {
+    condition = var.core_subnet_prefix == null || try(
+      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$", var.core_subnet_prefix)) &&
+      cidrhost(var.core_subnet_prefix, 0) == split("/", var.core_subnet_prefix)[0] &&
+      tonumber(split("/", var.core_subnet_prefix)[1]) <= 27,
+      false
+    )
+    error_message = "core_subnet_prefix must be an IPv4 CIDR of /27 or larger, written as its network address (for example \"10.20.8.0/24\"): a workload-profiles Container Apps environment needs at least a /27."
+  }
+}
+
+variable "outbound_subnet_prefix" {
+  type        = string
+  default     = null
+  description = "With split_processing, an explicit CIDR of the outbound environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 9 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when split_processing is false. Ignored when the network is injected (aca_subnet_id): set outbound_subnet_id instead."
+
+  validation {
+    condition = var.outbound_subnet_prefix == null || try(
+      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$", var.outbound_subnet_prefix)) &&
+      cidrhost(var.outbound_subnet_prefix, 0) == split("/", var.outbound_subnet_prefix)[0] &&
+      tonumber(split("/", var.outbound_subnet_prefix)[1]) <= 27,
+      false
+    )
+    error_message = "outbound_subnet_prefix must be an IPv4 CIDR of /27 or larger, written as its network address (for example \"10.20.9.0/24\"): a workload-profiles Container Apps environment needs at least a /27."
+  }
+}
+
+variable "extension_subnet_prefix" {
+  type        = string
+  default     = null
+  description = "With extensions, an explicit CIDR of the extension environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 10 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when extensions is false. Ignored when the network is injected (aca_subnet_id): set extension_subnet_id instead."
+
+  validation {
+    condition = var.extension_subnet_prefix == null || try(
+      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$", var.extension_subnet_prefix)) &&
+      cidrhost(var.extension_subnet_prefix, 0) == split("/", var.extension_subnet_prefix)[0] &&
+      tonumber(split("/", var.extension_subnet_prefix)[1]) <= 27,
+      false
+    )
+    error_message = "extension_subnet_prefix must be an IPv4 CIDR of /27 or larger, written as its network address (for example \"10.20.10.0/24\"): a workload-profiles Container Apps environment needs at least a /27."
+  }
+}
+
+variable "core_subnet_id" {
+  type        = string
+  default     = null
+  description = "With split_processing on an injected network (aca_subnet_id), the id of the core environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id, and different from every other subnet id. Set it with outbound_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
+}
+
+variable "outbound_subnet_id" {
+  type        = string
+  default     = null
+  description = "With split_processing on an injected network (aca_subnet_id), the id of the outbound environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id, and different from every other subnet id. Set it with core_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
+}
+
+variable "extension_subnet_id" {
+  type        = string
+  default     = null
+  description = "With extensions on an injected network (aca_subnet_id), the id of the extension environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id, and different from every other subnet id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and no Masterly subnet, your private-endpoint subnet above all, may admit it (docs/networking.md). Refused when extensions is false."
+}
+
 # --- Async bus (ADR 0029) ---------------------------------------------------------
 # Default off: the install runs the polling binding (the per-Environment Postgres queue is
 # the bus), so no broker is provisioned or billed. Enable to provision an Azure Service Bus
