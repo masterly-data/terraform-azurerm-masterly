@@ -1193,19 +1193,19 @@ variable "extension_subnet_prefix" {
 variable "core_subnet_id" {
   type        = string
   default     = null
-  description = "With split_processing on an injected network (aca_subnet_id), the id of the core environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id, and different from every other subnet id. Set it with outbound_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
+  description = "With split_processing on an injected network (aca_subnet_id), the id of the core environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. It must differ from every other subnet id. Set it with outbound_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
 }
 
 variable "outbound_subnet_id" {
   type        = string
   default     = null
-  description = "With split_processing on an injected network (aca_subnet_id), the id of the outbound environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id, and different from every other subnet id. Set it with core_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
+  description = "With split_processing on an injected network (aca_subnet_id), the id of the outbound environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. It must differ from every other subnet id. Set it with core_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
 }
 
 variable "extension_subnet_id" {
   type        = string
   default     = null
-  description = "With extensions on an injected network (aca_subnet_id), the id of the extension environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id, and different from every other subnet id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and no Masterly subnet, your private-endpoint subnet above all, may admit it (docs/networking.md). Refused when extensions is false."
+  description = "With extensions on an injected network (aca_subnet_id), the id of the extension environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. It must differ from every other subnet id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and no Masterly subnet, your private-endpoint subnet above all, may admit it (docs/networking.md). Refused when extensions is false."
 }
 
 # --- Async bus (ADR 0029) ---------------------------------------------------------
