@@ -1021,4 +1021,12 @@ run "api_401_alert_watches_ca_api_401s" {
     condition     = length(trimspace(azurerm_monitor_metric_alert.builtin_auth_api_401[0].description)) > 0
     error_message = "The 401 alert must carry a description."
   }
+
+  assert {
+    condition = alltrue([
+      for s in ["statusCode 401", "every 5 minutes", "severity 1", "20 requests in 15 minutes"] :
+      strcontains(azurerm_monitor_metric_alert.builtin_auth_api_401[0].description, s)
+    ])
+    error_message = "The 401 alert's description must state the signal, frequency, severity and the minimum traffic it needs."
+  }
 }

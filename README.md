@@ -680,7 +680,9 @@ availability alerts and the action group are not part of that switch; see below:
   evaluated every 5 minutes. A wrong allowed-client list on the api's gate refuses every call
   from `ca-frontend` and `ca-edge` with a 401 and trips no health check, so the 401 count tracks
   total traffic. The metric also counts the application's own 401s, which are occasional and sit
-  below the threshold, and 401s to a direct external caller the gate refuses. It exists only with
+  below the threshold, and 401s to a direct external caller the gate refuses. It fires only once
+  an install passes 20 requests in 15 minutes, so a quiet install with a broken gate may not
+  trigger it. It exists only with
   `builtin_auth_api` and does not need `enable_diagnostics`. See
   [docs/identity.md](docs/identity.md#the-apis-gate-builtin_auth_api).
 

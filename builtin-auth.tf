@@ -207,7 +207,7 @@ resource "azurerm_monitor_metric_alert" "builtin_auth_api_401" {
   name                = "alert-${var.name_prefix}-api-401"
   resource_group_name = azurerm_resource_group.aca.name
   scopes              = [module.api.id]
-  description         = "ca-api returned more than 20 responses with status 401 in 15 minutes while its built-in authentication gate is on. Every call from ca-frontend and ca-edge is refused when the gate's allowed-client list is wrong, so a sustained rate of 401s means the gate is likely refusing the callers it should admit. The count includes the application's own 401s, which are occasional and sit below this threshold, and 401s to direct external callers the gate refuses."
+  description         = "Reads ca-api's Requests metric filtered to statusCode 401: Total over a 15-minute window, evaluated every 5 minutes, severity 1, fires above 20. Fires while ca-api's built-in authentication gate is on and it returned more than 20 responses with status 401 in 15 minutes. Every call from ca-frontend and ca-edge is refused when the gate's allowed-client list is wrong, so a sustained rate of 401s means the gate is likely refusing the callers it should admit. The count includes the application's own 401s, which are occasional and sit below this threshold, and 401s to direct external callers the gate refuses. It fires only once the install passes 20 requests in 15 minutes, so a quiet install with a broken gate may not trigger it."
   severity            = 1
   frequency           = "PT5M"
   window_size         = "PT15M"
