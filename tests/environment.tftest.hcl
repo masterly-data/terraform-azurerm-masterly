@@ -812,3 +812,55 @@ run "ca_bundle_refuses_content_without_a_certificate_marker" {
 
   expect_failures = [var.ca_bundle_pem]
 }
+
+# front_door_id (MAS-5188): unset, ca-frontend gets no MASTERLY_FRONT_DOOR_ID, so an install not
+# behind a Front Door plans exactly as before; set, ca-frontend alone gets it, lowercased (Front
+# Door sends the id in lowercase, and the frontend compares exactly).
+run "front_door_id_unset_sets_nothing" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      !contains(module.frontend.env_names, "MASTERLY_FRONT_DOOR_ID") &&
+      !contains(module.api.env_names, "MASTERLY_FRONT_DOOR_ID")
+    )
+    error_message = "front_door_id unset must not put MASTERLY_FRONT_DOOR_ID on any app."
+  }
+}
+
+run "front_door_id_reaches_the_frontend_only" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_door_id         = "6C1A9F0E-2B4D-4E8A-9F3C-0D7E5B1A2C3F"
+  }
+
+  assert {
+    condition     = local.frontend_env["MASTERLY_FRONT_DOOR_ID"] == "6c1a9f0e-2b4d-4e8a-9f3c-0d7e5b1a2c3f"
+    error_message = "front_door_id must reach ca-frontend as MASTERLY_FRONT_DOOR_ID, lowercased."
+  }
+
+  assert {
+    condition = (
+      contains(module.frontend.env_names, "MASTERLY_FRONT_DOOR_ID") &&
+      !contains(module.api.env_names, "MASTERLY_FRONT_DOOR_ID")
+    )
+    error_message = "MASTERLY_FRONT_DOOR_ID belongs on ca-frontend alone: the api is not behind Front Door."
+  }
+}
+
+run "front_door_id_refuses_a_non_guid" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    front_door_id         = "afd-msly-shared-edge"
+  }
+
+  expect_failures = [var.front_door_id]
+}
