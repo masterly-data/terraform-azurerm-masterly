@@ -64,6 +64,13 @@ frontend image is the image's own repository at the registry root (`<registry>/a
 build was pushed only there, unsigned, and never copied under `release/`, and the entry says so.
 No other repository (`candidate/api`, `mirror/api`) and never the newest release.
 
+A release entry may record `edge_image`, the module's default ca-edge image for that release: one
+full reference, `registry/repository:tag@sha256:<64 lowercase hex>`, outside `images` and
+`digests` because it is upstream's Envoy image and not published under `release/`. A tag with no
+digest, or any other shape, is refused. With `--tag`, the newest release's `edge_image`, when it
+records one, must equal `edge_default_image` in the tree's `edge.tf`; an `edge.tf` whose default
+cannot be read is refused rather than passed. Only on a tag: between releases `edge.tf` may move on.
+
 The shape the manifest guarantees to whoever parses it — field by field, and what may change
 without warning — is `docs/release-manifest.md`. That document and this script move together.
 
@@ -124,6 +131,17 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)$")
 IMAGE_RE = re.compile(r"^(?P<registry>[^/\s]+)/(?P<repo>[^:\s]+):(?P<tag>[^\s\"]+)$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+# A release entry's `edge_image`: the module's default ca-edge image, a third-party image that is
+# not published under release/, so it is recorded whole and pinned by digest. The shape is edge.tf's
+# edge.image validation with the tag made mandatory: the tag says which version a reader is looking
+# at, the digest is what cannot be moved after review. ASCII, as Terraform's RE2 reads \w and \s.
+EDGE_IMAGE_FORM = "registry/repository:tag@sha256:<64 lowercase hex>"
+_EDGE_IMAGE_NAME = r"(?:[^\s/@]*[.:][^\s/@]*|localhost)(?:/[^\s/:@]+)+:\w[\w.-]{0,127}"
+EDGE_IMAGE_RE = re.compile(rf"^{_EDGE_IMAGE_NAME}@sha256:[0-9a-f]{{64}}$", re.ASCII)
+EDGE_IMAGE_TAG_ONLY_RE = re.compile(rf"^{_EDGE_IMAGE_NAME}$", re.ASCII)
+# edge.tf's pinned default, the value the newest release's `edge_image` is compared with on a tag.
+EDGE_DEFAULT_IMAGE_RE = re.compile(r'^\s*edge_default_image\s*=\s*"([^"]*)"\s*$', re.MULTILINE)
 
 # The README lines that restate a manifest fact. Each keeps everything up to the opening quote —
 # the HCL blocks in the README are aligned, and a rewrite must not disturb that.
@@ -265,6 +283,8 @@ def load_manifest() -> dict:
                     f"says, in plain text for people, what is wrong with the release and which "
                     f"release to move to."
                 )
+        if "edge_image" in entry:
+            check_edge_image_shape(where, entry["edge_image"])
 
     latest = manifest["latest"]
     if latest not in releases:
@@ -276,6 +296,33 @@ def load_manifest() -> dict:
             f"present. Bumping one without the other is how the copy goes stale."
         )
     return manifest
+
+
+def check_edge_image_shape(where: str, value) -> None:
+    """A release's `edge_image` is one full image reference, tagged and pinned by digest.
+
+    It is not an `images` role: the Envoy image is upstream's, not published under release/, so
+    the release/<role> path rule and `digests` do not describe it. What consumers are told to pull
+    must still be a reference nobody can move after review, and so a tag alone is refused.
+    """
+    if not isinstance(value, str):
+        raise CheckFailed(
+            f"{where}: 'edge_image' is {value!r}, which is not a string. It is the module's "
+            f"default ca-edge image for the release, written {EDGE_IMAGE_FORM}."
+        )
+    # fullmatch, not match: `$` alone also matches before a trailing newline, and RE2's does not.
+    if EDGE_IMAGE_TAG_ONLY_RE.fullmatch(value):
+        raise CheckFailed(
+            f"{where}: 'edge_image' is {value!r}, which names a tag but no digest. A tag can be "
+            f"moved to different content after review; record the @sha256 digest too, as "
+            f"{EDGE_IMAGE_FORM}, the way edge.tf pins edge_default_image."
+        )
+    if not EDGE_IMAGE_RE.fullmatch(value):
+        raise CheckFailed(
+            f"{where}: 'edge_image' is {value!r}, which is not a full image reference of the "
+            f"form {EDGE_IMAGE_FORM}: a registry, a repository, a tag and a sha256 digest of 64 "
+            f"lowercase hex characters, the way edge.tf pins edge_default_image."
+        )
 
 
 def check_digest_shape(where: str, images: dict, digests: object) -> None:
@@ -917,6 +964,47 @@ def check_no_fragments(tag: str) -> None:
             f"fragment not folded into {CHANGELOG_PATH.name} is a change the version ships and "
             f"its notes do not list. Run scripts/fold_changelog.py in the release-preparation "
             f"commit, which deletes the fragments, and tag that commit."
+        )
+
+
+def read_edge_default_image() -> str:
+    """edge.tf's `edge_default_image`, the ca-edge image the tagged tree pins by default."""
+    path = MODULE_ROOT / "edge.tf"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CheckFailed(
+            f"{path} cannot be read ({exc.__class__.__name__}), so the release's 'edge_image' "
+            f"cannot be compared with edge_default_image. A recorded edge image is refused "
+            f"rather than passed unchecked."
+        ) from None
+    found = EDGE_DEFAULT_IMAGE_RE.findall(text)
+    if len(found) != 1:
+        raise CheckFailed(
+            f"{path} has {'no' if not found else len(found)} edge_default_image = \"...\" "
+            f"line{'s' if len(found) > 1 else ''}, so the release's 'edge_image' cannot be "
+            f"compared with it. A recorded edge image is refused rather than passed unchecked."
+        )
+    return found[0]
+
+
+def check_edge_image(manifest: dict) -> None:
+    """On a tag, the newest release's `edge_image`, when it records one, is edge.tf's default.
+
+    Only on a tag: between releases edge.tf may move to a newer Envoy while the newest entry is
+    still a cut release, and that is not a fault. The tagged commit is where the two must agree.
+    """
+    entry = manifest["releases"][manifest["latest"]]
+    if "edge_image" not in entry:
+        return
+    recorded = entry["edge_image"]
+    default = read_edge_default_image()
+    if recorded != default:
+        raise CheckFailed(
+            f"{MANIFEST_PATH.name}: release {manifest['latest']} records edge_image {recorded}, "
+            f"but edge.tf's edge_default_image is {default}. The manifest pairs the edge with "
+            f"the api and frontend it ships with; copy the value from edge.tf in the release-"
+            f"preparation commit, or move edge.tf back to the recorded image."
         )
 
 
@@ -1672,6 +1760,117 @@ def _role_scenarios() -> list[tuple]:
     ]
 
 
+def _edge_tf(image: str) -> str:
+    """A fixture edge.tf pinning `image` as its default, laid out the way the real one aligns it."""
+    return (
+        "locals {\n"
+        f'  edge_default_image = "{image}"\n'
+        "  edge_image         = local.edge_default_image\n"
+        "}\n"
+    )
+
+
+def _with_edge_image(value, version: str | None = None) -> dict:
+    """The fixture manifest with `edge_image` on one release (the newest, unless named)."""
+    manifest = copy.deepcopy(FIXTURE_MANIFEST)
+    manifest["releases"][version or manifest["latest"]]["edge_image"] = value
+    return manifest
+
+
+def _edge_image_scenarios() -> list[tuple]:
+    """A release's optional `edge_image`: its shape always, and edge.tf's default on a tag."""
+    newest = FIXTURE_MANIFEST["latest"]
+    older = min(FIXTURE_MANIFEST["releases"], key=semver)
+    log = FIXTURE_CHANGELOG
+    ok = render_readme(FIXTURE_MANIFEST, FIXTURE_README_SKELETON)
+    name = "registry.example.invalid/mirror/envoy:v9.9.9"
+    edge = f"{name}@sha256:" + "9" * 64
+    other = f"{name}@sha256:" + "8" * 64
+    tag = ["--tag", f"v{newest}"]
+    form = f"not a full image reference of the form {EDGE_IMAGE_FORM}"
+    return [
+        # No edge.tf is staged: on a pull request the recorded value is checked for shape only.
+        ("a release recording a well-formed edge_image passes", _with_edge_image(edge), log, ok,
+         [], 0, newest),
+        (
+            "a recorded edge_image equal to edge.tf's default passes on its own tag",
+            _with_edge_image(edge), log, ok, tag, 0, newest,
+            {"scripts": {"edge.tf": _edge_tf(edge)}},
+        ),
+        (
+            "an edge_image naming a tag with no digest is refused, naming the missing digest",
+            _with_edge_image(name), log, ok, [], 1, "names a tag but no digest",
+        ),
+        (
+            "an edge_image with a digest and no tag is refused, naming the form",
+            _with_edge_image("registry.example.invalid/mirror/envoy@sha256:" + "9" * 64),
+            log, ok, [], 1, form,
+        ),
+        (
+            "an edge_image with an uppercase digest is refused, naming the form",
+            _with_edge_image(f"{name}@sha256:" + "A" * 64), log, ok, [], 1, form,
+        ),
+        (
+            "an edge_image with a short digest is refused, naming the form",
+            _with_edge_image(f"{name}@sha256:" + "9" * 63), log, ok, [], 1, form,
+        ),
+        (
+            "an edge_image with no registry is refused, naming the form",
+            _with_edge_image("envoy:v9.9.9@sha256:" + "9" * 64), log, ok, [], 1, form,
+        ),
+        (
+            "an edge_image with a trailing newline is refused, naming the form",
+            _with_edge_image(f"{edge}\n"), log, ok, [], 1, form,
+        ),
+        (
+            "an edge_image that is not a string is refused, naming the form",
+            _with_edge_image(42), log, ok, [], 1, f"is not a string. It is the module's default "
+            f"ca-edge image for the release, written {EDGE_IMAGE_FORM}",
+        ),
+        (
+            "an older release's malformed edge_image is refused too",
+            _with_edge_image(name, older), log, ok, [], 1,
+            f"release {older}: 'edge_image' is {name!r}, which names a tag but no digest",
+        ),
+        (
+            "a recorded edge_image other than edge.tf's default is refused on a tag, naming both",
+            _with_edge_image(edge), log, ok, tag, 1,
+            f"records edge_image {edge}, but edge.tf's edge_default_image is {other}",
+            {"scripts": {"edge.tf": _edge_tf(other)}},
+        ),
+        (
+            "a recorded edge_image is refused on a tag when edge.tf is missing",
+            _with_edge_image(edge), log, ok, tag, 1, "edge.tf cannot be read",
+        ),
+        (
+            "a recorded edge_image is refused on a tag when edge.tf has no edge_default_image",
+            _with_edge_image(edge), log, ok, tag, 1, "edge.tf has no edge_default_image",
+            {"scripts": {"edge.tf": "locals {}\n"}},
+        ),
+        (
+            "a recorded edge_image is refused on a tag when edge.tf has two edge_default_images",
+            _with_edge_image(edge), log, ok, tag, 1, "edge.tf has 2 edge_default_image",
+            {"scripts": {"edge.tf": _edge_tf(edge) + _edge_tf(other)}},
+        ),
+        (
+            "a release recording no edge_image is not compared with edge.tf on a tag",
+            FIXTURE_MANIFEST, log, ok, tag, 0, newest,
+            {"scripts": {"edge.tf": _edge_tf(other)}},
+        ),
+        # edge_image never loosens the image rules: the edge is not an `images` or `digests` key.
+        (
+            "an 'edge' key in images is refused by the closed role set",
+            _with_image(newest, "edge", "registry.example.invalid/release/edge:v1.1.0"),
+            log, ok, [], 1, "'images' names 'edge', which is not an image role",
+        ),
+        (
+            "an 'edge' key in digests is refused",
+            _with_digests({**FIXTURE_DIGESTS, "edge": "sha256:" + "9" * 64}), log, ok, [], 1,
+            "an image the entry's 'images' does not name",
+        ),
+    ]
+
+
 def _with_claims_versions(versions: dict) -> dict:
     """The fixture manifest with `api_claims_version` set per release; None removes it."""
     manifest = copy.deepcopy(FIXTURE_MANIFEST)
@@ -1959,6 +2158,8 @@ def _selftest_scenarios(canonical_readme: str) -> list[tuple]:
         # The release candidate's digests (ADR 0106), and the release cut that merges untagged.
         *_digest_scenarios(),
         *_role_scenarios(),
+        # The module's default ca-edge image, recorded beside the images and never among them.
+        *_edge_image_scenarios(),
         # The api image's licence claims version, which the module reads at plan time.
         *_claims_version_scenarios(),
         # Each image's floor and the tags with no published image, and the README prose of them.
@@ -2050,7 +2251,8 @@ def selftest() -> int:
         f"\nrelease-manifest selftest — {total} scenarios: a well-formed release passes, and "
         f"every way a release can be missing, malformed, mis-tagged, bumped less than its "
         f"images, recorded with digests its tags' builds disagree with or without the api "
-        f"image's claims version, against an image below its floor or outside release/ — or "
+        f"image's claims version, against an image below its floor or outside release/, with "
+        f"an edge image not pinned by digest or not edge.tf's default on its tag — or "
         f"a shipped "
         f"script's header can hand-type a module version — is rejected by name."
     )
@@ -2102,6 +2304,7 @@ def main() -> int:
         check_script_banners()
         if args.tag:
             check_tag(manifest, args.tag)
+            check_edge_image(manifest)
         if args.published_tags:
             if not args.tag:
                 raise CheckFailed("--published-tags needs --tag: it checks what a tag publishes")
