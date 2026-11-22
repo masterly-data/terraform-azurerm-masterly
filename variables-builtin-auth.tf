@@ -84,7 +84,9 @@ variable "builtin_auth_api" {
     token to ca-api. Before that, ca-api refuses every call the frontend's server makes on a
     user's behalf, and the application is unusable until it is turned off again. Turning it on or
     off changes neither app: ca-api carries builtin_auth_client_secret whenever builtin_auth is
-    set. builtin_auth_recovery_until never turns this gate off. The application still
+    set. builtin_auth_recovery_until turns this gate off too, with ca-frontend's, for its window
+    of at most 60 minutes, and every write to ca-api's authentication configuration raises the
+    activity-log alert alert-<name_prefix>-api-auth-config-write. The application still
     authenticates its callers as identity_binding sets; this gate is in front of that, not
     instead of it.
   EOT
@@ -101,24 +103,27 @@ variable "builtin_auth_recovery_until" {
   default     = null
   description = <<-EOT
     The recovery fallback for builtin_auth: an RFC 3339 UTC time (for example
-    2026-11-14T15:30:00Z) until which ca-frontend's built-in authentication is turned off, so that
-    a browser reaches the application's own sign-in (and its break-glass path) without an Entra
-    sign-in at the platform. Use it only when no other way in is available, such as an Entra
-    outage that blocks the platform sign-in. Null (the default) leaves the gate on.
+    2026-11-14T15:30:00Z) until which ca-frontend's built-in authentication, and with
+    builtin_auth_api ca-api's, is turned off. A browser then reaches the application's own
+    sign-in (and its break-glass path) without an Entra sign-in at the platform. Use it only when
+    no other way in is available, such as an Entra outage that blocks the platform sign-in. Null
+    (the default) leaves the gates on.
 
     - The time must be at most 60 minutes after the plan; a later time is refused.
     - It is refused without builtin_auth, and refused without a network restriction in front of
       ca-frontend: a non-empty ingress_allowed_cidrs, frontend_ingress_external = false, or
       aca_internal_load_balancer = true.
-    - It turns off ca-frontend's gate only. It changes nothing on ca-api: its ingress, its
-      environment and its authentication (the gate builtin_auth_api turns on included) are as
-      without this input, and the window in which
-      ca-api's own sign-in check is relaxed during an Entra outage is not set here.
-    - Terraform cannot act at the time itself: the gate comes back at the first plan and apply
-      after the time has passed. A plan that still sets a passed time restores the gate and
-      warns; remove the input then.
+    - With builtin_auth_api, it turns ca-api's gate off too, so that a caller reaches ca-api
+      without an Entra token at the platform. Only the gates change: the other fields of both
+      authentication configurations, and ca-api's ingress and environment, are as without this
+      input, and the window in which ca-api's own sign-in check is relaxed during an Entra outage
+      is not set here.
+    - Terraform cannot act at the time itself: the gates come back at the first plan and apply
+      after the time has passed. A plan that still sets a passed time restores them and warns;
+      remove the input then.
     - Every change to ca-frontend's authentication configuration, the disable and the restore
-      alike, raises the activity-log alert that builtin_auth creates.
+      alike, raises the activity-log alert that builtin_auth creates; with builtin_auth_api,
+      every change to ca-api's raises the alert alert-<name_prefix>-api-auth-config-write.
   EOT
 
   validation {

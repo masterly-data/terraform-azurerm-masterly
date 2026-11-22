@@ -673,8 +673,9 @@ availability alerts and the action group are not part of that switch; see below:
 - **Auth-configuration alert** — with `builtin_auth` set, an activity-log alert,
   `frontend-auth-config-write`, on every write to `ca-frontend`'s built-in authentication
   configuration: the recovery fallback turning the gate off or back on, a change made outside
-  Terraform, or an apply that changes `builtin_auth`. Activity-log alerts take no severity. See
-  [docs/identity.md](docs/identity.md#recovery-fallback-turning-the-frontend-gate-off-builtin_auth_recovery_until).
+  Terraform, or an apply that changes `builtin_auth`. With `builtin_auth_api`, a second one,
+  `api-auth-config-write`, does the same for `ca-api`'s. Activity-log alerts take no severity. See
+  [docs/identity.md](docs/identity.md#recovery-fallback-turning-the-gates-off-builtin_auth_recovery_until).
 
 The availability alerts and the module's action group do not need `enable_diagnostics`: they
 are created in every mode. `enable_diagnostics` governs the diagnostic settings, the saturation
