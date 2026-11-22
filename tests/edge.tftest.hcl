@@ -1409,6 +1409,423 @@ run "edge_trusts_exactly_the_ingress_hop_for_the_client_address" {
   }
 }
 
+# --- Token validation at the edge (edge.jwt_authn) ---------------------------------------------
+# Off by default. Set, ca-edge validates the caller's bearer token on every forwarded route against
+# the install's one Entra tenant (ADR 0117, ADR 0120 §2) before ca-api sees the request.
+
+# Unset (with the tenant set, so the OIDC inputs alone change nothing), the edge renders exactly
+# as before: no filter, no cluster and no per-route entry for it.
+run "edge_jwt_authn_unset_renders_as_before" {
+  command = plan
+
+  variables {
+    edge                  = {}
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = (
+      !local.edge_jwt_authn_enabled &&
+      [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.local_ratelimit", "envoy.filters.http.lua", "envoy.filters.http.router"] &&
+      [for c in local.edge_envoy_config.static_resources.clusters : c.name] == ["ca-api"] &&
+      !strcontains(jsonencode(local.edge_envoy_config), "jwt_authn") &&
+      !strcontains(jsonencode(local.edge_envoy_config), "login.microsoftonline.com")
+    )
+    error_message = "With edge.jwt_authn unset, the HTTP filters must be local_ratelimit, lua and the router, the only cluster ca-api, and the configuration must name no jwt_authn and no identity provider host."
+  }
+
+  assert {
+    condition = (
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : !contains(keys(r), "typed_per_filter_config") if r.name == "v1" || startswith(r.name, "serve-")]) &&
+      one([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.typed_per_filter_config if r.name == "mcp"]) == local.edge_rate_limit_per_route
+    )
+    error_message = "With edge.jwt_authn unset, v1 and the serve routes must carry no per-filter configuration and mcp only the rate limiter's, as before."
+  }
+
+  assert {
+    condition = (
+      strcontains(file("${path.module}/edge.tf"), "With jwt_authn unset (the default) it does no authentication") &&
+      strcontains(file("${path.module}/edge.tf"), "# checks it. With edge.jwt_authn unset (the default) the edge does no authentication of its own.") &&
+      !strcontains(file("${path.module}/edge.tf"), "It does no authentication yet") &&
+      !strcontains(file("${path.module}/edge.tf"), "does no authentication of its own yet")
+    )
+    error_message = "The edge variable's description and edge.tf's header must say the edge does no authentication only with jwt_authn unset."
+  }
+}
+
+run "edge_jwt_authn_runs_after_the_rate_limiter_and_before_the_router" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api", "api://masterly-mcp"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition     = [for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.name] == ["envoy.filters.http.local_ratelimit", "envoy.filters.http.jwt_authn", "envoy.filters.http.lua", "envoy.filters.http.router"]
+    error_message = "With edge.jwt_authn set, the HTTP filters must be local_ratelimit, jwt_authn, lua and the router, in that order."
+  }
+
+  assert {
+    condition     = one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config["@type"] if f.name == "envoy.filters.http.jwt_authn"]) == "type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication"
+    error_message = "The jwt_authn filter must be Envoy's JwtAuthentication."
+  }
+}
+
+# Threat: a token from any issuer other than the install's tenant accepted at the edge.
+run "edge_jwt_authn_trusts_only_the_install_tenant" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = (
+      length(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers) == 1 &&
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).issuer == local.oidc_allowed_issuers &&
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).issuer == "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0" &&
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).remote_jwks.http_uri.uri == local.oidc_jwks_uri &&
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).remote_jwks.http_uri.uri == "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/discovery/v2.0/keys"
+    )
+    error_message = "The jwt_authn filter must have exactly one provider, whose issuer is oidc_allowed_issuers (the install's tenant) and whose keys are fetched from oidc_jwks_uri (that tenant's)."
+  }
+
+}
+
+# Threat: a misconfigured issuer list widening trust. Each refused at plan, on the edge app.
+run "edge_jwt_authn_without_an_issuer_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+run "edge_jwt_authn_with_two_issuers_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0,https://login.microsoftonline.com/66666666-7777-8888-9999-000000000000/v2.0"
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+run "edge_jwt_authn_with_a_non_entra_issuer_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_allowed_issuers  = "https://idp.example.com/11111111-2222-3333-4444-555555555555/v2.0"
+    oidc_jwks_uri         = "https://idp.example.com/11111111-2222-3333-4444-555555555555/discovery/v2.0/keys"
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+run "edge_jwt_authn_with_a_multitenant_issuer_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+run "edge_jwt_authn_with_a_v1_issuer_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+    oidc_allowed_issuers  = "https://sts.windows.net/11111111-2222-3333-4444-555555555555/"
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+run "edge_jwt_authn_without_a_jwks_uri_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+run "edge_jwt_authn_with_another_tenants_jwks_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/66666666-7777-8888-9999-000000000000/discovery/v2.0/keys"
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+run "edge_jwt_authn_with_a_jwks_uri_on_another_host_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+    oidc_jwks_uri         = "https://keys.example.com/11111111-2222-3333-4444-555555555555/discovery/v2.0/keys"
+  }
+
+  expect_failures = [azurerm_container_app.edge]
+}
+
+# Threat: a token from the install's tenant for another audience (Microsoft Graph) accepted.
+run "edge_jwt_authn_audiences_come_from_the_input" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api", "api://masterly-mcp"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = (
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).audiences == var.edge.jwt_authn.audiences &&
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).audiences == tolist(["api://masterly-api", "api://masterly-mcp"])
+    )
+    error_message = "The provider's audiences must be edge.jwt_authn.audiences, exactly."
+  }
+}
+
+run "edge_jwt_authn_with_no_audiences_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = [] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  expect_failures = [var.edge]
+}
+
+run "edge_jwt_authn_with_an_empty_audience_is_refused" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api", ""] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  expect_failures = [var.edge]
+}
+
+# Threat: a request with no token reaching ca-api, on a route without the requirement or through
+# a rule that allows a missing or failed token.
+run "edge_jwt_authn_requires_a_token_on_every_forwarded_route" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = (
+      [for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name if contains(keys(r), "route")] == concat([for r in local.edge_serve_routes : "serve-${r.method} ${r.path}"], ["v1", "mcp"]) &&
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+        r.typed_per_filter_config["envoy.filters.http.jwt_authn"] == {
+          "@type"          = "type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.PerRouteConfig"
+          requirement_name = one(keys(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).requirement_map))
+        }
+      ) if contains(keys(r), "route")])
+    )
+    error_message = "v1, every serve route and mcp must each carry a jwt_authn requirement naming the filter's one requirement."
+  }
+
+  assert {
+    condition = (
+      values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).requirement_map) == [{ provider_name = one(keys(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)) }] &&
+      !contains(keys(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"])), "rules") &&
+      !strcontains(jsonencode(local.edge_envoy_config), "allow_missing") &&
+      !strcontains(jsonencode(local.edge_envoy_config), "allow_missing_or_failed") &&
+      !strcontains(jsonencode(local.edge_envoy_config), "bypass_cors_preflight")
+    )
+    error_message = "The requirement must name the one provider alone, with no rules and no allow_missing or allow_missing_or_failed anywhere: a missing or failed token is refused."
+  }
+
+  assert {
+    condition = (
+      [for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name if contains(keys(r), "direct_response")] == ["request-too-large", "request-too-large-beyond-int64", "not-found"] &&
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+        r.typed_per_filter_config == local.edge_rate_limit_off &&
+        !contains(keys(r.typed_per_filter_config), "envoy.filters.http.jwt_authn")
+      ) if contains(keys(r), "direct_response")]) &&
+      !contains(keys(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].typed_per_filter_config), "envoy.filters.http.jwt_authn")
+    )
+    error_message = "The 413 and not-found routes answer themselves and must carry no jwt_authn entry, only the rate limiter turned off."
+  }
+}
+
+# Threat: the per-route jwt_authn entry splitting the shared /v1 limiter, or dropping it.
+run "edge_jwt_authn_leaves_the_rate_limiter_as_it_was" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = (
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].typed_per_filter_config == local.edge_rate_limit_per_route &&
+      length([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r if r.name == "v1" || startswith(r.name, "serve-")]) == 1 + length(local.edge_serve_routes) &&
+      alltrue([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : (
+        tolist(keys(r.typed_per_filter_config)) == tolist(["envoy.filters.http.jwt_authn"]) &&
+        r.route.rate_limits == local.edge_forwarded_route.rate_limits
+      ) if r.name == "v1" || startswith(r.name, "serve-")])
+    )
+    error_message = "v1 and every serve route must carry the jwt_authn requirement alone, no local_ratelimit entry of their own, so they still share the virtual host's one limiter and /v1 budget."
+  }
+
+  assert {
+    condition = (
+      one([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.typed_per_filter_config["envoy.filters.http.local_ratelimit"] if r.name == "mcp"]) == local.edge_rate_limit_per_route["envoy.filters.http.local_ratelimit"] &&
+      toset(one([for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : keys(r.typed_per_filter_config) if r.name == "mcp"])) == toset(["envoy.filters.http.local_ratelimit", "envoy.filters.http.jwt_authn"]) &&
+      [for r in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.virtual_hosts[0].routes : r.name if try(r.typed_per_filter_config["envoy.filters.http.local_ratelimit"].filter_enabled.default_value.numerator, 0) > 0] == ["mcp"]
+    )
+    error_message = "mcp's local_ratelimit entry must still be local.edge_rate_limit_per_route's, beside the jwt_authn requirement, and mcp the only route turning a limiter of its own on."
+  }
+}
+
+run "edge_jwt_authn_forwards_the_token_and_no_payload" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = (
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).forward == true &&
+      !contains(keys(one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers))), "forward_payload_header") &&
+      !strcontains(jsonencode(local.edge_envoy_config), "forward_payload_header") &&
+      !strcontains(jsonencode(local.edge_envoy_config), "payload_in_metadata")
+    )
+    error_message = "The provider must forward the caller's token to ca-api (forward = true) and forward no decoded payload (no forward_payload_header, no payload_in_metadata)."
+  }
+
+  # The token is read from the Authorization header's bearer value alone, not from a query
+  # parameter (Envoy's other default location), which ca-api would never see.
+  assert {
+    condition = (
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).from_headers == [{ name = "authorization", value_prefix = "Bearer " }] &&
+      length(setintersection(keys(one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers))), ["from_params", "from_cookies"])) == 0
+    )
+    error_message = "The provider must read the token from the Authorization header's Bearer value only."
+  }
+}
+
+# Threat: the credential or a decoded payload in a log, or reaching ca-api as an identity.
+run "edge_jwt_authn_logs_no_credential_and_strips_the_payload_header" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = (
+      alltrue([for k, v in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.access_log[0].typed_config.log_format.json_format : !strcontains(upper(v), "AUTHORIZATION")]) &&
+      !strcontains(upper(jsonencode(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.access_log)), "AUTHORIZATION") &&
+      !strcontains(upper(jsonencode(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.access_log)), "JWT") &&
+      toset(flatten(regexall("%REQ\\(([^)]+)\\)%", jsonencode(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.access_log)))) == toset([":METHOD", "X-REQUEST-ID", "USER-AGENT"]) &&
+      !strcontains(jsonencode(local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.access_log), "DYNAMIC_METADATA")
+    )
+    error_message = "With edge.jwt_authn set, the access log must still hold no Authorization header, no token or payload, and only the method, request id and user agent of the request headers."
+  }
+
+  assert {
+    condition = (
+      contains(local.edge_stripped_request_headers, "x-jwt-payload") &&
+      local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.route_config.request_headers_to_remove == local.edge_stripped_request_headers
+    )
+    error_message = "With edge.jwt_authn set, the edge must still remove x-jwt-payload (and the other identity headers) from every request."
+  }
+}
+
+# Threat: the key fetch pointed elsewhere or intercepted, so an attacker's keys are trusted.
+run "edge_jwt_authn_fetches_keys_over_verified_tls" {
+  command = plan
+
+  variables {
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = (
+      [for c in local.edge_envoy_config.static_resources.clusters : c.name] == ["ca-api", "entra-jwks"] &&
+      one(values(one([for f in local.edge_envoy_config.static_resources.listeners[0].filter_chains[0].filters[0].typed_config.http_filters : f.typed_config if f.name == "envoy.filters.http.jwt_authn"]).providers)).remote_jwks.http_uri.cluster == local.edge_envoy_config.static_resources.clusters[1].name &&
+      local.edge_jwks_host == "login.microsoftonline.com" &&
+      local.edge_jwks_host == regex("^https://([^/]+)/", local.oidc_jwks_uri)[0]
+    )
+    error_message = "With edge.jwt_authn set, the clusters must be ca-api and entra-jwks, and the provider must fetch its keys through entra-jwks, from oidc_jwks_uri's host."
+  }
+
+  assert {
+    condition = (
+      local.edge_envoy_config.static_resources.clusters[1].load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address == { address = "login.microsoftonline.com", port_value = 443 } &&
+      length(local.edge_envoy_config.static_resources.clusters[1].load_assignment.endpoints) == 1 &&
+      length(local.edge_envoy_config.static_resources.clusters[1].load_assignment.endpoints[0].lb_endpoints) == 1 &&
+      local.edge_envoy_config.static_resources.clusters[1].transport_socket.name == "envoy.transport_sockets.tls" &&
+      local.edge_envoy_config.static_resources.clusters[1].transport_socket.typed_config["@type"] == "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext" &&
+      local.edge_envoy_config.static_resources.clusters[1].transport_socket.typed_config.sni == "login.microsoftonline.com" &&
+      local.edge_envoy_config.static_resources.clusters[1].transport_socket.typed_config.common_tls_context.validation_context.trusted_ca == { filename = "/etc/ssl/certs/ca-certificates.crt" } &&
+      local.edge_envoy_config.static_resources.clusters[1].transport_socket.typed_config.common_tls_context.validation_context.match_typed_subject_alt_names == [{ san_type = "DNS", matcher = { exact = "login.microsoftonline.com" } }]
+    )
+    error_message = "The entra-jwks cluster must reach login.microsoftonline.com on 443 over TLS with SNI set to that host, the image's CA bundle as trust, and an exact DNS SAN match on that host."
+  }
+
+  # ca-api's cluster is as it was: plain http to ca-api in the same environment.
+  assert {
+    condition = (
+      !contains(keys(local.edge_envoy_config.static_resources.clusters[0]), "transport_socket") &&
+      local.edge_envoy_config.static_resources.clusters[0].load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address == { address = "ca-api", port_value = 80 }
+    )
+    error_message = "With edge.jwt_authn set, the ca-api cluster must be unchanged."
+  }
+}
+
 # --- Applies: what reaches a running edge ----------------------------------------------------
 # Plan runs against applied state: only a change Terraform does not ignore shows in the plan.
 
