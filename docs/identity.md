@@ -197,6 +197,15 @@ names an instance this version does not have, and the plan fails. An install tha
 built-in auth on `ca-api` by hand and never imported it keeps that configuration; remove it in
 the portal (the app's **Authentication** page) if you want the api reached without it.
 
+#### Behind a reverse proxy (`builtin_auth.forward_proxy`)
+
+With a proxy that replaces `Host` in front of `ca-frontend`, such as Azure Front Door, set
+`forward_proxy = { convention = "Standard" }` in `builtin_auth`, so the gate builds its sign-in
+callback from `X-Forwarded-Host`. Unset, the body is written exactly as before and nothing changes
+on upgrade. [Behind a reverse proxy](networking.md#behind-a-reverse-proxy-azure-front-door-a-gateway)
+has the whole topology, including why it must be set only when every request comes through the
+proxy.
+
 #### Recovery fallback: turning the gates off (`builtin_auth_recovery_until`)
 
 When users cannot pass the platform sign-in, for example during an Entra outage, and no other way
@@ -213,7 +222,7 @@ application's own sign-in, including its break-glass path. Set it to an RFC 3339
   without `builtin_auth`.
 - **The api's gate with `builtin_auth_api`, and nothing else.** Without `builtin_auth_api`,
   `ca-api` has no gate and the window changes nothing on it. With it, the window turns the api's
-  gate off as well: under an Entra outage neither ca-recovery's nor the frontend's
+  gate off as well: under an Entra outage neither `ca-frontend`'s nor `ca-edge`'s
   workload-identity token can be issued, so the gate would otherwise refuse every call. Only the
   gates' `platform.enabled` changes; the rest of both configurations, and `ca-api`'s ingress and
   environment, stay as they are, so the application is not told the gate is off and its own

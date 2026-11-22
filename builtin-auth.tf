@@ -84,6 +84,15 @@ locals {
     } : {},
   ) : {}
 
+  # The reverse proxy in front of each gate, by the keys of builtin_auth_apps: the frontend's is
+  # builtin_auth.forward_proxy, and ca-api, which only ca-frontend and ca-edge call, has none.
+  # Kept out of builtin_auth_apps, whose entries must share one type: the frontend's typed
+  # null and the api's untyped one would not.
+  builtin_auth_forward_proxy = local.builtin_auth_enabled ? {
+    frontend = var.builtin_auth.forward_proxy
+    api      = null
+  } : {}
+
   # The api entries of builtin_auth, which configured ca-api's gate in 0.19.0 and 0.19.1 and are
   # now ignored, with or without builtin_auth_api. The check below warns while any is set.
   builtin_auth_ignored_api_entries = local.builtin_auth_enabled ? concat(
@@ -134,7 +143,9 @@ resource "azapi_resource" "builtin_auth" {
   parent_id = each.value.app_id
 
   body = {
-    properties = {
+    # httpSettings only when forward_proxy is set: an unset attribute leaves the body exactly as
+    # earlier versions wrote it, so an install that does not set it plans no change.
+    properties = merge({
       platform = {
         enabled = each.value.platform_enabled
       }
@@ -158,7 +169,15 @@ resource "azapi_resource" "builtin_auth" {
           }
         }
       }
-    }
+      }, local.builtin_auth_forward_proxy[each.key] == null ? {} : {
+      httpSettings = {
+        forwardProxy = merge(
+          { convention = local.builtin_auth_forward_proxy[each.key].convention },
+          local.builtin_auth_forward_proxy[each.key].custom_host_header_name == null ? {} : { customHostHeaderName = local.builtin_auth_forward_proxy[each.key].custom_host_header_name },
+          local.builtin_auth_forward_proxy[each.key].custom_proto_header_name == null ? {} : { customProtoHeaderName = local.builtin_auth_forward_proxy[each.key].custom_proto_header_name },
+        )
+      }
+    })
   }
 }
 
