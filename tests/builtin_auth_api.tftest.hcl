@@ -1006,8 +1006,8 @@ run "builtin_auth_recovery_turns_off_the_frontend_and_api_gates" {
 }
 
 # Threat (continued): ca-workers runs the same backend, so the window must not reach its env
-# either. The baseline run pins the window-closed values; the run after it, with the window open,
-# asserts the same literal.
+# either. The baseline run pins the window-closed values, and the run after it, with the window
+# open, checks they are unchanged.
 run "builtin_auth_api_workers_env_with_the_window_closed" {
   command = apply
 
