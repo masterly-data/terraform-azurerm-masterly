@@ -528,7 +528,82 @@ is the Entra object ID of the administrator's principal.
 Do not touch anything else: leave the administrator in Azure alone, and remove no other resource
 from state, the server least of all. A server forgotten in state stays in Azure with its
 databases and keeps costing money. For the other precondition of a destroy, see "Terraform has
-to reach the vault" in the [README](../README.md).
+to reach the vault" in the [README](../README.md). For what a destroy that stopped partway can
+leave in Azure, see the next subsection.
+
+#### Diagnostic settings left behind by a destroy that stopped partway
+
+Azure keys a diagnostic setting by the id of the resource it is on, and does not delete it when
+that resource is deleted outside Terraform. A `terraform destroy` that completes needs no
+cleanup: each setting's `target_resource_id` references its target, so Terraform removes the
+setting before the target. The cleanup is only for this sequence:
+
+1. A destroy stops partway, for example on the `2BP01` error above.
+2. The targets are then deleted outside Terraform, for example by deleting the resource group.
+3. The install is applied again under the same `name_prefix`. The targets come back at the same
+   ids, the old settings are still there, and the apply fails on
+   `azurerm_monitor_diagnostic_setting` with `already exists - needs to be imported`.
+
+Not every setting collides on every rebuild. The Container Apps (`ca-api`, `ca-frontend`,
+`ca-workers`, `ca-edge`) and the environments (`aca-<name_prefix>`, `aca-<name_prefix>-<key>`)
+have fixed names, so their settings collide on any recreate under the same `name_prefix`. The
+Postgres server, the Redis cache, the Key Vault and the Service Bus namespace carry the random
+suffix from `random_string.install` in their names, so their settings collide only when the
+state still holds that `random_string.install` and the new targets reuse the suffix.
+
+The module creates these settings, each named `diag-<name_prefix>-<key>`:
+
+| Setting name | Target | Created when |
+| --- | --- | --- |
+| `diag-<name_prefix>-aca-env` | Environment `aca-<name_prefix>` | `retire_runtime_environment` is not `true` |
+| `diag-<name_prefix>-aca-front` | Environment `aca-<name_prefix>-front` | The front environment exists |
+| `diag-<name_prefix>-aca-app` | Environment `aca-<name_prefix>-app` | The app environment exists |
+| `diag-<name_prefix>-aca-workers` | Environment `aca-<name_prefix>-workers` | The workers environment exists |
+| `diag-<name_prefix>-aca-core` | Environment `aca-<name_prefix>-core` | `split_processing = true` |
+| `diag-<name_prefix>-aca-outbound` | Environment `aca-<name_prefix>-outbound` | `split_processing = true` |
+| `diag-<name_prefix>-aca-extension` | Environment `aca-<name_prefix>-extension` | `extensions = true` |
+| `diag-<name_prefix>-postgres` | Server `psql-<name_prefix>-<suffix>` | Diagnostics on, and the module provisions the Postgres server |
+| `diag-<name_prefix>-redis` | Redis instance `redis-<name_prefix>-<suffix>` | Diagnostics on, and Redis is enabled |
+| `diag-<name_prefix>-redis-db` | The default database of the Azure Managed Redis instance | As `redis`, and `redis_offering = "managed"` |
+| `diag-<name_prefix>-kv` | Key Vault `kv-<first 14 characters of name_prefix>-<suffix>` | Diagnostics on, and `enable_key_vault` |
+| `diag-<name_prefix>-servicebus` | Namespace `sb-<name_prefix>-<suffix>` | Diagnostics on, and `enable_service_bus` |
+| `diag-<name_prefix>-api` | Container App `ca-api` | App availability diagnostics on |
+| `diag-<name_prefix>-frontend` | Container App `ca-frontend` | App availability diagnostics on |
+| `diag-<name_prefix>-workers` | Container App `ca-workers` | App availability diagnostics on, and `enable_workers` |
+| `diag-<name_prefix>-edge` | Container App `ca-edge` | App availability diagnostics on, and the edge enabled |
+
+The `aca-*` settings do not depend on `enable_diagnostics`. "Diagnostics on" is
+`enable_diagnostics`, which defaults to on when `mode = "production"`. "App availability
+diagnostics on" is `enable_app_availability_diagnostics` with diagnostics on, and it defaults to
+on in production.
+
+To find what is left on a target, list its settings. The target id is the id of the resource
+as it was, built from your subscription and the resource group that held it:
+
+```bash
+az monitor diagnostic-settings list \
+  --resource '/subscriptions/<subscription id>/resourceGroups/<resource group>/providers/Microsoft.App/managedEnvironments/aca-<name_prefix>-front'
+```
+
+A setting `list` does not show is one the apply will not collide with. To remove a leftover,
+delete it by its exact name and target id:
+
+```bash
+az monitor diagnostic-settings delete \
+  --name diag-<name_prefix>-aca-front \
+  --resource '/subscriptions/<subscription id>/resourceGroups/<resource group>/providers/Microsoft.App/managedEnvironments/aca-<name_prefix>-front'
+```
+
+The error message of the failed apply names the setting and its id; copy both from there. Rules:
+
+- Delete only for an install that has been destroyed. Never run it against a live install whose
+  state holds the setting: deleting `diag-<name_prefix>-kv`, for example, silently stops the
+  vault's audit log until the next apply recreates it, and the events in between are lost.
+- Delete one setting at a time, by exact name and exact target id. Do not use a prefix
+  wildcard, and do not loop over the output of `list`: a target can carry settings you created
+  yourself, and those are not the module's to remove.
+- Delete only settings the apply reported or that the table above lists for your configuration.
+  Once they are gone, run the apply again.
 
 ### Moving an existing install to Microsoft Entra authentication
 
