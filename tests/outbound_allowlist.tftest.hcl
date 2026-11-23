@@ -172,15 +172,20 @@ run "outbound_allowlist_platform_set_on_every_subnet" {
     error_message = "Every entry must have destination, kind (fqdn or service_tag), protocol, ports, why and source, none empty."
   }
 
-  # The platform entries name the Learn page they come from and the date it was read.
+  # The platform entries name the Learn page they come from and the date it was read; Azure
+  # management, which the page does not list, names ADR 0120 §5.
   assert {
     condition = alltrue(flatten([
       for k, l in output.outbound_allowlist : [
-        for e in l : strcontains(e.source, "firewall-integration") && strcontains(e.source, "read 2026-11-23")
-        if contains(["MicrosoftContainerRegistry", "AzureActiveDirectory", "AzureMonitor", "AzureResourceManager"], e.destination)
+        for e in l : (
+          contains(["AzureResourceManager", "management.azure.com"], e.destination)
+          ? strcontains(e.source, "ADR 0120")
+          : strcontains(e.source, "firewall-integration") && strcontains(e.source, "read 2026-11-23")
+        )
+        if contains(["MicrosoftContainerRegistry", "mcr.microsoft.com", "AzureActiveDirectory", "login.microsoftonline.com", "AzureMonitor", "AzureResourceManager", "management.azure.com"], e.destination)
       ]
     ]))
-    error_message = "The platform set's entries must name Microsoft Learn's page and the date it was read."
+    error_message = "The platform set's entries must name Microsoft Learn's page and the date it was read, and Azure management ADR 0120 §5."
   }
 }
 
@@ -379,6 +384,159 @@ run "outbound_allowlist_license_issuer_host_with_workers" {
   }
 }
 
+# Without ca-workers the licence refresh runs in ca-api, so the host goes with ca-api.
+run "outbound_allowlist_license_issuer_host_with_ca_api" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    license_token           = "eyJ.fake.jwt"
+    license_public_jwk      = "{\"kty\":\"EC\"}"
+    license_issuer_url      = "https://cp.masterlydata.com/v1/licenses/refresh"
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+    frontend_environment    = "front"
+    edge_environment        = "front"
+    api_environment         = "app"
+  }
+
+  assert {
+    condition = (
+      contains([for e in output.outbound_allowlist["app"] : e.destination], "cp.masterlydata.com") &&
+      !contains([for e in output.outbound_allowlist["front"] : e.destination], "cp.masterlydata.com") &&
+      !contains([for e in output.outbound_allowlist["workers"] : e.destination], "cp.masterlydata.com")
+    )
+    error_message = "Without enable_workers, license_issuer_url's host must be listed where ca-api runs (app), and not on front or workers."
+  }
+}
+
+# --- Threat: secret disclosure ------------------------------------------------------------------
+
+# The allowlist is not sensitive: a DSN carrying a password must leave its host and port and
+# nothing else.
+run "outbound_allowlist_database_host_and_port_only" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    external_database_url = "postgres://u:p@db.example.com:5432/m"
+  }
+
+  assert {
+    condition = (
+      !strcontains(jsonencode(output.outbound_allowlist), "u:p") &&
+      !strcontains(jsonencode(output.outbound_allowlist), "postgres://") &&
+      !strcontains(jsonencode(output.outbound_allowlist), "/m\"")
+    )
+    error_message = "The allowlist must carry no part of external_database_url beyond its host and port."
+  }
+
+  assert {
+    condition = jsonencode(distinct(flatten([
+      for k, l in output.outbound_allowlist : [
+        for e in l : "${e.destination}:${join(",", e.ports)}" if e.source == "external_database_url"
+      ]
+    ]))) == jsonencode(["db.example.com:5432"])
+    error_message = "The database entry must be exactly db.example.com on 5432."
+  }
+
+  # Whatever its source, every entry that names the database's host or port is that one entry.
+  assert {
+    condition = jsonencode(distinct(flatten([
+      for k, l in output.outbound_allowlist : [
+        for e in l : "${e.destination}:${join(",", e.ports)}"
+        if strcontains(jsonencode(e), "db.example.com") || contains(e.ports, "5432")
+      ]
+    ]))) == jsonencode(["db.example.com:5432"])
+    error_message = "The allowlist must hold the database only as db.example.com:5432."
+  }
+
+  assert {
+    condition     = !strcontains(jsonencode(output.outbound_allowlist), "p@db")
+    error_message = "The allowlist must carry no userinfo from external_database_url."
+  }
+}
+
+# A DSN with no port gets Postgres's 5432, and its query string stays out of the entry.
+run "outbound_allowlist_database_default_port" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com/postgres?ssl=require"
+  }
+
+  assert {
+    condition = jsonencode(distinct(flatten([
+      for k, l in output.outbound_allowlist : [
+        for e in l : "${e.destination}:${join(",", e.ports)}" if e.source == "external_database_url"
+      ]
+    ]))) == jsonencode(["pg.example.com:5432"])
+    error_message = "A DSN without a port must give its host on 5432."
+  }
+
+  assert {
+    condition = (
+      !strcontains(jsonencode(output.outbound_allowlist), "masterly:pw") &&
+      !strcontains(jsonencode(output.outbound_allowlist), "ssl=require")
+    )
+    error_message = "The allowlist must carry no credentials or query string from external_database_url."
+  }
+}
+
+# A password holding an unencoded / cannot be split from the host with certainty: the URL gives no
+# entry at all rather than a fragment of the password.
+run "outbound_allowlist_database_unparseable_url_gives_no_entry" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    external_database_url = "postgres://u:p/w@db.example.com:5432/m"
+  }
+
+  assert {
+    condition = (
+      alltrue(flatten([
+        for k, l in output.outbound_allowlist : [for e in l : e.source != "external_database_url"]
+      ])) &&
+      !strcontains(jsonencode(output.outbound_allowlist), "p/w")
+    )
+    error_message = "A DSN whose password breaks the URL's shape must give no database entry and no part of itself."
+  }
+}
+
+# The starter server is reached over its private endpoint: no database entry at all.
+run "outbound_allowlist_no_database_on_the_starter_server" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for k, l in output.outbound_allowlist : [for e in l : !strcontains(e.source, "database")]
+    ]))
+    error_message = "With the starter server no subnet may list a database."
+  }
+}
+
+# Without enable_key_vault there is no vault to reach: no subnet lists one.
+run "outbound_allowlist_no_key_vault_by_default" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for k, l in output.outbound_allowlist : [for e in l : !strcontains(e.destination, "vault.azure.net")]
+    ]))
+    error_message = "Without enable_key_vault no subnet may list a Key Vault."
+  }
+}
+
 # The install's own services carry its random suffix, which a mock plan leaves unknown
 # (`override_during = plan` needs Terraform 1.11 while CI runs 1.10). This run applies the suffix
 # alone, so every later run in this file plans against it in state and their names are known.
@@ -404,7 +562,7 @@ run "install_suffix_applied" {
   }
 }
 
-# --- Threats: front isolation and secret disclosure --------------------------------------------
+# --- Threat: front isolation --------------------------------------------------------------------
 
 # ADR 0120 §5: the front subnet reaches no data endpoint. Every data-plane input is on, the apps
 # are moved off aca-<prefix>, and front must list none of it while app and workers do.
@@ -458,125 +616,6 @@ run "outbound_allowlist_front_carries_no_data_endpoint" {
   assert {
     condition     = contains([for e in output.outbound_allowlist["front"] : e.destination], "kv-masterly-abc123.vault.azure.net")
     error_message = "With a public vault (outside production) the front subnet must list it, for ca-frontend's Key Vault references."
-  }
-}
-
-# The allowlist is not sensitive: a DSN carrying a password must leave its host and port and
-# nothing else.
-run "outbound_allowlist_database_host_and_port_only" {
-  command = plan
-
-  variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    external_database_url = "postgres://u:p@db.example.com:5432/m"
-  }
-
-  assert {
-    condition = (
-      !strcontains(jsonencode(output.outbound_allowlist), "u:p") &&
-      !strcontains(jsonencode(output.outbound_allowlist), "postgres://") &&
-      !strcontains(jsonencode(output.outbound_allowlist), "/m\"")
-    )
-    error_message = "The allowlist must carry no part of external_database_url beyond its host and port."
-  }
-
-  assert {
-    condition = jsonencode(distinct(flatten([
-      for k, l in output.outbound_allowlist : [
-        for e in l : "${e.destination}:${join(",", e.ports)}" if e.source == "external_database_url"
-      ]
-    ]))) == jsonencode(["db.example.com:5432"])
-    error_message = "The database entry must be exactly db.example.com on 5432."
-  }
-}
-
-# A DSN with no port gets Postgres's 5432, and its query string stays out of the entry.
-run "outbound_allowlist_database_default_port" {
-  command = plan
-
-  variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com/postgres?ssl=require"
-  }
-
-  assert {
-    condition = jsonencode(distinct(flatten([
-      for k, l in output.outbound_allowlist : [
-        for e in l : "${e.destination}:${join(",", e.ports)}" if e.source == "external_database_url"
-      ]
-    ]))) == jsonencode(["pg.example.com:5432"])
-    error_message = "A DSN without a port must give its host on 5432."
-  }
-
-  assert {
-    condition = (
-      !strcontains(jsonencode(output.outbound_allowlist), "masterly:pw") &&
-      !strcontains(jsonencode(output.outbound_allowlist), "ssl=require")
-    )
-    error_message = "The allowlist must carry no credentials or query string from external_database_url."
-  }
-}
-
-# A password holding an unencoded / cannot be split from the host with certainty: the URL gives no
-# entry at all rather than a fragment of the password.
-run "outbound_allowlist_database_unparseable_url_gives_no_entry" {
-  command = plan
-
-  variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-    external_database_url = "postgres://u:p/w@db.example.com:5432/m"
-  }
-
-  assert {
-    condition = (
-      alltrue(flatten([
-        for k, l in output.outbound_allowlist : [for e in l : e.source != "external_database_url"]
-      ])) &&
-      !strcontains(jsonencode(output.outbound_allowlist), "p/w")
-    )
-    error_message = "A DSN whose password breaks the URL's shape must give no database entry and no part of itself."
-  }
-}
-
-# Without ca-workers the licence refresh runs in ca-api, so the host goes with ca-api.
-run "outbound_allowlist_license_issuer_host_with_ca_api" {
-  command = plan
-
-  variables {
-    ingress_allowed_cidrs   = ["203.0.113.7/32"]
-    license_token           = "eyJ.fake.jwt"
-    license_public_jwk      = "{\"kty\":\"EC\"}"
-    license_issuer_url      = "https://cp.masterlydata.com/v1/licenses/refresh"
-    telemetry_client_id     = "sa_01TEST"
-    telemetry_client_secret = "s3cret"
-    frontend_environment    = "front"
-    edge_environment        = "front"
-    api_environment         = "app"
-  }
-
-  assert {
-    condition = (
-      contains([for e in output.outbound_allowlist["app"] : e.destination], "cp.masterlydata.com") &&
-      !contains([for e in output.outbound_allowlist["front"] : e.destination], "cp.masterlydata.com") &&
-      !contains([for e in output.outbound_allowlist["workers"] : e.destination], "cp.masterlydata.com")
-    )
-    error_message = "Without enable_workers, license_issuer_url's host must be listed where ca-api runs (app), and not on front or workers."
-  }
-}
-
-# The starter server is reached over its private endpoint: no database entry at all.
-run "outbound_allowlist_no_database_on_the_starter_server" {
-  command = plan
-
-  variables {
-    ingress_allowed_cidrs = ["203.0.113.7/32"]
-  }
-
-  assert {
-    condition = alltrue(flatten([
-      for k, l in output.outbound_allowlist : [for e in l : !strcontains(e.source, "database")]
-    ]))
-    error_message = "With the starter server no subnet may list a database."
   }
 }
 

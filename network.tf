@@ -631,6 +631,7 @@ moved {
 # one entry.
 locals {
   outbound_learn_source    = "Microsoft Learn, Securing a virtual network in Azure Container Apps (https://learn.microsoft.com/azure/container-apps/firewall-integration), read 2026-11-23"
+  outbound_adr_source      = "ADR 0120 §5, the Container Apps platform set the module publishes for every subnet"
   outbound_registry_source = "Microsoft Learn, Configure rules to access an Azure container registry behind a firewall (https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules), read 2026-11-23"
 
   # Every subnet, whatever runs there: what the environment itself needs to start a replica.
@@ -646,15 +647,17 @@ locals {
       { destination = "*.login.microsoft.com", kind = "fqdn", why = "Microsoft Entra ID's sign-in endpoints for managed identities" },
       { destination = "*.identity.azure.net", kind = "fqdn", why = "The managed identity endpoints the environment's identities use" },
       { destination = "AzureMonitor", kind = "service_tag", why = "Azure Monitor: the environment sends the apps' console and system logs through it. Blocked, new rows stop arriving in ContainerAppConsoleLogs and ContainerAppSystemLogs while the apps keep serving" },
-      { destination = "AzureResourceManager", kind = "service_tag", why = "Azure management (Azure Resource Manager), part of the Container Apps platform set ADR 0120 §5 publishes for every subnet" },
-      { destination = "management.azure.com", kind = "fqdn", why = "Azure management (Azure Resource Manager), for a firewall that admits by name" },
+      # Learn's page does not list Azure management for the environment itself: ADR 0120 §5 adds it
+      # to the platform set, so these two name the ADR as their source and not the page.
+      { destination = "AzureResourceManager", kind = "service_tag", why = "Azure management (Azure Resource Manager), part of the Container Apps platform set ADR 0120 §5 publishes for every subnet", source = local.outbound_adr_source },
+      { destination = "management.azure.com", kind = "fqdn", why = "Azure management (Azure Resource Manager), for a firewall that admits by name", source = local.outbound_adr_source },
       ] : "${e.kind}:${e.destination}:443" => {
       destination = e.destination
       kind        = e.kind
       protocol    = "TCP"
       ports       = ["443"]
       why         = e.why
-      source      = local.outbound_learn_source
+      source      = lookup(e, "source", local.outbound_learn_source)
     }
   }
 

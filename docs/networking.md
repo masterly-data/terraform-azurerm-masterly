@@ -243,13 +243,14 @@ their subnets exist, `core` and `outbound` with `split_processing`, and `extensi
 | `protocol` | `TCP` |
 | `ports` | The ports, as strings: `["443"]`, `["5671", "443"]` for Service Bus, the database's port for your own Postgres |
 | `why` | What reaches it, and what fails when it is blocked |
-| `source` | Where the entry comes from: a Microsoft Learn page with the date it was read, or the input that adds it |
+| `source` | Where the entry comes from: a Microsoft Learn page with the date it was read, ADR 0120 §5, or the input that adds it |
 
 Where each entry comes from, and which subnets carry it:
 
 | Entries | Source | On |
 |---|---|---|
-| Microsoft Container Registry, Microsoft Entra ID (managed identities), Azure Monitor, Azure management | Microsoft Learn, [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration), read 2026-11-23 | Every subnet |
+| Microsoft Container Registry, Microsoft Entra ID (managed identities), Azure Monitor | Microsoft Learn, [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration), read 2026-11-23 | Every subnet |
+| Azure management | ADR 0120 §5, which adds it to the platform set (the Learn page above does not list it) | Every subnet |
 | The image registry's login server, and `*.data.azurecr.io` and `*.blob.core.windows.net` for an Azure container registry | `registry_location`, `api_image` and `frontend_image`; Microsoft Learn, [Configure rules to access an Azure container registry behind a firewall](https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules), read 2026-11-23 | Every subnet, unless `registry_private_endpoint` |
 | Docker Hub | `edge` with `edge.image` unset | Where `ca-edge` runs |
 | The registry `edge.image` names (with its data endpoints for an Azure container registry) | `edge.image` | Where `ca-edge` runs |
