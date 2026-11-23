@@ -40,10 +40,11 @@ variable "migrate_job_environment" {
     error_message = "migrate_job_environment = \"workers\" needs the workers environment (aca-<name_prefix>-workers), and this install has none: environment_subnet_ids has no workers subnet. On an injected network set front_subnet_id, app_subnet_id and workers_subnet_id; on a network the module builds set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix, or use a VNet of /21 or larger. Or keep migrate_job_environment = \"runtime\"."
   }
 
-  # egress_firewall routes snet-aca only (network.tf): a move off it would leave forced tunnelling.
+  # Until retirement egress_firewall routes snet-aca only (network.tf): a move off it would leave
+  # forced tunnelling. Once retired it routes every environment subnet instead.
   validation {
-    condition     = var.migrate_job_environment != "workers" || var.egress_firewall == null
-    error_message = "migrate_job_environment = \"workers\" cannot be used with egress_firewall: egress_firewall attaches its route table to snet-aca only, so the environment subnets get no route table from egress_firewall and the migrate job's egress would bypass your firewall. Keep migrate_job_environment = \"runtime\" while egress_firewall is set."
+    condition     = var.migrate_job_environment != "workers" || var.egress_firewall == null || var.retire_runtime_environment
+    error_message = "migrate_job_environment = \"workers\" cannot be used with egress_firewall while aca-<name_prefix> runs: egress_firewall then attaches its route table to snet-aca only, so the environment subnets get no route table from egress_firewall and the migrate job's egress would bypass your firewall. Keep migrate_job_environment = \"runtime\" while egress_firewall is set, or remove egress_firewall, move every workload, set retire_runtime_environment = true and set egress_firewall again: on a retired install it routes every environment subnet."
   }
 }
 
@@ -301,6 +302,7 @@ resource "azurerm_container_app_job" "migrate" {
     azurerm_private_dns_zone_virtual_network_link.key_vault,
     # With egress_firewall, the first pull takes the firewall's route, as on the apps (main.tf).
     azurerm_subnet_route_table_association.aca,
+    azurerm_subnet_route_table_association.environment,
     # In the workers environment, its subnet's NSG is in place first, as for the environment.
     azurerm_subnet_network_security_group_association.environment,
     time_sleep.environment_move["migrate"],

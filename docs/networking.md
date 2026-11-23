@@ -10,7 +10,7 @@ stays on it without changing a line.
 |---|---|---|---|
 | **1. Public ingress** (default) | the module | the internet, narrowed by `ingress_allowed_cidrs` | nothing |
 | **2. Private ingress** | the module | VPN / ExpressRoute only | `aca_internal_load_balancer = true` |
-| **3. Hub-and-spoke** | your platform team | whichever of the above the spoke allows | `aca_subnet_id` + `private_endpoints_subnet_id` |
+| **3. Hub-and-spoke** | your platform team | whichever of the above the spoke allows | `private_endpoints_subnet_id` + the three environment subnet ids (+ `aca_subnet_id` until the runtime environment is retired) |
 
 Topologies 2 and 3 compose: a spoke with an internal load balancer is the common enterprise
 landing-zone shape.
@@ -18,7 +18,8 @@ landing-zone shape.
 ## 1. Public ingress behind an allowlist
 
 The default. The module creates a VNet from `vnet_address_space`, the runtime subnet
-`snet-aca`, the private-endpoint subnet, the three environment subnets `snet-front`, `snet-app`
+`snet-aca` (until [`retire_runtime_environment`](#retiring-the-runtime-environment) removes it;
+a new install retired from its first apply never has one), the private-endpoint subnet, the three environment subnets `snet-front`, `snet-app`
 and `snet-workers` (see [The environment subnets](#the-environment-subnets)), private
 endpoints for Postgres, Key Vault, and Redis, and the private DNS zones those need. With
 `registry_private_endpoint = true` (the `managed_identity` and `customer_registry` registry
@@ -56,8 +57,26 @@ module derives it from your hostname; see [ca-frontend on your own domain](#ca-f
 ## 3. Hub-and-spoke — join a network you already own
 
 ```hcl
-aca_subnet_id               = "/subscriptions/.../virtualNetworks/vnet-spoke/subnets/snet-aca"
 private_endpoints_subnet_id = "/subscriptions/.../virtualNetworks/vnet-spoke/subnets/snet-pe"
+front_subnet_id             = "/subscriptions/.../virtualNetworks/vnet-spoke/subnets/snet-front"
+app_subnet_id               = "/subscriptions/.../virtualNetworks/vnet-spoke/subnets/snet-app"
+workers_subnet_id           = "/subscriptions/.../virtualNetworks/vnet-spoke/subnets/snet-workers"
+
+# A new install retired from its first apply: everything runs in the front, app and workers
+# environments, and no runtime subnet is needed (see "Retiring the runtime environment").
+retire_runtime_environment = true
+frontend_environment       = "front"
+edge_environment           = "front"
+api_environment            = "app"
+workers_environment        = "workers"
+migrate_job_environment    = "workers" # with migrations = "job"
+```
+
+An install that still runs `aca-<name_prefix>` (`retire_runtime_environment = false`, the
+default) also sets `aca_subnet_id`, the runtime subnet it runs in:
+
+```hcl
+aca_subnet_id = "/subscriptions/.../virtualNetworks/vnet-spoke/subnets/snet-aca"
 ```
 
 The module creates **no VNet and no subnets**. Your platform team keeps ownership of the spoke,
@@ -68,20 +87,27 @@ One caveat on permissions: if the module still creates the privatelink DNS zones
 and it needs nothing on your network at all — that combination is the one to ask for if your
 platform team is counting the permissions they grant.
 
-Both are required together — half an injected network is refused at plan. The VNet is derived
-from the subnet id, so the two can never disagree.
+`private_endpoints_subnet_id` is what joins an existing network. Half an injected network is
+refused at plan: `aca_subnet_id` without `private_endpoints_subnet_id` always, and
+`private_endpoints_subnet_id` without `aca_subnet_id` while `retire_runtime_environment` is false,
+because `aca-<name_prefix>` would have nowhere to run. Without `aca_subnet_id`, the three
+environment subnet ids are required. The VNet is derived from `aca_subnet_id`, or from
+`front_subnet_id` without it, so the two can never disagree.
 
 **What the subnets must be:**
 
-- `aca_subnet_id` — **/23 or larger**, delegated to `Microsoft.App/environments`. Azure refuses
-  the environment otherwise, and the module cannot delegate a subnet it does not own.
+- `aca_subnet_id` (only while `aca-<name_prefix>` runs) — **/23 or larger**, delegated to
+  `Microsoft.App/environments`. Azure refuses the environment otherwise, and the module cannot
+  delegate a subnet it does not own. A retired install needs no runtime subnet, and the /23 is
+  free for something else once the environment is deleted.
 - `private_endpoints_subnet_id` — a **different** subnet. A delegated subnet cannot hold
   private endpoints, so these cannot be the same subnet; the module refuses that at plan too.
   Leave private endpoint network policies **enabled** on it if you want the NSG rules below to
   apply to the endpoints — disabled, they are there and inert.
-- `front_subnet_id`, `app_subnet_id` and `workers_subnet_id` (optional; all three or none) —
-  the [environment subnets](#the-environment-subnets): each **/27 or larger**, delegated to
-  `Microsoft.App/environments`, in the **same VNet** as `aca_subnet_id`, and three subnets of
+- `front_subnet_id`, `app_subnet_id` and `workers_subnet_id` (all three or none; required
+  without `aca_subnet_id`) — the [environment subnets](#the-environment-subnets): each **/27 or
+  larger**, delegated to `Microsoft.App/environments`, in the **same VNet** as `aca_subnet_id`
+  (where it is set), and three subnets of
   their own: none of them may be another of them, `aca_subnet_id` or
   `private_endpoints_subnet_id`. The module refuses each of those at plan. It cannot check a
   subnet's size without reading your spoke, so the size is yours to get right.
@@ -118,11 +144,19 @@ firewall. Your firewall then decides what passes, and it must admit the destinat
 | Topology | How |
 |---|---|
 | 1: public ingress | Not offered: `egress_firewall` is refused at plan while `aca_internal_load_balancer = false` ([why](#forced-tunnelling-needs-an-internal-environment)). Make the environment internal and publish the frontend through your Application Gateway, which is topology 2 |
-| 2: the module builds the network, internal environment (`aca_internal_load_balancer = true`) | `egress_firewall = { next_hop_ip = "10.0.0.4" }`: the module creates `rt-<name_prefix>-aca` in `rg-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, and attaches it to `snet-aca`. Or `egress_firewall = { route_table_id = "/subscriptions/.../routeTables/<name>" }`: the module attaches your route table to `snet-aca` as it is, and creates none |
-| 3: injected subnets | Your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to the injected ACA subnet, and to `workers_subnet_id` before `workers_environment` or `migrate_job_environment` is set to `"workers"`. `egress_firewall` is refused at plan there: a subnet holds one route table, and the module attaching its own would replace the hub's. The module creates no route table and no association on injected subnets, so the one the hub attached is never touched |
+| 2: the module builds the network, internal environment (`aca_internal_load_balancer = true`) | `egress_firewall = { next_hop_ip = "10.0.0.4" }`: the module creates `rt-<name_prefix>-aca` in `rg-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, and attaches it to `snet-aca`. Or `egress_firewall = { route_table_id = "/subscriptions/.../routeTables/<name>" }`: the module attaches your route table as it is, and creates none. On a retired install (`retire_runtime_environment = true`) the same route table goes on every environment subnet the module creates instead: `snet-front`, `snet-app` and `snet-workers`, and `snet-core`, `snet-outbound` and `snet-extension` with their add-ons |
+| 3: injected subnets | Your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to the injected environment subnets, to `aca_subnet_id` while `aca-<name_prefix>` runs, and to `workers_subnet_id` before `workers_environment` or `migrate_job_environment` is set to `"workers"`. `egress_firewall` is refused at plan there: a subnet holds one route table, and the module attaching its own would replace the hub's. The module creates no route table and no association on injected subnets, so the one the hub attached is never touched |
 
 The `egress_route` output shows the route table in effect and the next-hop address, and is null
 when `egress_firewall` is unset.
+
+**Which subnets, and when.** While `aca-<name_prefix>` runs, the route table goes on `snet-aca`
+only, and the plan refuses `egress_firewall` with any workload moved off it: the environment
+subnets would get no route, and the moved workload's egress would bypass your firewall while you
+believe it forced. Once `retire_runtime_environment = true`, there is no `snet-aca`, and the route
+table goes on every environment subnet the module creates. That includes `snet-extension` with
+`extensions`: extension code is the least trusted code in the install, so its egress is the last
+that should keep Azure's default path; your firewall decides what it may reach.
 
 **Only on a workload-profiles environment.** Azure ignores a route on a Container Apps
 environment that reports no workload profile, so egress would stay open while you believe it is
@@ -144,8 +178,10 @@ list is an environment without workload profiles. The `terraform output` form ne
 configuration to re-export the module's `aca_environment_id` output (`output "aca_environment_id" { value =
 module.<name>.aca_environment_id }`). Without that, use `-n aca-<name_prefix> -g
 rg-<name_prefix>-aca` instead of `--ids`. The output is null once `aca-<name_prefix>` is retired
-([Retiring the runtime environment](#retiring-the-runtime-environment)), and `egress_firewall` is
-refused by then, since every move off `aca-<name_prefix>` refuses it. On an injected subnet, run the
+([Retiring the runtime environment](#retiring-the-runtime-environment)). On a retired install the
+module checks each environment subnet instead: its delegation, and the workload profiles the module
+declares on the environment it creates there, both known at plan; check one yourself with
+`-n aca-<name_prefix>-<front|app|workers> -g rg-<name_prefix>-aca`. On an injected subnet, run the
 same check before your platform team attaches the hub's route table.
 
 **The private endpoints are unaffected.** No route goes on `snet-private-endpoints`: it has
@@ -341,7 +377,9 @@ covers: this VNet, every network peered to it, and every on-premises range reach
 a gateway attached to it. On a spoke somebody later peers into a wider estate, that is a door
 that opens by itself.
 
-**`snet-aca`**, the Container Apps infrastructure subnet:
+**`snet-aca`**, the Container Apps infrastructure subnet of `aca-<name_prefix>` (only while that
+environment runs; [`retire_runtime_environment`](#retiring-the-runtime-environment) removes the
+subnet, this group and the private-endpoint rule from it):
 
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
@@ -355,7 +393,7 @@ that opens by itself.
 
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
-| 100 | Allow | `snet-aca` | TCP 443, 5432, 6380, 10000 | Key Vault and the registry's private endpoint (443), Postgres, Azure Cache for Redis, Azure Managed Redis |
+| 100 | Allow | `snet-aca` | TCP 443, 5432, 6380, 10000 | Key Vault and the registry's private endpoint (443), Postgres, Azure Cache for Redis, Azure Managed Redis. Only while `snet-aca` exists (`allow-data-plane-from-apps`) |
 | 110 | Allow | `snet-app` | the same ports | The app environment (present with the [environment subnets](#the-environment-subnets)) |
 | 120 | Allow | `snet-workers` | the same ports | The workers environment (likewise) |
 | 130 | Allow | `snet-front` | TCP 443, to the Key Vault private endpoint's address (/32) only | Only with `frontend_environment = "front"` and the vault's private endpoint: `ca-frontend` resolves its vault secret references |
@@ -379,7 +417,7 @@ not admit from `snet-front`, so the plan refuses `frontend_environment = "front"
 `registry_private_endpoint = true`, on either network shape.
 On an injected network the module creates no NSG here, so your hub must admit the front subnet to
 the Key Vault private endpoint on 443 before moving `ca-frontend`. The `snet-aca` rule stays for
-as long as the apps run there.
+as long as `snet-aca` does: `retire_runtime_environment` removes both.
 
 The module sets `private_endpoint_network_policies = "Enabled"` on that subnet, without which
 an NSG on a private-endpoint subnet does not apply to private-endpoint traffic at all. Note
@@ -417,10 +455,12 @@ three workload-profiles Container Apps environments, each in a subnet of its own
 **front** (the frontend, the one environment callers reach), **app** (the api, reached only from
 the front) and **workers** (no inbound caller). The subnets sit beside `snet-aca`, which keeps
 serving the apps until they move. The placement inputs below move them, and
-`retire_runtime_environment` then deletes `aca-<name_prefix>` once nothing runs in it. `snet-aca`,
-its NSG and the private-endpoint rule from it stay in this version: the environment is retired,
-the subnet is not yet. [Retiring the runtime environment](#retiring-the-runtime-environment) gives
-the order.
+`retire_runtime_environment` then deletes `aca-<name_prefix>` once nothing runs in it, and with it
+the runtime subnet: on a network the module builds, `snet-aca`, its NSG and the private-endpoint
+rule from it; on an injected network, the need for `aca_subnet_id`.
+[Retiring the runtime environment](#retiring-the-runtime-environment) gives the order. A new
+install can be retired from its first apply, and then never has a runtime subnet at all
+([A /24 and a /28](#a-24-and-a-28)).
 
 On a network the module builds, `front_subnet_prefix`, `app_subnet_prefix` and
 `workers_subnet_prefix` set the three ranges, all three or none, each /27 or larger, inside
@@ -429,8 +469,12 @@ set and a first VNet prefix of /21 or larger, the module takes the /24s at index
 it: `10.20.5.0/24`, `10.20.6.0/24` and `10.20.7.0/24` on the default `10.20.0.0/16`, beside
 `snet-aca` (`10.20.0.0/23`) and the private-endpoint subnet (`10.20.4.0/24`). A smaller VNet, or
 explicit `aca_subnet_prefix` and `private_endpoints_subnet_prefix` that already cover those
-/24s, gets no environment subnets until the three prefixes are set. The `environment_subnet_ids`
-and `environment_subnet_prefixes` outputs carry what was created.
+/24s, gets no environment subnets until the three prefixes are set. The one exception is a retired
+install (`retire_runtime_environment = true`) whose first VNet prefix is /22 to /24: with no
+runtime subnet to leave room for, the module carves it in quarters, front, app and workers in the
+first three and the private endpoints in the fourth unless `private_endpoints_subnet_prefix` puts
+them elsewhere. The `environment_subnet_ids` and `environment_subnet_prefixes` outputs carry what
+was created.
 
 Each subnet holds its environment, `aca-<name_prefix>-front`, `aca-<name_prefix>-app` and
 `aca-<name_prefix>-workers`, each declaring the `Consumption` workload profile and sending its
@@ -448,8 +492,9 @@ The callers reach `ca-api` at `https://ca-api.<app environment default domain>` 
 certificate: the BFF through `MASTERLY_API_BASE_URL`, the edge through an upstream TLS context
 that checks the chain and the host name. `ca-api` takes VNet-only ingress there and refuses plain
 HTTP. The move replaces the three apps (new FQDNs, downtime between destroy and create), so plan
-it on a test install first. `egress_firewall` is refused with the apps moved, because only
-`snet-aca` gets its route table.
+it on a test install first. `egress_firewall` is refused with the apps moved while
+`aca-<name_prefix>` runs, because only `snet-aca` gets its route table until the install is
+retired.
 
 Two workloads can be placed in the workers environment, each with its own input:
 `ca-workers` with `workers_environment = "workers"`, and `caj-migrate` (with `migrations = "job"`)
@@ -474,9 +519,9 @@ team owns DNS, set it to `false`: the module creates no zone, record or link, an
 `container_app_environments` output gives each environment's `default_domain`,
 `static_ip_address` and whether it is `internal`, for the records the hub creates.
 
-`egress_firewall` still attaches its route table to `snet-aca` only ([Egress](#egress)): the
-three environment subnets get no route table in this version. So with `egress_firewall` set, the
-plan refuses `workers_environment` or `migrate_job_environment` set to `"workers"`: the moved
+While `aca-<name_prefix>` runs, `egress_firewall` attaches its route table to `snet-aca` only
+([Egress](#egress)): the environment subnets get one only once the install is retired. So with
+`egress_firewall` set on an install that is not retired, the plan refuses `workers_environment` or `migrate_job_environment` set to `"workers"`: the moved
 workload's egress would bypass your firewall. On injected subnets `egress_firewall` is refused
 anyway, so the plan cannot see where egress goes: before either input is set to `"workers"`,
 your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to
@@ -554,9 +599,10 @@ What each may reach:
 | outbound | The private endpoints on the data-plane ports (rule 150 above), and your targets and model endpoints through your firewall | Nothing: the platform's own traffic only |
 | extension | Nothing of Masterly's: no private endpoint, no Masterly environment | Nothing: the platform's own traffic only |
 
-The module writes no outbound rule and no route table for these subnets: `egress_firewall` still
-routes `snet-aca` only. So their egress is narrowed by your firewall or the hub's route table
-(`0.0.0.0/0` to the firewall) attached to them, which denies the internet to core and lets
+The module writes no outbound rule for these subnets. On a network the module builds and a retired
+install, `egress_firewall` attaches its route table to them as to the front, app and workers subnets;
+otherwise it routes `snet-aca` only, and on an injected network the hub's route table goes on them.
+Either way their egress is narrowed by your firewall, which denies the internet to core and lets
 outbound reach only the targets you allow (MAS-1771). Attach it before anything runs there.
 
 On a network the module builds, `core_subnet_prefix`, `outbound_subnet_prefix` and
@@ -632,8 +678,9 @@ On an injected spoke the module creates no NSG and associates none. A subnet hol
 so attaching ours would replace whatever your platform team put there, from outside their own
 configuration. The tables above are the baseline those subnets are expected to meet, and two
 rows of them are not optional: without the `AzureLoadBalancer` and intra-subnet rules the
-Container Apps environment provisions and then serves nothing, and without `snet-aca` reaching
-your endpoints subnet on the data-plane ports the apps cannot open a database connection.
+Container Apps environment provisions and then serves nothing, and without the subnets the apps
+run in (`snet-aca` while `aca-<name_prefix>` runs, the app and workers subnets) reaching your
+endpoints subnet on the data-plane ports the apps cannot open a database connection.
 
 With `front_subnet_id`, `app_subnet_id` and `workers_subnet_id` set, those three subnets are
 yours too, and the baseline each should carry is the tables in
@@ -678,11 +725,57 @@ its subnet. Azure accepts a /26 for v2, which brings the minimum down to 176 add
 spoke, at the cost of the gateway's headroom to scale; treat that as a reduced-capacity option,
 not the baseline.
 
+Without an Application Gateway (ca-edge on the front environment is the install's one entry), the
+minimum is the three environment subnets and the private endpoints alone: 3 × /27 and a /28, 112
+addresses. A /28 holds every private endpoint the module creates: Postgres, Key Vault, Redis and a
+private Service Bus namespace take one address each, and the registry's endpoint two (the registry
+and its regional data endpoint), at most six of the eleven addresses Azure leaves usable in a /28.
+
 While the apps still run in the legacy environment, the spoke also holds its /23
 (`aca_subnet_id`): 880 addresses at the minimum, a /22 (688 with the /26 gateway, still a /22),
 and 1,792 recommended, which still fits the /21. That /21 is the layout the module derives for
 itself: `snet-aca` at `.0.0/23`, the private endpoints at `.4.0/24`, front, app and workers at
-`.5.0`, `.6.0` and `.7.0/24`, and `.2.0/23` free for the Application Gateway.
+`.5.0`, `.6.0` and `.7.0/24`, and `.2.0/23` free for the Application Gateway. A retired install
+needs none of the /23: `retire_runtime_environment = true` removes `snet-aca` from the layout, and
+a new install retired from its first apply never has it.
+
+#### A /24 and a /28
+
+A worked layout for an allocation of one /24 for the environments and one /28 for the private
+endpoints, with no Application Gateway, retired from the first apply. Three /26s (64 addresses,
+59 usable, each) give every environment room for its nodes and replicas; the fourth /26 is free.
+
+| Subnet | Prefix | Addresses |
+|---|---|---|
+| `snet-front` | `10.40.0.0/26` | 64 |
+| `snet-app` | `10.40.0.64/26` | 64 |
+| `snet-workers` | `10.40.0.128/26` | 64 |
+| free | `10.40.0.192/26` | 64 |
+| `snet-private-endpoints` | `10.40.1.0/28` | 16 |
+
+On a network the module builds, the first prefix is carved in quarters, so naming the endpoints'
+/28 is enough:
+
+```hcl
+vnet_address_space              = ["10.40.0.0/24", "10.40.1.0/28"]
+private_endpoints_subnet_prefix = "10.40.1.0/28"
+retire_runtime_environment      = true
+frontend_environment            = "front"
+edge_environment                = "front"
+api_environment                 = "app"
+workers_environment             = "workers"
+migrate_job_environment         = "workers" # with migrations = "job"
+```
+
+The plan creates `snet-front`, `snet-app` and `snet-workers` at the three /26s and the endpoints in
+the /28, and no `snet-aca`. Set `front_subnet_prefix`, `app_subnet_prefix` and
+`workers_subnet_prefix` to place them differently, each /27 or larger.
+
+On an injected network the platform team creates the same four subnets, the three environment
+subnets delegated to `Microsoft.App/environments`, and the install sets
+`private_endpoints_subnet_id`, `front_subnet_id`, `app_subnet_id` and `workers_subnet_id` with the
+same `retire_runtime_environment` and placement inputs, and no `aca_subnet_id`
+([Hub-and-spoke](#3-hub-and-spoke--join-a-network-you-already-own)).
 
 ## Upgrading an existing install
 
@@ -791,16 +884,22 @@ a test install first, and read every plan before you apply it.
      private-endpoint subnet. On a network the module builds, the module adds that rule itself
      ([Network security baseline](#network-security-baseline)).
    - **`egress_firewall`.** The plan refuses `egress_firewall` with the apps moved, as it does in
-     step 2 for `ca-workers` and `caj-migrate`. Its route table is attached to `snet-aca` only,
-     and the environment subnets get none, so the moved workloads' egress would bypass your
-     firewall. Remove `egress_firewall` before step 2. On an injected network, your hub attaches
+     step 2 for `ca-workers` and `caj-migrate`, while `aca-<name_prefix>` runs. Its route table is
+     attached to `snet-aca` only until the install is retired, and the environment subnets get
+     none, so the moved workloads' egress would bypass your firewall. Remove `egress_firewall`
+     before step 2, and set it again in step 4: on a retired install it attaches the route table to
+     every environment subnet. Between the two, egress takes Azure's default path; keep that window
+     short, or make the moves on a test install first. On an injected network, your hub attaches
      its route table to the front, app and workers subnets instead.
 
    Run CD's release again after this apply too.
 4. **Set `retire_runtime_environment = true` and plan the deletion.** The plan must destroy
-   exactly two objects, `module.aca_env[0]` (`aca-<name_prefix>`) and
-   `azurerm_monitor_diagnostic_setting.aca_env[0]` (`diag-<name_prefix>-aca-env`), and nothing
-   else. The `aca_environment_id` output becomes null.
+   `module.aca_env[0]` (`aca-<name_prefix>`) and `azurerm_monitor_diagnostic_setting.aca_env[0]`
+   (`diag-<name_prefix>-aca-env`); on a network the module builds, also the runtime subnet
+   (`snet-aca`, its NSG and their association) and update the private-endpoint NSG in place to drop
+   `allow-data-plane-from-apps`, as described below. With `egress_firewall` set again in this
+   apply, it also creates one route-table association per environment subnet. Nothing else. The
+   `aca_environment_id` output becomes null.
 
    The plan refuses retirement while anything the module places is still on `aca-<name_prefix>`,
    and names what is left:
@@ -813,14 +912,32 @@ a test install first, and read every plan before you apply it.
    (`az containerapp list` and `az containerapp job list` on `rg-<name_prefix>-aca`, filtered on
    `aca-<name_prefix>`'s id). Move or delete anything else you find.
 
-`snet-aca`, its NSG, the private-endpoint rule from it and `aca_subnet_id` stay after step 4. A
-later version retires the subnet. Setting `retire_runtime_environment` back to `false` creates a
-new, empty `aca-<name_prefix>`.
+Step 4 also retires the runtime subnet. On a network the module builds, the same plan deletes
+`snet-aca`, its NSG (`nsg-<name_prefix>-aca`) and their association, and updates
+`nsg-<name_prefix>-private-endpoints` in place to drop `allow-data-plane-from-apps`, the rule
+admitting `snet-aca`; nothing else changes. Azure releases a subnet only once the environment that
+ran in it is fully deleted, so if the apply fails deleting `snet-aca` with the subnet still in use,
+apply again once `aca-<name_prefix>` is gone. On an injected network nothing changes in the spoke:
+`aca_subnet_id` is no longer needed, and the module creates nothing on it. Leaving it set plans no
+change; removing it plans none either, because the module then reads the VNet from
+`front_subnet_id`. If that plan shows the private DNS zone links replaced, the two ids spell the
+VNet differently (Azure ids are case-insensitive, Terraform's comparison is not): keep
+`aca_subnet_id` set. Once the environment is gone the platform team can delete or reuse the
+runtime subnet.
+
+An install that applied step 4 on an earlier module version, when the subnet stayed, plans that
+same removal on its first plan after upgrading.
+
+Setting `retire_runtime_environment` back to `false` creates a new, empty `aca-<name_prefix>`, and
+a runtime subnet of /23 or larger for it: on a network the module builds, `snet-aca` again, from
+`aca_subnet_prefix` or the first VNet prefix; on an injected network, `aca_subnet_id`, which the
+plan then requires.
 
 ## Landing-zone notes
 
-The install runs in its own VNet: the ACA environment is VNet-integrated (runtime subnet,
-/23 — an ACA consumption requirement) and the provisioned Postgres is reachable **only via
+The install runs in its own VNet: the Container Apps environments are VNet-integrated (the
+front, app and workers subnets, /27 or larger each, plus the runtime subnet, /23 or larger, while
+`aca-<name_prefix>` runs) and the provisioned Postgres is reachable **only via
 a private endpoint**; private DNS keeps the server FQDN unchanged for the apps. The
 frontend stays the single public surface, behind the optional ingress IP allowlist, unless you
 publish the api (`api_ingress_external`) or set `edge` ([The edge proxy](#the-edge-proxy-ca-edge)).
@@ -830,7 +947,10 @@ Landing-zone accommodations:
 - A first VNet prefix of /21 or larger derives the subnets automatically; a smaller
   allocation sets `aca_subnet_prefix` + `private_endpoints_subnet_prefix` explicitly, and
   `front_subnet_prefix`, `app_subnet_prefix` + `workers_subnet_prefix` for the
-  [environment subnets](#the-environment-subnets).
+  [environment subnets](#the-environment-subnets). A retired install
+  (`retire_runtime_environment = true`) needs no runtime subnet: a /22 to /24 first prefix
+  derives the rest, and a /24 plus a /28 for the private endpoints is enough
+  ([A /24 and a /28](#a-24-and-a-28)).
 - Hub-and-spoke shops that centralize private DNS pass
   `postgres_private_dns_zone_id` — the module then creates no zone and no VNet link
   (linking the central zone to this VNet is the platform team's side). The same holds for

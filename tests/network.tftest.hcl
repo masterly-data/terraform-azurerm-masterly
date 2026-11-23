@@ -2006,3 +2006,555 @@ run "egress_firewall_is_refused_when_azure_lists_no_workload_profile" {
 
   expect_failures = [azurerm_subnet_route_table_association.aca]
 }
+
+# --- A retired install has no runtime subnet (retire_runtime_environment) -------------------------
+# With everything moved off aca-<prefix> and retire_runtime_environment set, neither network shape
+# needs the runtime subnet: the module builds no snet-aca, no NSG for it and no private-endpoint
+# rule from it, and an injected network needs no aca_subnet_id. Every run below moves the same
+# three apps; ca-workers is off and migrations is "start", so nothing else is on aca-<prefix>.
+
+# A fresh install on the default VNet, retired from its first apply. The rest of the derived
+# layout keeps its addresses, which is also what an install retired on an earlier version plans:
+# only snet-aca, its NSG and association, and the one private-endpoint rule go.
+run "retired_module_built_network_has_no_runtime_subnet" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_virtual_network.this) == 1 &&
+      length(azurerm_subnet.aca) == 0 &&
+      length(azurerm_network_security_group.aca) == 0 &&
+      length(azurerm_subnet_network_security_group_association.aca) == 0 &&
+      local.aca_subnet_prefix == null &&
+      local.aca_subnet_id == null &&
+      length(module.aca_env) == 0
+    )
+    error_message = "A retired install on a network the module builds must plan no snet-aca, no nsg-<prefix>-aca and no association, and aca-<prefix> no instance."
+  }
+
+  assert {
+    condition = (
+      azurerm_subnet.private_endpoints[0].address_prefixes == tolist(["10.20.4.0/24"]) &&
+      azurerm_subnet.environment["front"].address_prefixes == tolist(["10.20.5.0/24"]) &&
+      azurerm_subnet.environment["app"].address_prefixes == tolist(["10.20.6.0/24"]) &&
+      azurerm_subnet.environment["workers"].address_prefixes == tolist(["10.20.7.0/24"])
+    )
+    error_message = "Retiring must leave the derived private-endpoint and environment subnets at the addresses they had beside snet-aca."
+  }
+
+  assert {
+    condition = toset([
+      for r in azurerm_network_security_group.private_endpoints[0].security_rule : join(" ", [
+        r.name, tostring(r.priority), r.source_address_prefix, r.destination_address_prefix,
+      ])
+      ]) == toset([
+      "allow-data-plane-from-app-subnet 110 10.20.6.0/24 10.20.4.0/24",
+      "allow-data-plane-from-workers-subnet 120 10.20.7.0/24 10.20.4.0/24",
+      "deny-all-inbound 4000 * *",
+    ])
+    error_message = "Retired, the endpoints subnet's NSG must drop allow-data-plane-from-apps (snet-aca) and keep the app and workers rules and the deny, unchanged."
+  }
+}
+
+# The first customer's shape: one /24 for the environments and one /28 for the private endpoints,
+# no Application Gateway. The /24 is carved in quarters; the fourth stays free.
+run "retired_install_fits_a_24_and_a_28" {
+  command = plan
+
+  variables {
+    vnet_address_space              = ["10.40.0.0/24", "10.40.1.0/28"]
+    private_endpoints_subnet_prefix = "10.40.1.0/28"
+    retire_runtime_environment      = true
+    ingress_allowed_cidrs           = ["203.0.113.7/32"]
+    frontend_environment            = "front"
+    edge_environment                = "front"
+    api_environment                 = "app"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet.aca) == 0 &&
+      length(azurerm_network_security_group.aca) == 0 &&
+      azurerm_virtual_network.this[0].address_space == toset(["10.40.0.0/24", "10.40.1.0/28"]) &&
+      azurerm_subnet.private_endpoints[0].address_prefixes == tolist(["10.40.1.0/28"]) &&
+      azurerm_subnet.environment["front"].address_prefixes == tolist(["10.40.0.0/26"]) &&
+      azurerm_subnet.environment["app"].address_prefixes == tolist(["10.40.0.64/26"]) &&
+      azurerm_subnet.environment["workers"].address_prefixes == tolist(["10.40.0.128/26"]) &&
+      length(azurerm_subnet.environment) == 3
+    )
+    error_message = "A retired /24 + /28 must plan front, app and workers at the first three /26s, the endpoints in the /28, and no snet-aca."
+  }
+
+  # The NSG rules follow the small prefixes: nothing names a range the install does not have.
+  assert {
+    condition = (
+      toset([for r in azurerm_network_security_group.private_endpoints[0].security_rule : r.source_address_prefix if r.access == "Allow"]) == toset(["10.40.0.64/26", "10.40.0.128/26"]) &&
+      one([for r in azurerm_network_security_group.environment["app"].security_rule : r.source_address_prefix if r.name == "allow-https-from-front"]) == "10.40.0.0/26" &&
+      alltrue([for k, g in azurerm_network_security_group.environment : one([for r in g.security_rule : r.destination_address_prefix if r.name == "allow-environment-internal"]) == azurerm_subnet.environment[k].address_prefixes[0]])
+    )
+    error_message = "On a /24 + /28 the endpoints must admit the app and workers /26s only, the app subnet the front /26 only, and each environment subnet itself."
+  }
+
+  assert {
+    condition     = output.environment_subnet_prefixes == { front = "10.40.0.0/26", app = "10.40.0.64/26", workers = "10.40.0.128/26" }
+    error_message = "environment_subnet_prefixes must publish the three /26s."
+  }
+}
+
+# A /24 alone, retired: the endpoints take the fourth quarter.
+run "retired_24_alone_puts_the_endpoints_in_its_last_quarter" {
+  command = plan
+
+  variables {
+    vnet_address_space         = ["10.40.0.0/24"]
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet.aca) == 0 &&
+      azurerm_subnet.private_endpoints[0].address_prefixes == tolist(["10.40.0.192/26"]) &&
+      azurerm_subnet.environment["workers"].address_prefixes == tolist(["10.40.0.128/26"])
+    )
+    error_message = "A retired /24 with no explicit prefixes must put the endpoints at 10.40.0.192/26, beside the three environment /26s."
+  }
+}
+
+# Not retired, a /24 still needs a runtime /23 that cannot fit: refused, as before.
+run "unretired_24_without_explicit_subnets_is_rejected" {
+  command = plan
+
+  variables {
+    vnet_address_space    = ["10.40.0.0/24"]
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  expect_failures = [var.vnet_address_space]
+}
+
+# Retired, a /25 cannot be carved in quarters of /27 or larger with room for the endpoints: it
+# needs explicit prefixes.
+run "retired_25_without_explicit_subnets_is_rejected" {
+  command = plan
+
+  variables {
+    vnet_address_space         = ["10.40.0.0/25"]
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+  }
+
+  expect_failures = [var.vnet_address_space]
+}
+
+# Retired with explicit prefixes, on a VNet too small to derive anything: aca_subnet_prefix may
+# stay set from before retirement, and is ignored. This is an upgraded install that had a small
+# explicit layout: its other subnets keep their prefixes.
+run "retired_explicit_layout_ignores_aca_subnet_prefix" {
+  command = plan
+
+  variables {
+    vnet_address_space              = ["10.50.0.0/22"]
+    aca_subnet_prefix               = "10.50.0.0/23"
+    private_endpoints_subnet_prefix = "10.50.2.0/26"
+    front_subnet_prefix             = "10.50.3.0/26"
+    app_subnet_prefix               = "10.50.3.64/26"
+    workers_subnet_prefix           = "10.50.3.128/26"
+    retire_runtime_environment      = true
+    ingress_allowed_cidrs           = ["203.0.113.7/32"]
+    frontend_environment            = "front"
+    edge_environment                = "front"
+    api_environment                 = "app"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet.aca) == 0 &&
+      azurerm_subnet.private_endpoints[0].address_prefixes == tolist(["10.50.2.0/26"]) &&
+      azurerm_subnet.environment["front"].address_prefixes == tolist(["10.50.3.0/26"]) &&
+      azurerm_subnet.environment["app"].address_prefixes == tolist(["10.50.3.64/26"]) &&
+      azurerm_subnet.environment["workers"].address_prefixes == tolist(["10.50.3.128/26"])
+    )
+    error_message = "A retired install with explicit prefixes must plan no snet-aca and keep its other subnets at their explicit prefixes."
+  }
+}
+
+# A fresh injected install retired from its first apply: the endpoints subnet and the three
+# environment subnets are the whole network, and the VNet is read from front_subnet_id.
+run "retired_injected_network_needs_no_aca_subnet_id" {
+  command = plan
+
+  variables {
+    retire_runtime_environment  = true
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    frontend_environment        = "front"
+    edge_environment            = "front"
+    api_environment             = "app"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  assert {
+    condition = (
+      local.inject_network &&
+      length(azurerm_virtual_network.this) == 0 &&
+      length(azurerm_subnet.aca) == 0 &&
+      length(azurerm_subnet.private_endpoints) == 0 &&
+      length(azurerm_subnet.environment) == 0 &&
+      length(azurerm_network_security_group.aca) == 0 &&
+      length(azurerm_network_security_group.private_endpoints) == 0 &&
+      length(azurerm_network_security_group.environment) == 0 &&
+      length(module.aca_env) == 0
+    )
+    error_message = "A retired injected install must create no VNet, no subnet, no NSG and no aca-<prefix>."
+  }
+
+  assert {
+    condition = (
+      local.virtual_network_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke" &&
+      azurerm_private_endpoint.postgres[0].subnet_id == var.private_endpoints_subnet_id &&
+      azurerm_private_dns_zone_virtual_network_link.postgres[0].virtual_network_id == local.virtual_network_id &&
+      output.environment_subnet_ids["front"] == var.front_subnet_id
+    )
+    error_message = "Without aca_subnet_id the module must read the VNet from front_subnet_id, and put the private endpoints in private_endpoints_subnet_id."
+  }
+}
+
+# Upgrade, injected: an install retired on an earlier version keeps aca_subnet_id set, and the
+# VNet is still read from it, so the private DNS links plan no change.
+run "retired_injected_network_may_keep_aca_subnet_id" {
+  command = plan
+
+  variables {
+    retire_runtime_environment  = true
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    frontend_environment        = "front"
+    edge_environment            = "front"
+    api_environment             = "app"
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/VNET-SPOKE/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  assert {
+    condition = (
+      local.virtual_network_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/VNET-SPOKE" &&
+      length(azurerm_subnet.aca) == 0 &&
+      length(module.aca_env) == 0
+    )
+    error_message = "With aca_subnet_id kept on a retired install, the VNet must still be read from it, exactly as spelled, and nothing created on it."
+  }
+}
+
+# Guard: while aca-<prefix> runs it needs its subnet. An injected network without aca_subnet_id is
+# refused until retire_runtime_environment is true.
+run "endpoints_subnet_without_runtime_subnet_is_rejected_until_retired" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: a retired injected network without aca_subnet_id must name the three environment subnets.
+run "retired_injected_network_without_environment_subnets_is_rejected" {
+  command = plan
+
+  variables {
+    retire_runtime_environment  = true
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# Guard: the runtime subnet alone is still half a network.
+run "runtime_subnet_without_endpoints_subnet_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    aca_subnet_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+# The guard's message names the way out, and the module builds snet-aca as before while not retired.
+run "unretired_install_keeps_its_runtime_subnet" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet.aca) == 1 &&
+      azurerm_subnet.aca[0].address_prefixes == tolist(["10.20.0.0/23"]) &&
+      length(azurerm_network_security_group.aca) == 1 &&
+      length(azurerm_subnet_network_security_group_association.aca) == 1 &&
+      contains([for r in azurerm_network_security_group.private_endpoints[0].security_rule : r.name], "allow-data-plane-from-apps")
+    )
+    error_message = "With retire_runtime_environment unset, snet-aca, its NSG, the association and the private-endpoint rule from it must plan as before."
+  }
+
+  assert {
+    condition     = can(regex("private_endpoints_subnet_id is set without aca_subnet_id, and aca-<name_prefix>, the runtime Container Apps environment, still runs", file("${path.module}/main.tf")))
+    error_message = "The guard refusing a missing runtime subnet must say why and name retire_runtime_environment as the way out."
+  }
+}
+
+# --- egress_firewall on a retired install ----------------------------------------------------------
+# Once retired there is no snet-aca, and the route table goes on every environment subnet the module
+# creates instead. While aca-<prefix> runs nothing changes: snet-aca only, and the move refusals
+# stay (app_placement.tftest.hcl, container_app_environments.tftest.hcl).
+
+# The /24 + /28 shape with forced tunnelling: one association per environment /26, none on
+# snet-aca, and never one on the endpoints' /28.
+run "retired_24_and_28_with_egress_firewall_routes_each_environment_subnet" {
+  command = plan
+
+  variables {
+    vnet_address_space              = ["10.40.0.0/24", "10.40.1.0/28"]
+    private_endpoints_subnet_prefix = "10.40.1.0/28"
+    retire_runtime_environment      = true
+    ingress_allowed_cidrs           = ["203.0.113.7/32"]
+    aca_internal_load_balancer      = true
+    egress_firewall                 = { next_hop_ip = "10.0.0.4" }
+    frontend_environment            = "front"
+    edge_environment                = "front"
+    api_environment                 = "app"
+    enable_workers                  = true
+    workers_environment             = "workers"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet.aca) == 0 &&
+      length(azurerm_subnet_route_table_association.aca) == 0 &&
+      length(azurerm_route_table.egress) == 1 &&
+      toset(keys(azurerm_subnet_route_table_association.environment)) == toset(["front", "app", "workers"]) &&
+      alltrue([
+        for k, a in azurerm_subnet_route_table_association.environment :
+        a.subnet_id == azurerm_subnet.environment[k].id && a.route_table_id == azurerm_route_table.egress[0].id
+      ])
+    )
+    error_message = "A retired /24 + /28 with egress_firewall must attach the module's route table to snet-front, snet-app and snet-workers, and to no snet-aca."
+  }
+
+  assert {
+    condition = alltrue([
+      for a in azurerm_subnet_route_table_association.environment : a.subnet_id != azurerm_subnet.private_endpoints[0].id
+    ])
+    error_message = "No route table association may reference snet-private-endpoints."
+  }
+
+  assert {
+    condition     = output.egress_route != null && output.egress_route.next_hop_ip == "10.0.0.4"
+    error_message = "egress_route must report the route in effect on a retired install."
+  }
+
+  # The apps and ca-workers start only after the routes are attached.
+  assert {
+    condition = alltrue([
+      for f in ["main.tf", "workers.tf", "migrate.tf", "edge.tf"] :
+      strcontains(file("${path.module}/${f}"), "azurerm_subnet_route_table_association.aca,\n    azurerm_subnet_route_table_association.environment,")
+    ])
+    error_message = "Every resource that depends on the snet-aca association must depend on the environment subnets' associations too."
+  }
+}
+
+# With both add-ons, every environment subnet is routed, extension included (network.tf says why).
+run "retired_egress_firewall_routes_the_add_on_subnets_too" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub" }
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+    split_processing           = true
+    extensions                 = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_route_table.egress) == 0 &&
+      toset(keys(azurerm_subnet_route_table_association.environment)) == toset(["front", "app", "workers", "core", "outbound", "extension"]) &&
+      alltrue([for a in azurerm_subnet_route_table_association.environment : a.route_table_id == var.egress_firewall.route_table_id])
+    )
+    error_message = "Retired with split_processing and extensions, your route table must go on all six environment subnets."
+  }
+}
+
+# Not retired: unchanged, snet-aca only.
+run "unretired_egress_firewall_still_routes_snet_aca_only" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
+  }
+
+  # Azure lists the Consumption profile on aca-<prefix>, as on a live workload-profiles environment.
+  override_module {
+    target = module.aca_env[0]
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      default_domain                 = "example.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = true
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      identity_ids                   = []
+      workload_profile_names         = ["Consumption"]
+      custom_domain_verification_id  = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet_route_table_association.aca) == 1 &&
+      length(azurerm_subnet_route_table_association.environment) == 0 &&
+      length(azurerm_subnet.environment) == 3
+    )
+    error_message = "Without retire_runtime_environment, egress_firewall must route snet-aca only, as before, even though the environment subnets exist."
+  }
+}
+
+# The guarantee on each environment subnet: never a route on an environment that lists no workload
+# profile.
+run "retired_egress_firewall_refused_on_an_environment_with_no_workload_profile" {
+  command = plan
+
+  variables {
+    retire_runtime_environment = true
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    egress_firewall            = { next_hop_ip = "10.0.0.4" }
+    frontend_environment       = "front"
+    edge_environment           = "front"
+    api_environment            = "app"
+  }
+
+  override_module {
+    target = module.environments["workers"]
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers"
+      name                           = "aca-masterly-workers"
+      default_domain                 = "workers-5e6f.swedencentral.azurecontainerapps.io"
+      static_ip_address              = "10.20.7.10"
+      internal_load_balancer_enabled = true
+      logs_destination               = "azure-monitor"
+      mutual_tls_enabled             = true
+      infrastructure_subnet_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-workers"
+      identity_ids                   = []
+      zone_redundancy_enabled        = false
+      workload_profiles              = []
+    }
+  }
+
+  expect_failures = [azurerm_subnet_route_table_association.environment["workers"]]
+}
+
+# --- Environment subnet ids must be subnet resource ids ----------------------------------------------
+# front_subnet_id anchors the VNet on a retired injected network without aca_subnet_id, so a
+# malformed id is refused by name rather than surfacing as a null network or a same-VNet error.
+
+run "malformed_front_subnet_id_is_rejected" {
+  command = plan
+
+  variables {
+    retire_runtime_environment  = true
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  expect_failures = [var.front_subnet_id]
+}
+
+run "malformed_app_subnet_id_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  expect_failures = [var.app_subnet_id]
+}
+
+run "malformed_workers_subnet_id_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    aca_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-aca"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers/extra"
+  }
+
+  expect_failures = [var.workers_subnet_id]
+}
+
+# Case-insensitive, as Azure compares resource names: the other two subnets spell the resource group
+# and the VNet in lower case, and pass the same-VNet check. (The azurerm provider itself expects the
+# canonical segment keywords, "subscriptions", "resourceGroups" and so on, as Azure returns them.)
+run "subnet_id_in_another_case_is_accepted" {
+  command = plan
+
+  variables {
+    retire_runtime_environment  = true
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    frontend_environment        = "front"
+    edge_environment            = "front"
+    api_environment             = "app"
+    private_endpoints_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-pe"
+    front_subnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/RG-HUB-SPOKE/providers/Microsoft.Network/virtualNetworks/VNET-SPOKE/subnets/snet-front"
+    app_subnet_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-app"
+    workers_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke/subnets/snet-workers"
+  }
+
+  assert {
+    condition     = local.virtual_network_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/RG-HUB-SPOKE/providers/Microsoft.Network/virtualNetworks/VNET-SPOKE"
+    error_message = "Names in another case must be accepted, the same-VNet check must compare them case-insensitively, and the VNet must be read from front_subnet_id as written."
+  }
+}

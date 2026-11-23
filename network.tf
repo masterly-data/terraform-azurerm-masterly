@@ -72,8 +72,14 @@ resource "azurerm_virtual_network" "this" {
 # The runtime environment (aca-<prefix>) was sized for a /23 or larger, and Azure now
 # requires the subnet to be delegated to Microsoft.App/environments (the first apply
 # failed with ManagedEnvironmentSubnetDelegationError without it).
+#
+# Only while aca-<prefix> exists: with retire_runtime_environment nothing runs here, so the
+# subnet, its NSG and their association are not created, and on an install that had them the plan
+# deletes the three. Azure releases a subnet a deleted environment ran in only after the
+# environment's own deletion completes; an apply that deletes both in one run may need a second
+# apply for the subnet (docs/networking.md, "Retiring the runtime environment").
 resource "azurerm_subnet" "aca" {
-  count = local.inject_network ? 0 : 1
+  count = !local.inject_network && local.runtime_subnet ? 1 : 0
 
   name                 = "snet-aca"
   resource_group_name  = azurerm_resource_group.aca.name
@@ -102,7 +108,8 @@ resource "azurerm_subnet" "private_endpoints" {
 # The environment subnets of ADR 0120 §4: front, app and workers, one workload-profiles
 # Container Apps environment each. They sit beside snet-aca rather than replacing it, so the
 # apps can move across while the runtime subnet still serves them; snet-aca, its NSG and the
-# endpoints subnet keep their addresses and plan no change. A workload-profiles environment
+# endpoints subnet keep their addresses and plan no change until retire_runtime_environment
+# removes snet-aca. A workload-profiles environment
 # accepts a /27 or larger and, like snet-aca, needs the delegation. Prefixes: main.tf.
 resource "azurerm_subnet" "environment" {
   for_each = local.env_subnet_prefixes
@@ -143,7 +150,7 @@ resource "azurerm_subnet" "environment" {
 # the baseline those subnets are expected to carry instead.
 
 resource "azurerm_network_security_group" "aca" {
-  count = local.inject_network ? 0 : 1
+  count = !local.inject_network && local.runtime_subnet ? 1 : 0
 
   name                = "nsg-${var.name_prefix}-aca"
   resource_group_name = azurerm_resource_group.aca.name
@@ -260,23 +267,30 @@ resource "azurerm_network_security_group" "private_endpoints" {
   # a private Service Bus namespace have no public network presence, so this rule is the whole
   # of who may open a connection to them — and it is now enforced rather than implied,
   # because the subnet above has private_endpoint_network_policies = "Enabled".
-  security_rule {
-    name                       = "allow-data-plane-from-apps"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_address_prefix      = local.aca_subnet_prefix
-    source_port_range          = "*"
-    destination_address_prefix = local.private_endpoints_subnet_prefix
-    destination_port_ranges    = local.private_endpoint_ports
-    description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the runtime subnet only."
+  #
+  # From snet-aca only while it exists: a retired install (retire_runtime_environment) has no
+  # runtime subnet, and its apps reach the data plane from the app and workers subnets below.
+  dynamic "security_rule" {
+    for_each = local.runtime_subnet ? { aca = local.aca_subnet_prefix } : {}
+
+    content {
+      name                       = "allow-data-plane-from-apps"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = local.private_endpoints_subnet_prefix
+      destination_port_ranges    = local.private_endpoint_ports
+      description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the runtime subnet only."
+    }
   }
 
   # ADR 0120 §5: the app and workers environments reach the data plane on the same ports. The
   # front environment never does on these ports: it is the one that faces the callers, and when
   # it is external, the internet (its one exception, the vault on 443, is below). The rule above
-  # stays while the apps still run in snet-aca.
+  # stays while snet-aca does.
   dynamic "security_rule" {
     for_each = { for k in ["app", "workers"] : k => local.env_subnet_prefixes[k] if contains(keys(local.env_subnet_prefixes), k) }
 
@@ -485,7 +499,7 @@ resource "azurerm_network_security_group" "environment" {
 # network_security_group_id argument, so this is the association, not a second way of
 # writing one.
 resource "azurerm_subnet_network_security_group_association" "aca" {
-  count = local.inject_network ? 0 : 1
+  count = !local.inject_network && local.runtime_subnet ? 1 : 0
 
   subnet_id                 = azurerm_subnet.aca[0].id
   network_security_group_id = azurerm_network_security_group.aca[0].id
@@ -506,19 +520,34 @@ resource "azurerm_subnet_network_security_group_association" "environment" {
 }
 
 # --- Forced-tunnel egress (egress_firewall) ------------------------------------------
-# All outbound traffic from snet-aca goes to the customer's firewall, which decides what passes
-# (docs/networking.md, "Egress", lists what it must admit). Only on a network the module builds:
-# on an injected spoke the input is refused at plan (variables-core.tf), and the module creates
-# nothing here, so a route table the hub already attached to that subnet is never touched.
+# All outbound traffic from the subnets the apps run in goes to the customer's firewall, which
+# decides what passes (docs/networking.md, "Egress", lists what it must admit). Only on a network
+# the module builds: on an injected spoke the input is refused at plan (variables-core.tf), and the
+# module creates nothing here, so a route table the hub already attached to a subnet is never
+# touched.
 #
-# snet-aca only. snet-private-endpoints has private_endpoint_network_policies = "Enabled", under
+# Which subnets: snet-aca while aca-<prefix> runs, exactly as before, and nothing else, because
+# the plan refuses egress_firewall while any workload has moved off it (variables-core.tf,
+# workers.tf, migrate.tf). Once retire_runtime_environment removes aca-<prefix> and snet-aca, every
+# environment subnet the module creates instead: front, app and workers, and core and outbound with
+# split_processing. And extension with extensions: extension code is the least trusted code in the
+# install (ADR 0120 §7), so its egress is the last that should keep Azure's default path while the
+# rest is forced through the firewall; what it may reach is then the firewall's decision.
+#
+# Never snet-private-endpoints. It has private_endpoint_network_policies = "Enabled", under
 # which a route table there would apply to private-endpoint traffic as well, sending the data
 # plane's replies through the firewall. Traffic from the apps to those endpoints needs no route:
 # it stays inside the VNet, where the VNet's system route is more specific than 0.0.0.0/0.
 
 locals {
-  # The route table in effect on snet-aca: the customer's, or the one created below. null unset.
+  # The route table in effect: the customer's, or the one created below. null unset.
   egress_route_table_id = try(coalesce(var.egress_firewall.route_table_id, one(azurerm_route_table.egress[*].id)), null)
+
+  # The environment subnets the route table goes on: every one the module creates, and only on a
+  # retired install. Empty otherwise, so an install that has not retired plans no change here.
+  egress_environment_subnet_keys = (
+    !local.inject_network && var.egress_firewall != null && !local.runtime_subnet
+  ) ? toset(keys(local.env_subnet_prefixes)) : toset([])
 }
 
 resource "azurerm_route_table" "egress" {
@@ -546,9 +575,9 @@ resource "azurerm_route_table" "egress" {
 # A separate resource, like the NSG associations above: a subnet holds one route table, and this
 # is that one association.
 resource "azurerm_subnet_route_table_association" "aca" {
-  count = !local.inject_network && var.egress_firewall != null ? 1 : 0
+  count = !local.inject_network && var.egress_firewall != null && local.runtime_subnet ? 1 : 0
 
-  subnet_id      = azurerm_subnet.aca[0].id
+  subnet_id      = one(azurerm_subnet.aca[*].id)
   route_table_id = local.egress_route_table_id
 
   lifecycle {
@@ -559,9 +588,8 @@ resource "azurerm_subnet_route_table_association" "aca" {
     # workload-profiles environment, with the Consumption profile filled in). The profiles Azure
     # actually lists are known at plan for an existing environment and at apply for a new one,
     # when Terraform evaluates this condition again; until then the unknown half does not refuse.
-    # A retired aca-<prefix> (retire_runtime_environment) refuses: no environment on snet-aca
-    # lists a profile. The plan refuses egress_firewall with retire before this anyway, as every
-    # move off aca-<prefix> does, but this does not rely on it.
+    # A retired install has no instance of this association (count above); the checks on
+    # aca-<prefix> stay, so it never passes without the environment it routes.
     precondition {
       condition = (
         try(azurerm_subnet.aca[0].delegation[0].service_delegation[0].name, null) == "Microsoft.App/environments" &&
@@ -569,6 +597,30 @@ resource "azurerm_subnet_route_table_association" "aca" {
         try(length(one(module.aca_env[*].workload_profile_names)) > 0, true)
       )
       error_message = "egress_firewall needs a workload-profiles Container Apps environment: Azure ignores a route on an environment that reports no workload profile, so egress would stay open while it is believed forced through your firewall. The environment's subnet must be delegated to Microsoft.App/environments and Azure must list at least one workload profile on the environment (az containerapp env show --query properties.workloadProfiles). Remove egress_firewall, or move the install to a workload-profiles environment first."
+    }
+  }
+}
+
+# The same route table on each environment subnet of a retired install. One association per
+# subnet, as above. The guarantee is the same as on snet-aca: never a route the environment would
+# ignore. Each of these subnets is the module's own, delegated to Microsoft.App/environments (known
+# at plan), and carries a workload-profiles environment (modules/aca-env-workload-profiles), whose
+# profiles are declared in configuration and so known at plan too: the precondition checks both,
+# and that the environment exists at all, rather than assume it.
+resource "azurerm_subnet_route_table_association" "environment" {
+  for_each = local.egress_environment_subnet_keys
+
+  subnet_id      = azurerm_subnet.environment[each.key].id
+  route_table_id = local.egress_route_table_id
+
+  lifecycle {
+    precondition {
+      condition = (
+        try(azurerm_subnet.environment[each.key].delegation[0].service_delegation[0].name, null) == "Microsoft.App/environments" &&
+        contains(local.container_app_environment_keys, each.key) &&
+        try(length(module.environments[each.key].workload_profiles) > 0, true)
+      )
+      error_message = "egress_firewall needs a workload-profiles Container Apps environment on every subnet it routes: Azure ignores a route on an environment that reports no workload profile, so egress would stay open while it is believed forced through your firewall. snet-${each.key} must be delegated to Microsoft.App/environments and carry aca-<name_prefix>-${each.key} with at least one workload profile. Remove egress_firewall, or give the install that environment."
     }
   }
 }
