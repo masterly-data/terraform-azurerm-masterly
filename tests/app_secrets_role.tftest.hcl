@@ -18,6 +18,20 @@ mock_provider "azurerm" {
       role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000001"
     }
   }
+
+  override_resource {
+    target = azurerm_role_definition.signing_key_reader
+    values = {
+      role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000002"
+    }
+  }
+
+  override_resource {
+    target = azurerm_role_definition.signing_keys
+    values = {
+      role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000003"
+    }
+  }
 }
 mock_provider "random" {
   mock_resource "random_string" {
@@ -74,6 +88,9 @@ variables {
 # an install-unique name, and assignable within the data resource group alone.
 run "app_secrets_role_reads_writes_and_deletes_secrets_and_nothing_more" {
   command = apply
+
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
 
   variables {
     migrations = "start"
@@ -150,7 +167,7 @@ run "app_secrets_role_reads_writes_and_deletes_secrets_and_nothing_more" {
       length([
         for ra in concat(
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
-          azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
@@ -160,7 +177,7 @@ run "app_secrets_role_reads_writes_and_deletes_secrets_and_nothing_more" {
       length([
         for ra in concat(
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
-          azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_signing_keys_workers,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
         ) : ra if(ra.role_definition_name == "Key Vault Secrets Officer" || endswith(lower(ra.role_definition_id), "/b86a8fe4-44ce-4948-aee5-eccb2c155cd7")) && contains(["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "ffffffff-ffff-ffff-ffff-ffffffffffff", "dddddddd-dddd-dddd-dddd-dddddddddddd"], ra.principal_id)
@@ -169,14 +186,17 @@ run "app_secrets_role_reads_writes_and_deletes_secrets_and_nothing_more" {
     error_message = "With a shared identity, only ca-api's identity may hold the app secrets role, and no app identity may hold Key Vault Secrets Officer on the vault."
   }
 
-  # The Crypto Officer grant stays as it was.
+  # Beside it, the signing roles, by id: with ca-workers on the apps identity (start on entra), that
+  # identity holds both the reader and the signing keys role on the vault, never Crypto Officer.
   assert {
     condition = (
-      azurerm_role_assignment.kv_crypto_officer[0].role_definition_name == "Key Vault Crypto Officer" &&
-      azurerm_role_assignment.kv_crypto_officer[0].scope == azurerm_key_vault.this[0].id &&
-      azurerm_role_assignment.kv_crypto_officer[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      azurerm_role_assignment.kv_signing_key_reader[0].role_definition_id == azurerm_role_definition.signing_key_reader[0].role_definition_resource_id &&
+      azurerm_role_assignment.kv_signing_key_reader[0].scope == azurerm_key_vault.this[0].id &&
+      azurerm_role_assignment.kv_signing_key_reader[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      azurerm_role_assignment.kv_signing_keys[0].role_definition_id == azurerm_role_definition.signing_keys[0].role_definition_resource_id &&
+      azurerm_role_assignment.kv_signing_keys[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     )
-    error_message = "ca-api's identity keeps Key Vault Crypto Officer on the vault for the erasure keys."
+    error_message = "With ca-workers on the apps identity, that identity must hold the signing key reader and signing keys roles on the vault."
   }
 }
 
@@ -236,7 +256,7 @@ run "app_secrets_role_on_ca_workers_own_identity" {
       length([
         for ra in concat(
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
-          azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
@@ -246,7 +266,7 @@ run "app_secrets_role_on_ca_workers_own_identity" {
       length([
         for ra in concat(
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
-          azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_signing_keys_workers,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
         ) : ra if(ra.role_definition_name == "Key Vault Secrets Officer" || endswith(lower(ra.role_definition_id), "/b86a8fe4-44ce-4948-aee5-eccb2c155cd7")) && contains(["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "ffffffff-ffff-ffff-ffff-ffffffffffff", "dddddddd-dddd-dddd-dddd-dddddddddddd"], ra.principal_id)
@@ -255,14 +275,16 @@ run "app_secrets_role_on_ca_workers_own_identity" {
     error_message = "Only ca-api's and ca-workers' identities may hold the app secrets role, and no app identity may hold Key Vault Secrets Officer on the vault."
   }
 
-  # The Crypto Officer grants stay as they were.
+  # The signing roles split by role: key read for ca-api, create and sign for ca-workers alone.
   assert {
     condition = (
-      azurerm_role_assignment.kv_crypto_officer[0].role_definition_name == "Key Vault Crypto Officer" &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].role_definition_name == "Key Vault Crypto Officer" &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+      azurerm_role_assignment.kv_signing_key_reader[0].role_definition_id == azurerm_role_definition.signing_key_reader[0].role_definition_resource_id &&
+      azurerm_role_assignment.kv_signing_key_reader[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      length(azurerm_role_assignment.kv_signing_keys) == 0 &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].role_definition_id == azurerm_role_definition.signing_keys[0].role_definition_resource_id &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     )
-    error_message = "Both app identities keep Key Vault Crypto Officer on the vault for the erasure keys."
+    error_message = "ca-api's identity must hold the signing key reader role and ca-workers' own the signing keys role, and neither Crypto Officer."
   }
 }
 

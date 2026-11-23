@@ -1,7 +1,8 @@
 # The install shapes on which ca-workers stays on the apps identity (workers.tf,
 # workers_own_identity): migrations = "start" with database_auth = "entra" on the starter server,
-# an install without ca-workers, and an install without the vault. tests/workers_identity.tftest.hcl
-# covers the shapes where it moves.
+# and an install without ca-workers. tests/workers_identity.tftest.hcl covers the shapes where it
+# moves. An install without the vault kept ca-workers on the apps identity through 0.26.0; the last
+# three runs here assert that it now moves there too.
 #
 # Every expected value here is a literal, so this file states what those shapes plan, and a change
 # that moves any of them has to change this file. Between them the runs compare the identities, the
@@ -28,6 +29,20 @@ mock_provider "azurerm" {
     target = azurerm_role_definition.app_secrets
     values = {
       role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000001"
+    }
+  }
+
+  override_resource {
+    target = azurerm_role_definition.signing_key_reader
+    values = {
+      role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000002"
+    }
+  }
+
+  override_resource {
+    target = azurerm_role_definition.signing_keys
+    values = {
+      role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000003"
     }
   }
 }
@@ -109,6 +124,9 @@ variables {
 run "start_on_entra_is_unchanged_on_managed_redis" {
   command = apply
 
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
+
   variables {
     database_auth = "entra"
   }
@@ -119,7 +137,7 @@ run "start_on_entra_is_unchanged_on_managed_redis" {
         azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
         azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
         azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-        azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+        azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
         azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
         values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
         values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
@@ -132,12 +150,13 @@ run "start_on_entra_is_unchanged_on_managed_redis" {
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|${azurerm_servicebus_queue.jobs[0].id}|Azure Service Bus Data Owner|(assigned by name)",
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Communication/communicationServices/acs-masterly|Communication and Email Service Owner|(assigned by name)",
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|${azurerm_key_vault.this[0].id}|(assigned by id)|${azurerm_role_definition.app_secrets[0].role_definition_resource_id}",
-      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|${azurerm_key_vault.this[0].id}|Key Vault Crypto Officer|(assigned by name)",
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|${azurerm_key_vault.this[0].id}|(assigned by id)|${azurerm_role_definition.signing_key_reader[0].role_definition_resource_id}",
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|${azurerm_key_vault.this[0].id}|(assigned by id)|${azurerm_role_definition.signing_keys[0].role_definition_resource_id}",
       "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee|${azurerm_key_vault.this[0].id}|Key Vault Secrets Officer|(assigned by name)",
       "ffffffff-ffff-ffff-ffff-ffffffffffff|${azurerm_key_vault_secret.install["bff-shared-secret"].resource_versionless_id}|Key Vault Secrets User|(assigned by name)",
       "ffffffff-ffff-ffff-ffff-ffffffffffff|${azurerm_key_vault_secret.install["oidc-client-secret"].resource_versionless_id}|Key Vault Secrets User|(assigned by name)",
     ])
-    error_message = "On start with entra every grant must stay as it was: the apps identity keeps Service Bus Receiver and the queue's Data Owner, and no workers grant exists."
+    error_message = "On start with entra the apps identity must keep Service Bus Receiver and the queue's Data Owner, hold the signing key reader and signing keys roles in place of Crypto Officer, and no workers grant may exist."
   }
 
   assert {
@@ -182,6 +201,9 @@ run "start_on_entra_is_unchanged_on_managed_redis" {
 run "start_on_entra_is_unchanged_on_azure_cache_for_redis" {
   command = apply
 
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
+
   variables {
     database_auth  = "entra"
     redis_offering = "cache"
@@ -193,7 +215,7 @@ run "start_on_entra_is_unchanged_on_azure_cache_for_redis" {
         azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
         azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
         azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-        azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+        azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
       ) : "${ra.principal_id}|${ra.role_definition_name}|${ra.role_definition_id}"
       ]) == toset([
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|AcrPull|(assigned by name)",
@@ -203,7 +225,8 @@ run "start_on_entra_is_unchanged_on_azure_cache_for_redis" {
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Azure Service Bus Data Owner|(assigned by name)",
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Communication and Email Service Owner|(assigned by name)",
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|(assigned by id)|${azurerm_role_definition.app_secrets[0].role_definition_resource_id}",
-      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Key Vault Crypto Officer|(assigned by name)",
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|(assigned by id)|${azurerm_role_definition.signing_key_reader[0].role_definition_resource_id}",
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|(assigned by id)|${azurerm_role_definition.signing_keys[0].role_definition_resource_id}",
     ])
     error_message = "On start with entra on Azure Cache for Redis the apps identity must keep every backend grant, and no workers grant may exist."
   }
@@ -241,7 +264,7 @@ run "no_workers_is_unchanged_on_password" {
         azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
         azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
         azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-        azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+        azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
       ) : "${ra.principal_id}|${ra.role_definition_name}|${ra.role_definition_id}"
       ]) == toset([
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|AcrPull|(assigned by name)",
@@ -250,7 +273,7 @@ run "no_workers_is_unchanged_on_password" {
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Azure Service Bus Data Receiver|(assigned by name)",
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Communication and Email Service Owner|(assigned by name)",
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|(assigned by id)|${azurerm_role_definition.app_secrets[0].role_definition_resource_id}",
-      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Key Vault Crypto Officer|(assigned by name)",
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|(assigned by id)|${azurerm_role_definition.signing_key_reader[0].role_definition_resource_id}",
     ])
     error_message = "Without ca-workers the apps identity must keep Sender, Receiver and every other backend grant, with no queue Data Owner and no workers grant."
   }
@@ -289,7 +312,7 @@ run "no_workers_is_unchanged_on_entra" {
       azurerm_role_assignment.sb_receiver[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
       length(azurerm_role_assignment.sb_scaler) == 0 &&
       length(azurerm_role_assignment.acr_pull_workers) + length(azurerm_role_assignment.kv_app_secrets_workers) +
-      length(azurerm_role_assignment.kv_crypto_officer_workers) + length(azurerm_role_assignment.sb_sender_workers) +
+      length(azurerm_role_assignment.kv_signing_keys_workers) + length(azurerm_role_assignment.sb_sender_workers) +
       length(azurerm_role_assignment.sb_receiver_workers) + length(azurerm_role_assignment.sb_scaler_workers) +
       length(azurerm_role_assignment.acs_email_sender_workers) + length(azurerm_managed_redis_access_policy_assignment.workers) +
       length(azurerm_redis_cache_access_policy_assignment.workers) == 0 &&
@@ -318,7 +341,7 @@ run "no_workers_is_unchanged_on_byo_database" {
       azurerm_role_assignment.sb_receiver[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
       length(azurerm_role_assignment.sb_scaler) == 0 &&
       length(azurerm_role_assignment.acr_pull_workers) + length(azurerm_role_assignment.kv_app_secrets_workers) +
-      length(azurerm_role_assignment.kv_crypto_officer_workers) + length(azurerm_role_assignment.sb_sender_workers) +
+      length(azurerm_role_assignment.kv_signing_keys_workers) + length(azurerm_role_assignment.sb_sender_workers) +
       length(azurerm_role_assignment.sb_receiver_workers) + length(azurerm_role_assignment.sb_scaler_workers) +
       length(azurerm_role_assignment.acs_email_sender_workers) + length(azurerm_managed_redis_access_policy_assignment.workers) +
       length(azurerm_redis_cache_access_policy_assignment.workers) == 0 &&
@@ -329,9 +352,10 @@ run "no_workers_is_unchanged_on_byo_database" {
   }
 }
 
-# No vault: every app carries its secrets as values, and ca-workers has no vault reference to
-# resolve, so it stays on the apps identity. Only demo runs without one.
-run "no_vault_is_unchanged_on_password" {
+# No vault: every app carries its secrets as values. Through 0.26.0 ca-workers stayed on the apps
+# identity here; now it runs as its own, and takes Service Bus receive and the queue's Data Owner
+# with it. Only demo runs without the vault, and it has no signing role to hold.
+run "no_vault_moves_ca_workers_on_password" {
   command = apply
 
   variables {
@@ -347,42 +371,46 @@ run "no_vault_is_unchanged_on_password" {
         azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
         azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
         azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-        azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+        azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
       ) : "${ra.principal_id}|${ra.role_definition_name}"
       ]) == toset([
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|AcrPull",
       "ffffffff-ffff-ffff-ffff-ffffffffffff|AcrPull",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb|AcrPull",
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Azure Service Bus Data Sender",
-      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Azure Service Bus Data Receiver",
-      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Azure Service Bus Data Owner",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb|Azure Service Bus Data Sender",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb|Azure Service Bus Data Receiver",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb|Azure Service Bus Data Owner",
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa|Communication and Email Service Owner",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb|Communication and Email Service Owner",
     ])
-    error_message = "Without the vault the apps identity must keep every backend grant, the queue's Data Owner included, and no workers grant may exist."
+    error_message = "Without the vault ca-workers' own identity must hold its pull, Service Bus send and receive, the queue's Data Owner and ACS, and ca-api's identity Sender alone among the queue roles."
   }
 
   assert {
     condition = (
-      length(module.workers_identity) + length(module.postgres_connection_urls_workers) == 0 &&
-      output.workers_identity_principal_id == null &&
+      local.workers_own_identity &&
+      output.workers_identity_principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      length(module.postgres_connection_urls_workers) == 0 &&
       length(azurerm_managed_redis_access_policy_assignment.apps) == 1 &&
-      length(azurerm_managed_redis_access_policy_assignment.workers) + length(azurerm_redis_cache_access_policy_assignment.workers) == 0 &&
+      azurerm_managed_redis_access_policy_assignment.workers[0].object_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       module.api.user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
-      module.workers[0].user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
-      module.workers[0].registry.identity == module.apps_identity.id &&
-      module.workers[0].scale.custom_scale_rules[0].identity_id == module.apps_identity.id &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id]) &&
+      module.workers[0].registry.identity == module.workers_identity[0].id &&
+      module.workers[0].scale.custom_scale_rules[0].identity_id == module.workers_identity[0].id &&
       local.api_env["AZURE_CLIENT_ID"] == "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc" &&
-      local.workers_env == local.api_env &&
+      local.workers_env["AZURE_CLIENT_ID"] == "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc" &&
       module.workers[0].env_names == module.api.env_names &&
       local.backend_env_secret_refs["MASTERLY_DATABASE_URL"] == "database-url" &&
       length(module.workers[0].vault_backed_secret_names) + length(module.api.vault_backed_secret_names) == 0 &&
       sort(module.workers[0].value_secret_names) == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
       sort(module.api.value_secret_names) == tolist(["bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"])
     )
-    error_message = "Without the vault on password both apps must stay on the apps identity, with the shared database-url as a value secret."
+    error_message = "Without the vault on password ca-workers must run, pull and scale as its own identity with its own AZURE_CLIENT_ID, keep the shared database-url as a value secret, and ca-api stay on the apps identity."
   }
 }
 
-run "no_vault_is_unchanged_on_entra" {
+run "no_vault_on_start_with_entra_is_unchanged" {
   command = apply
 
   variables {
@@ -392,26 +420,22 @@ run "no_vault_is_unchanged_on_entra" {
     database_auth    = "entra"
   }
 
+  # "start" on "entra" on the starter server is the one shape that keeps ca-workers on the apps
+  # identity, with or without the vault: both apps sign in as the server's administrator.
   assert {
     condition = (
+      !local.workers_own_identity &&
       length(module.workers_identity) + length(module.postgres_connection_urls_workers) == 0 &&
       length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 2 &&
-      length(azurerm_role_assignment.acr_pull_workers) + length(azurerm_role_assignment.kv_app_secrets_workers) +
-      length(azurerm_role_assignment.kv_crypto_officer_workers) + length(azurerm_role_assignment.sb_sender_workers) +
-      length(azurerm_role_assignment.sb_receiver_workers) + length(azurerm_role_assignment.sb_scaler_workers) +
-      length(azurerm_role_assignment.acs_email_sender_workers) + length(azurerm_managed_redis_access_policy_assignment.workers) +
-      length(azurerm_redis_cache_access_policy_assignment.workers) == 0 &&
       length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 1 &&
-      module.api.user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
       module.workers[0].user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
-      local.workers_env["AZURE_CLIENT_ID"] == "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc" &&
       local.workers_env == local.api_env
     )
-    error_message = "Without the vault on entra both apps must stay on the apps identity, its grants and its administrator."
+    error_message = "Without the vault on start with entra both apps must stay on the apps identity, its grants and its administrator."
   }
 }
 
-run "no_vault_is_unchanged_on_byo_database" {
+run "no_vault_moves_ca_workers_on_byo_database" {
   command = apply
 
   variables {
@@ -423,18 +447,16 @@ run "no_vault_is_unchanged_on_byo_database" {
 
   assert {
     condition = (
-      length(module.workers_identity) + length(module.postgres_connection_urls_workers) == 0 &&
-      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 2 &&
-      length(azurerm_role_assignment.acr_pull_workers) + length(azurerm_role_assignment.kv_app_secrets_workers) +
-      length(azurerm_role_assignment.kv_crypto_officer_workers) + length(azurerm_role_assignment.sb_sender_workers) +
-      length(azurerm_role_assignment.sb_receiver_workers) + length(azurerm_role_assignment.sb_scaler_workers) +
-      length(azurerm_role_assignment.acs_email_sender_workers) + length(azurerm_managed_redis_access_policy_assignment.workers) +
-      length(azurerm_redis_cache_access_policy_assignment.workers) == 0 &&
+      local.workers_own_identity &&
+      length(module.postgres_connection_urls_workers) == 0 &&
+      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 0 &&
+      azurerm_role_assignment.sb_receiver_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.sb_scaler_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      length(azurerm_role_assignment.kv_app_secrets_workers) + length(azurerm_role_assignment.kv_signing_keys_workers) == 0 &&
       module.api.user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
-      module.workers[0].user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
-      local.workers_env == local.api_env &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id]) &&
       local.backend_env_secret_refs["MASTERLY_DATABASE_URL"] == "database-url"
     )
-    error_message = "Without the vault on BYO-DB both apps must stay on the apps identity and the shared database-url."
+    error_message = "Without the vault on BYO-DB ca-workers must run as its own identity with the queue grants, and keep the shared database-url."
   }
 }

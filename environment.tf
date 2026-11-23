@@ -177,7 +177,7 @@ locals {
     var.frontend_environment == "aca" && local.frontend_custom_domain ? "the frontend_custom_domain certificate (it follows frontend_environment)" : "",
     var.edge_environment == "aca" && local.edge_custom_domain ? "the edge_custom_domain certificate (it follows edge_environment)" : "",
     var.enable_workers && var.workers_environment == "runtime" ? "ca-workers (workers_environment = \"runtime\")" : "",
-    var.migrations == "job" && var.migrate_job_environment == "runtime" ? "caj-migrate (migrations = \"job\" with migrate_job_environment = \"runtime\")" : "",
+    local.migrate_job && var.migrate_job_environment == "runtime" ? "caj-migrate (migrations = \"job\" with migrate_job_environment = \"runtime\")" : "",
   ])
 
   # ca-api in the app environment: its callers cross environments, so they address it by its

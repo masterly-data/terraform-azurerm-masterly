@@ -432,9 +432,9 @@ run "edge_identity_is_its_own_and_holds_no_data_role" {
   assert {
     condition = alltrue(concat(
       [for r in azurerm_role_assignment.kv_app_secrets : r.principal_id != module.edge_identity[0].principal_id],
-      [for r in azurerm_role_assignment.kv_crypto_officer : r.principal_id != module.edge_identity[0].principal_id],
+      [for r in azurerm_role_assignment.kv_signing_key_reader : r.principal_id != module.edge_identity[0].principal_id],
       [for r in azurerm_role_assignment.kv_app_secrets_workers : r.principal_id != module.edge_identity[0].principal_id],
-      [for r in azurerm_role_assignment.kv_crypto_officer_workers : r.principal_id != module.edge_identity[0].principal_id],
+      [for r in azurerm_role_assignment.kv_signing_keys_workers : r.principal_id != module.edge_identity[0].principal_id],
       [for r in azurerm_role_assignment.kv_secrets_officer_deployer : r.principal_id != module.edge_identity[0].principal_id],
       [for r in azurerm_role_assignment.kv_secrets_user_frontend : r.principal_id != module.edge_identity[0].principal_id],
       [for r in azurerm_role_assignment.kv_secrets_user_migrate : r.principal_id != module.edge_identity[0].principal_id],

@@ -96,15 +96,25 @@ locals {
   # claim, so one replica per message would add replicas faster than the work needs them.
   workers_scale_message_count = 5
 
-  # Whether ca-workers runs as its own identity (id-<prefix>-workers, main.tf): wherever it exists
-  # and the install has a Key Vault, so on "password", on BYO-DB and on migrations = "job", which
-  # requires the vault. migrations = "start" with database_auth = "entra" on the starter server
-  # stays on the apps identity: the shared DSN's user there is that identity's name, and its token
-  # is minted for AZURE_CLIENT_ID. Every `*_workers` grant and Redis policy counts on this, so an
-  # install without ca-workers gets none of them. nonsensitive() on database_entra alone, the
-  # same narrow unmarking as main.tf's presence tests: whether a DSN was supplied is not the secret,
-  # and a marked value here would hide which identity ca-workers runs as from every plan.
-  workers_own_identity = var.enable_workers && var.enable_key_vault && (local.migrate_app_roles || !nonsensitive(local.database_entra))
+  # Whether ca-workers runs as its own identity (id-<prefix>-workers, identity.tf): wherever it
+  # exists, except migrations = "start" with database_auth = "entra" on the starter server. There
+  # the shared DSN's user is the apps identity's name, the server's Entra administrator, because
+  # both apps migrate at start; its token is minted for AZURE_CLIENT_ID, so ca-workers stays on that
+  # identity (ADR 0120 §6 departure; production's default, migrations = "job", avoids it). Every
+  # `*_workers` grant and Redis policy counts on this, so an install without ca-workers gets none of
+  # them. Through 0.26.0 an install without the Key Vault kept ca-workers on the apps identity too.
+  # nonsensitive() on database_entra alone, the same narrow unmarking as main.tf's presence tests:
+  # whether a DSN was supplied is not the secret, and a marked value here would hide which identity
+  # ca-workers runs as from every plan.
+  workers_own_identity = var.enable_workers && (local.migrate_app_roles || !nonsensitive(local.database_entra))
+
+  # Whether ca-workers' env names its own identity's client id (workers_env, main.tf): where it runs
+  # as its own identity and the api's env names one, which the Key Vault, Service Bus and Entra
+  # bindings set (keyvault_env, servicebus_env, entra_auth_env). Without any of them nothing in the
+  # env mints a token, and the api sets none either. Stated from the inputs rather than read from
+  # local.api_env, which is sensitive: whether a key exists is not the secret, and a marked value
+  # here would mark the whole env.
+  workers_own_client_id = local.workers_own_identity && (var.enable_key_vault || var.enable_service_bus || nonsensitive(local.database_entra) || local.redis_entra)
 
   # Whether ca-workers signs in as its own database role, masterly_workers, with its own DSN
   # secrets: only where the migrate job creates that role (migrate_app_roles) and ca-workers exists.
@@ -232,10 +242,12 @@ module "workers" {
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,
     azurerm_managed_redis_access_policy_assignment.apps,
     azurerm_redis_cache_access_policy_assignment.apps,
+    # Where ca-workers runs as the apps identity, the signing keys grant it creates and signs with.
+    azurerm_role_assignment.kv_signing_keys,
     # Its own identity's grants, when it runs as it.
     azurerm_role_assignment.acr_pull_workers,
     azurerm_role_assignment.kv_app_secrets_workers,
-    azurerm_role_assignment.kv_crypto_officer_workers,
+    azurerm_role_assignment.kv_signing_keys_workers,
     azurerm_role_assignment.sb_sender_workers,
     azurerm_role_assignment.sb_receiver_workers,
     azurerm_role_assignment.sb_scaler_workers,

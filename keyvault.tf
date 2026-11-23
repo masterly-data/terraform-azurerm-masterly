@@ -252,45 +252,112 @@ moved {
   to   = azurerm_role_assignment.kv_app_secrets
 }
 
-# The apps identity also creates and uses this vault's KEYS — the Crypto Officer data-plane
-# role, again scoped to this vault only.
+# --- The signing keys: no Crypto Officer on any app (ADR 0120 §6, amended 2026-10-25) --------
 #
-# What needs it: erasure of personal data (ADR 0081). On an application release that carries
-# erasure, each Environment gets two erasure keys of its own, both living in this vault:
+# The vault holds the install's signing keys as vault keys: each Environment's erasure signing key
+# (ADR 0081) and its audit checkpoint key (ADR 0033). The application creates each one on first use,
+# at a fixed name derived from the Environment's id, only if it is absent, and asks the vault to sign
+# with it, so the private half never leaves the vault. Since api images v0.138.0 only the workers
+# process does this (the erasure job and the checkpoint signer run in the core worker pool); ca-api
+# reads a key's public half, for GET /v1/audit/signing-key, the audit export and online verify, and
+# nothing more.
 #
-#   - a SIGNING key, held as a vault key. The application asks the vault to sign each erasure
-#     listing and never holds the key's private half, so a listing cannot be forged by anyone
-#     who only reaches the database.
-#   - a SUPPRESSION key, held as a vault secret — already covered by the app secrets grant
-#     above, and named here only so the pair is not mistaken for one grant covering both.
+# So each role gets a role the module defines, holding only what it does, in place of the built-in
+# Key Vault Crypto Officer, whose keys/* also carries delete, purge, update, import, backup,
+# restore, rotate, recover and release on every key in the vault:
 #
-# Why this grant is on the vault rather than on those two keys, and why Crypto Officer rather
-# than the narrower Crypto User:
+#   signing_key_reader  keys/read: a key's properties and public half. Never its private half,
+#                       never a signature. ca-api's identity.
+#   signing_keys        the five data actions the amendment lists, and no others: keys/create,
+#                       keys/read and keys/sign, and getSecret and setSecret for the suppression key
+#                       and the high-water mark (which the app secrets role carries as well).
+#                       ca-workers' identity, wherever ca-workers runs.
 #
-#   - Both keys are created by the running application, at fixed names derived from the
-#     Environment's id, and only if they are absent. The Environment is created long after this
-#     module applies, so at apply time there is no key for a role assignment to name — and an
-#     Azure role assignment cannot be scoped to a key that does not exist yet.
-#   - Key Vault Crypto User can read, sign and verify, but it cannot create a key. Crypto
-#     Officer is the smallest built-in role that can, so it is the tightest grant this design
-#     admits.
+# Scope: the vault. An Azure role assignment cannot be scoped to a key that does not exist yet, and
+# Key Vault's attribute-based conditions (preview) cover secret data actions only, not keys, so the
+# narrower scope the amendment asks for (the erasure and audit names alone) needs a vault holding only
+# those objects, which the application does not support yet: it reads one vault URL. Until it does,
+# these roles reach every key in this vault, which holds no keys besides its Environments' signing
+# keys, and the role carries no delete or purge. In mode = "production" purge protection is armed on
+# the vault above as well. Losing a signing key is consequential all the same: see "Erasure keys
+# belong in your secret backup" in the README.
 #
-# What bounds it: the role reaches this install's own vault and nothing else, and that vault
-# holds no keys besides its Environments'. In mode = "production" purge protection is armed on
-# the vault above, so a deleted key stays recoverable for the soft-delete window and a purge is
-# refused by the vault whatever the role permits. Losing an erasure key is consequential all the
-# same — see "Erasure keys belong in your secret backup" in the README.
-resource "azurerm_role_assignment" "kv_crypto_officer" {
+# Creating either needs Microsoft.Authorization/roleDefinitions/write, as app_secrets does.
+resource "azurerm_role_definition" "signing_key_reader" {
   count = var.enable_key_vault ? 1 : 0
 
-  scope                = azurerm_key_vault.this[0].id
-  role_definition_name = "Key Vault Crypto Officer"
-  principal_id         = module.apps_identity.principal_id
+  name        = "Masterly signing key reader (${var.name_prefix}-${random_string.install.result})"
+  scope       = azurerm_resource_group.data.id
+  description = "Read the properties and public half of the keys in the Masterly install's Key Vault. No signing, no private key material, no create, update or delete."
+
+  permissions {
+    actions = []
+    data_actions = [
+      "Microsoft.KeyVault/vaults/keys/read",
+    ]
+  }
+
+  assignable_scopes = [azurerm_resource_group.data.id]
 }
 
-# The same two vault-scope roles for ca-workers' own identity, when it runs as it
-# (main.tf, workers_identity): ca-workers seals material and runs erasure as the api does.
-# Renamed and replaced as kv_app_secrets is, for the same reason.
+resource "azurerm_role_definition" "signing_keys" {
+  count = var.enable_key_vault ? 1 : 0
+
+  name        = "Masterly signing keys (${var.name_prefix}-${random_string.install.result})"
+  scope       = azurerm_resource_group.data.id
+  description = "Create a key that is absent, read keys and sign with them, and read and set secrets, in the Masterly install's Key Vault. No delete, purge, update, import, backup, restore, rotate, recover or release."
+
+  permissions {
+    actions = []
+    data_actions = [
+      "Microsoft.KeyVault/vaults/keys/create/action",
+      "Microsoft.KeyVault/vaults/keys/read",
+      "Microsoft.KeyVault/vaults/keys/sign/action",
+      "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+      "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+    ]
+  }
+
+  assignable_scopes = [azurerm_resource_group.data.id]
+}
+
+# ca-api's grant. It was Key Vault Crypto Officer under the name kv_crypto_officer; the moved block
+# keeps the address, so an upgrade replaces this one grant (a role change forces a new assignment)
+# rather than leaving the Crypto Officer grant as an orphan whose removal nothing orders: no resource
+# recorded a dependency on it. The replacement is destroy-then-create, as for kv_app_secrets:
+# create_before_destroy here puts module.api in a dependency cycle on any apply that also destroys a
+# resource depending on ca-api (an alert, a diagnostic setting). So for the seconds between the
+# removal and the create, and until Azure propagates the new grant, ca-api cannot read a signing
+# key's public half: GET /v1/audit/signing-key, the audit export and online verify can fail and
+# succeed when retried. ca-api depends on this address, so its update comes after the create.
+resource "azurerm_role_assignment" "kv_signing_key_reader" {
+  count = var.enable_key_vault ? 1 : 0
+
+  scope              = azurerm_key_vault.this[0].id
+  role_definition_id = azurerm_role_definition.signing_key_reader[0].role_definition_resource_id
+  principal_id       = module.apps_identity.principal_id
+}
+
+moved {
+  from = azurerm_role_assignment.kv_crypto_officer
+  to   = azurerm_role_assignment.kv_signing_key_reader
+}
+
+# Where ca-workers runs as the apps identity (migrations = "start" with database_auth = "entra" on
+# the starter server, workers.tf), that identity also needs the signing keys role, because the
+# workers process creates and signs. ca-workers depends on it, so it exists before ca-workers'
+# update.
+resource "azurerm_role_assignment" "kv_signing_keys" {
+  count = var.enable_key_vault && var.enable_workers && !local.workers_own_identity ? 1 : 0
+
+  scope              = azurerm_key_vault.this[0].id
+  role_definition_id = azurerm_role_definition.signing_keys[0].role_definition_resource_id
+  principal_id       = module.apps_identity.principal_id
+}
+
+# The app secrets role for ca-workers' own identity, when it runs as it (identity.tf,
+# workers_identity): ca-workers seals material as the api does. Renamed and replaced as
+# kv_app_secrets is, for the same reason.
 resource "azurerm_role_assignment" "kv_app_secrets_workers" {
   count = local.workers_own_identity && var.enable_key_vault ? 1 : 0
 
@@ -304,12 +371,17 @@ moved {
   to   = azurerm_role_assignment.kv_app_secrets_workers
 }
 
-resource "azurerm_role_assignment" "kv_crypto_officer_workers" {
+# ca-workers' own identity's signing keys grant. It replaces the Key Vault Crypto Officer grant
+# that was at azurerm_role_assignment.kv_crypto_officer_workers, at a new address and with no moved
+# block: ca-workers depends on both addresses (workers.tf through 0.26.0, and now this one), so the
+# new grant is created before ca-workers' update, and Terraform, which records that dependency in
+# state, removes the Crypto Officer grant only after the update.
+resource "azurerm_role_assignment" "kv_signing_keys_workers" {
   count = local.workers_own_identity && var.enable_key_vault ? 1 : 0
 
-  scope                = azurerm_key_vault.this[0].id
-  role_definition_name = "Key Vault Crypto Officer"
-  principal_id         = module.workers_identity[0].principal_id
+  scope              = azurerm_key_vault.this[0].id
+  role_definition_id = azurerm_role_definition.signing_keys[0].role_definition_resource_id
+  principal_id       = module.workers_identity[0].principal_id
 }
 
 # Private DNS + endpoint (production only): the vault's public hostname resolves to the

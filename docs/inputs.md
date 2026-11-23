@@ -367,7 +367,7 @@ In `migrate.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `migrations` | `string` | `"start"` | Where schema migrations run. |
+| `migrations` | `string` | `null` | Where schema migrations run. |
 | `migrate_job_environment` | `string` | `"runtime"` | With migrations = "job": which Container Apps environment the migrate job (caj-migrate) runs in. |
 | `migrate_job_schedule` | `string` | `"*/5 * * * *"` | With migrations = "job": when the migrate job (caj-migrate) runs on its own, as a five-field cron expression in UTC. |
 

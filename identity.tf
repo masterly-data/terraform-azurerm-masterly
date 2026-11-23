@@ -1,14 +1,15 @@
 # The apps' managed identities, the registry and image defaults, and the AcrPull grants.
 
 # --- App identities --------------------------------------------------------------
-# One identity per app is the platform's rule, and the reason is the frontend: it is the
-# only internet-facing app in the install, and it needs nothing but image pull. Sharing
-# `apps_identity` with it handed the public front door write access to the install's Key Vault
-# secrets (Key Vault Secrets Officer then, the narrower app secrets role now), Service Bus send
-# + receive and ACS Email Owner — permissions it never uses, on the one app an
-# attacker reaches first. So the backend apps (api, workers) keep `apps_identity` and the
-# data-plane grants that go with it; the frontend gets its own, holding AcrPull alone.
-
+# One identity per role (ADR 0120 §6), each holding only the grants that role uses. The first
+# reason was the frontend: it is the only internet-facing app in the install, and it needs nothing
+# but image pull, so it never shared the backend's identity. The second is the api: since api
+# v0.138.0 it creates and signs no key, so it holds key read and Service Bus send, and the workers'
+# create, sign and receive rights are on ca-workers' own identity (workers_identity, below).
+#
+# `apps_identity` is ca-api's identity. Its name, id-<prefix>-apps, predates the split and is kept:
+# renaming a user-assigned identity replaces it, which would change its principal, and with it every
+# grant and, under migrations = "job", the database role the migrate job bound to its object id.
 module "apps_identity" {
   source = "./modules/user-assigned-identity"
 
@@ -48,13 +49,12 @@ module "migrate_identity" {
 # ca-workers' own identity, and with migrations = "job" on the starter server the principal of its
 # database role, masterly_workers, which the migrate job creates on database_auth = "entra" from
 # this identity's object id (migrate.tf). ca-workers runs as it (workers.tf) and it holds the backend
-# grants ca-workers needs (each `*_workers` grant), and is no Postgres administrator. Two of them
-# the apps identity no longer holds once ca-workers runs as this one: Service Bus Data Receiver and
-# the jobs queue's Data Owner.
-# Wherever ca-workers exists and the install has a Key Vault, except migrations = "start" with
-# database_auth = "entra" on the starter server (local.workers_own_identity, workers.tf); otherwise
-# ca-workers runs as the apps identity. With the app roles but without ca-workers (enable_workers =
-# false) the identity still exists for the migrate job's role, but holds no grant and no DSN secret.
+# grants ca-workers needs (each `*_workers` grant), and is no Postgres administrator.
+# Wherever ca-workers exists, except migrations = "start" with database_auth = "entra" on the
+# starter server (local.workers_own_identity, workers.tf), where both apps sign in to Postgres as
+# the apps identity and ca-workers runs as it. With the app roles but without ca-workers
+# (enable_workers = false) the identity still exists for the migrate job's role, but holds no
+# grant and no DSN secret.
 module "workers_identity" {
   source = "./modules/user-assigned-identity"
   count  = local.migrate_app_roles || local.workers_own_identity ? 1 : 0

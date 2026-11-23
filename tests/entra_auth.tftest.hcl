@@ -94,15 +94,16 @@ run "production_new_install_defaults_to_entra" {
     error_message = "On database_auth = \"entra\" the server must have Entra authentication on and password authentication off."
   }
 
-  # The apps' identity is the server's Entra administrator — the role that can create a database
-  # per Environment — and the URL's user is that role's name.
+  # A new production install also runs the migrate job (migrations unset, MAS-5130): the migrate
+  # job's identity is the server's only Entra administrator, the role that can create a database per
+  # Environment, and ca-api's identity is none (ADR 0120 §6).
   assert {
     condition = (
-      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 1 &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].principal_name == "id-masterly-apps" &&
-      azurerm_postgresql_flexible_server_active_directory_administrator.apps[0].principal_type == "ServicePrincipal"
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0 &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 1 &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].principal_type == "ServicePrincipal"
     )
-    error_message = "The apps' identity must be the starter server's Entra administrator, under its own name."
+    error_message = "On a new production install the migrate job's identity must be the starter server's only Entra administrator, and the apps' identity none."
   }
 
   # Access keys off on the managed offering, and the identity holds the data access policy.
@@ -549,10 +550,11 @@ run "production_explicit_entra_reads_only_the_server" {
     condition = (
       length(data.azurerm_resources.existing_postgres) == 1 &&
       length(data.azurerm_resources.existing_redis) == 0 &&
-      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 1 &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.migrate) == 1 &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0 &&
       length(azurerm_managed_redis_access_policy_assignment.apps) == 1
     )
-    error_message = "An explicit \"entra\" must read only the server, and grant the apps' identity on both stores."
+    error_message = "An explicit \"entra\" must read only the server, make the migrate job's identity the server's administrator (production's default, migrations = \"job\"), and grant the apps' identity on Redis."
   }
 
   # A new server on "entra" is sent no password: Azure refuses one at creation when password
@@ -798,7 +800,7 @@ run "a_moved_server_keeps_its_password_on_later_plans" {
 # after an apply, so it follows that apply here rather than sitting with the other
 # sizing runs (MAS-4478).
 # The Service Bus binding: ca-workers scales on the jobs queue it receives from, authenticated as
-# the apps' identity, which holds the Manage right on that queue alone. An install whose replica
+# its own identity, which holds the Manage right on that queue alone (ADR 0120 §6: ca-api's never). An install whose replica
 # bounds are unchanged keeps them; only the rule and the grant are added.
 run "service_bus_workers_scale_on_the_jobs_queue" {
   command = plan
@@ -821,15 +823,26 @@ run "service_bus_workers_scale_on_the_jobs_queue" {
     }
   }
 
+  override_module {
+    target = module.workers_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"
+      principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+      client_id    = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-workers"
+    }
+  }
+
   assert {
     condition = (
       length(module.workers[0].scale.custom_scale_rules) == 1 &&
       module.workers[0].scale.custom_scale_rules[0].custom_rule_type == "azure-servicebus" &&
       module.workers[0].scale.custom_scale_rules[0].metadata["queueName"] == azurerm_servicebus_queue.jobs[0].name &&
       module.workers[0].scale.custom_scale_rules[0].metadata["messageCount"] == "5" &&
-      module.workers[0].scale.custom_scale_rules[0].identity_id == module.apps_identity.id
+      module.workers[0].scale.custom_scale_rules[0].identity_id == module.workers_identity[0].id
     )
-    error_message = "ca-workers must scale on the jobs queue's message count, authenticated as the apps' identity."
+    error_message = "ca-workers must scale on the jobs queue's message count, authenticated as its own identity."
   }
 
   # The rule watches the namespace the workers receive from: the same name the workers' env
@@ -846,11 +859,12 @@ run "service_bus_workers_scale_on_the_jobs_queue" {
 
   assert {
     condition = (
-      length(azurerm_role_assignment.sb_scaler) == 1 &&
-      azurerm_role_assignment.sb_scaler[0].role_definition_name == "Azure Service Bus Data Owner" &&
-      azurerm_role_assignment.sb_scaler[0].principal_id == module.apps_identity.principal_id
+      length(azurerm_role_assignment.sb_scaler) == 0 &&
+      length(azurerm_role_assignment.sb_scaler_workers) == 1 &&
+      azurerm_role_assignment.sb_scaler_workers[0].role_definition_name == "Azure Service Bus Data Owner" &&
+      azurerm_role_assignment.sb_scaler_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     )
-    error_message = "The apps' identity must hold Azure Service Bus Data Owner for the scale rule to read the queue."
+    error_message = "ca-workers' own identity, never the apps', must hold Azure Service Bus Data Owner for the scale rule to read the queue."
   }
 
   # The api has its own HTTP scale rule and no grace-period change.

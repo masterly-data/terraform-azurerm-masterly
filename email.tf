@@ -47,8 +47,10 @@ locals {
   } : {}
 }
 
-# The apps identity sends email via Entra ID (DefaultAzureCredential) — no connection string
-# (ADR 0040). "Communication and Email Service Owner" is the role ACS requires to send.
+# ca-api's identity sends email via Entra ID (DefaultAzureCredential) — no connection string
+# (ADR 0040). "Communication and Email Service Owner" is the role ACS requires to send. ca-api keeps
+# it although ADR 0120 §6 gives email to the workers: api v0.138.0 sends organization invitations
+# and notification verification codes from ca-api, inside the request.
 resource "azurerm_role_assignment" "acs_email_sender" {
   count                = var.email_acs_enabled ? 1 : 0
   scope                = module.acs_email[0].communication_service_id

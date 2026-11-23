@@ -32,6 +32,20 @@ mock_provider "azurerm" {
       role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000001"
     }
   }
+
+  override_resource {
+    target = azurerm_role_definition.signing_key_reader
+    values = {
+      role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000002"
+    }
+  }
+
+  override_resource {
+    target = azurerm_role_definition.signing_keys
+    values = {
+      role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/a99a5ec1-0000-4000-8000-000000000003"
+    }
+  }
 }
 mock_provider "random" {}
 mock_provider "azapi" {}
@@ -147,14 +161,15 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
 
   # The list below names every azurerm_role_assignment in the module, so a new one must be added.
   assert {
-    condition     = length(regexall("resource \"azurerm_role_assignment\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) == 26
+    condition     = length(regexall("resource \"azurerm_role_assignment\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) == 27
     error_message = "A role assignment was added or removed: name it in this file's grant lists."
   }
 
   # Threat: privilege creep. Every (scope, role name, role id) id-<prefix>-workers holds is also held by
   # the apps identity, among the role assignments and the Redis access policies, or is one of the
-  # two the apps identity held before "job" and gives up to it: Service Bus Data Receiver on the
-  # namespace and Data Owner on the jobs queue (ADR 0120).
+  # three the apps identity held before and gives up to it: Service Bus Data Receiver on the
+  # namespace, Data Owner on the jobs queue, and key create and sign, now the signing keys role in
+  # place of the Crypto Officer both identities held (ADR 0120 §6).
   assert {
     condition = (
       length([
@@ -162,7 +177,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers, azurerm_role_assignment.acr_pull_edge,
           azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
           azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -174,7 +189,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
             azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
             azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
             azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-            azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+            azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
             azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
             values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
             values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -184,7 +199,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
               azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
               azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
               azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-              azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+              azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
               azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
               values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
               values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -192,6 +207,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
             ], [
             "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver|(assigned by name)",
             "${azurerm_servicebus_queue.jobs[0].id}|Azure Service Bus Data Owner|(assigned by name)",
+            "${azurerm_key_vault.this[0].id}|(assigned by id)|${azurerm_role_definition.signing_keys[0].role_definition_resource_id}",
         ]), pair)
       ]) &&
       length(azurerm_managed_redis_access_policy_assignment.workers) == 1 &&
@@ -227,7 +243,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
       azurerm_role_assignment.kv_app_secrets_workers[0].scope == azurerm_key_vault.this[0].id &&
       endswith(azurerm_role_definition.app_secrets[0].role_definition_resource_id, "/a99a5ec1-0000-4000-8000-000000000001") &&
       azurerm_role_assignment.kv_app_secrets_workers[0].role_definition_id == azurerm_role_definition.app_secrets[0].role_definition_resource_id &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].scope == azurerm_key_vault.this[0].id &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.acr_pull_workers[0].scope == var.acr_id &&
       azurerm_role_assignment.acs_email_sender_workers[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Communication/communicationServices/acs-masterly" &&
       azurerm_role_assignment.acs_email_sender_workers[0].role_definition_name == "Communication and Email Service Owner" &&
@@ -254,7 +270,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
           azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
           azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -270,7 +286,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
           azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
           azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -282,7 +298,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
         for ra in concat(
           azurerm_role_assignment.acr_pull_workers, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
           azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender_workers,
-          azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
         ) : ra.principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
       ])
     )
@@ -380,7 +396,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_azure_cache_for_
             azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
             azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
             azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-            azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+            azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
             azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
             values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
             values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -390,7 +406,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_azure_cache_for_
               azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
               azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
               azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-              azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+              azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
               azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
               values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
               values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -398,6 +414,7 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_azure_cache_for_
             ], [
             "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver|(assigned by name)",
             "${azurerm_servicebus_queue.jobs[0].id}|Azure Service Bus Data Owner|(assigned by name)",
+            "${azurerm_key_vault.this[0].id}|(assigned by id)|${azurerm_role_definition.signing_keys[0].role_definition_resource_id}",
         ]), pair)
       ]) &&
       length(azurerm_managed_redis_access_policy_assignment.workers) + length(azurerm_managed_redis_access_policy_assignment.apps) == 0 &&
@@ -483,15 +500,15 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_azure_cache_for_
       length(concat(
         azurerm_role_assignment.acr_pull_workers, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
         azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender_workers,
-        azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+        azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
       )) == 7 &&
       azurerm_role_assignment.acr_pull_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.acr_pull_workers[0].scope == var.acr_id &&
       azurerm_role_assignment.kv_app_secrets_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.kv_app_secrets_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.kv_app_secrets_workers[0].role_definition_id == azurerm_role_definition.app_secrets[0].role_definition_resource_id &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].scope == azurerm_key_vault.this[0].id &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.acs_email_sender_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.acs_email_sender_workers[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Communication/communicationServices/acs-masterly"
     )
@@ -534,6 +551,9 @@ run "backend_apps_get_their_own_password_urls_with_pgbouncer" {
 run "workers_own_identity_on_password_start" {
   command = apply
 
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
+
   variables {
     migrations         = "start"
     redis_offering     = "managed"
@@ -574,8 +594,8 @@ run "workers_own_identity_on_password_start" {
       azurerm_role_assignment.kv_app_secrets_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.kv_app_secrets_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.kv_app_secrets_workers[0].role_definition_id == azurerm_role_definition.app_secrets[0].role_definition_resource_id &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].scope == azurerm_key_vault.this[0].id &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.acs_email_sender_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.acs_email_sender_workers[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Communication/communicationServices/acs-masterly" &&
       azurerm_managed_redis_access_policy_assignment.workers[0].object_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
@@ -595,7 +615,7 @@ run "workers_own_identity_on_password_start" {
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
           azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
           azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -606,6 +626,7 @@ run "workers_own_identity_on_password_start" {
         for h in held : contains(concat([for g in held : g.grant if g.principal == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], [
           "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver|(assigned by name)",
           "${azurerm_servicebus_queue.jobs[0].id}|Azure Service Bus Data Owner|(assigned by name)",
+          "${azurerm_key_vault.this[0].id}|(assigned by id)|${azurerm_role_definition.signing_keys[0].role_definition_resource_id}",
         ]), h.grant) if h.principal == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
       ]) &&
       contains([for b in azurerm_managed_redis_access_policy_assignment.apps : b.managed_redis_id if b.object_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], azurerm_managed_redis_access_policy_assignment.workers[0].managed_redis_id)
@@ -635,6 +656,9 @@ run "workers_own_identity_on_password_start" {
 # name, and database_auth stays unset: the customer's DSN is the credential.
 run "workers_own_identity_on_byo_database_with_start" {
   command = apply
+
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
 
   variables {
     migrations            = "start"
@@ -674,8 +698,8 @@ run "workers_own_identity_on_byo_database_with_start" {
       azurerm_role_assignment.kv_app_secrets_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.kv_app_secrets_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.kv_app_secrets_workers[0].role_definition_id == azurerm_role_definition.app_secrets[0].role_definition_resource_id &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].scope == azurerm_key_vault.this[0].id &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.acs_email_sender_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.acs_email_sender_workers[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Communication/communicationServices/acs-masterly" &&
       azurerm_redis_cache_access_policy_assignment.workers[0].object_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
@@ -695,7 +719,7 @@ run "workers_own_identity_on_byo_database_with_start" {
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
           azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
           azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -706,6 +730,7 @@ run "workers_own_identity_on_byo_database_with_start" {
         for h in held : contains(concat([for g in held : g.grant if g.principal == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], [
           "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver|(assigned by name)",
           "${azurerm_servicebus_queue.jobs[0].id}|Azure Service Bus Data Owner|(assigned by name)",
+          "${azurerm_key_vault.this[0].id}|(assigned by id)|${azurerm_role_definition.signing_keys[0].role_definition_resource_id}",
         ]), h.grant) if h.principal == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
       ]) &&
       contains([for b in azurerm_redis_cache_access_policy_assignment.apps : "${b.redis_cache_id}|${b.access_policy_name}" if b.object_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], "${azurerm_redis_cache_access_policy_assignment.workers[0].redis_cache_id}|${azurerm_redis_cache_access_policy_assignment.workers[0].access_policy_name}")
@@ -770,8 +795,8 @@ run "workers_own_identity_on_byo_database_with_job" {
       azurerm_role_assignment.kv_app_secrets_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.kv_app_secrets_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.kv_app_secrets_workers[0].role_definition_id == azurerm_role_definition.app_secrets[0].role_definition_resource_id &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].scope == azurerm_key_vault.this[0].id &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].scope == azurerm_key_vault.this[0].id &&
       azurerm_role_assignment.acs_email_sender_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       azurerm_role_assignment.acs_email_sender_workers[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.Communication/communicationServices/acs-masterly" &&
       azurerm_managed_redis_access_policy_assignment.workers[0].object_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
@@ -791,7 +816,7 @@ run "workers_own_identity_on_byo_database_with_job" {
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers,
           azurerm_role_assignment.sb_sender, azurerm_role_assignment.sb_receiver, azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers,
           azurerm_role_assignment.sb_scaler, azurerm_role_assignment.sb_scaler_workers, azurerm_role_assignment.acs_email_sender, azurerm_role_assignment.acs_email_sender_workers,
-          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader), azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
@@ -802,6 +827,7 @@ run "workers_own_identity_on_byo_database_with_job" {
         for h in held : contains(concat([for g in held : g.grant if g.principal == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], [
           "${azurerm_servicebus_namespace.this[0].id}|Azure Service Bus Data Receiver|(assigned by name)",
           "${azurerm_servicebus_queue.jobs[0].id}|Azure Service Bus Data Owner|(assigned by name)",
+          "${azurerm_key_vault.this[0].id}|(assigned by id)|${azurerm_role_definition.signing_keys[0].role_definition_resource_id}",
         ]), h.grant) if h.principal == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
       ]) &&
       contains([for b in azurerm_managed_redis_access_policy_assignment.apps : b.managed_redis_id if b.object_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], azurerm_managed_redis_access_policy_assignment.workers[0].managed_redis_id)
@@ -830,6 +856,9 @@ run "workers_own_identity_on_byo_database_with_job" {
 run "workers_depends_on_every_grant_it_replaces" {
   command = plan
 
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
+
   variables {
     migrations     = "start"
     redis_offering = "managed"
@@ -841,7 +870,7 @@ run "workers_depends_on_every_grant_it_replaces" {
       for ref in [
         "azurerm_role_assignment.acr_pull_workers,",
         "azurerm_role_assignment.kv_app_secrets_workers,",
-        "azurerm_role_assignment.kv_crypto_officer_workers,",
+        "azurerm_role_assignment.kv_signing_keys_workers,",
         "azurerm_role_assignment.sb_sender_workers,",
         "azurerm_role_assignment.sb_receiver_workers,",
         "azurerm_role_assignment.sb_scaler_workers,",
@@ -863,9 +892,9 @@ run "workers_depends_on_every_grant_it_replaces" {
       strcontains(regex("(?s)module \"workers_identity\" \\{(.*?)\\n\\}", file("${path.module}/identity.tf"))[0], "count  = local.migrate_app_roles || local.workers_own_identity ? 1 : 0") &&
       strcontains(regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0], "count  = local.workers_own_dsn ? 1 : 0") &&
       strcontains(file("${path.module}/workers.tf"), "workers_own_dsn = local.migrate_app_roles && var.enable_workers") &&
-      startswith(regex("workers_own_identity = (.*)", file("${path.module}/workers.tf"))[0], "var.enable_workers && var.enable_key_vault && ")
+      regex("workers_own_identity = (.*)", file("${path.module}/workers.tf"))[0] == "var.enable_workers && (local.migrate_app_roles || !nonsensitive(local.database_entra))"
     )
-    error_message = "module.workers_identity must exist with the app roles or where ca-workers runs as it; the workers DSN must follow local.workers_own_dsn; and workers_own_identity must need ca-workers and the vault."
+    error_message = "module.workers_identity must exist with the app roles or where ca-workers runs as it; the workers DSN must follow local.workers_own_dsn; and workers_own_identity must need ca-workers alone, except on start with entra on the starter server."
   }
 }
 

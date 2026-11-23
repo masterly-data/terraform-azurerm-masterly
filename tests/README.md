@@ -5,6 +5,12 @@ such as `network.tftest.hcl` or `keyvault.tftest.hcl`), the files whose runs app
 modules' own files. Add a run to the file of the concern it asserts on. A run that applies goes last
 in its file, after every plan run that does not read its state.
 
+`upgrade_identities.tftest.hcl` is the one file whose runs start from a published release: each
+scenario applies `masterly-data/masterly/azurerm` 0.26.0 from the registry, then the working tree
+on the same `state_key`, so `terraform init` needs the registry for it, as for the providers. A mock
+provider never performs a forced replacement, so no run here can show that one would happen; say so
+where a change depends on it, and leave that to a live plan.
+
 ## What every plan file starts with
 
 Each per-concern plan file starts with the same two parts. Copy them into a new file:
