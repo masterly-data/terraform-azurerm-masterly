@@ -96,6 +96,27 @@ run "defaults_add_no_add_on_environment" {
   }
 }
 
+# Both inputs are non-nullable: null from a caller reads as the default, off.
+run "null_add_on_inputs_read_as_off" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    split_processing      = null
+    extensions            = null
+  }
+
+  assert {
+    condition     = var.split_processing == false && var.extensions == false
+    error_message = "split_processing and extensions must be non-nullable: null must read as false."
+  }
+
+  assert {
+    condition     = toset(keys(module.environments)) == toset(["front", "app", "workers"])
+    error_message = "With null add-on inputs, only the baseline environments may be planned."
+  }
+}
+
 # --- split_processing on a network the module builds ---------------------------------------------
 
 run "split_processing_builds_core_and_outbound" {
@@ -567,6 +588,18 @@ run "api_environment_refuses_the_core_environment" {
   }
 
   expect_failures = [var.api_environment]
+}
+
+run "edge_environment_refuses_the_core_environment" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    split_processing      = true
+    edge_environment      = "core"
+  }
+
+  expect_failures = [var.edge_environment]
 }
 
 run "workers_environment_refuses_the_outbound_environment" {
