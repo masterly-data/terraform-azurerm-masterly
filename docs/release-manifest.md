@@ -104,6 +104,7 @@ your own source is the defect this manifest exists to kill.
 | `releases["X.Y.Z"].digests.<role>` | string | with the per-role image | Same form, for `migrate`, `worker_core` or `worker_integration`, copied from the backend release record. |
 | `releases["X.Y.Z"].api_claims_version` | integer | see "The api claims version" | The licence claims version the release's `api` image verifies, `0` or more. May be absent from releases cut before the field existed; read an absent value as `0`. |
 | `releases["X.Y.Z"].known_issue` | string | no | Present when the release was later found faulty, as plain text for people: what is wrong and which release to move to. Do not parse it. See "The known issue". |
+| `releases["X.Y.Z"].edge_image` | string | no | The module's default `ca-edge` (Envoy) image for the release, as one full reference pinned by digest: `registry/repository:tag@sha256:<64 lowercase hex>`, for example `docker.io/envoyproxy/envoy:vA.B.C@sha256:<64 hex characters>`. Not under `release/`, and not a key of `images` or `digests`. Absent from releases cut before the field existed, and optional after it. See "The edge image". |
 | `image_floors` | object | no | The oldest image of each app an install can run, and the image tags with no published image, keyed by image name (`api`, `frontend`). Added within `schema_version` 1; absent from the file at tags cut before it existed. See "The image floors". |
 | `image_floors.<image>.minimum` | string | with the image | The floor: the oldest image tag, `vX.Y.Z`, an install can run for that app. |
 | `image_floors.<image>.below_minimum` | string | with the image | What an image older than `minimum` does wrong, as plain text completing "an image older than the floor …". For people; do not parse it. |
@@ -289,6 +290,27 @@ which release to move to; do not parse it. Do not pin the image pair of an entry
 without reading it. It is the one field that may be added to an entry after that release is
 published, on `main` only: the file at the release's own tag does not carry it.
 
+## The edge image
+
+`edge_image` was added within `schema_version` 1, as the compatibility rules below allow: a new
+key inside a release entry. A consumer that ignores keys it does not recognise needs no change.
+
+It pairs the release's edge with its `api` and `frontend`. When an entry carries it, a consumer
+may assume:
+
+- it is the `ca-edge` image the module pins by default at that release, `edge_default_image` in
+  `edge.tf`; the release check refuses a tag whose newest entry records any other value;
+- an install that sets `edge.image` runs that image instead: the field is the module's default,
+  not what a given install pulls;
+- it is upstream's Envoy image, not a Masterly build, so it is not published under `release/`
+  and the image path rule ("The image path") does not apply to it;
+- it is one full reference, `registry/repository:tag@sha256:<64 lowercase hex>`, the tag for
+  people and the digest for pulling. The release check refuses a tag with no digest, a digest with
+  no tag, and a digest that is short or not lowercase hex.
+
+An absent value means only that the release did not record one; it says nothing about the edge.
+Entries cut before the field existed are not back-filled.
+
 ## Compatibility
 
 **Stable while `schema_version` is `1`.** Every field in the table above keeps its name, its type
@@ -332,9 +354,15 @@ a `schema_version` bump.
 `schema_version` 1, the "new named images" case above: no existing field is renamed or retyped,
 and an entry that names only `api` and `frontend` stays valid. See "The per-role images".
 
+**The edge image, added within `schema_version` 1.** A release entry may carry `edge_image`, the
+module's default `ca-edge` image as a full digest-pinned reference. This is the "new keys inside a
+release entry" case above, not a new named image: it is outside `images` and `digests`, no
+existing field is renamed or retyped, `schema_version` stays `1`, and an entry without it stays
+valid. See "The edge image".
+
 Ignore keys you do not recognise. Do not fail on them, and do not assume `images` has exactly two
 members. The producer is stricter than the consumer: the release check accepts only the five roles
-named in "The per-role images" in `images`.
+named in "The per-role images" in `images`, and refuses an `edge` key there.
 
 **Will not happen without a `schema_version` bump:** renaming, removing or retyping any field in
 the table; `releases` becoming an array; version keys growing a `v` prefix; `date` changing
