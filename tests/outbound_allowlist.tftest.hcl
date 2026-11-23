@@ -410,6 +410,30 @@ run "outbound_allowlist_license_issuer_host_with_ca_api" {
   }
 }
 
+# telemetry_url's host goes with the licence refresh: on the subnet ca-workers runs on, with its port.
+run "outbound_allowlist_telemetry_host_with_workers" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    telemetry_url           = "https://telemetry.masterlydata.com:8443/v1/reports"
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+    enable_workers          = true
+    workers_environment     = "workers"
+  }
+
+  assert {
+    condition = (
+      contains([for e in output.outbound_allowlist["workers"] : e.destination], "telemetry.masterlydata.com") &&
+      alltrue([for e in output.outbound_allowlist["workers"] : length(e.ports) == 1 && contains(e.ports, "8443") && e.source == "telemetry_url" if e.destination == "telemetry.masterlydata.com"]) &&
+      !contains([for e in output.outbound_allowlist["front"] : e.destination], "telemetry.masterlydata.com") &&
+      !contains([for e in output.outbound_allowlist["aca"] : e.destination], "telemetry.masterlydata.com")
+    )
+    error_message = "telemetry_url's host and port must be listed on the subnet ca-workers runs on, and not where only ca-frontend and ca-api run."
+  }
+}
+
 # --- Threat: secret disclosure ------------------------------------------------------------------
 
 # The allowlist is not sensitive: a DSN carrying a password must leave its host and port and
@@ -616,6 +640,26 @@ run "outbound_allowlist_front_carries_no_data_endpoint" {
   assert {
     condition     = contains([for e in output.outbound_allowlist["front"] : e.destination], "kv-masterly-abc123.vault.azure.net")
     error_message = "With a public vault (outside production) the front subnet must list it, for ca-frontend's Key Vault references."
+  }
+
+  # The conditional entries (database, Service Bus, Communication Services, Key Vault) have the
+  # same six fields as the platform set, none empty.
+  assert {
+    condition = alltrue(flatten([
+      for k, l in output.outbound_allowlist : [
+        for e in l : (
+          toset(keys(e)) == toset(["destination", "kind", "protocol", "ports", "why", "source"]) &&
+          e.destination != "" &&
+          contains(["fqdn", "service_tag"], e.kind) &&
+          e.protocol == "TCP" &&
+          length(e.ports) > 0 &&
+          alltrue([for p in e.ports : can(regex("^[0-9]{1,5}$", p))]) &&
+          e.why != "" &&
+          e.source != ""
+        )
+      ]
+    ]))
+    error_message = "Every entry, the conditional ones included, must have destination, kind, protocol, ports, why and source, none empty."
   }
 }
 
