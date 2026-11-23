@@ -20,7 +20,7 @@
 # builtin_auth_recovery_until is the recovery fallback: it turns ca-frontend's gate off for at
 # most 60 minutes, only behind a network restriction, and the first plan after the time turns it
 # back on. It never turns off ca-api's gate. The activity-log alert at the end of this file
-# reports both writes.
+# reports both writes. A second alert, on ca-api's 401s, exists with builtin_auth_api.
 
 locals {
   builtin_auth_enabled = var.builtin_auth != null
@@ -196,6 +196,53 @@ resource "azurerm_monitor_activity_log_alert" "builtin_auth_config_write" {
   criteria {
     category       = "Administrative"
     operation_name = "Microsoft.App/containerApps/authConfigs/write"
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# A sustained rate of 401s from ca-api, while its gate (builtin_auth_api) is on. A wrong
+# allowed-client list on ca-api refuses every call from ca-frontend (the BFF) and ca-edge with a
+# 401, fails closed, and trips no health check (ADR 0120, "Detecting a broken L1"). When the gate
+# is broken the 401 count tracks total traffic, so a count over a 15-minute window well above
+# ordinary refusals is the signal. The Requests metric counts 401s at ca-api's ingress, so it
+# also counts the application's own (L2) refusals; those are occasional, and the threshold is set
+# above them rather than trying to tell them apart. With api_ingress_external, a direct external
+# caller is refused on every call by the gate and counts here too.
+#
+# Unlike app_5xx this alert does not depend on diagnostics_enabled: a platform metric alert reads
+# the metric directly and needs no diagnostic setting, and detecting a broken gate is a condition
+# of turning it on. It exists exactly as long as builtin_auth_api does.
+resource "azurerm_monitor_metric_alert" "builtin_auth_api_401" {
+  count = var.builtin_auth_api ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-api-401"
+  resource_group_name = azurerm_resource_group.aca.name
+  scopes              = [module.api.id]
+  description         = "Reads ca-api's Requests metric filtered to statusCode 401: Total over a 15-minute window, evaluated every 5 minutes, severity 1, fires above 20. Fires while ca-api's built-in authentication gate is on and it returned more than 20 responses with status 401 in 15 minutes. Every call from ca-frontend and ca-edge is refused when the gate's allowed-client list is wrong, so a sustained rate of 401s means the gate is likely refusing the callers it should admit. The count includes the application's own 401s, which are occasional and sit below this threshold, and 401s to direct external callers the gate refuses. It fires only once the install passes 20 requests in 15 minutes, so a quiet install with a broken gate may not trigger it."
+  severity            = 1
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.App/containerapps"
+    metric_name      = "Requests"
+    aggregation      = "Total"
+    operator         = "GreaterThan"
+    threshold        = 20
+
+    dimension {
+      name     = "statusCode"
+      operator = "Include"
+      values   = ["401"]
+    }
   }
 
   dynamic "action" {

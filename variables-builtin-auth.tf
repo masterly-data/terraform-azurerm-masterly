@@ -122,6 +122,10 @@ variable "builtin_auth_api" {
     set. builtin_auth_recovery_until never turns this gate off. The application still
     authenticates its callers as identity_binding sets; this gate is in front of that, not
     instead of it.
+
+    With it on, the module also creates the alert alert-<name_prefix>-api-401 (severity 1): more
+    than 20 responses with status 401 from ca-api in 15 minutes. It fires only once an install
+    passes 20 requests in 15 minutes, so a quiet install with a broken gate may not trigger it.
   EOT
 
   validation {

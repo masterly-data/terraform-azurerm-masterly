@@ -146,6 +146,11 @@ the api's gate. The application still authenticates every caller as `identity_bi
   frontend's server makes on a user's behalf is refused, and the application is unusable until the
   switch is turned off again, as happened with 0.19.x on 2026-10-22. Upgrade both apps to releases
   that send it first, then turn this on.
+- **A broken gate is alerted on.** With the switch on, `alert-<name_prefix>-api-401` (severity 1)
+  fires when `ca-api` returns more than 20 responses with status 401 in 15 minutes, which is what
+  a wrong allowed-client list looks like. It routes through `alert_email` or
+  `alert_action_group_id`, does not need `enable_diagnostics`, and also counts the application's
+  own 401s, which are occasional and sit below the threshold.
 - **Nothing else moves.** `ca-api` carries `builtin_auth_client_secret` whenever `builtin_auth` is
   set, so turning the switch on or off changes neither app, only the api's `authConfigs/current`
   (`module.masterly.azapi_resource.builtin_auth["api"]`, the address 0.19.0 and 0.19.1 used).
