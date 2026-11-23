@@ -461,7 +461,7 @@ variable "allow_private_egress" {
 
 # --- Forced-tunnel egress through your firewall --------------------------------------
 #
-# A route table on snet-aca whose one route sends 0.0.0.0/0 to a firewall you run, usually in
+# A route table on snet-aca (or, once retired, on every environment subnet) whose one route sends 0.0.0.0/0 to a firewall you run, usually in
 # your hub. The module routes; your firewall decides what passes, and docs/networking.md
 # ("Egress") lists every destination it must admit and what fails when one is missing. Not the
 # same control as allowed_private_egress_cidrs above, which is the application's own list of the
@@ -473,7 +473,7 @@ variable "egress_firewall" {
     route_table_id = optional(string)
   })
   default     = null
-  description = "Force all outbound traffic from the Container Apps subnet (snet-aca) through your firewall. Set exactly one of: next_hop_ip, your firewall's private IPv4 address, and the module creates a route table in rg-<name_prefix>-aca with one route, 0.0.0.0/0 to that address as a virtual appliance; or route_table_id, the resource ID of a route table you manage, which the module attaches as it is and does not change. Either way the route table is attached to snet-aca only: snet-private-endpoints gets none, and the apps' traffic to the private endpoints stays inside the VNet. Only for a network the module builds: with aca_subnet_id set the plan is refused, because the hub's route table goes on that subnet and is attached by your platform team. Refused unless aca_internal_load_balancer = true: Microsoft documents forced tunnelling only for an internal environment behind an Application Gateway, not alongside public ingress. Refused too when the environment reports no workload profile, on which Azure ignores the route. The container apps and the migrate job are created after the route table is attached. Your firewall must admit the destinations docs/networking.md lists under \"Egress\"; with one missing, the part of the install that needs it fails with the symptom given there. Null (the default) attaches no route table and leaves Azure's default outbound path."
+  description = "Force all outbound traffic from the Container Apps subnets through your firewall: snet-aca while aca-<name_prefix> runs, and with retire_runtime_environment = true every environment subnet the module creates instead (front, app and workers, core and outbound with split_processing, extension with extensions). Set exactly one of: next_hop_ip, your firewall's private IPv4 address, and the module creates a route table in rg-<name_prefix>-aca with one route, 0.0.0.0/0 to that address as a virtual appliance; or route_table_id, the resource ID of a route table you manage, which the module attaches as it is and does not change. Either way snet-private-endpoints gets none, and the apps' traffic to the private endpoints stays inside the VNet. While aca-<name_prefix> runs it is refused with any workload moved off it, because the environment subnets would get no route; remove it before the moves and set it again after retire_runtime_environment = true. Only for a network the module builds: on an injected network (aca_subnet_id or private_endpoints_subnet_id set) the plan is refused, because the hub's route table goes on the injected subnets and is attached by your platform team. Refused unless aca_internal_load_balancer = true: Microsoft documents forced tunnelling only for an internal environment behind an Application Gateway, not alongside public ingress. Refused too when an environment it routes reports no workload profile, on which Azure ignores the route. The container apps and the migrate job are created after the route table is attached. Your firewall must admit the destinations docs/networking.md lists under \"Egress\"; with one missing, the part of the install that needs it fails with the symptom given there. Null (the default) attaches no route table and leaves Azure's default outbound path."
 
   validation {
     condition = var.egress_firewall == null || (
@@ -504,7 +504,7 @@ variable "egress_firewall" {
   # input while attaching nothing would be a control that is silently not there.
   validation {
     condition     = var.egress_firewall == null || (var.aca_subnet_id == null && var.private_endpoints_subnet_id == null)
-    error_message = "egress_firewall is for a network the module builds. With aca_subnet_id or private_endpoints_subnet_id set, the hub's route table (0.0.0.0/0 to your firewall) goes on the injected ACA subnet, attached by the platform team that owns it: a subnet holds one route table, and the module attaching its own would replace the hub's. Remove egress_firewall."
+    error_message = "egress_firewall is for a network the module builds. With aca_subnet_id or private_endpoints_subnet_id set, the hub's route table (0.0.0.0/0 to your firewall) goes on the injected environment subnets (front_subnet_id, app_subnet_id, workers_subnet_id and any add-on subnet ids), and on aca_subnet_id while aca-<name_prefix> runs, attached by the platform team that owns them: a subnet holds one route table, and the module attaching its own would replace the hub's. Remove egress_firewall."
   }
 
   # Microsoft Learn (read 2026-11-14) documents forced tunnelling only for an internal
@@ -517,11 +517,12 @@ variable "egress_firewall" {
     error_message = "egress_firewall needs aca_internal_load_balancer = true. Microsoft documents forced tunnelling for Container Apps only as an internal environment behind an Application Gateway, with the route to your firewall on the environment's subnet. On an external environment inbound traffic arrives on a public IP in the managed resource group, and public ingress alongside 0.0.0.0/0 to a firewall is not a documented configuration. Set aca_internal_load_balancer = true and publish the frontend through your Application Gateway (frontend_custom_domain), or remove egress_firewall."
   }
 
-  # The route table goes on snet-aca only. An app moved to the front or app environment would
-  # leave through a subnet with no route table, with egress believed forced.
+  # While aca-<name_prefix> runs the route table goes on snet-aca only. An app moved to the front or
+  # app environment would leave through a subnet with no route table, with egress believed forced.
+  # Once retired, it goes on every environment subnet instead (network.tf).
   validation {
-    condition     = var.egress_firewall == null || (var.frontend_environment == "aca" && var.edge_environment == "aca" && var.api_environment == "aca")
-    error_message = "egress_firewall cannot be combined with frontend_environment, edge_environment or api_environment off \"aca\": the route table is attached to snet-aca only, and the front and app environment subnets get no route table, so the moved apps' egress would not go through your firewall while it is believed forced. Keep all three \"aca\", or remove egress_firewall."
+    condition     = var.egress_firewall == null || var.retire_runtime_environment || (var.frontend_environment == "aca" && var.edge_environment == "aca" && var.api_environment == "aca")
+    error_message = "egress_firewall cannot be combined with frontend_environment, edge_environment or api_environment off \"aca\" while aca-<name_prefix> runs: the route table is then attached to snet-aca only, and the front and app environment subnets get no route table, so the moved apps' egress would not go through your firewall while it is believed forced. Keep all three \"aca\", or remove egress_firewall until every workload has moved and retire_runtime_environment = true, after which egress_firewall routes every environment subnet."
   }
 }
 
@@ -1112,18 +1113,37 @@ variable "front_subnet_id" {
   type        = string
   default     = null
   description = "On an injected network (private_endpoints_subnet_id), the id of the front environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id where that is set. Required, with app_subnet_id and workers_subnet_id, on an injected network without aca_subnet_id (retire_runtime_environment = true), where the module reads the install's virtual network from it. Set it with app_subnet_id and workers_subnet_id, or none of them; the three must be different subnets, and none of them aca_subnet_id or private_endpoints_subnet_id. The module attaches no network security group to it: docs/networking.md gives the inbound rules it should carry."
+
+  # The full shape, because the module reads the install's virtual network from this id on a
+  # retired injected network without aca_subnet_id (main.tf, network_anchor_subnet_id): a malformed
+  # id there would leave the private DNS links with no network, or report a misleading same-VNet
+  # error, instead of naming the input.
+  validation {
+    condition     = var.front_subnet_id == null || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.front_subnet_id))
+    error_message = "front_subnet_id must be a subnet's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>."
+  }
 }
 
 variable "app_subnet_id" {
   type        = string
   default     = null
   description = "On an injected network (private_endpoints_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_id without it). Set it with front_subnet_id and workers_subnet_id, or none of them. The module attaches no network security group to it: it should admit HTTPS from the front subnet only, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
+
+  validation {
+    condition     = var.app_subnet_id == null || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.app_subnet_id))
+    error_message = "app_subnet_id must be a subnet's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>."
+  }
 }
 
 variable "workers_subnet_id" {
   type        = string
   default     = null
   description = "On an injected network (private_endpoints_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_id without it). Set it with front_subnet_id and app_subnet_id, or none of them. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
+
+  validation {
+    condition     = var.workers_subnet_id == null || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.workers_subnet_id))
+    error_message = "workers_subnet_id must be a subnet's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>."
+  }
 }
 
 # --- Add-on environments (ADR 0120 §4) ---------------------------------------------------

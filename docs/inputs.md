@@ -131,7 +131,7 @@ In `variables-core.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `egress_firewall` | `object(...)` | `null` | Force all outbound traffic from the Container Apps subnet (snet-aca) through your firewall. |
+| `egress_firewall` | `object(...)` | `null` | Force all outbound traffic from the Container Apps subnets through your firewall: snet-aca while aca-<name_prefix> runs, and with retire_runtime_environment = true every environment subnet the module creates instead (... |
 
 ## Trusting a private CA (MAS-446)
 

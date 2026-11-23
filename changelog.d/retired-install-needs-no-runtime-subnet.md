@@ -37,6 +37,22 @@
   than a validation on the variable. It refuses the same plans with the same message; only the
   address an error names has changed.
 
+- `egress_firewall` works on a retired install. With `retire_runtime_environment = true` on a
+  network the module builds, the route table is attached to every environment subnet the module
+  creates (front, app and workers, core and outbound with `split_processing`, extension with
+  `extensions`) instead of `snet-aca`, each checked at plan for its `Microsoft.App/environments`
+  delegation and a workload-profiles environment. The refusals of `egress_firewall` with a workload
+  moved off `aca-<name_prefix>` now apply only while that environment runs. An install that is not
+  retired plans no change: the route stays on `snet-aca` only. An install moving off
+  `aca-<name_prefix>` still removes `egress_firewall` before the moves and can set it again with
+  `retire_runtime_environment = true`; between the two, egress takes Azure's default path
+  (`docs/networking.md`, "Retiring the runtime environment").
+
+- `front_subnet_id`, `app_subnet_id` and `workers_subnet_id` must be a subnet's resource ID
+  (`/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>`,
+  in any case); the plan refuses anything else by name. The module reads the virtual network from
+  a subnet id case-insensitively, as Azure compares ids.
+
 ### Documentation
 
 - The /23 requirement now applies only to the runtime subnet while `aca-<name_prefix>` runs, in the

@@ -1691,11 +1691,11 @@ run "retire_with_everything_moved_removes_aca_env" {
   }
 }
 
-# Threat: egress believed forced while open. Retire does not lift the egress_firewall refusal: with
-# everything moved and retired, egress_firewall is still refused (the apps' move refuses it), and
-# the route table's precondition would refuse with no aca-<prefix> as well (asserted from the
-# source in retire_runtime_environment_unset_keeps_aca_env).
-run "retire_refused_with_egress_firewall" {
+# Threat: egress believed forced while open. Retired with everything moved, egress_firewall is
+# accepted and routes every environment subnet instead of snet-aca, which no longer exists; the
+# snet-aca association has no instance, so its precondition (which would refuse with no
+# aca-<prefix>) never applies to a subnet the install lacks.
+run "retire_with_egress_firewall_routes_the_environment_subnets" {
   command = plan
 
   variables {
@@ -1708,7 +1708,13 @@ run "retire_refused_with_egress_firewall" {
     api_environment            = "app"
   }
 
-  expect_failures = [var.egress_firewall]
+  assert {
+    condition = (
+      length(azurerm_subnet_route_table_association.aca) == 0 &&
+      toset(keys(azurerm_subnet_route_table_association.environment)) == toset(["front", "app", "workers"])
+    )
+    error_message = "Retired with egress_firewall, the route table must go on the front, app and workers subnets and nowhere else."
+  }
 }
 
 # The provider's ForceNew and DiffSuppressFunc never run under mock providers, so a plan cannot

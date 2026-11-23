@@ -144,11 +144,19 @@ firewall. Your firewall then decides what passes, and it must admit the destinat
 | Topology | How |
 |---|---|
 | 1: public ingress | Not offered: `egress_firewall` is refused at plan while `aca_internal_load_balancer = false` ([why](#forced-tunnelling-needs-an-internal-environment)). Make the environment internal and publish the frontend through your Application Gateway, which is topology 2 |
-| 2: the module builds the network, internal environment (`aca_internal_load_balancer = true`) | `egress_firewall = { next_hop_ip = "10.0.0.4" }`: the module creates `rt-<name_prefix>-aca` in `rg-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, and attaches it to `snet-aca`. Or `egress_firewall = { route_table_id = "/subscriptions/.../routeTables/<name>" }`: the module attaches your route table to `snet-aca` as it is, and creates none |
-| 3: injected subnets | Your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to the injected ACA subnet, and to `workers_subnet_id` before `workers_environment` or `migrate_job_environment` is set to `"workers"`. `egress_firewall` is refused at plan there: a subnet holds one route table, and the module attaching its own would replace the hub's. The module creates no route table and no association on injected subnets, so the one the hub attached is never touched |
+| 2: the module builds the network, internal environment (`aca_internal_load_balancer = true`) | `egress_firewall = { next_hop_ip = "10.0.0.4" }`: the module creates `rt-<name_prefix>-aca` in `rg-<name_prefix>-aca` with one route, `0.0.0.0/0` to that address as a virtual appliance, and attaches it to `snet-aca`. Or `egress_firewall = { route_table_id = "/subscriptions/.../routeTables/<name>" }`: the module attaches your route table as it is, and creates none. On a retired install (`retire_runtime_environment = true`) the same route table goes on every environment subnet the module creates instead: `snet-front`, `snet-app` and `snet-workers`, and `snet-core`, `snet-outbound` and `snet-extension` with their add-ons |
+| 3: injected subnets | Your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to the injected environment subnets, to `aca_subnet_id` while `aca-<name_prefix>` runs, and to `workers_subnet_id` before `workers_environment` or `migrate_job_environment` is set to `"workers"`. `egress_firewall` is refused at plan there: a subnet holds one route table, and the module attaching its own would replace the hub's. The module creates no route table and no association on injected subnets, so the one the hub attached is never touched |
 
 The `egress_route` output shows the route table in effect and the next-hop address, and is null
 when `egress_firewall` is unset.
+
+**Which subnets, and when.** While `aca-<name_prefix>` runs, the route table goes on `snet-aca`
+only, and the plan refuses `egress_firewall` with any workload moved off it: the environment
+subnets would get no route, and the moved workload's egress would bypass your firewall while you
+believe it forced. Once `retire_runtime_environment = true`, there is no `snet-aca`, and the route
+table goes on every environment subnet the module creates. That includes `snet-extension` with
+`extensions`: extension code is the least trusted code in the install, so its egress is the last
+that should keep Azure's default path; your firewall decides what it may reach.
 
 **Only on a workload-profiles environment.** Azure ignores a route on a Container Apps
 environment that reports no workload profile, so egress would stay open while you believe it is
@@ -170,8 +178,10 @@ list is an environment without workload profiles. The `terraform output` form ne
 configuration to re-export the module's `aca_environment_id` output (`output "aca_environment_id" { value =
 module.<name>.aca_environment_id }`). Without that, use `-n aca-<name_prefix> -g
 rg-<name_prefix>-aca` instead of `--ids`. The output is null once `aca-<name_prefix>` is retired
-([Retiring the runtime environment](#retiring-the-runtime-environment)), and `egress_firewall` is
-refused by then, since every move off `aca-<name_prefix>` refuses it. On an injected subnet, run the
+([Retiring the runtime environment](#retiring-the-runtime-environment)). On a retired install the
+module checks each environment subnet instead: its delegation, and the workload profiles the module
+declares on the environment it creates there, both known at plan; check one yourself with
+`-n aca-<name_prefix>-<front|app|workers> -g rg-<name_prefix>-aca`. On an injected subnet, run the
 same check before your platform team attaches the hub's route table.
 
 **The private endpoints are unaffected.** No route goes on `snet-private-endpoints`: it has
@@ -482,8 +492,9 @@ The callers reach `ca-api` at `https://ca-api.<app environment default domain>` 
 certificate: the BFF through `MASTERLY_API_BASE_URL`, the edge through an upstream TLS context
 that checks the chain and the host name. `ca-api` takes VNet-only ingress there and refuses plain
 HTTP. The move replaces the three apps (new FQDNs, downtime between destroy and create), so plan
-it on a test install first. `egress_firewall` is refused with the apps moved, because only
-`snet-aca` gets its route table.
+it on a test install first. `egress_firewall` is refused with the apps moved while
+`aca-<name_prefix>` runs, because only `snet-aca` gets its route table until the install is
+retired.
 
 Two workloads can be placed in the workers environment, each with its own input:
 `ca-workers` with `workers_environment = "workers"`, and `caj-migrate` (with `migrations = "job"`)
@@ -508,9 +519,9 @@ team owns DNS, set it to `false`: the module creates no zone, record or link, an
 `container_app_environments` output gives each environment's `default_domain`,
 `static_ip_address` and whether it is `internal`, for the records the hub creates.
 
-`egress_firewall` still attaches its route table to `snet-aca` only ([Egress](#egress)): the
-three environment subnets get no route table in this version. So with `egress_firewall` set, the
-plan refuses `workers_environment` or `migrate_job_environment` set to `"workers"`: the moved
+While `aca-<name_prefix>` runs, `egress_firewall` attaches its route table to `snet-aca` only
+([Egress](#egress)): the environment subnets get one only once the install is retired. So with
+`egress_firewall` set on an install that is not retired, the plan refuses `workers_environment` or `migrate_job_environment` set to `"workers"`: the moved
 workload's egress would bypass your firewall. On injected subnets `egress_firewall` is refused
 anyway, so the plan cannot see where egress goes: before either input is set to `"workers"`,
 your platform team attaches the hub's route table (`0.0.0.0/0` to the firewall) to
@@ -588,9 +599,10 @@ What each may reach:
 | outbound | The private endpoints on the data-plane ports (rule 150 above), and your targets and model endpoints through your firewall | Nothing: the platform's own traffic only |
 | extension | Nothing of Masterly's: no private endpoint, no Masterly environment | Nothing: the platform's own traffic only |
 
-The module writes no outbound rule and no route table for these subnets: `egress_firewall` still
-routes `snet-aca` only. So their egress is narrowed by your firewall or the hub's route table
-(`0.0.0.0/0` to the firewall) attached to them, which denies the internet to core and lets
+The module writes no outbound rule for these subnets. On a network the module builds and a retired
+install, `egress_firewall` attaches its route table to them as to the front, app and workers subnets;
+otherwise it routes `snet-aca` only, and on an injected network the hub's route table goes on them.
+Either way their egress is narrowed by your firewall, which denies the internet to core and lets
 outbound reach only the targets you allow (MAS-1771). Attach it before anything runs there.
 
 On a network the module builds, `core_subnet_prefix`, `outbound_subnet_prefix` and
@@ -872,16 +884,22 @@ a test install first, and read every plan before you apply it.
      private-endpoint subnet. On a network the module builds, the module adds that rule itself
      ([Network security baseline](#network-security-baseline)).
    - **`egress_firewall`.** The plan refuses `egress_firewall` with the apps moved, as it does in
-     step 2 for `ca-workers` and `caj-migrate`. Its route table is attached to `snet-aca` only,
-     and the environment subnets get none, so the moved workloads' egress would bypass your
-     firewall. Remove `egress_firewall` before step 2. On an injected network, your hub attaches
+     step 2 for `ca-workers` and `caj-migrate`, while `aca-<name_prefix>` runs. Its route table is
+     attached to `snet-aca` only until the install is retired, and the environment subnets get
+     none, so the moved workloads' egress would bypass your firewall. Remove `egress_firewall`
+     before step 2, and set it again in step 4: on a retired install it attaches the route table to
+     every environment subnet. Between the two, egress takes Azure's default path; keep that window
+     short, or make the moves on a test install first. On an injected network, your hub attaches
      its route table to the front, app and workers subnets instead.
 
    Run CD's release again after this apply too.
 4. **Set `retire_runtime_environment = true` and plan the deletion.** The plan must destroy
-   exactly two objects, `module.aca_env[0]` (`aca-<name_prefix>`) and
-   `azurerm_monitor_diagnostic_setting.aca_env[0]` (`diag-<name_prefix>-aca-env`), and nothing
-   else. The `aca_environment_id` output becomes null.
+   `module.aca_env[0]` (`aca-<name_prefix>`) and `azurerm_monitor_diagnostic_setting.aca_env[0]`
+   (`diag-<name_prefix>-aca-env`); on a network the module builds, also the runtime subnet
+   (`snet-aca`, its NSG and their association) and update the private-endpoint NSG in place to drop
+   `allow-data-plane-from-apps`, as described below. With `egress_firewall` set again in this
+   apply, it also creates one route-table association per environment subnet. Nothing else. The
+   `aca_environment_id` output becomes null.
 
    The plan refuses retirement while anything the module places is still on `aca-<name_prefix>`,
    and names what is left:

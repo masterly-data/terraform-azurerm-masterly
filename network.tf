@@ -520,19 +520,34 @@ resource "azurerm_subnet_network_security_group_association" "environment" {
 }
 
 # --- Forced-tunnel egress (egress_firewall) ------------------------------------------
-# All outbound traffic from snet-aca goes to the customer's firewall, which decides what passes
-# (docs/networking.md, "Egress", lists what it must admit). Only on a network the module builds:
-# on an injected spoke the input is refused at plan (variables-core.tf), and the module creates
-# nothing here, so a route table the hub already attached to that subnet is never touched.
+# All outbound traffic from the subnets the apps run in goes to the customer's firewall, which
+# decides what passes (docs/networking.md, "Egress", lists what it must admit). Only on a network
+# the module builds: on an injected spoke the input is refused at plan (variables-core.tf), and the
+# module creates nothing here, so a route table the hub already attached to a subnet is never
+# touched.
 #
-# snet-aca only. snet-private-endpoints has private_endpoint_network_policies = "Enabled", under
+# Which subnets: snet-aca while aca-<prefix> runs, exactly as before, and nothing else, because
+# the plan refuses egress_firewall while any workload has moved off it (variables-core.tf,
+# workers.tf, migrate.tf). Once retire_runtime_environment removes aca-<prefix> and snet-aca, every
+# environment subnet the module creates instead: front, app and workers, and core and outbound with
+# split_processing. And extension with extensions: extension code is the least trusted code in the
+# install (ADR 0120 §7), so its egress is the last that should keep Azure's default path while the
+# rest is forced through the firewall; what it may reach is then the firewall's decision.
+#
+# Never snet-private-endpoints. It has private_endpoint_network_policies = "Enabled", under
 # which a route table there would apply to private-endpoint traffic as well, sending the data
 # plane's replies through the firewall. Traffic from the apps to those endpoints needs no route:
 # it stays inside the VNet, where the VNet's system route is more specific than 0.0.0.0/0.
 
 locals {
-  # The route table in effect on snet-aca: the customer's, or the one created below. null unset.
+  # The route table in effect: the customer's, or the one created below. null unset.
   egress_route_table_id = try(coalesce(var.egress_firewall.route_table_id, one(azurerm_route_table.egress[*].id)), null)
+
+  # The environment subnets the route table goes on: every one the module creates, and only on a
+  # retired install. Empty otherwise, so an install that has not retired plans no change here.
+  egress_environment_subnet_keys = (
+    !local.inject_network && var.egress_firewall != null && !local.runtime_subnet
+  ) ? toset(keys(local.env_subnet_prefixes)) : toset([])
 }
 
 resource "azurerm_route_table" "egress" {
@@ -560,10 +575,8 @@ resource "azurerm_route_table" "egress" {
 # A separate resource, like the NSG associations above: a subnet holds one route table, and this
 # is that one association.
 resource "azurerm_subnet_route_table_association" "aca" {
-  count = !local.inject_network && var.egress_firewall != null ? 1 : 0
+  count = !local.inject_network && var.egress_firewall != null && local.runtime_subnet ? 1 : 0
 
-  # Through a splat: a retired install has no snet-aca, and the precondition below refuses it
-  # rather than the plan failing on an index.
   subnet_id      = one(azurerm_subnet.aca[*].id)
   route_table_id = local.egress_route_table_id
 
@@ -575,9 +588,8 @@ resource "azurerm_subnet_route_table_association" "aca" {
     # workload-profiles environment, with the Consumption profile filled in). The profiles Azure
     # actually lists are known at plan for an existing environment and at apply for a new one,
     # when Terraform evaluates this condition again; until then the unknown half does not refuse.
-    # A retired aca-<prefix> (retire_runtime_environment) refuses: no environment on snet-aca
-    # lists a profile. The plan refuses egress_firewall with retire before this anyway, as every
-    # move off aca-<prefix> does, but this does not rely on it.
+    # A retired install has no instance of this association (count above); the checks on
+    # aca-<prefix> stay, so it never passes without the environment it routes.
     precondition {
       condition = (
         try(azurerm_subnet.aca[0].delegation[0].service_delegation[0].name, null) == "Microsoft.App/environments" &&
@@ -585,6 +597,30 @@ resource "azurerm_subnet_route_table_association" "aca" {
         try(length(one(module.aca_env[*].workload_profile_names)) > 0, true)
       )
       error_message = "egress_firewall needs a workload-profiles Container Apps environment: Azure ignores a route on an environment that reports no workload profile, so egress would stay open while it is believed forced through your firewall. The environment's subnet must be delegated to Microsoft.App/environments and Azure must list at least one workload profile on the environment (az containerapp env show --query properties.workloadProfiles). Remove egress_firewall, or move the install to a workload-profiles environment first."
+    }
+  }
+}
+
+# The same route table on each environment subnet of a retired install. One association per
+# subnet, as above. The guarantee is the same as on snet-aca: never a route the environment would
+# ignore. Each of these subnets is the module's own, delegated to Microsoft.App/environments (known
+# at plan), and carries a workload-profiles environment (modules/aca-env-workload-profiles), whose
+# profiles are declared in configuration and so known at plan too: the precondition checks both,
+# and that the environment exists at all, rather than assume it.
+resource "azurerm_subnet_route_table_association" "environment" {
+  for_each = local.egress_environment_subnet_keys
+
+  subnet_id      = azurerm_subnet.environment[each.key].id
+  route_table_id = local.egress_route_table_id
+
+  lifecycle {
+    precondition {
+      condition = (
+        try(azurerm_subnet.environment[each.key].delegation[0].service_delegation[0].name, null) == "Microsoft.App/environments" &&
+        contains(local.container_app_environment_keys, each.key) &&
+        try(length(module.environments[each.key].workload_profiles) > 0, true)
+      )
+      error_message = "egress_firewall needs a workload-profiles Container Apps environment on every subnet it routes: Azure ignores a route on an environment that reports no workload profile, so egress would stay open while it is believed forced through your firewall. snet-${each.key} must be delegated to Microsoft.App/environments and carry aca-<name_prefix>-${each.key} with at least one workload profile. Remove egress_firewall, or give the install that environment."
     }
   }
 }

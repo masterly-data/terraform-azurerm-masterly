@@ -202,7 +202,7 @@ locals {
   # injected network that has neither, which those preconditions refuse.
   network_anchor_subnet_id = var.aca_subnet_id != null ? var.aca_subnet_id : var.front_subnet_id
   virtual_network_id = local.inject_network ? try(
-    regex("^(.*)/subnets/[^/]+$", local.network_anchor_subnet_id)[0], null
+    regex("(?i)^(.*)/subnets/[^/]+$", local.network_anchor_subnet_id)[0], null
   ) : azurerm_virtual_network.this[0].id
 
   # The environment subnets on an injected spoke: all three or none, beside aca_subnet_id
@@ -571,7 +571,7 @@ resource "azurerm_resource_group" "aca" {
     precondition {
       condition = !local.inject_network || local.network_anchor_subnet_id == null ? true : alltrue([
         for id in concat(local.env_subnet_ids_given, local.add_on_subnet_ids_given) :
-        lower(try(regex("^(.*)/subnets/[^/]+$", id)[0], id)) == lower(try(regex("^(.*)/subnets/[^/]+$", local.network_anchor_subnet_id)[0], local.network_anchor_subnet_id))
+        lower(try(regex("(?i)^(.*)/subnets/[^/]+$", id)[0], id)) == lower(try(regex("(?i)^(.*)/subnets/[^/]+$", local.network_anchor_subnet_id)[0], local.network_anchor_subnet_id))
       ])
       error_message = "front_subnet_id, app_subnet_id and workers_subnet_id (and core_subnet_id, outbound_subnet_id and extension_subnet_id where set) must be subnets of the same virtual network as aca_subnet_id, or, without aca_subnet_id, as front_subnet_id: the install's private DNS zones are linked to that network, and its private endpoints answer only to callers that resolve them."
     }
@@ -1658,6 +1658,7 @@ module "api" {
     # route, not Azure's default path (network.tf). Without egress_firewall the association has
     # no instance, so nothing changes.
     azurerm_subnet_route_table_association.aca,
+    azurerm_subnet_route_table_association.environment,
     time_sleep.environment_move["api"],
   ]
 }
@@ -1812,6 +1813,7 @@ module "frontend" {
     azurerm_private_dns_zone_virtual_network_link.registry,
     # With egress_firewall, the first pull takes the firewall's route, as on the api.
     azurerm_subnet_route_table_association.aca,
+    azurerm_subnet_route_table_association.environment,
     time_sleep.environment_move["frontend"],
   ]
 }
