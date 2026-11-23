@@ -26,7 +26,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -95,6 +95,7 @@ run "production_refuses_small_even_with_explicit_sku_and_ha" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   expect_failures = [var.capacity_profile]
@@ -550,6 +551,7 @@ run "production_refuses_a_resolved_burstable_sku" {
 
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   expect_failures = [var.postgres_sku_name]
@@ -582,6 +584,7 @@ run "production_plans_with_ha_unset" {
 
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -617,6 +620,7 @@ run "production_standard_plans_with_the_sku_and_ha_unset" {
 
     capacity_profile               = "standard"
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -657,6 +661,7 @@ run "production_enterprise_without_ha_warns" {
 
     capacity_profile               = "enterprise"
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   expect_failures = [check.enterprise_production_without_postgres_ha]
@@ -694,6 +699,7 @@ run "production_enterprise_with_ha_does_not_warn" {
     capacity_profile               = "enterprise"
     postgres_backup_retention_days = 14
     postgres_zone_redundant_ha     = true
+    migrations                     = "job"
   }
 
   assert {
@@ -728,6 +734,7 @@ run "production_refuses_an_api_floor_of_zero_under_a_profile" {
     capacity_profile               = "standard"
     postgres_backup_retention_days = 14
     api_min_replicas               = 0
+    migrations                     = "job"
   }
 
   expect_failures = [var.api_min_replicas]
@@ -759,6 +766,7 @@ run "production_refuses_a_frontend_floor_of_zero_under_a_profile" {
     capacity_profile               = "standard"
     postgres_backup_retention_days = 14
     frontend_min_replicas          = 0
+    migrations                     = "job"
   }
 
   expect_failures = [var.frontend_min_replicas]
@@ -790,6 +798,7 @@ run "production_refuses_a_workers_floor_of_zero_under_a_profile" {
     capacity_profile               = "standard"
     postgres_backup_retention_days = 14
     workers_min_replicas           = 0
+    migrations                     = "job"
   }
 
   expect_failures = [var.workers_min_replicas]
@@ -913,6 +922,7 @@ run "production_refuses_an_explicit_burstable_sku_under_standard" {
     postgres_sku_name              = "B_Standard_B2s"
     postgres_pgbouncer             = false
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   expect_failures = [var.postgres_sku_name]
@@ -944,6 +954,7 @@ run "production_plans_explicit_ha_off_under_standard" {
     capacity_profile               = "standard"
     postgres_zone_redundant_ha     = false
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {

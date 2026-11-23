@@ -4,10 +4,10 @@ variable "migrate_byo_database_secret_names" {
   type        = set(string)
   default     = []
   nullable    = false
-  description = "Existing per-Environment BYO-DB connection secret names in this install's Key Vault that the migrate job may read. Default empty grants no runtime secret access. Add each sealed connection_ref's secret name and apply before provisioning; update this set when a connection gets a new secret name. Names only, never DSNs, URLs or install-* secrets. Requires migrations = \"job\" (the default for a new install in mode = \"production\"); grants Key Vault Secrets User at each secret, never at the vault."
+  description = "Existing per-Environment BYO-DB connection secret names in this install's Key Vault that the migrate job may read. Default empty grants no runtime secret access. Add each sealed connection_ref's secret name and apply before provisioning; update this set when a connection gets a new secret name. Names only, never DSNs, URLs or install-* secrets. Requires migrations = \"job\"; grants Key Vault Secrets User at each secret, never at the vault."
 
   validation {
-    condition     = length(var.migrate_byo_database_secret_names) == 0 || var.migrations == "job" || (var.migrations == null && var.mode == "production")
+    condition     = length(var.migrate_byo_database_secret_names) == 0 || var.migrations == "job"
     error_message = "migrate_byo_database_secret_names requires migrations = \"job\"; otherwise leave it empty."
   }
 

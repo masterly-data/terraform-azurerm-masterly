@@ -18,7 +18,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -118,6 +118,7 @@ run "production_example_runs_the_api_at_one_vcpu" {
     app_resources = {
       api = { cpu = 1, memory = "2Gi" }
     }
+    migrations = "job"
   }
 
   assert {
@@ -455,6 +456,7 @@ run "postgres_auto_grow_on_by_default_in_production" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -490,6 +492,7 @@ run "postgres_auto_grow_false_wins_in_production" {
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
     postgres_auto_grow             = false
+    migrations                     = "job"
   }
 
   assert {

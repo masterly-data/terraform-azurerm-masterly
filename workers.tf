@@ -97,16 +97,24 @@ locals {
   workers_scale_message_count = 5
 
   # Whether ca-workers runs as its own identity (id-<prefix>-workers, identity.tf): wherever it
-  # exists, except migrations = "start" with database_auth = "entra" on the starter server. There
-  # the shared DSN's user is the apps identity's name, the server's Entra administrator, because
-  # both apps migrate at start; its token is minted for AZURE_CLIENT_ID, so ca-workers stays on that
-  # identity (ADR 0120 §6 departure; production's default, migrations = "job", avoids it). Every
-  # `*_workers` grant and Redis policy counts on this, so an install without ca-workers gets none of
-  # them. Through 0.26.0 an install without the Key Vault kept ca-workers on the apps identity too.
-  # nonsensitive() on database_entra alone, the same narrow unmarking as main.tf's presence tests:
-  # whether a DSN was supplied is not the secret, and a marked value here would hide which identity
-  # ca-workers runs as from every plan.
-  workers_own_identity = var.enable_workers && (local.migrate_app_roles || !nonsensitive(local.database_entra))
+  # exists, with two exceptions where it stays on the apps identity.
+  #   - migrations = "start" with database_auth = "entra" on the starter server: the shared DSN's
+  #     user is the apps identity's name, the server's Entra administrator, because both apps
+  #     migrate at start, and its token is minted for AZURE_CLIENT_ID (an ADR 0120 §6 departure;
+  #     migrations = "job" avoids it).
+  #   - An install without the Key Vault that pulls from a registry as its identities and grants
+  #     AcrPull out of band (acr_id null, no token): the identity would be created in the same apply
+  #     that moves ca-workers to it, before anyone could grant it AcrPull, and ca-workers could not
+  #     pull. Through 0.26.0 every install without the vault kept ca-workers on the apps identity;
+  #     it moves now where the module grants AcrPull itself (acr_id), pulls with a token, or pulls
+  #     public images. An install with the vault moved in 0.24.0, with the out-of-band grant made
+  #     first, as its upgrade note says.
+  # Every `*_workers` grant and Redis policy counts on this, so an install without ca-workers gets
+  # none of them. nonsensitive() on database_entra alone, the same narrow unmarking as main.tf's
+  # presence tests: whether a DSN was supplied is not the secret, and a marked value here would hide
+  # which identity ca-workers runs as from every plan.
+  workers_pull_needs_a_manual_grant = !var.enable_key_vault && !local.registry_token_mode && var.acr_id == null && local.registry_server != ""
+  workers_own_identity              = var.enable_workers && (local.migrate_app_roles || !nonsensitive(local.database_entra)) && !local.workers_pull_needs_a_manual_grant
 
   # Whether ca-workers' env names its own identity's client id (workers_env, main.tf): where it runs
   # as its own identity and the api's env names one, which the Key Vault, Service Bus and Entra

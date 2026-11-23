@@ -83,7 +83,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -201,7 +201,7 @@ run "builtin_auth_api_off_gates_the_frontend_only" {
       })) == jsonencode({
       name                       = "ca-api"
       environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
-      image                      = "masterly.azurecr.io/release/api:v0.0.0"
+      image                      = "masterly.azurecr.io/release/api:v0.138.0"
       registry                   = null
       cpu                        = 0.5
       memory                     = "1Gi"
@@ -578,7 +578,7 @@ run "builtin_auth_api_on_admits_only_the_frontend_identity" {
       })) == jsonencode({
       name                       = "ca-api"
       environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
-      image                      = "masterly.azurecr.io/release/api:v0.0.0"
+      image                      = "masterly.azurecr.io/release/api:v0.138.0"
       registry                   = null
       cpu                        = 0.5
       memory                     = "1Gi"
@@ -971,7 +971,7 @@ run "builtin_auth_recovery_turns_off_the_frontend_and_api_gates" {
       })) == jsonencode({
       name                       = "ca-api"
       environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
-      image                      = "masterly.azurecr.io/release/api:v0.0.0"
+      image                      = "masterly.azurecr.io/release/api:v0.138.0"
       registry                   = null
       cpu                        = 0.5
       memory                     = "1Gi"

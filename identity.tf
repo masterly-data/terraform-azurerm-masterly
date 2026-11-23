@@ -114,6 +114,45 @@ locals {
   frontend_image          = module.release_channel.images.frontend
 }
 
+# --- The api image is new enough for the grants this module makes -------------------------------
+#
+# Two of this module's choices hold only for a recent enough api image, and the module cannot see
+# the image's code, so it reads the version:
+#   - the Key Vault grants (keyvault.tf): ca-api holds key read alone, because from api v0.138.0
+#     only the workers process creates and signs keys (MAS-3117, MAS-3578). An older ca-api creates
+#     and signs erasure keys itself, and erasure would fail.
+#   - migrations = "job" (migrate.tf): the migrate entry point, MASTERLY_MIGRATIONS and the app
+#     roles are in api v0.136.0 and later; an older image cannot run the job.
+# The version is the tag MANIFEST.json records for the channel's release when api_image is unset
+# (the default reference is pinned by digest and names no tag), and otherwise the semver tag of
+# api_image, with or without a digest after it. A reference with no such tag (a digest alone, a
+# mirror's own tag, a pre-release) cannot be judged: the plan warns rather than refuses, because
+# refusing would block every install that pins by digest or mirrors under its own tags, and the
+# image may well be new enough. The warning names the floor so the operator can check it.
+locals {
+  # The release's api tag, from its manifest entry when api_image is unset (the channel's version
+  # is the module's, not the api's).
+  api_image_reference = var.api_image != null ? var.api_image : try(local.release_manifest.releases[local.release_channel_version].images.api, "")
+  api_image_version = try(
+    regex(":v?([0-9]+\\.[0-9]+\\.[0-9]+)(@sha256:[0-9a-f]{64})?$", local.api_image_reference)[0], null
+  )
+  api_image_floor        = var.enable_key_vault ? "0.138.0" : (local.migrate_job ? "0.136.0" : null)
+  api_image_floor_reason = var.enable_key_vault ? "enable_key_vault: ca-api holds Key Vault key read only, and from v0.138.0 only the workers process creates and signs keys" : "migrations = \"job\": the migrate entry point and the app roles are in v0.136.0 and later"
+
+  # Compared as one number per version, each part weighted by 10^6, so 0.1000.0 is above 0.138.0.
+  api_image_meets_floor = local.api_image_floor == null || local.api_image_version == null ? true : (
+    sum([for i, p in split(".", local.api_image_version) : tonumber(p) * pow(1000000, 2 - i)]) >=
+    sum([for i, p in split(".", local.api_image_floor) : tonumber(p) * pow(1000000, 2 - i)])
+  )
+}
+
+check "api_image_version_is_known" {
+  assert {
+    condition     = local.api_image_floor == null || local.api_image_version != null
+    error_message = "api_image (${coalesce(var.api_image, "unset")}) names no semver tag this module can read, so the plan cannot check it against the floor this install needs: api v${coalesce(local.api_image_floor, "0.0.0")} or later (${local.api_image_floor_reason}). Confirm the image is that release or later; an older one breaks it at runtime."
+  }
+}
+
 # The release each channel resolves to in MANIFEST.json, and the default references it gives:
 # always release/<role> on the selected registry (Masterly's when the apps have no registry
 # block), pinned by the digest the release records or by its tag for a release that records none.

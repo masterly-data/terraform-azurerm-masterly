@@ -141,8 +141,8 @@ variable "external_database_admin_url" {
 
 variable "migrations" {
   type        = string
-  default     = null
-  description = "Unset (default): the module's production default, \"job\" for a new install (caj-migrate runs migrations as the only Postgres administrator, and ca-api and ca-workers connect as DML-only roles; needs an api image from a backend release later than v0.135.0). An install that already runs without caj-migrate must set \"start\" (no change) or \"job\" (see \"The migrate job\" in the module's docs/data-plane.md); the plan says so."
+  default     = "job"
+  description = "\"job\" (this example's value, and the recommendation for a new install): caj-migrate runs the schema migrations as the only Postgres administrator, and ca-api and ca-workers connect as DML-only roles; needs an api image from a backend release later than v0.135.0. The module requires the value in production. An install that already runs without caj-migrate is on \"start\": set \"start\" to keep it, and move to \"job\" deliberately (\"The migrate job\" in the module's docs/data-plane.md)."
 }
 
 variable "migrate_byo_database_secret_names" {

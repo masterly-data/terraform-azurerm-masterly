@@ -340,17 +340,24 @@ group: Owner or User Access Administrator, not Role Based Access Control Adminis
 
 **The signing keys need api v0.138.0 or later on `ca-api`.** From that release only the workers
 process creates and signs with them; on an earlier api image `ca-api` still does, and with only key
-read erasure fails.
+read erasure fails. With the Key Vault on, the plan refuses an `api_image` tagged below v0.138.0
+(the release channel's default is checked through `MANIFEST.json`), and warns when the reference
+names no tag it can read, such as a digest alone.
 
 **`ca-api` keeps ACS Email Owner.** api v0.138.0 sends organization invitations and notification
 verification codes from `ca-api` itself, while it handles the request, so the grant stays with
 `ca-api` until a release moves those emails to the workers.
 
-**The one shape where two apps share an identity.** With `migrations = "start"` and
+**Without the vault and with `acr_id` null**, where the apps pull from a registry as their
+identities and you grant AcrPull yourself, `ca-workers` also stays on `id-<prefix>-apps`:
+`id-<prefix>-workers` would be created in the apply that moves `ca-workers` to it, before you could
+grant it AcrPull. Set `acr_id`, or turn the vault on, and it moves.
+
+**The one shape where two apps share an identity in production.** With `migrations = "start"` and
 `database_auth = "entra"` on the starter server, both `ca-api` and `ca-workers` migrate at start
 and sign in to Postgres as the server's Entra administrator, `id-<prefix>-apps`, so `ca-workers`
 runs as that identity, which then also holds the signing keys role, Service Bus Data Receiver and
 the jobs queue's Data Owner. This is a departure from ADR 0120 §6, and in `mode = "production"`
-every plan warns about it (the check `production_migrations_at_start`). `migrations = "job"`, the
-default for a new production install, removes it: see
+every plan warns about it (the check `production_migrations_at_start`). `migrations = "job"`, what
+a new production install sets, removes it: see
 [The migrate job](data-plane.md#the-migrate-job).

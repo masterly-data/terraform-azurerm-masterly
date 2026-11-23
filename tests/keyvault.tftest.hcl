@@ -25,7 +25,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -347,6 +347,7 @@ run "production_secrets_are_vault_references" {
     breakglass_owner_email  = "owner@example.com"
     breakglass_secret_hash  = "0000000000000000000000000000000000000000000000000000000000000000"
     external_database_url   = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations              = "job"
   }
 
   # THE assertion this finding is about: not one app carries a value-based secret.
@@ -479,6 +480,7 @@ run "production_without_a_deployer_path_is_rejected" {
     api_max_replicas            = 3
     external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     key_vault_deployer_ip_rules = []
+    migrations                  = "job"
   }
 
   expect_failures = [var.key_vault_deployer_ip_rules]
@@ -510,6 +512,7 @@ run "production_in_vnet_apply_keeps_the_vault_closed" {
     external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     key_vault_deployer_ip_rules = []
     key_vault_deployer_in_vnet  = true
+    migrations                  = "job"
   }
 
   assert {
@@ -583,6 +586,7 @@ run "production_with_injected_zone_still_plans_the_secrets" {
     key_vault_deployer_ip_rules   = []
     key_vault_deployer_in_vnet    = true
     key_vault_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+    migrations                    = "job"
   }
 
   assert {
@@ -886,6 +890,7 @@ run "production_premium_service_bus_is_private" {
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     enable_service_bus    = true
     servicebus_sku        = "Premium"
+    migrations            = "job"
   }
 
   assert {
@@ -958,6 +963,7 @@ run "production_premium_service_bus_uses_injected_dns_zone" {
     enable_service_bus             = true
     servicebus_sku                 = "Premium"
     servicebus_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"
+    migrations                     = "job"
   }
 
   assert {
@@ -1013,6 +1019,7 @@ run "production_service_bus_without_sku_is_rejected" {
     api_max_replicas      = 3
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     enable_service_bus    = true
+    migrations            = "job"
   }
 
   expect_failures = [var.servicebus_sku]
@@ -1042,6 +1049,7 @@ run "production_without_service_bus_needs_no_sku" {
     enable_workers        = true
     api_max_replicas      = 3
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -1095,6 +1103,7 @@ run "production_standard_service_bus_keeps_public_endpoint" {
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     enable_service_bus    = true
     servicebus_sku        = "Standard"
+    migrations            = "job"
   }
 
   assert {
@@ -1207,6 +1216,7 @@ run "production_scale_to_zero_is_rejected" {
     frontend_min_replicas = 0 # likewise
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.api_min_replicas, var.frontend_min_replicas]
@@ -1240,6 +1250,7 @@ run "production_workers_scale_to_zero_is_rejected" {
     workers_min_replicas = 0 # scale-to-zero for the pipeline in production -> refused
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.workers_min_replicas]
@@ -1272,6 +1283,7 @@ run "production_workers_floor_of_one_plans" {
     workers_min_replicas = 1
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -1826,7 +1838,7 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
   assert {
     condition = (
       azurerm_container_app_job.migrate[0].name == "caj-migrate" &&
-      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.0" &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.138.0" &&
       azurerm_container_app_job.migrate[0].template[0].container[0].image == module.api.image &&
       azurerm_container_app_job.migrate[0].template[0].container[0].command == tolist(["python", "-m", "masterly_app.apps.migrate"])
     )

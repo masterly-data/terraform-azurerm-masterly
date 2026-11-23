@@ -88,7 +88,7 @@ variables {
   location       = "swedencentral"
   org_id         = "org_test"
   install_id     = "test"
-  api_image      = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image      = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
 
@@ -892,9 +892,9 @@ run "workers_depends_on_every_grant_it_replaces" {
       strcontains(regex("(?s)module \"workers_identity\" \\{(.*?)\\n\\}", file("${path.module}/identity.tf"))[0], "count  = local.migrate_app_roles || local.workers_own_identity ? 1 : 0") &&
       strcontains(regex("(?s)module \"postgres_connection_urls_workers\" \\{(.*?)\\n\\}", file("${path.module}/main.tf"))[0], "count  = local.workers_own_dsn ? 1 : 0") &&
       strcontains(file("${path.module}/workers.tf"), "workers_own_dsn = local.migrate_app_roles && var.enable_workers") &&
-      regex("workers_own_identity = (.*)", file("${path.module}/workers.tf"))[0] == "var.enable_workers && (local.migrate_app_roles || !nonsensitive(local.database_entra))"
+      regex("workers_own_identity\\s+= (.*)", file("${path.module}/workers.tf"))[0] == "var.enable_workers && (local.migrate_app_roles || !nonsensitive(local.database_entra)) && !local.workers_pull_needs_a_manual_grant"
     )
-    error_message = "module.workers_identity must exist with the app roles or where ca-workers runs as it; the workers DSN must follow local.workers_own_dsn; and workers_own_identity must need ca-workers alone, except on start with entra on the starter server."
+    error_message = "module.workers_identity must exist with the app roles or where ca-workers runs as it; the workers DSN must follow local.workers_own_dsn; and workers_own_identity must need ca-workers, except on start with entra on the starter server and where its pull would need a grant made by hand."
   }
 }
 

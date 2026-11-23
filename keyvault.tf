@@ -326,10 +326,12 @@ resource "azurerm_role_definition" "signing_keys" {
 # rather than leaving the Crypto Officer grant as an orphan whose removal nothing orders: no resource
 # recorded a dependency on it. The replacement is destroy-then-create, as for kv_app_secrets:
 # create_before_destroy here puts module.api in a dependency cycle on any apply that also destroys a
-# resource depending on ca-api (an alert, a diagnostic setting). So for the seconds between the
-# removal and the create, and until Azure propagates the new grant, ca-api cannot read a signing
-# key's public half: GET /v1/audit/signing-key, the audit export and online verify can fail and
-# succeed when retried. ca-api depends on this address, so its update comes after the create.
+# resource depending on ca-api (an alert, a diagnostic setting). A new address with no moved block
+# would not help: nothing in an existing install's state depends on the Crypto Officer grant, so
+# its removal would be unordered too. So from the removal until Azure propagates the new grant,
+# which can take minutes, ca-api cannot read a signing key's public half: GET
+# /v1/audit/signing-key, the audit export and online verify can fail and succeed when retried.
+# ca-api depends on this address, so its update comes after the create.
 resource "azurerm_role_assignment" "kv_signing_key_reader" {
   count = var.enable_key_vault ? 1 : 0
 

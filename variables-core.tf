@@ -574,8 +574,8 @@ variable "external_database_admin_url" {
   }
 
   validation {
-    condition     = var.external_database_admin_url == null || var.migrations == "job" || (var.migrations == null && var.mode == "production")
-    error_message = "external_database_admin_url is set but migrations is not \"job\". Only the migrate job reads external_database_admin_url, and it exists only with migrations = \"job\" (the default for a new install in mode = \"production\"). Set migrations = \"job\", or leave external_database_admin_url unset."
+    condition     = var.external_database_admin_url == null || var.migrations == "job"
+    error_message = "external_database_admin_url is set but migrations is not \"job\". Only the migrate job reads external_database_admin_url, and it exists only with migrations = \"job\". Set migrations = \"job\", or leave external_database_admin_url unset."
   }
 }
 

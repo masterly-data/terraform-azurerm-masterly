@@ -37,5 +37,5 @@ output "migrate_identity_principal_id" {
 
 output "workers_identity_principal_id" {
   value       = one(module.workers_identity[*].principal_id)
-  description = "Principal (object) id of ca-workers' own user-assigned identity (id-<prefix>-workers, which ca-workers runs and pulls as), wherever ca-workers exists, except migrations = \"start\" with database_auth = \"entra\" on the starter server; null otherwise, where ca-workers runs as the apps identity. Grant AcrPull on your registry scope to this principal before applying when acr_id is left null in the managed_identity or customer_registry mode, or ca-workers cannot pull the api image."
+  description = "Principal (object) id of ca-workers' own user-assigned identity (id-<prefix>-workers, which ca-workers runs and pulls as), wherever ca-workers exists, except migrations = \"start\" with database_auth = \"entra\" on the starter server and an install without the Key Vault that pulls as its identities with acr_id null; null otherwise, where ca-workers runs as the apps identity. Grant AcrPull on your registry scope to this principal before applying when acr_id is left null in the managed_identity or customer_registry mode, or ca-workers cannot pull the api image."
 }

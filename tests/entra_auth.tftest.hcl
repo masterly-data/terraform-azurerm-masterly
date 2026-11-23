@@ -25,7 +25,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -74,6 +74,7 @@ run "production_new_install_defaults_to_entra" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -170,6 +171,7 @@ run "production_new_install_cache_offering_defaults_to_entra" {
     enable_workers        = true
     api_max_replicas      = 2
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -271,6 +273,7 @@ run "production_opt_down_keeps_password_and_key" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -335,6 +338,7 @@ run "production_existing_password_server_is_refused" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   override_data {
@@ -378,6 +382,7 @@ run "production_existing_key_cache_is_refused" {
     enable_workers        = true
     api_max_replicas      = 2
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   override_data {
@@ -425,6 +430,7 @@ run "existing_entra_server_stays_entra_and_other_installs_are_ignored" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   override_data {
@@ -544,6 +550,7 @@ run "production_explicit_entra_reads_only_the_server" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {

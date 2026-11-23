@@ -453,12 +453,11 @@ resource "azurerm_resource_group" "aca" {
       error_message = "Data-residency mismatch: this install declares masterly_region = \"${var.masterly_region}\", but every resource is created in Azure location \"${var.location}\", which is geo \"${local.install_geo == null ? "unknown" : local.install_geo}\". The declared geo is what customers are told and what the app stamps on usage records; the location is where the data actually sits. Change one to match the other — or, if this location genuinely satisfies that residency commitment, say so explicitly with location_geo."
     }
 
-    # A production departure is an explicit input, as for database_auth: an install already
-    # running with migrations at start is neither moved to the migrate job by a default nor kept
-    # at start silently (migrate.tf, local.recorded_migrations).
+    # The api image is new enough for the grants and migrations this module configures
+    # (identity.tf, api_image_floor). A reference with no readable tag warns instead.
     precondition {
-      condition     = !(var.mode == "production" && var.migrations == null && local.recorded_migrations == "start")
-      error_message = "This install already runs, and its schema migrations run at the start of ca-api and ca-workers (it has no caj-migrate job), but migrations is unset. In mode = \"production\" this module now defaults to migrations = \"job\" (ADR 0120 §6: the migrate job is the only Postgres administrator, and no Container App identity is one), but it will not move a running install's databases to the migrate job on its own. Choose explicitly. Set migrations = \"start\" to keep what runs today (nothing changes; on database_auth = \"entra\" the api's identity stays the server's administrator, a documented departure), or read \"The migrate job\" in the module's docs/data-plane.md and set migrations = \"job\"."
+      condition     = local.api_image_meets_floor
+      error_message = "The api image is v${coalesce(local.api_image_version, "?")}, older than this install needs: v${coalesce(local.api_image_floor, "?")} or later (${local.api_image_floor_reason}). Set api_image to that release or later, or leave it unset for the release channel's image."
     }
 
     precondition {

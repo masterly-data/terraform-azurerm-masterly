@@ -25,7 +25,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -522,6 +522,7 @@ run "production_starter_postgres_grade_plans" {
 
     # A notification target -> the module creates its own action group.
     alert_email = "ops@example.com"
+    migrations  = "job"
   }
 
   assert {
@@ -683,6 +684,7 @@ run "production_burstable_postgres_is_rejected" {
     # postgres_sku_name stays the burstable B_Standard_B1ms default -> refused
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   expect_failures = [var.postgres_sku_name]
@@ -714,6 +716,7 @@ run "production_short_retention_is_rejected" {
     postgres_sku_name          = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha = true
     # postgres_backup_retention_days stays the 7-day default -> refused
+    migrations = "job"
   }
 
   expect_failures = [var.postgres_backup_retention_days]
@@ -746,6 +749,7 @@ run "production_without_ha_plans" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_backup_retention_days = 14
     # postgres_zone_redundant_ha stays false (the default) -> plans, no standby
+    migrations = "job"
   }
 
   assert {
@@ -785,6 +789,7 @@ run "production_geo_backup_on_in_a_supported_region" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -820,6 +825,7 @@ run "production_geo_backup_on_with_the_display_form_location" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -856,6 +862,7 @@ run "production_geo_backup_off_in_an_unsupported_region" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -892,6 +899,7 @@ run "production_geo_backup_off_in_an_unlisted_region" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -927,6 +935,7 @@ run "production_geo_backup_explicit_false_wins" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -1029,6 +1038,7 @@ run "existing_server_created_without_geo_backup" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   assert {
@@ -1066,6 +1076,7 @@ run "existing_server_keeps_its_geo_backup_setting" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "job"
   }
 
   # The new default for this install is on...

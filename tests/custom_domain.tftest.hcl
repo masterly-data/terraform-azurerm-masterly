@@ -80,7 +80,7 @@ variables {
   location       = "swedencentral"
   org_id         = "org_test"
   install_id     = "test"
-  api_image      = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image      = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
 
@@ -107,6 +107,7 @@ variables {
   postgres_zone_redundant_ha     = true
   postgres_backup_retention_days = 14
   ingress_allowed_cidrs          = ["203.0.113.7/32", "198.51.100.0/24"]
+  migrations                     = "job"
 }
 
 # Unset: no certificate identity, nothing on the environment, no grant, no certificate, no

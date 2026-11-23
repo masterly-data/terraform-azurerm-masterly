@@ -149,7 +149,7 @@ the credential, and `database_auth = "entra"` is refused at plan.
 
 ### The migrate job
 
-The default for a new install in `mode = "production"`, and set with `migrations = "job"`. Schema
+Set with `migrations = "job"`, which `mode = "production"` requires you to state. Schema
 migrations, and the database of each new Masterly
 Environment, then run in a Container Apps job, `caj-migrate`, as its own identity,
 `id-<prefix>-migrate` (ADR 0120). `ca-api` and `ca-workers` carry `MASTERLY_MIGRATIONS=job`,
@@ -161,15 +161,16 @@ the API's `MASTERLY_ORG_ID`, optional `MASTERLY_ORG_NAME` and `MASTERLY_MODE`, w
 `MASTERLY_CONTROLPLANE_STORE=postgres`, to open the same install's durable control plane.
 Production's Key Vault requirement also applies.
 
-**The default.** Left unset, `migrations` is `"job"` for a new install in `mode = "production"`
-and `"start"` in every other mode. To tell a new production install from a running one, the module
-looks for `ca-api` and `caj-migrate` in the install's apps resource group (`rg-<prefix>-aca`): an
-install whose `caj-migrate` exists keeps `"job"`, and one whose `ca-api` runs without it is refused
-at plan, with a message asking for `migrations = "start"` (nothing changes) or `migrations = "job"`
-(the move below). An explicit value always wins and skips the lookup. With `"start"` in production
-every plan warns (the check `production_migrations_at_start`): on `database_auth = "entra"` the
-api's identity is then the server's Entra administrator and `ca-workers` runs as it, a departure
-from ADR 0120 §6.
+**Required in production.** In `mode = "production"`, `migrations` has no default: set `"job"` for
+a new install (`examples/production/` does), or `"start"` to keep a running install as it is. A
+default would have to tell a new install from a running one at plan, and the only way to do that
+is a lookup that the deploying identity's read access can hide, so a running install on `"start"`
+could be read as new and have its databases moved to the migrate job by a default. With `"start"`
+in production every plan warns (the check `production_migrations_at_start`): on
+`database_auth = "entra"` the api's identity is then the server's Entra administrator and
+`ca-workers` runs as it, a departure from ADR 0120 §6. Outside production, unset means `"start"`.
+The plan also refuses an api image tagged below v0.136.0 with `"job"` (below v0.138.0 with the Key
+Vault), and warns when the image names no tag it can read.
 
 With `"start"` the module creates no job, no migrate identity, no app-role password, no grant and
 no migrate Entra administrator, sets no `MASTERLY_MIGRATIONS`, and `ca-api` and `ca-workers`
@@ -179,8 +180,39 @@ the app roles below under both `database_auth` values are in v0.136.0 and later,
 default image, v0.138.0, has them. **Known gap of v0.138.0:** under `"job"`, deleting an
 Environment leaves its database on the server, because the api no longer holds the right to drop
 it and the migrate job of that release does not drop it. The backend's fix (MAS-5128) is in no
-release yet; until your install runs one that names it, drop such a database yourself, as the
-migrate identity or `masterly_admin`.
+release yet; until your install runs one that names it, drop such databases by hand (below).
+
+**Databases left by deleted Environments** (`"job"` on the starter server, until a backend release
+carries MAS-5128). Each Environment on the starter server has its own database,
+`masterly_dp_<environment id>` (the backend's `MASTERLY_DATAPLANE_DATABASE_PREFIX`, `masterly_dp_`
+unless your install sets another), and the install's control plane records each Environment in the
+`cp_environments` table of the server's `postgres` database. A deleted Environment keeps its row,
+with `status = 'deleted'`. To drop what deleted Environments left:
+
+1. Connect to the `postgres` database through the server's private endpoint, as a principal allowed
+   to drop those databases: on `database_auth = "entra"` the migrate identity, the server's
+   administrator (or a Microsoft Entra administrator you add for the purpose); on `"password"`,
+   `masterly_admin`.
+2. List the candidates, and check each against the product's Environment list before you drop it:
+
+   ```sql
+   SELECT d.datname, e.environment_id, e.name, e.status
+   FROM pg_database d
+   JOIN cp_environments e ON d.datname = 'masterly_dp_' || e.environment_id
+   WHERE e.status = 'deleted' AND e.data_tier = 'masterly-db';
+   ```
+
+3. For each one, end its sessions and drop it. This deletes that Environment's data for good; take
+   or confirm a backup first if you may need it:
+
+   ```sql
+   SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '<datname>';
+   DROP DATABASE IF EXISTS "<datname>";
+   ```
+
+Never drop a database whose Environment is not `deleted`, and never one on a BYO-DB server: the
+backend never drops those either. Once your install runs a backend release that names MAS-5128, the
+migrate job drops them itself.
 
 The job runs `python -m masterly_app.apps.migrate` on the api image, has no ingress, and runs in
 three ways:
@@ -328,23 +360,28 @@ unlisted connection cannot be migrated, even though the schedule continues to ru
 **Upgrading from 0.26.0: one identity per role, and `"job"` by default in production.**
 A minor release under ADR 0062. What an existing install sees:
 
-- **Production, `migrations` unset, no `caj-migrate`** (0.26.0's default): the plan is refused
-  until you set `migrations = "start"` (no change) or `"job"` (the move described under "Turning
-  the job on" and "Removing the apps identity's administrator" below). Setting `"start"` is the
-  one-line upgrade; move to `"job"` afterwards, deliberately.
+- **Production, `migrations` unset** (0.26.0's default, `"start"`): the plan is refused until you
+  set it. `migrations = "start"` is the one-line upgrade and changes nothing; move to `"job"`
+  afterwards, deliberately (the move described under "Turning the job on" and "Removing the apps
+  identity's administrator" below). An install already on `"job"` set it explicitly and is not
+  affected.
+- **An api image older than this release needs is refused at plan:** v0.138.0 or later with the
+  Key Vault. Set `api_image` to that release or later, or leave it unset.
 - **Key Vault Crypto Officer goes.** On every install with the vault, the apps identity's and the
   workers identity's Crypto Officer grants are replaced by the signing key reader and signing keys
   roles. `ca-workers`' new grant is created before its update and the Crypto Officer grant removed
   after it (through the dependency `ca-workers` recorded on the old grant). `ca-api`'s is replaced
-  at its own address, destroy then create: for the seconds between the two, and until Azure
-  propagates the new grant, `GET /v1/audit/signing-key`, the audit export and online verify can
-  fail, and succeed when retried. Apply in a quiet period if those routes matter to you. Run api v0.138.0 or later on `ca-api` first; an older `ca-api` creates and signs
+  at its own address, destroy then create: from the removal until Azure propagates the new grant,
+  which can take minutes, `GET /v1/audit/signing-key`, the audit export and online verify can fail,
+  and succeed when retried. Apply the upgrade in a maintenance window if those routes matter to you. Run api v0.138.0 or later on `ca-api` first; an older `ca-api` creates and signs
   erasure keys itself and needs the right this removes. The deploying identity needs
   `Microsoft.Authorization/roleDefinitions/write` for the two new role definitions, as for
   `Masterly app secrets`.
 - **Without the vault, `ca-workers` moves to `id-<prefix>-workers`** (an evaluation install with
-  `enable_workers`), as described in the next note for installs with the vault: with `acr_id`
-  null, grant AcrPull to `workers_identity_principal_id` first.
+  `enable_workers`) where the module can make its pull work in the same apply: with `acr_id` set
+  (the module grants AcrPull), a registry token, or public images. With `acr_id` null and a registry
+  it pulls from as its identity, `ca-workers` stays on `id-<prefix>-apps`: the new identity would
+  exist only in the apply that needs it to pull, before anyone could grant it AcrPull.
 - **Nothing is replaced** among the Postgres server, the vault, the Service Bus namespace and the
   Container Apps environments: this release changes none of their arguments.
 

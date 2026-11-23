@@ -22,7 +22,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -102,7 +102,7 @@ run "migrate_job_is_started_at_apply" {
       azapi_resource_action.migrate_start[0].type == "Microsoft.App/jobs@2025-01-01" &&
       azapi_resource_action.migrate_start[0].action == "start" &&
       azapi_resource_action.migrate_start[0].method == "POST" &&
-      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.0.0"
+      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.138.0"
     )
     error_message = "An azapi start action must start the migrate job, keyed on the resolved api image."
   }
@@ -112,13 +112,13 @@ run "migrate_job_start_follows_the_api_image" {
   command = plan
 
   variables {
-    api_image = "masterly.azurecr.io/release/api:v0.0.1"
+    api_image = "masterly.azurecr.io/release/api:v0.139.1"
   }
 
   assert {
     condition = (
-      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.0.1" &&
-      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.1"
+      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.139.1" &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.139.1"
     )
     error_message = "A new api_image must reach the migrate job and the input that replaces its start action."
   }

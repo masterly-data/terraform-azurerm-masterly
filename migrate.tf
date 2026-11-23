@@ -1,5 +1,5 @@
-# The migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23): the default for a
-# new install in mode = "production". "start" keeps app-start migrations; "job" needs a backend
+# The migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23): what a new install
+# in mode = "production" sets, where migrations is required. "start" keeps app-start migrations; "job" needs a backend
 # release after v0.135.0.
 # At install, migrate_start acknowledges execution start before the apps roll; readiness
 # waits for schema stamps. CD owns image drift: update the job, start it, await success,
@@ -11,66 +11,37 @@
 variable "migrations" {
   type        = string
   default     = null
-  description = "Where schema migrations run. \"job\": the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, the only Postgres administrator on the starter server, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job and connect as the DML-only roles masterly_api and masterly_workers, so no Container App identity is a database administrator (ADR 0120 §6). \"start\": ca-api and ca-workers migrate at start and the module creates no migrate job; on the starter server with database_auth = \"entra\" the api's identity, id-<prefix>-apps, is then the server's Entra administrator and ca-workers runs as it too, a departure from ADR 0120 §6. Unset: a new install gets \"job\" in mode = \"production\" and \"start\" otherwise; an existing production install (ca-api already exists in its resource group) keeps \"job\" if its caj-migrate exists, and otherwise the plan stops and asks for an explicit value, because moving a running install's databases to the migrate job is a change to customer data that a default never makes. \"job\" requires mode = \"production\" and an api image from a backend release later than v0.135.0, which has the migrate entry point, honours MASTERLY_MIGRATIONS and creates the app roles; an earlier image cannot run the job. An existing \"start\" install on \"entra\" moves in one apply (id-<prefix>-migrate becomes the administrator before id-<prefix>-apps stops being one) or, more cautiously, in two: see the upgrade note under \"The migrate job\" in docs/data-plane.md."
+  description = "Where schema migrations run. \"job\" (recommended, and what examples/production sets): the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, the only Postgres administrator on the starter server, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job and connect as the DML-only roles masterly_api and masterly_workers, so no Container App identity is a database administrator (ADR 0120 §6). \"start\": ca-api and ca-workers migrate at start and the module creates no migrate job; on the starter server with database_auth = \"entra\" the api's identity, id-<prefix>-apps, is then the server's Entra administrator and ca-workers runs as it too, a departure from ADR 0120 §6 that every production plan warns about. Required in mode = \"production\", where no default is safe: \"job\" is right for a new install, while a running install on \"start\" must move its databases deliberately (see \"The migrate job\" in docs/data-plane.md). Unset outside production means \"start\". \"job\" requires mode = \"production\" and an api image from a backend release later than v0.135.0 (the plan checks a tagged image)."
 
   validation {
     # Not coalesce(): it skips "", which would then pass as unset.
     condition     = contains(["start", "job"], var.migrations == null ? "start" : var.migrations)
-    error_message = "migrations must be \"start\" (the apps migrate at start) or \"job\" (the migrate job does; needs a backend release later than v0.135.0), or left unset (\"job\" for a new install in mode = \"production\", \"start\" otherwise)."
+    error_message = "migrations must be \"start\" (the apps migrate at start) or \"job\" (the migrate job does; needs a backend release later than v0.135.0), or left unset outside mode = \"production\"."
   }
 
   validation {
     condition     = var.migrations != "job" || var.mode != "demo"
     error_message = "migrations = \"job\" cannot be used with mode = \"demo\": demo's control plane is in memory, so there is nothing for the job to migrate. Leave migrations unset or set \"start\" for demo, or use mode = \"production\"."
   }
-}
 
-# --- Which migrations an existing install already runs --------------------------------
-#
-# Read only in mode = "production" with migrations unset, to tell a new install (which gets the
-# migrate job) from one that already runs (which keeps what it has, or is asked). A listing by
-# resource type, narrowed below to this install's apps resource group and the module's fixed app
-# and job names, the same shape as entra-auth.tf's server and cache lookups: it finds nothing on a
-# new install, and needs only the read access the applying identity already has.
-data "azurerm_resources" "existing_container_apps" {
-  count = var.mode == "production" && var.migrations == null ? 1 : 0
-
-  type = "Microsoft.App/containerApps"
-}
-
-data "azurerm_resources" "existing_container_app_jobs" {
-  count = var.mode == "production" && var.migrations == null ? 1 : 0
-
-  type = "Microsoft.App/jobs"
+  # Production states it. A default would have to tell a new install from a running one, and the
+  # only way to do that at plan is a lookup that the deploying identity's read access can hide; a
+  # running install on "start" read as new would then have its databases moved to the migrate job
+  # by a default.
+  validation {
+    condition     = var.mode != "production" || var.migrations != null
+    error_message = "mode = \"production\" requires migrations to be set. Set migrations = \"job\" for a new install (recommended: the migrate job is the only Postgres administrator, and no Container App identity is one, ADR 0120 §6). An install that already runs without caj-migrate is on \"start\": set migrations = \"start\" to keep it as it is, and move to \"job\" deliberately, following \"The migrate job\" in the module's docs/data-plane.md."
+  }
 }
 
 locals {
-  existing_api = [
-    for r in flatten(data.azurerm_resources.existing_container_apps[*].resources) : r
-    if lower(r.resource_group_name) == lower(local.rg_aca_name) && r.name == "ca-api"
-  ]
-  existing_migrate_job = [
-    for r in flatten(data.azurerm_resources.existing_container_app_jobs[*].resources) : r
-    if lower(r.resource_group_name) == lower(local.rg_aca_name) && r.name == "caj-migrate"
-  ]
-
-  # What a running install records: null for a new install (or when the input is set and no
-  # lookup ran), "job" when its migrate job exists, "start" otherwise.
-  recorded_migrations = length(local.existing_api) == 0 ? null : (length(local.existing_migrate_job) > 0 ? "job" : "start")
-
-  # The effective choice: the input when set; otherwise production's default, "job", for a new
-  # install and what an existing one records (an existing "start" install is refused below, on
-  # azurerm_resource_group.aca); "start" in every other mode.
-  migrations = var.migrations != null ? var.migrations : (
-    var.mode == "production" ? coalesce(local.recorded_migrations, "job") : "start"
-  )
+  # The effective choice: the input, required in production, otherwise "start".
+  migrations = var.migrations != null ? var.migrations : "start"
 }
 
 # The production departure, stated: an explicit "start" plans, and says what it keeps.
 check "production_migrations_at_start" {
   assert {
-    # Only the stated value: an unset one on a running "start" install is refused instead
-    # (azurerm_resource_group.aca), and the refusal says the same.
     condition     = !(var.mode == "production" && var.migrations == "start")
     error_message = "migrations = \"start\" in mode = \"production\": ca-api and ca-workers run the schema migrations, so on the starter server with database_auth = \"entra\" the api's identity (id-<prefix>-apps) stays the server's Entra administrator and ca-workers runs as it, a departure from ADR 0120 §6. Move to migrations = \"job\" (see \"The migrate job\" in docs/data-plane.md)."
   }

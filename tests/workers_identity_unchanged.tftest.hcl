@@ -83,7 +83,7 @@ variables {
   location       = "swedencentral"
   org_id         = "org_test"
   install_id     = "test"
-  api_image      = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image      = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
 
@@ -460,3 +460,59 @@ run "no_vault_moves_ca_workers_on_byo_database" {
     error_message = "Without the vault on BYO-DB ca-workers must run as its own identity with the queue grants, and keep the shared database-url."
   }
 }
+
+# Without the vault, pulling from a registry as the identities with acr_id null (AcrPull granted out
+# of band): id-<prefix>-workers would be created in the apply that moves ca-workers to it, before
+# anyone could grant it AcrPull, so ca-workers stays on the apps identity there. Its own identity
+# would not exist, and the apps identity keeps the queue grants.
+run "no_vault_with_an_out_of_band_pull_grant_is_unchanged" {
+  command = apply
+
+  variables {
+    mode                     = "demo"
+    enable_key_vault         = false
+    api_max_replicas         = 1
+    database_auth            = "password"
+    acr_id                   = null
+    registry_credential_mode = "managed_identity"
+  }
+
+  assert {
+    condition = (
+      local.workers_pull_needs_a_manual_grant &&
+      !local.workers_own_identity &&
+      length(module.workers_identity) == 0 &&
+      output.workers_identity_principal_id == null &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
+      module.workers[0].registry.identity == module.apps_identity.id &&
+      length(azurerm_role_assignment.sb_receiver) + length(azurerm_role_assignment.sb_scaler) == 2 &&
+      length(azurerm_role_assignment.sb_receiver_workers) + length(azurerm_role_assignment.acr_pull_workers) == 0
+    )
+    error_message = "Without the vault and with acr_id null on an identity pull, ca-workers must stay on the apps identity, which keeps the queue grants: its own identity could not pull in the apply that creates it."
+  }
+}
+
+# The same install with acr_id set: the module grants the new identity AcrPull in the same apply,
+# so ca-workers moves.
+run "no_vault_with_acr_id_moves_ca_workers" {
+  command = apply
+
+  variables {
+    mode                     = "demo"
+    enable_key_vault         = false
+    api_max_replicas         = 1
+    database_auth            = "password"
+    registry_credential_mode = "managed_identity"
+  }
+
+  assert {
+    condition = (
+      !local.workers_pull_needs_a_manual_grant &&
+      local.workers_own_identity &&
+      module.workers[0].registry.identity == module.workers_identity[0].id &&
+      azurerm_role_assignment.acr_pull_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    )
+    error_message = "With acr_id set the module grants ca-workers' own identity AcrPull, so ca-workers must move to it."
+  }
+}
+
