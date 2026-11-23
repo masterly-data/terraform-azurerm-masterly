@@ -22,7 +22,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -102,7 +102,7 @@ run "migrate_job_is_started_at_apply" {
       azapi_resource_action.migrate_start[0].type == "Microsoft.App/jobs@2025-01-01" &&
       azapi_resource_action.migrate_start[0].action == "start" &&
       azapi_resource_action.migrate_start[0].method == "POST" &&
-      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.0.0"
+      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.138.0"
     )
     error_message = "An azapi start action must start the migrate job, keyed on the resolved api image."
   }
@@ -112,13 +112,13 @@ run "migrate_job_start_follows_the_api_image" {
   command = plan
 
   variables {
-    api_image = "masterly.azurecr.io/release/api:v0.0.1"
+    api_image = "masterly.azurecr.io/release/api:v0.139.1"
   }
 
   assert {
     condition = (
-      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.0.1" &&
-      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.1"
+      terraform_data.migrate_image[0].input == "masterly.azurecr.io/release/api:v0.139.1" &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.139.1"
     )
     error_message = "A new api_image must reach the migrate job and the input that replaces its start action."
   }
@@ -196,13 +196,13 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
       for principal in concat(
         [
           azurerm_role_assignment.kv_app_secrets[0].principal_id,
-          azurerm_role_assignment.kv_crypto_officer[0].principal_id,
+          azurerm_role_assignment.kv_signing_key_reader[0].principal_id,
           azurerm_role_assignment.sb_sender[0].principal_id,
           azurerm_role_assignment.acs_email_sender[0].principal_id,
           azurerm_role_assignment.acr_pull[0].principal_id,
           azurerm_role_assignment.acr_pull_frontend[0].principal_id,
           azurerm_role_assignment.kv_app_secrets_workers[0].principal_id,
-          azurerm_role_assignment.kv_crypto_officer_workers[0].principal_id,
+          azurerm_role_assignment.kv_signing_keys_workers[0].principal_id,
           azurerm_role_assignment.sb_sender_workers[0].principal_id,
           azurerm_role_assignment.sb_receiver_workers[0].principal_id,
           azurerm_role_assignment.sb_scaler_workers[0].principal_id,
@@ -606,7 +606,9 @@ run "migrate_app_roles_on_entra_name_their_identities" {
       # The app secrets role's id is computed, so at plan the grant is checked by count and
       # principal here, and by role in app_secrets_role.tftest.hcl.
       length(azurerm_role_assignment.kv_app_secrets_workers) == 1 && length(azurerm_role_definition.app_secrets) == 1 &&
-      azurerm_role_assignment.kv_crypto_officer_workers[0].role_definition_name == "Key Vault Crypto Officer" &&
+      # The signing keys role is by id too, so counted here; what it holds is asserted in
+      # keyvault.tftest.hcl, and that no grant is the built-in Crypto Officer as well.
+      length(azurerm_role_assignment.kv_signing_keys_workers) == 1 && length(azurerm_role_definition.signing_keys) == 1 &&
       azurerm_role_assignment.acr_pull_workers[0].role_definition_name == "AcrPull" &&
       azurerm_role_assignment.acr_pull_workers[0].scope == var.acr_id &&
       azurerm_role_assignment.acs_email_sender_workers[0].role_definition_name == "Communication and Email Service Owner" &&
@@ -615,7 +617,7 @@ run "migrate_app_roles_on_entra_name_their_identities" {
       azurerm_role_assignment.sb_scaler_workers[0].role_definition_name == "Azure Service Bus Data Owner" &&
       alltrue([
         for ra in [
-          azurerm_role_assignment.kv_app_secrets_workers[0], azurerm_role_assignment.kv_crypto_officer_workers[0],
+          azurerm_role_assignment.kv_app_secrets_workers[0], azurerm_role_assignment.kv_signing_keys_workers[0],
           azurerm_role_assignment.acr_pull_workers[0], azurerm_role_assignment.acs_email_sender_workers[0],
           azurerm_role_assignment.sb_sender_workers[0], azurerm_role_assignment.sb_receiver_workers[0],
           azurerm_role_assignment.sb_scaler_workers[0],
@@ -639,7 +641,7 @@ run "migrate_app_roles_on_entra_name_their_identities" {
     condition = alltrue(concat(
       [
         for principal in [
-          azurerm_role_assignment.kv_app_secrets[0].principal_id, azurerm_role_assignment.kv_crypto_officer[0].principal_id,
+          azurerm_role_assignment.kv_app_secrets[0].principal_id, azurerm_role_assignment.kv_signing_key_reader[0].principal_id,
           azurerm_role_assignment.sb_sender[0].principal_id, azurerm_role_assignment.acs_email_sender[0].principal_id,
           azurerm_role_assignment.acr_pull[0].principal_id, azurerm_managed_redis_access_policy_assignment.apps[0].object_id,
         ] : principal == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -650,7 +652,7 @@ run "migrate_app_roles_on_entra_name_their_identities" {
       ],
       [
         for principal in [
-          azurerm_role_assignment.kv_app_secrets_workers[0].principal_id, azurerm_role_assignment.kv_crypto_officer_workers[0].principal_id,
+          azurerm_role_assignment.kv_app_secrets_workers[0].principal_id, azurerm_role_assignment.kv_signing_keys_workers[0].principal_id,
           azurerm_role_assignment.sb_sender_workers[0].principal_id, azurerm_role_assignment.sb_receiver_workers[0].principal_id,
           azurerm_role_assignment.sb_scaler_workers[0].principal_id, azurerm_role_assignment.acs_email_sender_workers[0].principal_id,
           azurerm_role_assignment.acr_pull_workers[0].principal_id, azurerm_managed_redis_access_policy_assignment.workers[0].object_id,
@@ -715,8 +717,7 @@ run "apps_identity_holds_only_its_own_roles_with_job" {
         azurerm_role_assignment.sb_receiver,
         azurerm_role_assignment.sb_sender_workers,
         azurerm_role_assignment.sb_receiver_workers,
-        azurerm_role_assignment.kv_crypto_officer,
-        azurerm_role_assignment.kv_crypto_officer_workers,
+        azurerm_role_assignment.kv_signing_keys_workers,
         values(azurerm_role_assignment.kv_secrets_officer_deployer),
         values(azurerm_role_assignment.kv_secrets_user_frontend),
         values(azurerm_role_assignment.kv_secrets_user_migrate),
@@ -733,9 +734,20 @@ run "apps_identity_holds_only_its_own_roles_with_job" {
       "AcrPull",
       "Azure Service Bus Data Sender",
       "Communication and Email Service Owner",
-      "Key Vault Crypto Officer",
     ])
-    error_message = "With migrations = \"job\" the apps identity (ca-api) may hold AcrPull, Key Vault Crypto Officer, Service Bus Data Sender and the ACS role by name, and no other built-in role assignment."
+    error_message = "With migrations = \"job\" the apps identity (ca-api) may hold AcrPull, Service Bus Data Sender and the ACS role by name, and no other built-in role assignment: no Key Vault Crypto Officer."
+  }
+
+  # The signing grants name their role by id too: ca-api's identity holds the reader, and never the
+  # signing keys role, which ca-workers' own identity holds.
+  assert {
+    condition = (
+      length(azurerm_role_assignment.kv_signing_key_reader) == 1 &&
+      azurerm_role_assignment.kv_signing_key_reader[0].principal_id == module.apps_identity.principal_id &&
+      length(azurerm_role_assignment.kv_signing_keys) == 0 &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].principal_id != module.apps_identity.principal_id
+    )
+    error_message = "With migrations = \"job\" the apps identity (ca-api) must hold the signing key reader role and no signing keys role."
   }
 
   # The two app secrets grants name their role by id, which is computed at plan, so they are
@@ -815,7 +827,7 @@ run "migrate_app_roles_workers_hold_no_queue_role_without_service_bus" {
       length(azurerm_role_assignment.sb_scaler_workers) + length(azurerm_role_assignment.sb_sender_workers) + length(azurerm_role_assignment.sb_receiver_workers) == 0 &&
       length(module.workers[0].scale.custom_scale_rules) == 0 &&
       length(azurerm_role_assignment.acr_pull_workers) + length(azurerm_role_assignment.acs_email_sender_workers) == 0 &&
-      length(azurerm_role_assignment.kv_app_secrets_workers) == 1 && length(azurerm_role_assignment.kv_crypto_officer_workers) == 1
+      length(azurerm_role_assignment.kv_app_secrets_workers) == 1 && length(azurerm_role_assignment.kv_signing_keys_workers) == 1
     )
     error_message = "Without Service Bus, id-<prefix>-workers must hold no Service Bus role, and without acr_id or ACS no AcrPull or ACS role."
   }
@@ -1091,6 +1103,9 @@ run "migrate_app_roles_narrow_the_apps_service_bus_grants_on_entra" {
 run "shared_service_bus_grants_stay_with_start_on_entra" {
   command = plan
 
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
+
   variables {
     migrations         = "start"
     database_auth      = "entra"
@@ -1123,6 +1138,9 @@ run "shared_service_bus_grants_stay_with_start_on_entra" {
 # takes the Receiver and the queue's Data Owner from the apps identity, though no app role exists.
 run "service_bus_grants_move_to_the_workers_identity_with_start_on_password" {
   command = plan
+
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
 
   variables {
     migrations         = "start"
@@ -1197,6 +1215,9 @@ run "service_bus_grants_move_to_the_workers_identity_on_byo_database" {
 run "migrate_app_roles_absent_with_start" {
   command = plan
 
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
+
   variables {
     migrations = "start"
   }
@@ -1228,7 +1249,7 @@ run "migrate_app_roles_absent_with_start" {
   assert {
     condition = (
       length(module.workers_identity) == 1 &&
-      length(azurerm_role_assignment.kv_app_secrets_workers) + length(azurerm_role_assignment.kv_crypto_officer_workers) == 2 &&
+      length(azurerm_role_assignment.kv_app_secrets_workers) + length(azurerm_role_assignment.kv_signing_keys_workers) == 2 &&
       length(module.postgres_connection_urls_api) + length(module.postgres_connection_urls_workers) == 0 &&
       output.workers_identity_principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id]) &&
@@ -1242,7 +1263,7 @@ run "migrate_app_roles_absent_with_start" {
       local.api_env_secret_refs["MASTERLY_DATABASE_URL"] == "database-url" &&
       local.backend_env_secret_refs["MASTERLY_DATABASE_URL"] == "database-url" &&
       !anytrue([for name in keys(azurerm_key_vault_secret.install) : startswith(name, "api-") || startswith(name, "workers-")]) &&
-      length(azurerm_role_assignment.kv_app_secrets) == 1 && length(azurerm_role_assignment.kv_crypto_officer) == 1
+      length(azurerm_role_assignment.kv_app_secrets) == 1 && length(azurerm_role_assignment.kv_signing_key_reader) == 1
     )
     error_message = "With migrations = \"start\" on password ca-workers must run as id-<prefix>-workers with the shared database-url, ca-api as the apps identity, and neither with a per-app DSN."
   }
@@ -1252,6 +1273,9 @@ run "migrate_app_roles_absent_with_start" {
 # URL names it, as on main.
 run "migrate_app_roles_absent_with_start_on_entra" {
   command = plan
+
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
 
   variables {
     migrations    = "start"
@@ -1313,7 +1337,7 @@ run "migrate_app_roles_absent_on_byo_database" {
   assert {
     condition = (
       length(module.workers_identity) == 1 &&
-      length(azurerm_role_assignment.kv_app_secrets_workers) + length(azurerm_role_assignment.kv_crypto_officer_workers) == 2 &&
+      length(azurerm_role_assignment.kv_app_secrets_workers) + length(azurerm_role_assignment.kv_signing_keys_workers) == 2 &&
       length(module.postgres_connection_urls_api) + length(module.postgres_connection_urls_workers) == 0 &&
       output.workers_identity_principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" &&
       module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id]) &&
@@ -1325,7 +1349,7 @@ run "migrate_app_roles_absent_on_byo_database" {
       module.api.vault_backed_secret_names == tolist(["bff-shared-secret", "database-url", "license-token", "redis-url", "session-secret"]) &&
       module.workers[0].vault_backed_secret_names == tolist(["database-url", "license-token", "redis-url", "session-secret"]) &&
       !anytrue([for name in keys(azurerm_key_vault_secret.install) : startswith(name, "api-") || startswith(name, "workers-")]) &&
-      length(azurerm_role_assignment.kv_app_secrets) == 1 && length(azurerm_role_assignment.kv_crypto_officer) == 1
+      length(azurerm_role_assignment.kv_app_secrets) == 1 && length(azurerm_role_assignment.kv_signing_key_reader) == 1
     )
     error_message = "On BYO-DB ca-workers must run as id-<prefix>-workers with the shared database-url, ca-api as the apps identity, and neither with a per-app DSN."
   }
@@ -1354,6 +1378,9 @@ mock_provider "azurerm" {
 run "before_migrate_job_uses_previous_defaults" {
   command   = apply
   providers = { azurerm = azurerm.upgrade, random = random, azapi = azapi, time = time }
+
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
 
   variables {
     migrations         = "start"
@@ -1410,7 +1437,7 @@ run "migrate_job_preserves_the_existing_install" {
       azurerm_private_endpoint.postgres, azurerm_private_endpoint.key_vault, azurerm_private_endpoint.redis,
       azurerm_managed_redis.this, azurerm_managed_redis_access_policy_assignment.apps, azurerm_servicebus_queue.jobs,
       azurerm_role_assignment.sb_sender,
-      azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_crypto_officer,
+      azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_signing_key_reader,
       azurerm_monitor_diagnostic_setting.postgres, azurerm_monitor_diagnostic_setting.key_vault,
       azurerm_monitor_diagnostic_setting.redis, azurerm_monitor_diagnostic_setting.redis_database, azurerm_monitor_diagnostic_setting.service_bus,
       azurerm_monitor_action_group.alerts, azurerm_monitor_metric_alert.postgres_storage, azurerm_monitor_metric_alert.postgres_cpu,
@@ -1499,6 +1526,7 @@ run "migrate_job_preserves_the_existing_install" {
     condition = (
       length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0 &&
       length(azurerm_role_assignment.sb_receiver) == 0 && length(azurerm_role_assignment.sb_scaler) == 0 &&
+      length(azurerm_role_assignment.kv_signing_keys) == 0 && length(azurerm_role_assignment.kv_signing_keys_workers) == 1 &&
       azurerm_role_assignment.sb_sender[0].principal_id == run.before_migrate_job_uses_previous_defaults.apps_identity_principal_id &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].server_name == "psql-masterly-before" &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].resource_group_name == "rg-masterly-data" &&
@@ -1506,7 +1534,7 @@ run "migrate_job_preserves_the_existing_install" {
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].principal_type == "ServicePrincipal" &&
       azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].tenant_id == "00000000-0000-0000-0000-000000000000"
     )
-    error_message = "The upgrade to \"job\" must remove the apps' Entra administrator, Service Bus Receiver and scaler grant, keep Sender on the apps identity, and make id-<prefix>-migrate the server's administrator."
+    error_message = "The upgrade to \"job\" must remove the apps' Entra administrator, Service Bus Receiver, scaler grant and signing keys role (the last moves to ca-workers' own identity), keep Sender on the apps identity, and make id-<prefix>-migrate the server's administrator."
   }
 
   assert {
@@ -1539,7 +1567,7 @@ run "migrate_job_preserves_the_existing_install" {
     condition = (
       length(module.workers_identity) == 1 &&
       alltrue([for group in [
-        azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_crypto_officer_workers,
+        azurerm_role_assignment.kv_app_secrets_workers, azurerm_role_assignment.kv_signing_keys_workers,
         azurerm_role_assignment.sb_sender_workers, azurerm_role_assignment.sb_receiver_workers, azurerm_role_assignment.sb_scaler_workers,
         azurerm_managed_redis_access_policy_assignment.workers,
       ] : length(group) == 1]) &&

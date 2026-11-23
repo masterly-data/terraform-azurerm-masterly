@@ -18,7 +18,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -402,6 +402,7 @@ run "builtin_auth_secret_is_a_vault_reference_in_production" {
       client_id = "22222222-2222-2222-2222-222222222222"
     }
     builtin_auth_client_secret = "test-only-not-a-secret"
+    migrations                 = "job"
   }
 
 

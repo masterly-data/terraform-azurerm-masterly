@@ -18,7 +18,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -214,6 +214,7 @@ run "workspace_query_access_and_retention_follow_the_inputs" {
     log_query_public_access     = false
     log_retention_days          = 365
     security_log_retention_days = 730
+    migrations                  = "job"
   }
 
   assert {
@@ -316,6 +317,7 @@ run "production_mode_load_alerts_on_byo_db" {
     api_max_replicas     = 3
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   # BYO-DB: the module wires no telemetry for a server it does not provision, so it claims no
@@ -858,6 +860,7 @@ run "edge_gets_a_metrics_only_diagnostic_setting_and_all_three_alerts" {
 
     edge                  = {}
     ingress_allowed_cidrs = ["203.0.113.7/32"]
+    migrations            = "job"
   }
 
   assert {
@@ -1030,6 +1033,7 @@ run "production_without_a_notification_target_is_refused" {
     alert_email          = null
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.alert_email]
@@ -1061,6 +1065,7 @@ run "production_without_a_notification_target_is_refused_with_diagnostics_off" {
     alert_email          = null
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.alert_email]
@@ -1092,6 +1097,7 @@ run "production_without_a_target_plans_with_the_escape_hatch" {
     alerts_routed_externally = true
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -1126,6 +1132,7 @@ run "production_without_a_target_plans_with_the_escape_hatch_and_diagnostics_off
     alerts_routed_externally = true
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -1160,6 +1167,7 @@ run "production_with_only_alert_email_plans" {
     alert_email          = "ops@example.com"
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -1193,6 +1201,7 @@ run "production_with_only_alert_action_group_id_plans" {
     alert_action_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ops/providers/microsoft.insights/actionGroups/ag-ops"
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {

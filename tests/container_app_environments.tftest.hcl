@@ -27,7 +27,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -1446,7 +1446,7 @@ run "retire_runtime_environment_unset_keeps_aca_env" {
   # The refusals below can only name the variable they fail on, so the message is read from the
   # source: it lists local.runtime_environment_workloads.
   assert {
-    condition     = can(regex("error_message = \"retire_runtime_environment = true would delete aca-<name_prefix> while these still run in it: \\$\\{join\\(\"; \", local\\.runtime_environment_workloads\\)\\}", file("${path.module}/variables-environment.tf")))
+    condition     = can(regex("error_message = \"retire_runtime_environment = true would delete aca-<name_prefix> while these still run in it: \\$\\{join\\(\"; \", local\\.runtime_environment_workloads\\)\\}", file("${path.module}/main.tf")))
     error_message = "The retire refusal must name what is left on aca-<prefix> (local.runtime_environment_workloads)."
   }
 
@@ -1479,7 +1479,7 @@ run "retire_refused_with_the_apps_on_aca_env" {
     }
   }
 
-  expect_failures = [var.retire_runtime_environment]
+  expect_failures = [azurerm_resource_group.aca]
 }
 
 # With only ca-workers left on aca-<prefix>, the refusal names ca-workers alone: the moved apps
@@ -1520,7 +1520,7 @@ run "retire_refused_with_ca_workers_on_runtime" {
     enable_workers             = true
   }
 
-  expect_failures = [var.retire_runtime_environment]
+  expect_failures = [azurerm_resource_group.aca]
 }
 
 # The apps and ca-workers have moved; caj-migrate is still on aca-<prefix>.
@@ -1557,7 +1557,7 @@ run "retire_refused_with_the_migrate_job_on_runtime" {
     workers_environment        = "workers"
   }
 
-  expect_failures = [var.retire_runtime_environment]
+  expect_failures = [azurerm_resource_group.aca]
 }
 
 # migrations = "start" creates no migrate job, so migrate_job_environment left at "runtime" does
@@ -1585,7 +1585,7 @@ run "retire_with_migrations_start_ignores_migrate_job_environment" {
 
   assert {
     condition = (
-      var.migrations == "start" && var.migrate_job_environment == "runtime" &&
+      local.migrations == "start" && var.migrate_job_environment == "runtime" &&
       length(azurerm_container_app_job.migrate) == 0 &&
       length(local.runtime_environment_workloads) == 0 &&
       length(module.aca_env) == 0 &&
@@ -1691,11 +1691,11 @@ run "retire_with_everything_moved_removes_aca_env" {
   }
 }
 
-# Threat: egress believed forced while open. Retire does not lift the egress_firewall refusal: with
-# everything moved and retired, egress_firewall is still refused (the apps' move refuses it), and
-# the route table's precondition would refuse with no aca-<prefix> as well (asserted from the
-# source in retire_runtime_environment_unset_keeps_aca_env).
-run "retire_refused_with_egress_firewall" {
+# Threat: egress believed forced while open. Retired with everything moved, egress_firewall is
+# accepted and routes every environment subnet instead of snet-aca, which no longer exists; the
+# snet-aca association has no instance, so its precondition (which would refuse with no
+# aca-<prefix>) never applies to a subnet the install lacks.
+run "retire_with_egress_firewall_routes_the_environment_subnets" {
   command = plan
 
   variables {
@@ -1708,7 +1708,13 @@ run "retire_refused_with_egress_firewall" {
     api_environment            = "app"
   }
 
-  expect_failures = [var.egress_firewall]
+  assert {
+    condition = (
+      length(azurerm_subnet_route_table_association.aca) == 0 &&
+      toset(keys(azurerm_subnet_route_table_association.environment)) == toset(["front", "app", "workers"])
+    )
+    error_message = "Retired with egress_firewall, the route table must go on the front, app and workers subnets and nowhere else."
+  }
 }
 
 # The provider's ForceNew and DiffSuppressFunc never run under mock providers, so a plan cannot

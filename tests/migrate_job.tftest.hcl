@@ -18,7 +18,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -56,7 +56,7 @@ run "migrations_default_to_start_and_create_no_migrate_job" {
 
   assert {
     condition = (
-      var.migrations == "start" &&
+      local.migrations == "start" &&
       length(azurerm_container_app_job.migrate) == 0 &&
       length(azapi_resource_action.migrate_start) == 0 &&
       length(terraform_data.migrate_image) == 0 &&
@@ -90,7 +90,7 @@ run "migrations_default_to_start_and_create_no_migrate_job" {
       !local.workers_own_identity &&
       length(module.workers_identity) == 0 &&
       length(azurerm_role_assignment.kv_app_secrets_workers) == 0 &&
-      length(azurerm_role_assignment.kv_crypto_officer_workers) == 0 &&
+      length(azurerm_role_assignment.kv_signing_keys_workers) == 0 &&
       length(azurerm_role_assignment.acr_pull_workers) == 0 &&
       length(azurerm_role_assignment.acs_email_sender_workers) == 0 &&
       length(azurerm_role_assignment.sb_sender_workers) == 0 &&
@@ -179,13 +179,17 @@ run "migrations_start_creates_no_workers_grant_with_every_feature_on" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "start"
   }
+
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
 
   assert {
     condition = (
-      var.migrations == "start" &&
+      local.migrations == "start" &&
       length(azurerm_role_assignment.kv_app_secrets) == 1 &&
-      length(azurerm_role_assignment.kv_crypto_officer) == 1 &&
+      length(azurerm_role_assignment.kv_signing_key_reader) == 1 &&
       length(azurerm_role_assignment.acr_pull) == 1 &&
       length(azurerm_role_assignment.acs_email_sender) == 1 &&
       length(azurerm_role_assignment.sb_sender) == 1 &&
@@ -200,7 +204,7 @@ run "migrations_start_creates_no_workers_grant_with_every_feature_on" {
     condition = (
       length(module.workers_identity) == 0 &&
       length(azurerm_role_assignment.kv_app_secrets_workers) == 0 &&
-      length(azurerm_role_assignment.kv_crypto_officer_workers) == 0 &&
+      length(azurerm_role_assignment.kv_signing_keys_workers) == 0 &&
       length(azurerm_role_assignment.acr_pull_workers) == 0 &&
       length(azurerm_role_assignment.acs_email_sender_workers) == 0 &&
       length(azurerm_role_assignment.sb_sender_workers) == 0 &&
@@ -210,7 +214,7 @@ run "migrations_start_creates_no_workers_grant_with_every_feature_on" {
       length(module.postgres_connection_urls_api) == 0 &&
       length(module.postgres_connection_urls_workers) == 0
     )
-    error_message = "With migrations left at \"start\" no workers grant, Redis policy or per-app DSN may exist, whatever features are on."
+    error_message = "With migrations = \"start\" no workers grant, Redis policy or per-app DSN may exist, whatever features are on."
   }
 }
 
@@ -241,14 +245,18 @@ run "migrations_start_creates_no_workers_redis_policy_on_azure_cache_for_redis" 
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
+    migrations                     = "start"
   }
+
+  # migrations = "start" in production plans, with the check's warning (migrate.tf).
+  expect_failures = [check.production_migrations_at_start]
 
   assert {
     condition = (
       length(azurerm_redis_cache_access_policy_assignment.apps) == 1 &&
       length(azurerm_redis_cache_access_policy_assignment.workers) == 0
     )
-    error_message = "With migrations left at \"start\" on Azure Cache for Redis, only the apps identity may hold an access policy."
+    error_message = "With migrations = \"start\" on Azure Cache for Redis, only the apps identity may hold an access policy."
   }
 }
 
@@ -349,6 +357,7 @@ run "sensitive_registry_username_plans_in_production_with_key_vault" {
     registry_password    = sensitive("pull-secret")
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -402,6 +411,7 @@ run "sensitive_registry_token_plans_in_production_with_key_vault" {
     })
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -506,4 +516,395 @@ run "oidc_tenant_id_must_be_a_guid" {
   }
 
   expect_failures = [var.oidc_tenant_id]
+}
+
+# --- migrations in production (MAS-5130, ADR 0120 §6) ----------------------------------------
+#
+# mode = "production" requires migrations to be stated: no default is safe there, because telling a
+# new install from a running one at plan needs a lookup that the deployer's read access can hide.
+# "job" makes the migrate identity the only Postgres administrator; an explicit "start" plans with a
+# warning. Every other mode keeps "start" when unset.
+
+# Unset in production is refused, with "job" recommended in the message.
+run "production_requires_migrations" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = null
+  }
+
+  expect_failures = [var.migrations]
+}
+
+run "production_job_makes_the_migrate_identity_the_only_administrator" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = "job"
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+
+  override_module {
+    target  = module.frontend_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend", principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff", client_id = "ffffffff-ffff-ffff-ffff-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-frontend" }
+  }
+
+  override_module {
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
+  }
+
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+
+  assert {
+    condition = (
+      local.migrate_job &&
+      length(azurerm_container_app_job.migrate) == 1 &&
+      contains(module.api.env_names, "MASTERLY_MIGRATIONS") &&
+      contains(module.workers[0].env_names, "MASTERLY_MIGRATIONS")
+    )
+    error_message = "migrations = \"job\" in production must create the migrate job and give both backend apps MASTERLY_MIGRATIONS=job."
+  }
+
+  # On database_auth = "entra" (production's default for a new server) the migrate identity is the
+  # server's only Entra administrator, ca-api's identity is none, and no Container App runs as the
+  # migrate identity.
+  assert {
+    condition = (
+      local.database_entra &&
+      length(azurerm_postgresql_flexible_server_active_directory_administrator.apps) == 0 &&
+      azurerm_postgresql_flexible_server_active_directory_administrator.migrate[0].object_id == "dddddddd-dddd-dddd-dddd-dddddddddddd" &&
+      !contains(module.api.user_assigned_identity_ids, module.migrate_identity[0].id) &&
+      !contains(module.workers[0].user_assigned_identity_ids, module.migrate_identity[0].id) &&
+      !contains(module.frontend.user_assigned_identity_ids, module.migrate_identity[0].id) &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id])
+    )
+    error_message = "With migrations = \"job\" no Container App identity may be a Postgres administrator, and the migrate identity must be attached to no Container App."
+  }
+}
+
+# Stated, "start" plans in production, and the check says what it keeps.
+run "production_explicit_start_plans_with_a_warning" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = "start"
+  }
+
+  expect_failures = [check.production_migrations_at_start]
+
+  assert {
+    condition     = !local.migrate_job && length(azurerm_container_app_job.migrate) == 0
+    error_message = "An explicit migrations = \"start\" must plan in production, with no migrate job."
+  }
+}
+
+# Every other mode keeps "start" when unset.
+run "demo_defaults_to_start" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = var.migrations == null && local.migrations == "start" && !local.migrate_job
+    error_message = "Outside production an unset migrations must be \"start\"."
+  }
+}
+
+# Not read as unset: coalesce() would skip "", so the validation does not use it.
+run "migrations_refuses_an_empty_value" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    migrations            = ""
+  }
+
+  expect_failures = [var.migrations]
+}
+
+# --- The api image is new enough (identity.tf, api_image_floor) ------------------------------
+#
+# With the Key Vault ca-api holds key read only, which api v0.138.0 and later need; with "job" the
+# image must have the migrate entry point and the app roles (v0.136.0 and later). A tag below the
+# floor is refused at plan; a reference with no readable tag warns.
+
+run "api_image_below_the_key_vault_floor_is_refused" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = "job"
+    api_image                      = "masterly.azurecr.io/release/api:v0.137.0"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+run "api_image_below_the_floor_is_refused_with_a_digest_after_the_tag" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = "job"
+    api_image                      = "masterly.azurecr.io/release/api:v0.135.0@sha256:00b0c775ff83cd4b1d0a9c79e9290d3166f471b5576f43e4272ab0d031a9ed04"
+  }
+
+  expect_failures = [azurerm_resource_group.aca]
+}
+
+run "api_image_at_the_floor_plans" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = "job"
+    api_image                      = "masterly.azurecr.io/release/api:v0.138.0"
+  }
+
+  assert {
+    condition     = local.api_image_version == "0.138.0" && local.api_image_floor == "0.138.0" && local.api_image_meets_floor
+    error_message = "api v0.138.0 must meet the Key Vault floor."
+  }
+}
+
+run "api_image_above_the_floor_compares_numerically" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = "job"
+    api_image                      = "masterly.azurecr.io/release/api:v0.1000.0"
+  }
+
+  assert {
+    condition     = local.api_image_version == "0.1000.0" && local.api_image_meets_floor
+    error_message = "Versions must compare numerically, not as text: 0.1000.0 is above 0.138.0."
+  }
+}
+
+run "api_image_default_is_checked_through_the_manifest" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = "job"
+    api_image                      = null
+    frontend_image                 = null
+  }
+
+  assert {
+    condition = (
+      local.api_image_version == regex(":v([0-9.]+)$", jsondecode(file("${path.module}/MANIFEST.json")).releases[module.release_channel.version].images.api)[0] &&
+      local.api_image_meets_floor
+    )
+    error_message = "With api_image unset the api tag MANIFEST.json records for the channel's release must be checked, and meet the floor."
+  }
+}
+
+# A digest alone, as a mirror may pin: the plan cannot judge it, so it warns rather than refuses.
+run "api_image_without_a_readable_tag_warns" {
+  command = plan
+
+  variables {
+    mode                           = "production"
+    identity_binding               = "oidc"
+    oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience                  = "api-client-id"
+    oidc_jwks_uri                  = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id                 = "bff-client-id"
+    oidc_client_secret             = "s3cret"
+    oidc_authority                 = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri              = "https://app.example.com/api/auth/callback"
+    license_token                  = "eyJ.fake.jwt"
+    license_public_jwk             = "{\"kty\":\"EC\"}"
+    initial_owner_email            = "owner@example.com"
+    enable_key_vault               = true
+    enable_redis                   = true
+    redis_offering                 = "cache"
+    enable_workers                 = true
+    api_max_replicas               = 3
+    postgres_sku_name              = "GP_Standard_D2ds_v5"
+    postgres_backup_retention_days = 14
+    migrations                     = "job"
+    api_image                      = "mirror.example.com/masterly/api@sha256:00b0c775ff83cd4b1d0a9c79e9290d3166f471b5576f43e4272ab0d031a9ed04"
+  }
+
+  expect_failures = [check.api_image_version_is_known]
+
+  assert {
+    condition     = local.api_image_version == null && local.api_image_meets_floor
+    error_message = "A reference with no semver tag must warn, not refuse."
+  }
+}
+
+# Outside the Key Vault and the job there is no floor, so an old image plans as before.
+run "api_image_has_no_floor_without_the_vault_or_the_job" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "masterly.azurecr.io/release/api:v0.100.0"
+  }
+
+  assert {
+    condition     = local.api_image_floor == null && local.api_image_meets_floor
+    error_message = "Without the Key Vault and the migrate job no api image floor applies."
+  }
 }

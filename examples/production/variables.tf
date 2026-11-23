@@ -141,8 +141,8 @@ variable "external_database_admin_url" {
 
 variable "migrations" {
   type        = string
-  default     = "start"
-  description = "\"start\" (default): the apps migrate at start. \"job\": the migrate job does; needs an api image from a backend release later than v0.135.0 that also creates the app roles masterly_api and masterly_workers. On the starter server it also removes the apps identity's Postgres Entra administrator and, as wherever ca-workers runs as its own identity, its Service Bus Receiver and jobs-queue Data Owner grants (see the upgrade note in the module's docs/data-plane.md for the order on an existing install)."
+  default     = "job"
+  description = "\"job\" (this example's value, and the recommendation for a new install): caj-migrate runs the schema migrations as the only Postgres administrator, and ca-api and ca-workers connect as DML-only roles; needs an api image from a backend release later than v0.135.0. The module requires the value in production. An install that already runs without caj-migrate is on \"start\": set \"start\" to keep it, and move to \"job\" deliberately (\"The migrate job\" in the module's docs/data-plane.md)."
 }
 
 variable "migrate_byo_database_secret_names" {

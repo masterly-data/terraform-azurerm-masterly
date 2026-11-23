@@ -18,7 +18,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -462,7 +462,7 @@ run "release_channel_leaves_an_explicit_image_alone" {
   }
 
   assert {
-    condition     = module.api.image == "masterly.azurecr.io/release/api:v0.0.0" && module.frontend.image == "masterly.azurecr.io/release/frontend:v0.0.0"
+    condition     = module.api.image == "masterly.azurecr.io/release/api:v0.138.0" && module.frontend.image == "masterly.azurecr.io/release/frontend:v0.0.0"
     error_message = "An explicit api_image or frontend_image must not be replaced by the channel's reference."
   }
 }
@@ -895,6 +895,7 @@ run "production_without_initial_owner_is_rejected" {
     # initial_owner_email is unset -> refused
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.mode]
@@ -929,6 +930,7 @@ run "production_breakglass_does_not_replace_the_owner_bootstrap" {
     breakglass_secret_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.mode]

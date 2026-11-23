@@ -34,10 +34,11 @@ variable "workers_environment" {
     error_message = "workers_environment = \"workers\" needs the workers environment (aca-<name_prefix>-workers), and this install has none: environment_subnet_ids has no workers subnet. On an injected network set front_subnet_id, app_subnet_id and workers_subnet_id; on a network the module builds set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix, or use a VNet of /21 or larger. Or keep workers_environment = \"runtime\"."
   }
 
-  # egress_firewall routes snet-aca only (network.tf): a move off it would leave forced tunnelling.
+  # Until retirement egress_firewall routes snet-aca only (network.tf): a move off it would leave
+  # forced tunnelling. Once retired it routes every environment subnet instead.
   validation {
-    condition     = var.workers_environment != "workers" || var.egress_firewall == null
-    error_message = "workers_environment = \"workers\" cannot be used with egress_firewall: egress_firewall attaches its route table to snet-aca only, so the environment subnets get no route table from egress_firewall and ca-workers' egress would bypass your firewall. Keep workers_environment = \"runtime\" while egress_firewall is set."
+    condition     = var.workers_environment != "workers" || var.egress_firewall == null || var.retire_runtime_environment
+    error_message = "workers_environment = \"workers\" cannot be used with egress_firewall while aca-<name_prefix> runs: egress_firewall then attaches its route table to snet-aca only, so the environment subnets get no route table from egress_firewall and ca-workers' egress would bypass your firewall. Keep workers_environment = \"runtime\" while egress_firewall is set, or remove egress_firewall, move every workload, set retire_runtime_environment = true and set egress_firewall again: on a retired install it routes every environment subnet."
   }
 }
 
@@ -96,15 +97,33 @@ locals {
   # claim, so one replica per message would add replicas faster than the work needs them.
   workers_scale_message_count = 5
 
-  # Whether ca-workers runs as its own identity (id-<prefix>-workers, main.tf): wherever it exists
-  # and the install has a Key Vault, so on "password", on BYO-DB and on migrations = "job", which
-  # requires the vault. migrations = "start" with database_auth = "entra" on the starter server
-  # stays on the apps identity: the shared DSN's user there is that identity's name, and its token
-  # is minted for AZURE_CLIENT_ID. Every `*_workers` grant and Redis policy counts on this, so an
-  # install without ca-workers gets none of them. nonsensitive() on database_entra alone, the
-  # same narrow unmarking as main.tf's presence tests: whether a DSN was supplied is not the secret,
-  # and a marked value here would hide which identity ca-workers runs as from every plan.
-  workers_own_identity = var.enable_workers && var.enable_key_vault && (local.migrate_app_roles || !nonsensitive(local.database_entra))
+  # Whether ca-workers runs as its own identity (id-<prefix>-workers, identity.tf): wherever it
+  # exists, with two exceptions where it stays on the apps identity.
+  #   - migrations = "start" with database_auth = "entra" on the starter server: the shared DSN's
+  #     user is the apps identity's name, the server's Entra administrator, because both apps
+  #     migrate at start, and its token is minted for AZURE_CLIENT_ID (an ADR 0120 §6 departure;
+  #     migrations = "job" avoids it).
+  #   - An install without the Key Vault that pulls from a registry as its identities and grants
+  #     AcrPull out of band (acr_id null, no token): the identity would be created in the same apply
+  #     that moves ca-workers to it, before anyone could grant it AcrPull, and ca-workers could not
+  #     pull. Through 0.26.0 every install without the vault kept ca-workers on the apps identity;
+  #     it moves now where the module grants AcrPull itself (acr_id), pulls with a token, or pulls
+  #     public images. An install with the vault moved in 0.24.0, with the out-of-band grant made
+  #     first, as its upgrade note says.
+  # Every `*_workers` grant and Redis policy counts on this, so an install without ca-workers gets
+  # none of them. nonsensitive() on database_entra alone, the same narrow unmarking as main.tf's
+  # presence tests: whether a DSN was supplied is not the secret, and a marked value here would hide
+  # which identity ca-workers runs as from every plan.
+  workers_pull_needs_a_manual_grant = !var.enable_key_vault && !local.registry_token_mode && var.acr_id == null && local.registry_server != ""
+  workers_own_identity              = var.enable_workers && (local.migrate_app_roles || !nonsensitive(local.database_entra)) && !local.workers_pull_needs_a_manual_grant
+
+  # Whether ca-workers' env names its own identity's client id (workers_env, main.tf): where it runs
+  # as its own identity and the api's env names one, which the Key Vault, Service Bus and Entra
+  # bindings set (keyvault_env, servicebus_env, entra_auth_env). Without any of them nothing in the
+  # env mints a token, and the api sets none either. Stated from the inputs rather than read from
+  # local.api_env, which is sensitive: whether a key exists is not the secret, and a marked value
+  # here would mark the whole env.
+  workers_own_client_id = local.workers_own_identity && (var.enable_key_vault || var.enable_service_bus || nonsensitive(local.database_entra) || local.redis_entra)
 
   # Whether ca-workers signs in as its own database role, masterly_workers, with its own DSN
   # secrets: only where the migrate job creates that role (migrate_app_roles) and ca-workers exists.
@@ -232,10 +251,12 @@ module "workers" {
     azurerm_postgresql_flexible_server_active_directory_administrator.apps,
     azurerm_managed_redis_access_policy_assignment.apps,
     azurerm_redis_cache_access_policy_assignment.apps,
+    # Where ca-workers runs as the apps identity, the signing keys grant it creates and signs with.
+    azurerm_role_assignment.kv_signing_keys,
     # Its own identity's grants, when it runs as it.
     azurerm_role_assignment.acr_pull_workers,
     azurerm_role_assignment.kv_app_secrets_workers,
-    azurerm_role_assignment.kv_crypto_officer_workers,
+    azurerm_role_assignment.kv_signing_keys_workers,
     azurerm_role_assignment.sb_sender_workers,
     azurerm_role_assignment.sb_receiver_workers,
     azurerm_role_assignment.sb_scaler_workers,
@@ -248,6 +269,7 @@ module "workers" {
     azapi_resource_action.migrate_start,
     # With egress_firewall, the first pull takes the firewall's route, as on the api (main.tf).
     azurerm_subnet_route_table_association.aca,
+    azurerm_subnet_route_table_association.environment,
     # In the workers environment, its subnet's NSG is in place first, as for the environment.
     azurerm_subnet_network_security_group_association.environment,
     time_sleep.environment_move["workers"],

@@ -44,11 +44,23 @@ locals {
   # Subnet layout: derived from the first VNet prefix (the /16-default layout the demo
   # runs: first /23 for the runtime, the /24 at index 4 for private endpoints) unless
   # explicit prefixes are supplied (enterprise IPAM allocations smaller than /21).
-  vnet_prefix_bits = tonumber(split("/", var.vnet_address_space[0])[1])
-  aca_subnet_prefix = var.aca_subnet_prefix != null ? var.aca_subnet_prefix : (
+  #
+  # The runtime subnet (snet-aca) exists only while aca-<prefix> does: with
+  # retire_runtime_environment the module neither derives nor creates it, and aca_subnet_prefix is
+  # ignored. A retired install whose first VNet prefix is /22 to /24 and which sets no environment
+  # prefixes is carved in quarters instead (small_vnet_layout): front, app and workers in the first
+  # three, and the private endpoints in the fourth unless private_endpoints_subnet_prefix puts them
+  # elsewhere (a /24 gives four /26s). No install planned before this rule could be in that state:
+  # a retired install already had its three environment subnets, and with a VNet that small they
+  # were explicit prefixes.
+  vnet_prefix_bits  = tonumber(split("/", var.vnet_address_space[0])[1])
+  runtime_subnet    = !var.retire_runtime_environment
+  small_vnet_layout = var.retire_runtime_environment && local.vnet_prefix_bits > 21 && local.vnet_prefix_bits <= 24
+  aca_subnet_prefix = !local.runtime_subnet ? null : var.aca_subnet_prefix != null ? var.aca_subnet_prefix : (
     cidrsubnet(var.vnet_address_space[0], 23 - local.vnet_prefix_bits, 0)
   )
   private_endpoints_subnet_prefix = var.private_endpoints_subnet_prefix != null ? var.private_endpoints_subnet_prefix : (
+    local.small_vnet_layout ? cidrsubnet(var.vnet_address_space[0], 2, 3) :
     cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 4)
   )
 
@@ -57,14 +69,19 @@ locals {
   # win. With none set, a first VNet prefix of /21 or larger derives the /24s at index 5, 6 and
   # 7, which are clear of the derived runtime /23 (index 0) and endpoints /24 (index 4). A
   # smaller VNet, or explicit legacy prefixes that already cover those /24s, derives nothing:
-  # an existing install keeps planning, and sets the three prefixes to add the subnets.
+  # an existing install keeps planning, and sets the three prefixes to add the subnets. A retired
+  # install on a /22 to /24 takes the quarters of small_vnet_layout above.
   env_subnet_prefix_inputs = {
     front   = var.front_subnet_prefix
     app     = var.app_subnet_prefix
     workers = var.workers_subnet_prefix
   }
   env_subnet_prefixes_given = length(compact(values(local.env_subnet_prefix_inputs))) > 0
-  env_subnet_candidates = local.env_subnet_prefixes_given || local.vnet_prefix_bits > 21 ? local.env_subnet_prefix_inputs : {
+  env_subnet_candidates = local.env_subnet_prefixes_given ? local.env_subnet_prefix_inputs : local.small_vnet_layout ? {
+    front   = cidrsubnet(var.vnet_address_space[0], 2, 0)
+    app     = cidrsubnet(var.vnet_address_space[0], 2, 1)
+    workers = cidrsubnet(var.vnet_address_space[0], 2, 2)
+    } : local.vnet_prefix_bits > 21 ? local.env_subnet_prefix_inputs : {
     front   = cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 5)
     app     = cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 6)
     workers = cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 7)
@@ -164,15 +181,29 @@ locals {
   #   3. hub-and-spoke landing zone              — subnets injected, module owns no network
   # Injection is all-or-nothing: a half-injected network is a topology nobody asked for and
   # every combination of it would need its own test matrix.
-  inject_network = var.aca_subnet_id != null
+  #
+  # Either subnet id marks an injected network. aca_subnet_id names the runtime subnet, which a
+  # retired install (retire_runtime_environment) no longer needs, so there private_endpoints_subnet_id
+  # and the front, app and workers subnet ids are the whole injected network. The preconditions on
+  # azurerm_resource_group.aca refuse aca_subnet_id without private_endpoints_subnet_id always, and
+  # the reverse while aca-<prefix> still runs.
+  inject_network = var.aca_subnet_id != null || var.private_endpoints_subnet_id != null
 
-  aca_subnet_id               = local.inject_network ? var.aca_subnet_id : azurerm_subnet.aca[0].id
+  # null once retired on a network the module builds: no snet-aca is created then, and
+  # module.aca_env, the one reader, has no instance.
+  aca_subnet_id               = local.inject_network ? var.aca_subnet_id : one(azurerm_subnet.aca[*].id)
   private_endpoints_subnet_id = local.inject_network ? var.private_endpoints_subnet_id : azurerm_subnet.private_endpoints[0].id
 
   # Private DNS links need the VNet, and an injected subnet id already carries it:
   # /subscriptions/../virtualNetworks/<vnet>/subnets/<subnet>. Derived rather than asked
-  # for, so the two can never disagree.
-  virtual_network_id = local.inject_network ? regex("^(.*)/subnets/[^/]+$", var.aca_subnet_id)[0] : azurerm_virtual_network.this[0].id
+  # for, so the two can never disagree. From aca_subnet_id where it is set, as it always was, so an
+  # install that keeps it plans no change; without it, from front_subnet_id, which a retired
+  # injected install sets and which the preconditions hold to the same network. null only on an
+  # injected network that has neither, which those preconditions refuse.
+  network_anchor_subnet_id = var.aca_subnet_id != null ? var.aca_subnet_id : var.front_subnet_id
+  virtual_network_id = local.inject_network ? try(
+    regex("(?i)^(.*)/subnets/[^/]+$", local.network_anchor_subnet_id)[0], null
+  ) : azurerm_virtual_network.this[0].id
 
   # The environment subnets on an injected spoke: all three or none, beside aca_subnet_id
   # (preconditions on azurerm_resource_group.aca). Compared case-insensitively, as Azure
@@ -453,6 +484,13 @@ resource "azurerm_resource_group" "aca" {
       error_message = "Data-residency mismatch: this install declares masterly_region = \"${var.masterly_region}\", but every resource is created in Azure location \"${var.location}\", which is geo \"${local.install_geo == null ? "unknown" : local.install_geo}\". The declared geo is what customers are told and what the app stamps on usage records; the location is where the data actually sits. Change one to match the other — or, if this location genuinely satisfies that residency commitment, say so explicitly with location_geo."
     }
 
+    # The api image is new enough for the grants and migrations this module configures
+    # (identity.tf, api_image_floor). A reference with no readable tag warns instead.
+    precondition {
+      condition     = local.api_image_meets_floor
+      error_message = "The api image is v${coalesce(local.api_image_version, "?")}, older than this install needs: v${coalesce(local.api_image_floor, "?")} or later (${local.api_image_floor_reason}). Set api_image to that release or later, or leave it unset for the release channel's image."
+    }
+
     precondition {
       condition     = !var.api_ingress_external || length(var.ingress_allowed_cidrs) > 0
       error_message = "api_ingress_external = true with an empty ingress_allowed_cidrs would publish /v1 to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. The api holds no session of its own — it trusts a bearer token — so it is the surface least able to survive being open. Name the CIDRs that may reach it."
@@ -484,9 +522,31 @@ resource "azurerm_resource_group" "aca" {
       error_message = "telemetry_client_id and telemetry_client_secret are set, but neither feature that uses them is: the install credential authenticates licence refresh (license_issuer_url) and fleet telemetry (telemetry_url), and on its own it does nothing. Set the input for the feature you want, or leave the credential unset."
     }
 
+    # retire_runtime_environment (variables-environment.tf). Azure deletes an environment with
+    # everything in it, so nothing the module places there may be left:
+    # local.runtime_environment_workloads (environment.tf) lists what still is.
     precondition {
-      condition     = (var.aca_subnet_id == null) == (var.private_endpoints_subnet_id == null)
-      error_message = "aca_subnet_id and private_endpoints_subnet_id go together: either the module builds the whole network, or the platform team supplies both subnets. Half of an injected network is a topology nobody asked for."
+      condition     = !var.retire_runtime_environment || length(local.runtime_environment_workloads) == 0
+      error_message = "retire_runtime_environment = true would delete aca-<name_prefix> while these still run in it: ${join("; ", local.runtime_environment_workloads)}. Move them first, in the order docs/networking.md gives under \"Retiring the runtime environment\", apply, and then set retire_runtime_environment = true; or keep it false."
+    }
+
+    # An injected network is private_endpoints_subnet_id and the environment subnets, plus
+    # aca_subnet_id while aca-<prefix> still runs. Each half is refused without the other: the
+    # runtime subnet alone leaves the private endpoints nowhere, and the endpoints alone leave
+    # aca-<prefix> nowhere to run until retire_runtime_environment removes it.
+    precondition {
+      condition     = var.aca_subnet_id == null || var.private_endpoints_subnet_id != null
+      error_message = "aca_subnet_id needs private_endpoints_subnet_id beside it: either the module builds the whole network, or the platform team supplies the subnets. Half of an injected network is a topology nobody asked for."
+    }
+
+    precondition {
+      condition     = var.private_endpoints_subnet_id == null || var.aca_subnet_id != null || var.retire_runtime_environment
+      error_message = "private_endpoints_subnet_id is set without aca_subnet_id, and aca-<name_prefix>, the runtime Container Apps environment, still runs (retire_runtime_environment = false): it needs its subnet, delegated to Microsoft.App/environments. Set aca_subnet_id, or, once every workload runs in the front, app and workers environments, set retire_runtime_environment = true, after which the install needs no runtime subnet."
+    }
+
+    precondition {
+      condition     = !local.inject_network || var.aca_subnet_id != null || length(local.env_subnet_ids_given) == 3
+      error_message = "An injected network without aca_subnet_id (retire_runtime_environment = true) runs everything in the front, app and workers environments, so it needs front_subnet_id, app_subnet_id and workers_subnet_id beside private_endpoints_subnet_id."
     }
 
     precondition {
@@ -503,8 +563,8 @@ resource "azurerm_resource_group" "aca" {
     }
 
     precondition {
-      condition     = length(local.env_subnet_ids_given) == 0 || var.aca_subnet_id != null
-      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id join an existing network, so they need aca_subnet_id and private_endpoints_subnet_id beside them. On a network the module builds, set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix instead."
+      condition     = length(local.env_subnet_ids_given) == 0 || local.inject_network
+      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id join an existing network, so they need private_endpoints_subnet_id beside them (and aca_subnet_id until retire_runtime_environment = true). On a network the module builds, set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix instead."
     }
 
     precondition {
@@ -513,13 +573,14 @@ resource "azurerm_resource_group" "aca" {
     }
 
     # A conditional, not `||`: Terraform before 1.12 evaluates both operands of `||`, and
-    # lower(null) would then error instead of leaving the precondition above to refuse it.
+    # lower(null) would then error instead of leaving the precondition above to refuse it. The
+    # anchor is aca_subnet_id, or front_subnet_id on a retired install without it (main.tf locals).
     precondition {
-      condition = var.aca_subnet_id == null ? true : alltrue([
+      condition = !local.inject_network || local.network_anchor_subnet_id == null ? true : alltrue([
         for id in concat(local.env_subnet_ids_given, local.add_on_subnet_ids_given) :
-        lower(try(regex("^(.*)/subnets/[^/]+$", id)[0], id)) == lower(try(regex("^(.*)/subnets/[^/]+$", var.aca_subnet_id)[0], var.aca_subnet_id))
+        lower(try(regex("(?i)^(.*)/subnets/[^/]+$", id)[0], id)) == lower(try(regex("(?i)^(.*)/subnets/[^/]+$", local.network_anchor_subnet_id)[0], local.network_anchor_subnet_id))
       ])
-      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id (and core_subnet_id, outbound_subnet_id and extension_subnet_id where set) must be subnets of the same virtual network as aca_subnet_id: the install's private DNS zones are linked to that network, and its private endpoints answer only to callers that resolve them."
+      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id (and core_subnet_id, outbound_subnet_id and extension_subnet_id where set) must be subnets of the same virtual network as aca_subnet_id, or, without aca_subnet_id, as front_subnet_id: the install's private DNS zones are linked to that network, and its private endpoints answer only to callers that resolve them."
     }
 
     # The add-on environments (ADR 0120 §4). Their inputs mean nothing without the add-on, and an
@@ -533,8 +594,8 @@ resource "azurerm_resource_group" "aca" {
     }
 
     precondition {
-      condition     = length(local.add_on_subnet_ids_given) == 0 || var.aca_subnet_id != null
-      error_message = "core_subnet_id, outbound_subnet_id and extension_subnet_id join an existing network, so they need aca_subnet_id and private_endpoints_subnet_id beside them. On a network the module builds, set core_subnet_prefix, outbound_subnet_prefix and extension_subnet_prefix instead, or let a VNet of /20 or larger derive them."
+      condition     = length(local.add_on_subnet_ids_given) == 0 || local.inject_network
+      error_message = "core_subnet_id, outbound_subnet_id and extension_subnet_id join an existing network, so they need private_endpoints_subnet_id beside them (and aca_subnet_id until retire_runtime_environment = true). On a network the module builds, set core_subnet_prefix, outbound_subnet_prefix and extension_subnet_prefix instead, or let a VNet of /20 or larger derive them."
     }
 
     precondition {
@@ -542,7 +603,7 @@ resource "azurerm_resource_group" "aca" {
         (!var.split_processing || (var.core_subnet_id != null && var.outbound_subnet_id != null)) &&
         (!var.extensions || var.extension_subnet_id != null)
       )
-      error_message = "On an injected network (aca_subnet_id) split_processing needs core_subnet_id and outbound_subnet_id, and extensions needs extension_subnet_id: the module creates no subnet there, and each add-on environment needs one of its own. Set the ids, or leave the add-on off."
+      error_message = "On an injected network (private_endpoints_subnet_id) split_processing needs core_subnet_id and outbound_subnet_id, and extensions needs extension_subnet_id: the module creates no subnet there, and each add-on environment needs one of its own. Set the ids, or leave the add-on off."
     }
 
     # Read from the environment keys, which are known at plan. On a network the module builds, an
@@ -1253,7 +1314,7 @@ locals {
   # so it is the only value.
   workers_env = merge(
     local.api_env,
-    local.workers_own_identity ? { AZURE_CLIENT_ID = module.workers_identity[0].client_id } : {},
+    local.workers_own_client_id ? { AZURE_CLIENT_ID = module.workers_identity[0].client_id } : {},
   )
 
   # --- The install's secret material -----------------------------------------------
@@ -1586,6 +1647,9 @@ module "api" {
     # The app secrets grant exists before this app's update; on an upgrade it replaces the
     # Secrets Officer grant at the same address (keyvault.tf).
     azurerm_role_assignment.kv_app_secrets,
+    # Key read for the signing keys' public half. On an upgrade it replaces the Crypto Officer grant
+    # at the same address (keyvault.tf), so this app is updated only after the new grant exists.
+    azurerm_role_assignment.kv_signing_key_reader,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
     # On "entra" the api authenticates as its identity at boot, so the database role and the
@@ -1604,6 +1668,7 @@ module "api" {
     # route, not Azure's default path (network.tf). Without egress_firewall the association has
     # no instance, so nothing changes.
     azurerm_subnet_route_table_association.aca,
+    azurerm_subnet_route_table_association.environment,
     time_sleep.environment_move["api"],
   ]
 }
@@ -1758,6 +1823,7 @@ module "frontend" {
     azurerm_private_dns_zone_virtual_network_link.registry,
     # With egress_firewall, the first pull takes the firewall's route, as on the api.
     azurerm_subnet_route_table_association.aca,
+    azurerm_subnet_route_table_association.environment,
     time_sleep.environment_move["frontend"],
   ]
 }
