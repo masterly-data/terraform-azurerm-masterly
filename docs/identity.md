@@ -154,8 +154,14 @@ the api's gate. The application still authenticates every caller as `identity_bi
 - **Nothing else moves.** `ca-api` carries `builtin_auth_client_secret` whenever `builtin_auth` is
   set, so turning the switch on or off changes neither app, only the api's `authConfigs/current`
   (`module.masterly.azapi_resource.builtin_auth["api"]`, the address 0.19.0 and 0.19.1 used).
-- **The recovery fallback does not turn it off.** `builtin_auth_recovery_until` acts on
-  `ca-frontend`'s gate alone.
+- **The recovery fallback turns it off too.** While `builtin_auth_recovery_until` is open, at most
+  60 minutes and only behind a network restriction, it turns this gate off along with
+  `ca-frontend`'s, so that under an Entra outage a caller reaches `ca-api` with the application's
+  own authentication alone in front of it (ADR 0117, amended 2026-11-02). Only the gate changes:
+  the rest of the api's configuration, its ingress and its environment stay as they are. Every
+  write to the api's auth configuration raises the activity-log alert
+  `alert-<prefix>-api-auth-config-write`, which exists whenever the switch is on. See
+  [Recovery fallback](#recovery-fallback-turning-the-gates-off-builtin_auth_recovery_until).
 - **A hand-made configuration is imported once.** An install that configured built-in auth on
   `ca-api` by hand imports it in the first apply that sets `builtin_auth_api`, as for the frontend
   below, with `["api"]` and the api's `authConfigs/current`.
@@ -205,12 +211,13 @@ on upgrade. [Behind a reverse proxy](networking.md#behind-a-reverse-proxy-azure-
 has the whole topology, including why it must be set only when every request comes through the
 proxy.
 
-#### Recovery fallback: turning the frontend gate off (`builtin_auth_recovery_until`)
+#### Recovery fallback: turning the gates off (`builtin_auth_recovery_until`)
 
 When users cannot pass the platform sign-in, for example during an Entra outage, and no other way
-in is available, `builtin_auth_recovery_until` turns `ca-frontend`'s built-in authentication off
-until a time you set, so that a browser reaches the application's own sign-in, including its
-break-glass path. Set it to an RFC 3339 UTC time, such as `2026-11-14T15:30:00Z`, and apply.
+in is available, `builtin_auth_recovery_until` turns `ca-frontend`'s built-in authentication off,
+and with `builtin_auth_api` `ca-api`'s too, until a time you set, so that a browser reaches the
+application's own sign-in, including its break-glass path. Set it to an RFC 3339 UTC time, such as
+`2026-11-14T15:30:00Z`, and apply.
 
 - **At most 60 minutes.** A time more than 60 minutes after the plan is refused. To extend the
   window, plan and apply again with a new time.
@@ -218,18 +225,30 @@ break-glass path. Set it to an RFC 3339 UTC time, such as `2026-11-14T15:30:00Z`
   who reaches the frontend: a non-empty `ingress_allowed_cidrs`,
   `frontend_ingress_external = false`, or `aca_internal_load_balancer = true`. It is also refused
   without `builtin_auth`.
-- **The frontend only.** It changes nothing on `ca-api`: its ingress, its environment and its
-  authentication, the gate `builtin_auth_api` turns on included, stay as they are. Relaxing the
-  api's own sign-in check during an Entra outage is not set by this input.
+- **The api's gate with `builtin_auth_api`, and nothing else.** Without `builtin_auth_api`,
+  `ca-api` has no gate and the window changes nothing on it. With it, the window turns the api's
+  gate off as well: under an Entra outage neither `ca-frontend`'s nor `ca-edge`'s
+  workload-identity token can be issued, so the gate would otherwise refuse every call. Only the
+  gates' `platform.enabled` changes; the rest of both configurations, and `ca-api`'s ingress and
+  environment, stay as they are, so the application is not told the gate is off and its own
+  authentication stays in front. Relaxing the api's own sign-in check during an Entra outage is
+  not set by this input. A published `ca-api` (`api_ingress_external`) always sits behind
+  `ingress_allowed_cidrs`.
 - **Restored at the next plan, not at the time itself.** Terraform does not run on its own: the
-  gate comes back at the first plan and apply after the time has passed. Run that apply as soon
-  as the window ends. A plan that still sets a passed time turns the gate back on and warns
+  gates come back at the first plan and apply after the time has passed. Run that apply as soon
+  as the window ends. A plan that still sets a passed time turns the gates back on and warns
   through the check `builtin_auth_recovery_window_has_expired`; remove the input then.
 - **Alerted both ways.** With `builtin_auth` set, the module creates the activity-log alert
   `alert-<prefix>-frontend-auth-config-write`, which fires on every write to `ca-frontend`'s auth
   configuration and notifies the install's action group (`alert_email` or
-  `alert_action_group_id`). That is the disable and the restore, any change made outside
-  Terraform, and also an apply that changes `builtin_auth` itself; confirm each one was intended.
+  `alert_action_group_id`). With `builtin_auth_api`, it also creates
+  `alert-<prefix>-api-auth-config-write`, which does the same for `ca-api`'s. Both exist for as
+  long as their gate does, not only during a window. They fire on the disable and the restore,
+  any change made outside Terraform, and also an apply that changes `builtin_auth` itself;
+  confirm each one was intended. The api's alert covers every write after it exists, not the
+  apply that turns `builtin_auth_api` on or off: turning it on creates the alert and `ca-api`'s
+  configuration in the same apply, so that first write can land before the alert does, and
+  turning it off deletes the configuration and the alert together.
 
 The configuration is written with the `Azure/azapi` provider, because azurerm has no resource
 for it; the same provider starts the [migrate job](data-plane.md#the-migrate-job) at apply. The module

@@ -1,4 +1,4 @@
-# The auth-configuration alert (builtin-auth.tf) routes to the module's own action group when
+# The auth-configuration alerts (builtin-auth.tf) route to the module's own action group when
 # alert_email is set (mock providers — no cloud access; runs in CI via `terraform test`).
 #
 # This is its own file, and an apply, for the reason availability_routing.tftest.hcl is: the
@@ -193,6 +193,150 @@ run "auth_config_alert_routes_to_the_module_action_group" {
       contains([for a in azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].action : a.action_group_id], azurerm_monitor_action_group.alerts[0].id)
     )
     error_message = "With alert_email set, the auth-configuration alert must route to the module's action group."
+  }
+}
+
+# With builtin_auth_api, ca-api's auth-configuration alert routes the same way, one action per
+# entry of local.alert_action_group_ids, and the frontend's keeps its own.
+run "api_auth_config_alert_routes_to_the_module_action_group" {
+  command = apply
+
+  variables {
+    builtin_auth_api = true
+  }
+
+  plan_options {
+    target = [
+      azurerm_monitor_action_group.alerts,
+      azurerm_monitor_activity_log_alert.builtin_auth_config_write,
+      azurerm_monitor_activity_log_alert.builtin_auth_api_config_write,
+    ]
+  }
+
+  override_resource {
+    target = azurerm_monitor_action_group.alerts
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/microsoft.insights/actionGroups/ag-masterly-alerts"
+    }
+  }
+
+  override_module {
+    target = module.frontend
+    outputs = {
+      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
+      name = "ca-frontend"
+      fqdn = "ca-frontend.example.com"
+    }
+  }
+
+  override_resource {
+    target = azurerm_resource_group.data
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data"
+    }
+  }
+
+  override_module {
+    target = module.aca_env[0]
+    outputs = {
+      id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/cae-masterly"
+      default_domain                 = "masterly.swedencentral.azurecontainerapps.io"
+      internal_load_balancer_enabled = false
+      logs_destination               = "log-analytics"
+      mutual_tls_enabled             = true
+    }
+  }
+
+  override_module {
+    target = module.logs
+    outputs = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.OperationalInsights/workspaces/log-masterly"
+    }
+  }
+
+  override_module {
+    target = module.api
+    outputs = {
+      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
+      name = "ca-api"
+      fqdn = "ca-api.example.com"
+    }
+  }
+
+  override_module {
+    target  = module.environments["front"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-front", default_domain = "front-1a2b.swedencentral.azurecontainerapps.io", static_ip_address = "203.0.113.50" }
+  }
+
+  override_module {
+    target  = module.environments["app"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-app", default_domain = "app-3c4d.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.6.10" }
+  }
+
+  override_module {
+    target  = module.environments["workers"]
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly-workers", default_domain = "workers-5e6f.swedencentral.azurecontainerapps.io", static_ip_address = "10.30.7.10" }
+  }
+
+  override_resource {
+    target = azurerm_virtual_network.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/virtualNetworks/vnet-masterly"
+    }
+  }
+
+  override_resource {
+    target = azurerm_subnet.aca
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-aca"
+    }
+  }
+
+  override_resource {
+    target = azurerm_subnet.private_endpoints
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/virtualNetworks/vnet-masterly/subnets/snet-pe"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.postgres
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-net/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com"
+    }
+  }
+
+  override_resource {
+    target = azurerm_postgresql_flexible_server.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-data/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-masterly-test"
+    }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write) == 1 &&
+      azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].criteria[0].operation_name == "Microsoft.App/containerApps/authConfigs/write" &&
+      toset(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].scopes) == toset(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"])
+    )
+    error_message = "With builtin_auth_api set, ca-api's auth-configuration alert must watch authConfigs/write on ca-api."
+  }
+
+  assert {
+    condition = (
+      length(local.alert_action_group_ids) == 1 &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].action) == length(local.alert_action_group_ids) &&
+      jsonencode([for a in azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].action : a.action_group_id]) == jsonencode(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/microsoft.insights/actionGroups/ag-masterly-alerts"])
+    )
+    error_message = "With alert_email set, ca-api's auth-configuration alert must route to the module's action group, one action per entry of local.alert_action_group_ids."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].action) == 1 &&
+      contains([for a in azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].action : a.action_group_id], azurerm_monitor_action_group.alerts[0].id)
+    )
+    error_message = "With builtin_auth_api set, the frontend's auth-configuration alert must still route to the module's action group."
   }
 }
 

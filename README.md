@@ -673,8 +673,9 @@ availability alerts and the action group are not part of that switch; see below:
 - **Auth-configuration alert** — with `builtin_auth` set, an activity-log alert,
   `frontend-auth-config-write`, on every write to `ca-frontend`'s built-in authentication
   configuration: the recovery fallback turning the gate off or back on, a change made outside
-  Terraform, or an apply that changes `builtin_auth`. Activity-log alerts take no severity. See
-  [docs/identity.md](docs/identity.md#recovery-fallback-turning-the-frontend-gate-off-builtin_auth_recovery_until).
+  Terraform, or an apply that changes `builtin_auth`. With `builtin_auth_api`, a second one,
+  `api-auth-config-write`, does the same for `ca-api`'s. Activity-log alerts take no severity. See
+  [docs/identity.md](docs/identity.md#recovery-fallback-turning-the-gates-off-builtin_auth_recovery_until).
 - **API 401 alert** — with `builtin_auth_api` set, a metric alert, `api-401`, severity 1, on
   `ca-api`'s `Requests` metric filtered to status 401: more than 20 in a 15-minute window,
   evaluated every 5 minutes. A wrong allowed-client list on the api's gate refuses every call

@@ -153,6 +153,17 @@ run "builtin_auth_api_off_gates_the_frontend_only" {
     error_message = "With builtin_auth_api unset and the api internal, the frontend's configuration must name ca-frontend, and the published-api warning must not fire."
   }
 
+  # Threat: a write to ca-api's authConfigs goes unreported. With the switch off there is no
+  # ca-api gate to write, so no ca-api alert; the frontend's alert is the one it always was.
+  assert {
+    condition = (
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write) == 0 &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write) == 1 &&
+      azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].name == "alert-masterly-frontend-auth-config-write"
+    )
+    error_message = "With builtin_auth_api unset, there must be no ca-api auth-config alert, and the frontend's alert must be builtin_auth_config_write[0], alert-masterly-frontend-auth-config-write."
+  }
+
   # The rest of ca-api's and ca-frontend's arguments are in main.tf and the app module: neither
   # reads the switch, so it cannot reach them.
   assert {
@@ -799,8 +810,66 @@ run "builtin_auth_api_on_admits_the_frontend_and_edge_identities" {
   }
 }
 
-# Threat: the frontend's recovery fallback turns ca-api's gate off. With the window open, the
-# frontend's gate is off and ca-api's stays on.
+# --- The ca-api auth-config alert ----------------------------------------------------------------
+
+# Threat: a write to ca-api's authConfigs goes unreported. With builtin_auth_api and no window,
+# one alert on ca-api's authConfigs writes, beside the frontend's, which keeps its address and
+# name and so is not replaced. It routes to the install's action group (alert_email is set).
+run "builtin_auth_api_alerts_on_api_auth_config_writes" {
+  command = apply
+
+  variables {
+    builtin_auth_api = true
+  }
+
+  assert {
+    condition = (
+      !local.builtin_auth_recovery_open &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write) == 1 &&
+      azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].name == "alert-masterly-frontend-auth-config-write" &&
+      jsonencode(azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].scopes) == jsonencode(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"])
+    )
+    error_message = "With builtin_auth_api = true, the frontend's alert must stay builtin_auth_config_write[0], alert-masterly-frontend-auth-config-write, on ca-frontend."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write) == 1 &&
+      azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].name == "alert-masterly-api-auth-config-write" &&
+      azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].name != azurerm_monitor_activity_log_alert.builtin_auth_config_write[0].name
+    )
+    error_message = "With builtin_auth_api = true, there must be one ca-api auth-config alert, alert-masterly-api-auth-config-write, named apart from the frontend's."
+  }
+
+  assert {
+    condition = (
+      azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].location == "global" &&
+      azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].resource_group_name == "rg-masterly-aca" &&
+      jsonencode(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].scopes) == jsonencode([module.api.id]) &&
+      jsonencode(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].scopes) == jsonencode(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"]) &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].criteria) == 1 &&
+      azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].criteria[0].category == "Administrative" &&
+      azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].criteria[0].operation_name == "Microsoft.App/containerApps/authConfigs/write" &&
+      jsonencode(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].tags) == jsonencode({ install-id = "test", org-id = "org_test" })
+    )
+    error_message = "The ca-api alert must be a global Administrative alert on Microsoft.App/containerApps/authConfigs/write, scoped to ca-api alone, carrying the install's tags."
+  }
+
+  assert {
+    condition = (
+      length(local.alert_action_group_ids) == 1 &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].action) == length(local.alert_action_group_ids) &&
+      jsonencode([for a in azurerm_monitor_activity_log_alert.builtin_auth_api_config_write[0].action : a.action_group_id]) == jsonencode([azurerm_monitor_action_group.alerts[0].id])
+    )
+    error_message = "The ca-api alert must notify the install's action group, one action per entry of local.alert_action_group_ids."
+  }
+}
+
+# --- The recovery fallback ---------------------------------------------------------------------
+
+# ADR 0117 (amended 2026-11-02, item 5): under an Entra outage the window turns ca-api's gate off
+# too, and only the gate: every other field of both configurations, and ca-api's container app,
+# are the window-closed literals of builtin_auth_api_on_admits_only_the_frontend_identity.
 run "plan_time" {
   command = plan
 
@@ -809,7 +878,7 @@ run "plan_time" {
   }
 }
 
-run "builtin_auth_api_stays_on_through_the_frontend_recovery_window" {
+run "builtin_auth_recovery_turns_off_the_frontend_and_api_gates" {
   command = apply
 
   variables {
@@ -818,25 +887,291 @@ run "builtin_auth_api_stays_on_through_the_frontend_recovery_window" {
   }
 
   assert {
-    condition     = local.builtin_auth_recovery_open
+    condition     = local.builtin_auth_recovery_open && !local.builtin_auth_recovery_expired
     error_message = "A builtin_auth_recovery_until 30 minutes after the plan must open the recovery window."
   }
 
   assert {
     condition = (
+      jsonencode(keys(azapi_resource.builtin_auth)) == jsonencode(["api", "frontend"]) &&
       azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == false &&
-      azapi_resource.builtin_auth["api"].body.properties.platform.enabled == true
+      azapi_resource.builtin_auth["api"].body.properties.platform.enabled == false
     )
-    error_message = "With the recovery window open, ca-frontend's gate must be off and ca-api's must stay on."
+    error_message = "With builtin_auth_api = true and the recovery window open, ca-frontend's and ca-api's gates must both be off."
+  }
+
+  # Threat: turning the window on widens other ca-api auth fields, which would then stay widened
+  # after the restore. The whole body is the window-closed literal but for platform.enabled.
+  assert {
+    condition = jsonencode(azapi_resource.builtin_auth["api"].body) == jsonencode({
+      properties = {
+        platform = {
+          enabled = false
+        }
+        globalValidation = {
+          unauthenticatedClientAction = "Return401"
+          excludedPaths               = []
+        }
+        identityProviders = {
+          azureActiveDirectory = {
+            registration = {
+              clientId                = "22222222-2222-2222-2222-222222222222"
+              clientSecretSettingName = "microsoft-provider-authentication-secret"
+              openIdIssuer            = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0"
+            }
+            validation = {
+              allowedAudiences = []
+              defaultAuthorizationPolicy = {
+                allowedApplications = ["ffffffff-ffff-ffff-ffff-cccccccccccc"]
+              }
+            }
+          }
+        }
+      }
+    })
+    error_message = "With the recovery window open, ca-api's auth configuration must differ from its window-closed literal in platform.enabled alone: 401 with no redirect, no excluded path, no additional audience, and ca-frontend's workload identity alone."
   }
 
   assert {
     condition = (
-      azapi_resource.builtin_auth["api"].body.properties.globalValidation.unauthenticatedClientAction == "Return401" &&
-      jsonencode(azapi_resource.builtin_auth["api"].body.properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications) == jsonencode(["ffffffff-ffff-ffff-ffff-cccccccccccc"])
+      azapi_resource.builtin_auth["api"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api" &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write) == 1 &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write) == 1
     )
-    error_message = "The recovery window must leave the rest of ca-api's configuration as it is without it."
+    error_message = "With the recovery window open, ca-api's configuration must still be on ca-api, and both auth-config alerts must exist."
   }
+
+  # Threat: the window hands the application (L2) an L1-off signal while ADR 0119's open question
+  # 1 is undecided. ca-api's container app, its env and ingress included, is the window-closed
+  # literal of builtin_auth_api_on_admits_only_the_frontend_identity.
+  assert {
+    condition = nonsensitive(jsonencode({
+      name                       = module.api.name
+      environment_id             = module.api.environment_id
+      image                      = module.api.image
+      registry                   = module.api.registry
+      cpu                        = module.api.cpu
+      memory                     = module.api.memory
+      scale                      = module.api.scale
+      user_assigned_identity_ids = module.api.user_assigned_identity_ids
+      ingress_enabled            = module.api.ingress_enabled
+      ingress_external           = module.api.ingress_external
+      ingress_allow_insecure     = module.api.ingress_allow_insecure
+      ingress_allowed_ip_ranges  = module.api.ingress_allowed_ip_ranges
+      env_names                  = module.api.env_names
+      env_value_sha256           = module.api.env_value_sha256
+      env_secret_refs            = module.api.env_secret_refs
+      readiness_probe            = module.api.readiness_probe
+      liveness_probe             = module.api.liveness_probe
+      value_secret_names         = sort(module.api.value_secret_names)
+      vault_backed_secret_names  = module.api.vault_backed_secret_names
+      secret_ref_identity_ids    = module.api.secret_ref_identity_ids
+      secret_refs                = module.api.secret_refs
+      secret_file_mounts         = module.api.secret_file_mounts
+      })) == jsonencode({
+      name                       = "ca-api"
+      environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/managedEnvironments/aca-masterly"
+      image                      = "masterly.azurecr.io/release/api:v0.0.0"
+      registry                   = null
+      cpu                        = 0.5
+      memory                     = "1Gi"
+      scale                      = { min_replicas = 1, max_replicas = 1, termination_grace_period_seconds = null, custom_scale_rules = [] }
+      user_assigned_identity_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps"]
+      ingress_enabled            = true
+      ingress_external           = false
+      ingress_allow_insecure     = true
+      ingress_allowed_ip_ranges  = []
+      env_names                  = ["MASTERLY_ALLOWED_REGIONS", "MASTERLY_DPOP_INTERNAL_ORIGIN", "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS", "MASTERLY_IDENTITY_BINDING", "MASTERLY_INSTALL_ID", "MASTERLY_MODE", "MASTERLY_ORG_ID", "MASTERLY_REGION"]
+      env_value_sha256 = {
+        MASTERLY_ALLOWED_REGIONS               = sha256("eu")
+        MASTERLY_DPOP_INTERNAL_ORIGIN          = sha256("http://ca-api")
+        MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = sha256("7")
+        MASTERLY_IDENTITY_BINDING              = sha256("dev")
+        MASTERLY_INSTALL_ID                    = sha256("test")
+        MASTERLY_MODE                          = sha256("demo")
+        MASTERLY_ORG_ID                        = sha256("org_test")
+        MASTERLY_REGION                        = sha256("eu")
+      }
+      env_secret_refs           = { MASTERLY_BFF_SHARED_SECRET = "bff-shared-secret", MASTERLY_DATABASE_URL = "database-url", MASTERLY_SESSION_SECRET = "session-secret" }
+      readiness_probe           = { path = "/readyz", initial_delay = 5, interval_seconds = 10, timeout = 8, failure_count_threshold = 48, success_count_threshold = 1 }
+      liveness_probe            = { path = "/healthz", initial_delay = 5, interval_seconds = 20, timeout = 10, failure_count_threshold = 24 }
+      value_secret_names        = ["bff-shared-secret", "database-url", "microsoft-provider-authentication-secret", "session-secret"]
+      vault_backed_secret_names = []
+      secret_ref_identity_ids   = []
+      secret_refs               = {}
+      secret_file_mounts        = {}
+    })
+    error_message = "The recovery window must leave ca-api's container app, its env, secrets and ingress included, as it is with the window closed."
+  }
+}
+
+# Threat (continued): ca-workers runs the same backend, so the window must not reach its env
+# either. The baseline run pins the window-closed values, and the run after it, with the window
+# open, checks they are unchanged.
+run "builtin_auth_api_workers_env_with_the_window_closed" {
+  command = apply
+
+  variables {
+    builtin_auth_api = true
+    enable_workers   = true
+  }
+
+  assert {
+    condition = nonsensitive(jsonencode({
+      env_names        = module.workers[0].env_names
+      env_value_sha256 = module.workers[0].env_value_sha256
+      })) == jsonencode({
+      env_names = ["MASTERLY_ALLOWED_REGIONS", "MASTERLY_DPOP_INTERNAL_ORIGIN", "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS", "MASTERLY_IDENTITY_BINDING", "MASTERLY_INPROCESS_WORKER", "MASTERLY_INSTALL_ID", "MASTERLY_MODE", "MASTERLY_ORG_ID", "MASTERLY_REGION"]
+      env_value_sha256 = {
+        MASTERLY_ALLOWED_REGIONS               = sha256("eu")
+        MASTERLY_DPOP_INTERNAL_ORIGIN          = sha256("http://ca-api")
+        MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = sha256("7")
+        MASTERLY_IDENTITY_BINDING              = sha256("dev")
+        MASTERLY_INPROCESS_WORKER              = sha256("false")
+        MASTERLY_INSTALL_ID                    = sha256("test")
+        MASTERLY_MODE                          = sha256("demo")
+        MASTERLY_ORG_ID                        = sha256("org_test")
+        MASTERLY_REGION                        = sha256("eu")
+      }
+    })
+    error_message = "With builtin_auth_api = true, enable_workers and no window, ca-workers' env must be this literal."
+  }
+}
+
+run "builtin_auth_recovery_leaves_the_workers_env_unchanged" {
+  command = apply
+
+  variables {
+    builtin_auth_api            = true
+    enable_workers              = true
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  assert {
+    condition = (
+      local.builtin_auth_recovery_open &&
+      azapi_resource.builtin_auth["api"].body.properties.platform.enabled == false
+    )
+    error_message = "This run needs the recovery window open and ca-api's gate off."
+  }
+
+  assert {
+    condition = nonsensitive(jsonencode({
+      env_names        = module.workers[0].env_names
+      env_value_sha256 = module.workers[0].env_value_sha256
+      })) == jsonencode({
+      env_names = ["MASTERLY_ALLOWED_REGIONS", "MASTERLY_DPOP_INTERNAL_ORIGIN", "MASTERLY_ERASURE_BACKUP_RETENTION_DAYS", "MASTERLY_IDENTITY_BINDING", "MASTERLY_INPROCESS_WORKER", "MASTERLY_INSTALL_ID", "MASTERLY_MODE", "MASTERLY_ORG_ID", "MASTERLY_REGION"]
+      env_value_sha256 = {
+        MASTERLY_ALLOWED_REGIONS               = sha256("eu")
+        MASTERLY_DPOP_INTERNAL_ORIGIN          = sha256("http://ca-api")
+        MASTERLY_ERASURE_BACKUP_RETENTION_DAYS = sha256("7")
+        MASTERLY_IDENTITY_BINDING              = sha256("dev")
+        MASTERLY_INPROCESS_WORKER              = sha256("false")
+        MASTERLY_INSTALL_ID                    = sha256("test")
+        MASTERLY_MODE                          = sha256("demo")
+        MASTERLY_ORG_ID                        = sha256("org_test")
+        MASTERLY_REGION                        = sha256("eu")
+      }
+    })
+    error_message = "The recovery window must leave ca-workers' env as it is with the window closed (builtin_auth_api_workers_env_with_the_window_closed)."
+  }
+}
+
+# Without builtin_auth_api the window turns off ca-frontend's gate alone, as before: there is no
+# ca-api configuration to turn off, and no ca-api alert.
+run "builtin_auth_recovery_without_builtin_auth_api_turns_off_the_frontend_only" {
+  command = apply
+
+  variables {
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  assert {
+    condition = (
+      local.builtin_auth_recovery_open &&
+      jsonencode(keys(azapi_resource.builtin_auth)) == jsonencode(["frontend"]) &&
+      !contains(keys(azapi_resource.builtin_auth), "api") &&
+      azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == false
+    )
+    error_message = "With builtin_auth_api unset and the window open, only ca-frontend's gate must be configured, and it must be off."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write) == 0 &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write) == 1
+    )
+    error_message = "With builtin_auth_api unset and the window open, there must be no ca-api auth-config alert, and the frontend's alert must remain."
+  }
+}
+
+# Threat: after expiry ca-api's gate is not restored. A passed time turns both gates back on, and
+# the expired-window check warns.
+run "builtin_auth_recovery_expired_restores_the_frontend_and_api_gates" {
+  command = apply
+
+  variables {
+    builtin_auth_api            = true
+    builtin_auth_recovery_until = "2020-01-01T00:00:00Z"
+  }
+
+  assert {
+    condition = (
+      !local.builtin_auth_recovery_open &&
+      local.builtin_auth_recovery_expired &&
+      azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == true &&
+      azapi_resource.builtin_auth["api"].body.properties.platform.enabled == true
+    )
+    error_message = "With builtin_auth_api = true and a passed builtin_auth_recovery_until, ca-frontend's and ca-api's gates must both be back on."
+  }
+
+  expect_failures = [check.builtin_auth_recovery_window_has_expired]
+}
+
+# Threat: the switch widens beyond its bounds. With builtin_auth_api, the window's bounds are the
+# same: a time more than 60 minutes after the plan is refused, and so is a window with no network
+# restriction in front of ca-frontend. The plan time is taken again just before, as in
+# builtin_auth.tftest.hcl, so that the 61 minutes are counted from close to this plan.
+run "plan_time_for_61_minutes" {
+  command = plan
+
+  module {
+    source = "./tests/helpers/plan-time"
+  }
+}
+
+run "builtin_auth_api_recovery_refuses_more_than_60_minutes" {
+  command = plan
+
+  variables {
+    builtin_auth_api            = true
+    builtin_auth_recovery_until = run.plan_time_for_61_minutes.in_61_minutes
+  }
+
+  expect_failures = [var.builtin_auth_recovery_until]
+}
+
+run "builtin_auth_api_recovery_is_refused_without_a_network_restriction" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = []
+    frontend_ingress_external  = true
+    aca_internal_load_balancer = false
+    identity_binding           = "oidc"
+    oidc_allowed_issuers       = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience              = "api-client-id"
+    oidc_jwks_uri              = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id             = "bff-client-id"
+    oidc_client_secret         = "s3cret"
+    oidc_authority             = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri          = "https://app.example.com/api/auth/callback"
+
+    builtin_auth_api            = true
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  expect_failures = [var.builtin_auth_recovery_until]
 }
 
 # Threat: the published api ungated while the switch is on. With api_ingress_external, ca-api's

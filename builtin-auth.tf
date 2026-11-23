@@ -17,10 +17,13 @@
 # secret_values), which the configuration names rather than holds. ca-api carries that secret
 # whenever builtin_auth is set, so turning builtin_auth_api on or off changes neither app.
 #
-# builtin_auth_recovery_until is the recovery fallback: it turns ca-frontend's gate off for at
-# most 60 minutes, only behind a network restriction, and the first plan after the time turns it
-# back on. It never turns off ca-api's gate. The activity-log alert at the end of this file
-# reports both writes. A second alert, on ca-api's 401s, exists with builtin_auth_api.
+# builtin_auth_recovery_until is the recovery fallback: it turns ca-frontend's gate off and, with
+# builtin_auth_api, ca-api's too, for at most 60 minutes, only behind a network restriction, and
+# the first plan after the time turns them back on (ADR 0117, amended 2026-11-02, item 5). It
+# changes nothing else on either app: ca-api's environment and ingress are as without it, so the
+# application's own authentication is not told the gate is off. The activity-log alerts near the
+# end of this file, one per gated app, report both writes. A further alert, on ca-api's 401s,
+# exists with builtin_auth_api.
 
 locals {
   builtin_auth_enabled = var.builtin_auth != null
@@ -51,11 +54,12 @@ locals {
 
   # Per app: whether the gate is on, what an unauthenticated request gets, which paths skip the
   # gate, and who besides the registration itself may present a token. The frontend admits
-  # only tokens issued to its own registration, which is what a browser sign-in yields, and its
-  # gate is off while the recovery fallback is open. ca-api, with builtin_auth_api, answers 401
-  # and is never turned off here. The map and its keys are the ones earlier versions used, so
-  # the frontend's configuration keeps its address and its body, and an install's import blocks
-  # for ["api"] from 0.19.0 and 0.19.1 line up again.
+  # only tokens issued to its own registration, which is what a browser sign-in yields. ca-api,
+  # with builtin_auth_api, answers 401. Both gates are off while the recovery fallback is open,
+  # and only platform_enabled changes: every other field is as with the window closed, so the
+  # restore puts back exactly what was there. The map and its keys are the ones earlier versions
+  # used, so the frontend's configuration keeps its address and its body, and an install's
+  # import blocks for ["api"] from 0.19.0 and 0.19.1 line up again.
   builtin_auth_apps = local.builtin_auth_enabled ? merge(
     {
       frontend = {
@@ -71,7 +75,7 @@ locals {
     var.builtin_auth_api ? {
       api = {
         app_id                      = module.api.id
-        platform_enabled            = true
+        platform_enabled            = !local.builtin_auth_recovery_open
         unauthenticated_action      = "Return401"
         redirect_to_provider        = null
         excluded_paths              = local.builtin_auth_api_excluded_paths
@@ -101,9 +105,9 @@ locals {
   # is, without builtin_auth_api. The check below warns while it holds.
   builtin_auth_leaves_published_api_ungated = local.builtin_auth_enabled && var.api_ingress_external && !var.builtin_auth_api
 
-  # The recovery fallback (builtin_auth_recovery_until): ca-frontend's gate is off while the
-  # time is set and still after this plan, and on again at the first plan after it. The try()
-  # leaves a malformed time to the variable's validation.
+  # The recovery fallback (builtin_auth_recovery_until): ca-frontend's gate, and ca-api's with
+  # builtin_auth_api, is off while the time is set and still after this plan, and on again at
+  # the first plan after it. The try() leaves a malformed time to the variable's validation.
   builtin_auth_recovery_open = var.builtin_auth_recovery_until == null ? false : try(timecmp(plantimestamp(), var.builtin_auth_recovery_until) < 0, false)
 
   # A recovery time that has passed: the gate is back on, and the check below warns until the
@@ -128,7 +132,7 @@ check "builtin_auth_does_not_gate_the_published_api" {
 check "builtin_auth_recovery_window_has_expired" {
   assert {
     condition     = !local.builtin_auth_recovery_expired
-    error_message = "builtin_auth_recovery_until has passed: the recovery window has expired, and this plan turns ca-frontend's built-in authentication back on (ca-api's, with builtin_auth_api, was never turned off). Remove builtin_auth_recovery_until."
+    error_message = "builtin_auth_recovery_until has passed: the recovery window has expired, and this plan turns ca-frontend's built-in authentication back on, and ca-api's too where builtin_auth_api is set. Remove builtin_auth_recovery_until."
   }
 }
 
@@ -182,8 +186,9 @@ resource "azapi_resource" "builtin_auth" {
 # recovery fallback's disable and its restore, and a change made in the portal. It exists for as
 # long as builtin_auth does, not only during a recovery window, or the write that restores the
 # gate would go unreported. An activity-log alert takes no severity; it notifies the install's
-# action group like the other alerts (diagnostics.tf). Activity-log alert rules are global
-# resources: "global" is the location Azure accepts for every region this module deploys to.
+# action group like the other alerts (diagnostics.tf); ca-api's has its own alert below.
+# Activity-log alert rules are global resources: "global" is the location Azure accepts for every
+# region this module deploys to.
 resource "azurerm_monitor_activity_log_alert" "builtin_auth_config_write" {
   count = local.builtin_auth_enabled ? 1 : 0
 
@@ -192,6 +197,34 @@ resource "azurerm_monitor_activity_log_alert" "builtin_auth_config_write" {
   location            = "global"
   scopes              = [module.frontend.id]
   description         = "ca-frontend's built-in authentication configuration was written: the recovery fallback turned the gate off or back on, or the configuration was changed outside Terraform. Confirm the change was intended."
+
+  criteria {
+    category       = "Administrative"
+    operation_name = "Microsoft.App/containerApps/authConfigs/write"
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# The same for ca-api's auth configuration, for as long as builtin_auth_api gates it: the
+# recovery fallback turns that gate off and back on too. A resource of its own rather than a
+# second instance of the one above, so the frontend's alert keeps its address and is not
+# replaced.
+resource "azurerm_monitor_activity_log_alert" "builtin_auth_api_config_write" {
+  count = local.builtin_auth_enabled && var.builtin_auth_api ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-api-auth-config-write"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = "global"
+  scopes              = [module.api.id]
+  description         = "ca-api's built-in authentication configuration was written: the recovery fallback turned the gate off or back on, or the configuration was changed outside Terraform. Confirm the change was intended."
 
   criteria {
     category       = "Administrative"
