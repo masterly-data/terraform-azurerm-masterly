@@ -345,7 +345,8 @@ that opens by itself.
 
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
-| 100 | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443 | Reach the apps. 80 carries Azure's 301 to `https://`, so dropping it turns that redirect into a timeout |
+| 100 | Deny | `snet-extension` | any | Only with [`extensions`](#the-add-on-environments) (`deny-from-extension-subnet`): extension code reaches nothing of Masterly's, though `VirtualNetwork` covers its subnet |
+| 100 (105 with `extensions`) | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443 | Reach the apps. 80 carries Azure's 301 to `https://`, so dropping it turns that redirect into a timeout |
 | 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement: the platform's load balancer reaches the environment on the ephemeral range |
 | 120 | Allow | `snet-aca` | any | Container Apps platform requirement: traffic within the infrastructure subnet |
 | 4000 | Deny | any | any | Everything not admitted above |
@@ -362,8 +363,10 @@ that opens by itself.
 | 150 | Allow | `snet-outbound` | the same ports as 100 | The outbound environment, likewise (`allow-data-plane-from-outbound-subnet`) |
 | 4000 | Deny | any | any | Everything not admitted above |
 
-`snet-extension` is never a source here, nor on any other NSG the module writes: extension code
-has no database and no Masterly identity (ADR 0120 §7), so nothing admits it to the data plane.
+`snet-extension` is never a source here, nor of an allow rule on any other Masterly NSG the module
+writes: extension code has no database and no Masterly identity (ADR 0120 §7), so nothing admits it
+to the data plane. Apart from its own group's intra-subnet platform rule, it is the source of the
+deny at 100 on `snet-aca` and on `snet-front` only.
 
 `snet-front` is otherwise never a source here: the front environment is the one that faces your
 users, and the internet when it is external, so it opens no connection to Postgres, PgBouncer,
@@ -489,7 +492,8 @@ its load balancer.
 
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
-| 100 | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443, 31080, 31443 | Reach the front environment's apps |
+| 100 | Deny | `snet-extension` | any | Only with [`extensions`](#the-add-on-environments) (`deny-from-extension-subnet`), as on `snet-aca` |
+| 100 (105 with `extensions`) | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443, 31080, 31443 | Reach the front environment's apps |
 | 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement |
 | 120 | Allow | `snet-front` | any | Container Apps platform requirement: traffic within the subnet |
 | 4000 | Deny | any | any | Everything not admitted above |
@@ -580,10 +584,14 @@ Each subnet the module builds carries its own NSG, with the platform rows only:
 | 4000 | Deny | any | any | Everything not admitted above |
 
 No allow rule on them names `VirtualNetwork` or `Internet`, and no NSG of front, app, workers,
-core or outbound names `snet-extension` as a source. One reach remains: on an internal install
+core or outbound names `snet-extension` as the source of an allow rule. On an internal install
 (`aca_internal_load_balancer = true`) `snet-front` and `snet-aca` admit `VirtualNetwork` on the
-ingress ports, which covers `snet-extension` as it covers every caller on the VNet. Keep the
-extension range out of `ingress_allowed_cidrs`, so Container Apps ingress refuses it there.
+ingress ports, which covers `snet-extension` as it covers every caller on the VNet. So with
+`extensions` on, both carry `deny-from-extension-subnet` at priority 100, the lowest Azure
+accepts, and `allow-app-ingress` moves from 100 to 105 behind it: the extension environment
+reaches neither `ca-frontend`, `ca-edge` nor `ca-api`, whatever `ingress_allowed_cidrs` says.
+Without `extensions` neither rule changes. The deny is there on a public install too, where it
+changes nothing today.
 
 ### Zone redundancy
 
@@ -650,7 +658,9 @@ With [the add-ons](#the-add-on-environments), `core_subnet_id`, `outbound_subnet
 - **your endpoints subnet**: add the core and outbound subnets' ranges as sources on the
   data-plane ports. **Never add the extension subnet's range**, and never admit it to the front,
   app, workers, core or outbound subnets either: the network is the only thing isolating extension
-  code from Masterly's data plane (ADR 0122). A rule sourced from `VirtualNetwork` admits it too.
+  code from Masterly's data plane (ADR 0122). A rule sourced from `VirtualNetwork` admits it too:
+  where your front or `snet-aca` subnet admits `VirtualNetwork`, put a deny of the extension
+  subnet's range ahead of that rule, as the module does on a network it builds.
 - **egress**: the hub's route table on core and outbound (`0.0.0.0/0` to your firewall), with the
   firewall denying core the internet and allowing outbound only your targets and model endpoints.
 

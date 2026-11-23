@@ -687,8 +687,8 @@ run "extension_subnet_reaches_nothing_of_masterly" {
   }
 
   # VirtualNetwork covers the extension subnet. Only the front's caller rule may name it, as it did
-  # before the add-ons (docs/networking.md states what that admits); app, workers, core and outbound
-  # admit no tag at all.
+  # before the add-ons, behind the deny asserted below; app, workers, core and outbound admit no tag
+  # at all.
   assert {
     condition = alltrue(flatten([
       for k in ["app", "workers", "core", "outbound"] : [
@@ -698,6 +698,99 @@ run "extension_subnet_reaches_nothing_of_masterly" {
       ]
     ]))
     error_message = "No allow rule on the app, workers, core or outbound subnet may admit a tag or any address, which would cover the extension subnet."
+  }
+
+  # The front and snet-aca admit VirtualNetwork here, which covers the extension subnet: each denies
+  # that subnet, everything and every port, at 100 (the lowest priority Azure accepts), before
+  # allow-app-ingress, which moves to 105.
+  assert {
+    condition = alltrue([
+      for rules in [
+        azurerm_network_security_group.environment["front"].security_rule,
+        azurerm_network_security_group.aca[0].security_rule,
+      ] :
+      length([
+        for r in rules : r
+        if r.name == "deny-from-extension-subnet" && r.priority == 100 && r.access == "Deny" &&
+        r.direction == "Inbound" && r.protocol == "*" && r.source_address_prefix == "10.20.10.0/24" &&
+        r.destination_address_prefix == "*" && r.destination_port_range == "*"
+      ]) == 1 &&
+      length([for r in rules : r if r.name == "allow-app-ingress" && r.priority == 105 && r.source_address_prefix == "VirtualNetwork"]) == 1 &&
+      length([for r in rules : r if r.access == "Allow" && r.priority <= 100]) == 0
+    ])
+    error_message = "nsg-<prefix>-front and nsg-<prefix>-aca must each deny the extension subnet (deny-from-extension-subnet, priority 100, all protocols and ports) ahead of allow-app-ingress (105) from VirtualNetwork, with no allow rule at or before it."
+  }
+
+  # The deny is on those two groups only: no other group needs it, since none admits a range that
+  # covers the extension subnet.
+  assert {
+    condition = alltrue(flatten([
+      [for r in azurerm_network_security_group.private_endpoints[0].security_rule : r.name != "deny-from-extension-subnet"],
+      [
+        for k in ["app", "workers", "core", "outbound", "extension"] : [
+          for r in azurerm_network_security_group.environment[k].security_rule : r.name != "deny-from-extension-subnet"
+        ]
+      ],
+    ]))
+    error_message = "deny-from-extension-subnet belongs on nsg-<prefix>-front and nsg-<prefix>-aca only."
+  }
+}
+
+# On a public install the ingress rule admits Internet, which does not cover the extension subnet, but
+# the deny is there all the same: it follows the extension subnet, not the load balancer.
+run "extension_deny_on_a_public_install" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    extensions            = true
+  }
+
+  assert {
+    condition = alltrue([
+      for rules in [
+        azurerm_network_security_group.environment["front"].security_rule,
+        azurerm_network_security_group.aca[0].security_rule,
+      ] :
+      length([for r in rules : r if r.name == "deny-from-extension-subnet" && r.priority == 100 && r.access == "Deny" && r.source_address_prefix == "10.20.10.0/24"]) == 1 &&
+      length([for r in rules : r if r.name == "allow-app-ingress" && r.priority == 105 && r.source_address_prefix == "Internet"]) == 1
+    ])
+    error_message = "On a public install with extensions, nsg-<prefix>-front and nsg-<prefix>-aca must still deny the extension subnet at 100, with allow-app-ingress from Internet at 105."
+  }
+}
+
+# The deny comes with the extension subnet: split_processing alone adds no extension subnet, so no
+# deny, and allow-app-ingress keeps priority 100 on snet-aca and the front, as before the add-ons.
+run "no_extension_deny_without_extensions" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs      = ["203.0.113.7/32"]
+    aca_internal_load_balancer = true
+    split_processing           = true
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      [for r in azurerm_network_security_group.aca[0].security_rule : r.name != "deny-from-extension-subnet"],
+      [
+        for k, g in azurerm_network_security_group.environment : [
+          for r in g.security_rule : r.name != "deny-from-extension-subnet"
+        ]
+      ],
+    ]))
+    error_message = "Without extensions, no group may carry deny-from-extension-subnet."
+  }
+
+  assert {
+    condition = alltrue([
+      for rules in [
+        azurerm_network_security_group.environment["front"].security_rule,
+        azurerm_network_security_group.aca[0].security_rule,
+      ] :
+      length([for r in rules : r if r.name == "allow-app-ingress" && r.priority == 100]) == 1
+    ])
+    error_message = "Without extensions, allow-app-ingress must keep priority 100 on nsg-<prefix>-front and nsg-<prefix>-aca."
   }
 }
 

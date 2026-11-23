@@ -165,9 +165,31 @@ resource "azurerm_network_security_group" "aca" {
   # Port 80 is admitted beside 443 because Azure's edge answers it with a 301 to https://
   # (see ingress_allow_insecure on the api). Dropping it here would turn that redirect into a
   # timeout for anyone who typed the host without a scheme.
+  #
+  # VirtualNetwork covers the extension subnet, and extension code reaches nothing of
+  # Masterly's (ADR 0120 §7, ADR 0122 §6.2), so with the extensions add-on a deny of that
+  # subnet comes first. 100 is the lowest priority Azure accepts, so the deny takes it and this
+  # rule moves to 105 — only with the add-on, so an install without it plans no change here.
+  dynamic "security_rule" {
+    for_each = local.extension_subnet_denied ? { extension = local.env_subnet_prefixes["extension"] } : {}
+
+    content {
+      name                       = "deny-from-extension-subnet"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Deny"
+      protocol                   = "*"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = "*"
+      destination_port_range     = "*"
+      description                = "The extension environment reaches nothing of Masterly's, whatever the rules below admit."
+    }
+  }
+
   security_rule {
     name                       = "allow-app-ingress"
-    priority                   = 100
+    priority                   = local.extension_subnet_denied ? 105 : 100
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
@@ -368,6 +390,10 @@ locals {
     outbound  = []
     extension = []
   }
+
+  # The extension subnet exists on a network the module builds: snet-aca and the front, which may
+  # admit VirtualNetwork, deny it ahead of their ingress rule.
+  extension_subnet_denied = contains(keys(local.env_subnet_prefixes), "extension")
 }
 
 resource "azurerm_network_security_group" "environment" {
@@ -378,12 +404,32 @@ resource "azurerm_network_security_group" "environment" {
   location            = var.location
   tags                = local.tags
 
+  # The front's caller rule may admit VirtualNetwork, which covers the extension subnet: with the
+  # extensions add-on, the same deny as on snet-aca comes first, at 100, and the caller rule moves
+  # to 105.
+  dynamic "security_rule" {
+    for_each = each.key == "front" && local.extension_subnet_denied ? { extension = local.env_subnet_prefixes["extension"] } : {}
+
+    content {
+      name                       = "deny-from-extension-subnet"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Deny"
+      protocol                   = "*"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = "*"
+      destination_port_range     = "*"
+      description                = "The extension environment reaches nothing of Masterly's, whatever the rules below admit."
+    }
+  }
+
   dynamic "security_rule" {
     for_each = local.env_subnet_callers[each.key]
 
     content {
       name                       = security_rule.value.name
-      priority                   = 100
+      priority                   = each.key == "front" && local.extension_subnet_denied ? 105 : 100
       direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"
