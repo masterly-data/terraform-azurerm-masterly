@@ -1,5 +1,6 @@
-# Opt-in migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23).
-# "start" preserves app-start migrations; "job" needs a backend release after v0.135.0.
+# The migrate job (ADR 0120 §6; ADR 0065, 0086 and 0108 as amended 2026-10-23): what a new install
+# in mode = "production" sets, where migrations is required. "start" keeps app-start migrations; "job" needs a backend
+# release after v0.135.0.
 # At install, migrate_start acknowledges execution start before the apps roll; readiness
 # waits for schema stamps. CD owns image drift: update the job, start it, await success,
 # then roll the apps to the same digest. The schedule picks up pending provisioning runs.
@@ -9,17 +10,40 @@
 
 variable "migrations" {
   type        = string
-  default     = "start"
-  description = "Where schema migrations run. \"start\" (default): ca-api and ca-workers migrate at start, as before, and the module creates no migrate job. \"job\": the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job. \"job\" requires mode = \"production\" and an api image from a backend release later than v0.135.0, which has the migrate entry point and honours MASTERLY_MIGRATIONS; an earlier image cannot run the job. On the starter server, \"job\" also moves ca-api and ca-workers to the DML-only roles masterly_api and masterly_workers, so the image must also create those roles, which no release up to v0.135.0 does. It also removes id-<prefix>-apps' Postgres Entra administrator (id-<prefix>-migrate is the only one). As wherever ca-workers runs as id-<prefix>-workers, on BYO-DB and on \"start\" with database_auth = \"password\" too, id-<prefix>-apps gives up its Service Bus Data Receiver and jobs-queue Data Owner grants to that identity, and ca-api keeps Service Bus Data Sender. Removing these is a minor release under ADR 0062. An existing \"entra\" install moves to this in two steps: on module 0.23.x with \"job\", confirm a Succeeded migrate run and both apps on their roles, then upgrade; a start-to-job jump does it all in one apply. See the upgrade note under \"The migrate job\" in docs/data-plane.md."
+  default     = null
+  description = "Where schema migrations run. \"job\" (recommended, and what examples/production sets): the migrate Container Apps job (caj-migrate) runs them as its own identity, id-<prefix>-migrate, the only Postgres administrator on the starter server, and ca-api and ca-workers get MASTERLY_MIGRATIONS=job and connect as the DML-only roles masterly_api and masterly_workers, so no Container App identity is a database administrator (ADR 0120 §6). \"start\": ca-api and ca-workers migrate at start and the module creates no migrate job; on the starter server with database_auth = \"entra\" the api's identity, id-<prefix>-apps, is then the server's Entra administrator and ca-workers runs as it too, a departure from ADR 0120 §6 that every production plan warns about. Required in mode = \"production\", where no default is safe: \"job\" is right for a new install, while a running install on \"start\" must move its databases deliberately (see \"The migrate job\" in docs/data-plane.md). Unset outside production means \"start\". \"job\" requires mode = \"production\" and an api image from a backend release later than v0.135.0 (the plan checks a tagged image)."
 
   validation {
-    condition     = contains(["start", "job"], var.migrations)
-    error_message = "migrations must be \"start\" (the apps migrate at start; the default) or \"job\" (the migrate job does; needs a backend release later than v0.135.0)."
+    # Not coalesce(): it skips "", which would then pass as unset.
+    condition     = contains(["start", "job"], var.migrations == null ? "start" : var.migrations)
+    error_message = "migrations must be \"start\" (the apps migrate at start) or \"job\" (the migrate job does; needs a backend release later than v0.135.0), or left unset outside mode = \"production\"."
   }
 
   validation {
     condition     = var.migrations != "job" || var.mode != "demo"
-    error_message = "migrations = \"job\" cannot be used with mode = \"demo\": demo's control plane is in memory, so there is nothing for the job to migrate. Keep migrations = \"start\" for demo, or use mode = \"production\"."
+    error_message = "migrations = \"job\" cannot be used with mode = \"demo\": demo's control plane is in memory, so there is nothing for the job to migrate. Leave migrations unset or set \"start\" for demo, or use mode = \"production\"."
+  }
+
+  # Production states it. A default would have to tell a new install from a running one, and the
+  # only way to do that at plan is a lookup that the deploying identity's read access can hide; a
+  # running install on "start" read as new would then have its databases moved to the migrate job
+  # by a default.
+  validation {
+    condition     = var.mode != "production" || var.migrations != null
+    error_message = "mode = \"production\" requires migrations to be set. Set migrations = \"job\" for a new install (recommended: the migrate job is the only Postgres administrator, and no Container App identity is one, ADR 0120 §6). An install that already runs without caj-migrate is on \"start\": set migrations = \"start\" to keep it as it is, and move to \"job\" deliberately, following \"The migrate job\" in the module's docs/data-plane.md."
+  }
+}
+
+locals {
+  # The effective choice: the input, required in production, otherwise "start".
+  migrations = var.migrations != null ? var.migrations : "start"
+}
+
+# The production departure, stated: an explicit "start" plans, and says what it keeps.
+check "production_migrations_at_start" {
+  assert {
+    condition     = !(var.mode == "production" && var.migrations == "start")
+    error_message = "migrations = \"start\" in mode = \"production\": ca-api and ca-workers run the schema migrations, so on the starter server with database_auth = \"entra\" the api's identity (id-<prefix>-apps) stays the server's Entra administrator and ca-workers runs as it, a departure from ADR 0120 §6. Move to migrations = \"job\" (see \"The migrate job\" in docs/data-plane.md)."
   }
 }
 
@@ -61,8 +85,8 @@ variable "migrate_job_schedule" {
 
 locals {
   # Everything in this file, the migrate identity, its grants and its Entra administrator exist
-  # only with migrations = "job".
-  migrate_job = var.migrations == "job"
+  # only with migrations = "job" (local.migrations, above: the input, or production's default).
+  migrate_job = local.migrations == "job"
 
   # The migrate job's Postgres role: the migrate identity's Entra role on "entra" (its
   # administrator is in entra-auth.tf), masterly_admin on "password". Never local.database_role,

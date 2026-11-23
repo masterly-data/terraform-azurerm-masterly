@@ -27,7 +27,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -1585,7 +1585,7 @@ run "retire_with_migrations_start_ignores_migrate_job_environment" {
 
   assert {
     condition = (
-      var.migrations == "start" && var.migrate_job_environment == "runtime" &&
+      local.migrations == "start" && var.migrate_job_environment == "runtime" &&
       length(azurerm_container_app_job.migrate) == 0 &&
       length(local.runtime_environment_workloads) == 0 &&
       length(module.aca_env) == 0 &&

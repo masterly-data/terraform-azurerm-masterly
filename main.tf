@@ -484,6 +484,13 @@ resource "azurerm_resource_group" "aca" {
       error_message = "Data-residency mismatch: this install declares masterly_region = \"${var.masterly_region}\", but every resource is created in Azure location \"${var.location}\", which is geo \"${local.install_geo == null ? "unknown" : local.install_geo}\". The declared geo is what customers are told and what the app stamps on usage records; the location is where the data actually sits. Change one to match the other — or, if this location genuinely satisfies that residency commitment, say so explicitly with location_geo."
     }
 
+    # The api image is new enough for the grants and migrations this module configures
+    # (identity.tf, api_image_floor). A reference with no readable tag warns instead.
+    precondition {
+      condition     = local.api_image_meets_floor
+      error_message = "The api image is v${coalesce(local.api_image_version, "?")}, older than this install needs: v${coalesce(local.api_image_floor, "?")} or later (${local.api_image_floor_reason}). Set api_image to that release or later, or leave it unset for the release channel's image."
+    }
+
     precondition {
       condition     = !var.api_ingress_external || length(var.ingress_allowed_cidrs) > 0
       error_message = "api_ingress_external = true with an empty ingress_allowed_cidrs would publish /v1 to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. The api holds no session of its own — it trusts a bearer token — so it is the surface least able to survive being open. Name the CIDRs that may reach it."
@@ -1307,7 +1314,7 @@ locals {
   # so it is the only value.
   workers_env = merge(
     local.api_env,
-    local.workers_own_identity ? { AZURE_CLIENT_ID = module.workers_identity[0].client_id } : {},
+    local.workers_own_client_id ? { AZURE_CLIENT_ID = module.workers_identity[0].client_id } : {},
   )
 
   # --- The install's secret material -----------------------------------------------
@@ -1640,6 +1647,9 @@ module "api" {
     # The app secrets grant exists before this app's update; on an upgrade it replaces the
     # Secrets Officer grant at the same address (keyvault.tf).
     azurerm_role_assignment.kv_app_secrets,
+    # Key read for the signing keys' public half. On an upgrade it replaces the Crypto Officer grant
+    # at the same address (keyvault.tf), so this app is updated only after the new grant exists.
+    azurerm_role_assignment.kv_signing_key_reader,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
     # On "entra" the api authenticates as its identity at boot, so the database role and the

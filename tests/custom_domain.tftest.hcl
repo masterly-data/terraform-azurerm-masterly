@@ -80,7 +80,7 @@ variables {
   location       = "swedencentral"
   org_id         = "org_test"
   install_id     = "test"
-  api_image      = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image      = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
 
@@ -107,6 +107,7 @@ variables {
   postgres_zone_redundant_ha     = true
   postgres_backup_retention_days = 14
   ingress_allowed_cidrs          = ["203.0.113.7/32", "198.51.100.0/24"]
+  migrations                     = "job"
 }
 
 # Unset: no certificate identity, nothing on the environment, no grant, no certificate, no
@@ -230,7 +231,7 @@ run "custom_domain_binds_the_hostname_on_a_public_environment" {
           azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers, azurerm_role_assignment.acr_pull_edge,
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
-          azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
@@ -446,7 +447,7 @@ run "edge_custom_domain_binds_the_hostname_on_ca_edge" {
           azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
           azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers, azurerm_role_assignment.acr_pull_edge,
           azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
-          azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+          azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_signing_keys_workers,
           azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
           values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
           values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),
@@ -474,7 +475,7 @@ run "edge_custom_domain_binds_the_hostname_on_ca_edge" {
         azurerm_role_assignment.frontend_certificate_reader, azurerm_role_assignment.edge_certificate_reader,
         azurerm_role_assignment.acr_pull, azurerm_role_assignment.acr_pull_frontend, azurerm_role_assignment.acr_pull_migrate, azurerm_role_assignment.acr_pull_workers, azurerm_role_assignment.acr_pull_edge,
         azurerm_role_assignment.kv_app_secrets, azurerm_role_assignment.kv_app_secrets_workers,
-        azurerm_role_assignment.kv_crypto_officer, azurerm_role_assignment.kv_crypto_officer_workers,
+        azurerm_role_assignment.kv_signing_key_reader, azurerm_role_assignment.kv_signing_keys, azurerm_role_assignment.kv_signing_keys_workers,
         azurerm_role_assignment.kv_secrets_user_migrate_api_role_password, azurerm_role_assignment.kv_secrets_user_migrate_workers_role_password,
         values(azurerm_role_assignment.kv_secrets_officer_deployer), values(azurerm_role_assignment.kv_secrets_user_frontend), values(azurerm_role_assignment.kv_secrets_user_migrate),
         values(azurerm_role_assignment.kv_byo_database_reader_migrate), values(azurerm_role_assignment.kv_secrets_reader),

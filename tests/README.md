@@ -5,6 +5,11 @@ such as `network.tftest.hcl` or `keyvault.tftest.hcl`), the files whose runs app
 modules' own files. Add a run to the file of the concern it asserts on. A run that applies goes last
 in its file, after every plan run that does not read its state.
 
+A mock provider never performs a forced replacement (it updates in place and keeps every computed
+value), so no run here can show that a change would replace a resource; say so where a change
+depends on it, and leave that to a live plan. A run that starts from a published release's state
+needs `state_key`, which Terraform 1.10, the floor CI pins, does not have.
+
 ## What every plan file starts with
 
 Each per-concern plan file starts with the same two parts. Copy them into a new file:

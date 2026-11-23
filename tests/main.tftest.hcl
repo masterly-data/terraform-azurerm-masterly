@@ -18,7 +18,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -57,6 +57,7 @@ run "production_mode_full_wiring_plans" {
     api_max_replicas     = 3
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -352,6 +353,7 @@ run "production_single_replica_api_is_rejected" {
     api_max_replicas     = 1 # single replica in production -> refused
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.api_max_replicas]
@@ -381,6 +383,7 @@ run "production_without_workers_is_rejected" {
     # enable_workers stays false -> refused
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.enable_workers]
@@ -406,6 +409,7 @@ run "production_without_redis_is_rejected" {
     # enable_redis missing -> refused
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.mode]

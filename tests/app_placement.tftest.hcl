@@ -25,7 +25,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -564,6 +564,7 @@ run "default_placement_adds_no_front_rule_to_the_endpoints_nsg" {
     api_max_replicas      = 3
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
     ingress_allowed_cidrs = ["203.0.113.7/32"]
+    migrations            = "job"
   }
 
   assert {
@@ -607,6 +608,7 @@ run "moved_placement_admits_the_front_subnet_to_the_vault_on_443_only" {
     frontend_environment  = "front"
     edge_environment      = "front"
     api_environment       = "app"
+    migrations            = "job"
   }
 
   override_module {

@@ -25,7 +25,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -97,23 +97,22 @@ run "key_vault_enabled_provisions_vault_and_grant" {
   }
 }
 
-# The erasure keys (ADR 0081) live in this same vault, and the application creates them at
-# runtime — so the grant that lets it is vault-scoped and has to be Crypto Officer, the only
-# built-in Crypto role that can create a key. Pinning the role name and the principal is the
-# point: Crypto User would fail the first erasure an install runs, months after the apply that
-# looked clean, and a grant that drifted onto the frontend's identity would hand the
-# internet-facing app the signing key.
-run "key_vault_enabled_grants_the_apps_identity_crypto_officer" {
+# The signing keys (the erasure keys of ADR 0081 and the audit checkpoint keys of ADR 0033) live
+# in this same vault, and the application creates them at runtime, so their grants are vault-scoped.
+# ADR 0120 §6 (amended 2026-10-25): no app identity holds Key Vault Crypto Officer. ca-api reads a
+# key's public half and nothing more; ca-workers, which creates and signs, holds exactly five data
+# actions. Pinning the actions is the point: one more (delete, purge, rotate) would reach every key
+# in the vault, and key read on the frontend would be a grant to the internet-facing app.
+run "key_vault_grants_the_signing_roles_and_no_crypto_officer" {
   command = plan
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     enable_key_vault      = true
+    enable_workers        = true
   }
 
-  # The identity's principal id is only known after apply, so it is supplied here — the same
-  # shape the frontend grant test uses — and the assertion below is then about the grant's
-  # target rather than about what the mock provider happened to return.
+  # The principals are only known after apply, so they are supplied here, distinct per identity.
   override_module {
     target = module.apps_identity
     outputs = {
@@ -125,27 +124,91 @@ run "key_vault_enabled_grants_the_apps_identity_crypto_officer" {
     }
   }
 
-  assert {
-    condition = (
-      length(azurerm_role_assignment.kv_crypto_officer) == 1 &&
-      azurerm_role_assignment.kv_crypto_officer[0].role_definition_name == "Key Vault Crypto Officer" &&
-      azurerm_role_assignment.kv_crypto_officer[0].principal_id == module.apps_identity.principal_id
-    )
-    error_message = "enable_key_vault must grant the apps identity Key Vault Crypto Officer, and no other Crypto role."
+  override_module {
+    target = module.workers_identity
+    outputs = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers"
+      principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+      client_id    = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc"
+      tenant_id    = "00000000-0000-0000-0000-000000000000"
+      name         = "id-masterly-workers"
+    }
   }
 
-  # The grant's scope is the install's own vault. It is a computed id, so a plan cannot compare
-  # it to a literal; what a plan can prove is that exactly one vault is being created for it to
-  # name, which is what makes "scoped to this vault" true rather than merely intended.
+  assert {
+    condition = (
+      azurerm_role_definition.signing_key_reader[0].permissions[0].data_actions == toset(["Microsoft.KeyVault/vaults/keys/read"]) &&
+      length(azurerm_role_definition.signing_key_reader[0].permissions[0].actions) == 0 &&
+      azurerm_role_definition.signing_keys[0].permissions[0].data_actions == toset([
+        "Microsoft.KeyVault/vaults/keys/create/action",
+        "Microsoft.KeyVault/vaults/keys/read",
+        "Microsoft.KeyVault/vaults/keys/sign/action",
+        "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+      ]) &&
+      length(azurerm_role_definition.signing_keys[0].permissions[0].actions) == 0 &&
+      length(coalesce(azurerm_role_definition.signing_keys[0].permissions[0].not_data_actions, [])) == 0
+    )
+    error_message = "The signing key reader role must hold keys/read alone, and the signing keys role exactly create, read and sign on keys and get and set on secrets: no delete, purge, update, import, backup, restore, rotate, recover or release, and no wildcard."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.kv_signing_key_reader) == 1 &&
+      azurerm_role_assignment.kv_signing_key_reader[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      length(azurerm_role_assignment.kv_signing_keys) == 0 &&
+      length(azurerm_role_assignment.kv_signing_keys_workers) == 1 &&
+      azurerm_role_assignment.kv_signing_keys_workers[0].principal_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    )
+    error_message = "ca-api's identity must hold the signing key reader role and ca-workers' own the signing keys role, and the apps identity must hold no signing keys role while ca-workers runs as its own."
+  }
+
+  # The role's scope is the install's own vault. It is a computed id, so a plan cannot compare it
+  # to a literal; what a plan can prove is that exactly one vault is planned for it to name.
   assert {
     condition     = length(azurerm_key_vault.this) == 1
-    error_message = "The Crypto Officer grant is scoped to the install vault, so exactly one vault must be planned beside it."
+    error_message = "The signing grants are scoped to the install vault, so exactly one vault must be planned beside them."
   }
 }
 
-# The other branch: no vault, no key grant. A role assignment left planned against a vault that
-# is not created is a plan that cannot apply.
+# The other branch: no vault, no key grant and no role to define. A role assignment left planned
+# against a vault that is not created is a plan that cannot apply.
 run "key_vault_off_plans_no_crypto_grant" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    enable_workers        = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_definition.signing_key_reader) == 0 && length(azurerm_role_definition.signing_keys) == 0 &&
+      length(azurerm_role_assignment.kv_signing_key_reader) == 0 && length(azurerm_role_assignment.kv_signing_keys) == 0 &&
+      length(azurerm_role_assignment.kv_signing_keys_workers) == 0
+    )
+    error_message = "Without the vault there is no key to grant on."
+  }
+
+  # Nor a frontend read grant: there are no vault secrets to scope one to.
+  assert {
+    condition     = length(azurerm_role_assignment.kv_secrets_user_frontend) == 0
+    error_message = "Without the vault no Key Vault role assignment may be planned for the frontend."
+  }
+}
+
+# Threat: an upgrade leaves an app without key access, or keeps Crypto Officer.
+#   - ca-workers' grant is at a new address. module.workers depended on kv_crypto_officer_workers in
+#     0.26.0 (workers.tf), and Terraform removes a resource only after the resources recorded as
+#     depending on it are updated; module.workers depends on the new one, which is created first.
+#   - ca-api's grant replaces kv_crypto_officer at its own address (moved): no resource recorded a
+#     dependency on kv_crypto_officer, so a new address would leave its removal unordered. The
+#     replacement is destroy-then-create. create_before_destroy is not used: on this grant it puts
+#     module.api in a dependency cycle on an apply that also destroys an alert or a diagnostic setting
+#     on ca-api (it failed builtin_auth_api.tftest.hcl's api_401_alert_absent_with_builtin_auth_api_off).
+#     module.api depends on the address, so it is updated after the new grant exists.
+# No block may remain at either old address, and no file may grant the built-in role.
+run "signing_grants_replace_crypto_officer_in_order" {
   command = plan
 
   variables {
@@ -153,14 +216,17 @@ run "key_vault_off_plans_no_crypto_grant" {
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.kv_crypto_officer) == 0
-    error_message = "Without the vault there is nothing to grant Crypto Officer on."
-  }
-
-  # Nor a frontend read grant: there are no vault secrets to scope one to.
-  assert {
-    condition     = length(azurerm_role_assignment.kv_secrets_user_frontend) == 0
-    error_message = "Without the vault no Key Vault role assignment may be planned for the frontend."
+    condition = (
+      can(regex("moved \\{\\s*from = azurerm_role_assignment\\.kv_crypto_officer\\s+to   = azurerm_role_assignment\\.kv_signing_key_reader\\s*\\}", file("${path.module}/keyvault.tf"))) &&
+      !can(regex("(?s)resource \"azurerm_role_assignment\" \"kv_signing_key_reader\" \\{[^}]*lifecycle", file("${path.module}/keyvault.tf"))) &&
+      !can(regex("from = azurerm_role_assignment\\.kv_crypto_officer_workers", file("${path.module}/keyvault.tf"))) &&
+      !can(regex("resource \"azurerm_role_assignment\" \"kv_crypto_officer(_workers)?\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) &&
+      !strcontains(join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]), "role_definition_name = \"Key Vault Crypto Officer\"") &&
+      strcontains(regex("(?s)\\nmodule \"api\" \\{.*?\\n\\}\\n", file("${path.module}/main.tf")), "azurerm_role_assignment.kv_signing_key_reader,") &&
+      strcontains(regex("(?s)\\nmodule \"workers\" \\{.*?\\n\\}\\n", file("${path.module}/workers.tf")), "azurerm_role_assignment.kv_signing_keys,") &&
+      strcontains(regex("(?s)\\nmodule \"workers\" \\{.*?\\n\\}\\n", file("${path.module}/workers.tf")), "azurerm_role_assignment.kv_signing_keys_workers,")
+    )
+    error_message = "kv_signing_key_reader must be moved from kv_crypto_officer, with no lifecycle block (create_before_destroy cycles), kv_signing_keys_workers must be a new address, no block or built-in Crypto Officer grant may remain, and module.api and module.workers must depend on the new grants."
   }
 }
 
@@ -222,14 +288,14 @@ run "the_frontend_reads_its_own_secrets_and_only_reads" {
     error_message = "A frontend carrying vault-backed secrets must get Key Vault Secrets User on its own identity, once per frontend secret — read, and nothing more."
   }
 
-  # The app secrets and Crypto Officer grants stay where they were: on the backend apps, never on
-  # the public one.
+  # The app secrets and signing key reader grants stay where they were: on the backend apps, never
+  # on the public one.
   assert {
     condition = (
       azurerm_role_assignment.kv_app_secrets[0].principal_id == module.apps_identity.principal_id &&
-      azurerm_role_assignment.kv_crypto_officer[0].principal_id == module.apps_identity.principal_id
+      azurerm_role_assignment.kv_signing_key_reader[0].principal_id == module.apps_identity.principal_id
     )
-    error_message = "The app secrets role and Key Vault Crypto Officer must never reach the frontend's identity."
+    error_message = "The app secrets role and the signing key reader role must never reach the frontend's identity."
   }
 
   # And the references name the identity that actually holds the grant. ACA resolves a vault
@@ -281,6 +347,7 @@ run "production_secrets_are_vault_references" {
     breakglass_owner_email  = "owner@example.com"
     breakglass_secret_hash  = "0000000000000000000000000000000000000000000000000000000000000000"
     external_database_url   = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations              = "job"
   }
 
   # THE assertion this finding is about: not one app carries a value-based secret.
@@ -323,11 +390,14 @@ run "production_secrets_are_vault_references" {
   }
 
   # Every one of them is written into the vault, under the install- prefix that keeps the
-  # module's secrets clear of the ones the application seals at runtime (<slug>-<ulid>).
+  # module's secrets clear of the ones the application seals at runtime (<slug>-<ulid>). With
+  # migrations unset, production's new install runs the migrate job, whose DSN on BYO-DB is the same
+  # external_database_url under its own name (migrate.tf).
   assert {
     condition = (
-      length(azurerm_key_vault_secret.install) == 9 &&
+      length(azurerm_key_vault_secret.install) == 10 &&
       azurerm_key_vault_secret.install["database-url"].name == "install-database-url" &&
+      azurerm_key_vault_secret.install["migrate-database-url"].name == "install-migrate-database-url" &&
       azurerm_key_vault_secret.install["oidc-client-secret"].name == "install-oidc-client-secret"
     )
     error_message = "Each distinct install secret must be written to the vault once, under the install- prefix."
@@ -410,6 +480,7 @@ run "production_without_a_deployer_path_is_rejected" {
     api_max_replicas            = 3
     external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     key_vault_deployer_ip_rules = []
+    migrations                  = "job"
   }
 
   expect_failures = [var.key_vault_deployer_ip_rules]
@@ -441,6 +512,7 @@ run "production_in_vnet_apply_keeps_the_vault_closed" {
     external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     key_vault_deployer_ip_rules = []
     key_vault_deployer_in_vnet  = true
+    migrations                  = "job"
   }
 
   assert {
@@ -514,6 +586,7 @@ run "production_with_injected_zone_still_plans_the_secrets" {
     key_vault_deployer_ip_rules   = []
     key_vault_deployer_in_vnet    = true
     key_vault_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+    migrations                    = "job"
   }
 
   assert {
@@ -680,9 +753,11 @@ run "service_bus_enabled_provisions_broker_and_grants" {
       length(azurerm_servicebus_namespace.this) == 1 &&
       length(azurerm_servicebus_queue.jobs) == 1 &&
       length(azurerm_role_assignment.sb_sender) == 1 &&
-      length(azurerm_role_assignment.sb_receiver) == 1
+      length(azurerm_role_assignment.sb_receiver) == 0 &&
+      length(azurerm_role_assignment.sb_sender_workers) == 1 &&
+      length(azurerm_role_assignment.sb_receiver_workers) == 1
     )
-    error_message = "enable_service_bus must provision the namespace, the queue, and both data-plane grants."
+    error_message = "enable_service_bus must provision the namespace, the queue, Sender for ca-api's identity, and Sender and Receiver for ca-workers' own (ADR 0120 §6: ca-api never receives)."
   }
 
   # Outside production servicebus_sku has no value of its own and means Standard, which is
@@ -815,6 +890,7 @@ run "production_premium_service_bus_is_private" {
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     enable_service_bus    = true
     servicebus_sku        = "Premium"
+    migrations            = "job"
   }
 
   assert {
@@ -887,6 +963,7 @@ run "production_premium_service_bus_uses_injected_dns_zone" {
     enable_service_bus             = true
     servicebus_sku                 = "Premium"
     servicebus_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"
+    migrations                     = "job"
   }
 
   assert {
@@ -942,6 +1019,7 @@ run "production_service_bus_without_sku_is_rejected" {
     api_max_replicas      = 3
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     enable_service_bus    = true
+    migrations            = "job"
   }
 
   expect_failures = [var.servicebus_sku]
@@ -971,6 +1049,7 @@ run "production_without_service_bus_needs_no_sku" {
     enable_workers        = true
     api_max_replicas      = 3
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -1024,6 +1103,7 @@ run "production_standard_service_bus_keeps_public_endpoint" {
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     enable_service_bus    = true
     servicebus_sku        = "Standard"
+    migrations            = "job"
   }
 
   assert {
@@ -1136,6 +1216,7 @@ run "production_scale_to_zero_is_rejected" {
     frontend_min_replicas = 0 # likewise
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.api_min_replicas, var.frontend_min_replicas]
@@ -1169,6 +1250,7 @@ run "production_workers_scale_to_zero_is_rejected" {
     workers_min_replicas = 0 # scale-to-zero for the pipeline in production -> refused
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   expect_failures = [var.workers_min_replicas]
@@ -1201,6 +1283,7 @@ run "production_workers_floor_of_one_plans" {
     workers_min_replicas = 1
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -1755,7 +1838,7 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
   assert {
     condition = (
       azurerm_container_app_job.migrate[0].name == "caj-migrate" &&
-      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.0.0" &&
+      azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.138.0" &&
       azurerm_container_app_job.migrate[0].template[0].container[0].image == module.api.image &&
       azurerm_container_app_job.migrate[0].template[0].container[0].command == tolist(["python", "-m", "masterly_app.apps.migrate"])
     )

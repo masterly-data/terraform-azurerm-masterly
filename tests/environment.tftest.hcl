@@ -18,7 +18,7 @@ variables {
   location         = "swedencentral"
   org_id           = "org_test"
   install_id       = "test"
-  api_image        = "masterly.azurecr.io/release/api:v0.0.0"
+  api_image        = "masterly.azurecr.io/release/api:v0.138.0"
   frontend_image   = "masterly.azurecr.io/release/frontend:v0.0.0"
   acr_login_server = ""
 
@@ -189,6 +189,7 @@ run "public_api_url_is_absent_by_default" {
     api_max_replicas     = 3
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
   }
 
   assert {
@@ -228,6 +229,7 @@ run "public_api_url_reaches_all_three_apps" {
     api_ingress_external  = true
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     public_api_url        = "https://api.example.com/masterly//"
+    migrations            = "job"
   }
 
   # Verbatim but for the trailing slashes, which are dropped so "/v1/..." appends cleanly.
@@ -719,6 +721,7 @@ run "ca_bundle_reaches_the_backend_apps" {
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
     ca_bundle_pem         = "-----BEGIN CERTIFICATE-----\nMIIBfakefakefakefakefakefakefakefakefakefakeA==\n-----END CERTIFICATE-----\n"
+    migrations            = "job"
   }
 
   # SSL_CERT_FILE names the path the init container actually writes to -- the two must agree,
