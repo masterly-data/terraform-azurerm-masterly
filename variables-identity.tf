@@ -25,11 +25,23 @@ variable "frontend_image" {
 variable "release_channel" {
   type        = string
   default     = "stable"
-  description = "Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. \"stable\" (the default) is the newest release, the image pair this module version was released against. \"previous\" is the newest older release with no known issue. The channel changes only the digest (or tag) of each image: the repository stays release/api and release/frontend on the registry that registry_location names. An image you set explicitly is used as given. Like api_image and frontend_image, the channel's references seed each app when it is created; CD owns the running image thereafter, so changing the channel on an existing install rolls nothing (terraform apply does not roll a running image). To roll a running install back, redeploy the previous image with az containerapp update --image, as the Upgrades section of the install documentation describes."
+  description = "Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. \"stable\" (the default) is the newest release, the image pair this module version was released against. \"previous\" is the newest older release with no known issue. The channel changes only the digest (or tag) of each image: the repository stays release/api and release/frontend on the registry that registry_location names. An image you set explicitly is used as given. Like api_image and frontend_image, the channel's references seed each app when it is created; CD owns the running image thereafter, so changing the channel on an existing install rolls nothing (terraform apply does not roll a running image). To roll a running install back, redeploy the previous image with az containerapp update --image, as the Upgrades section of the install documentation describes. The channel is not release_ring: it picks an image pair from MANIFEST.json, and says nothing about the install's release ring."
 
   validation {
     condition     = contains(["stable", "previous"], var.release_channel)
     error_message = "release_channel must be \"stable\" or \"previous\". A Canary or Beta build is not in MANIFEST.json: set api_image and frontend_image to the references Masterly gives you instead."
+  }
+}
+
+variable "release_ring" {
+  type        = string
+  default     = "stable"
+  nullable    = false
+  description = "The release ring this install declares (ADR 0107): \"canary\", \"beta\" or \"stable\" (the default). Reported in the deployment_stamp output and nowhere else: it changes no image and no resource. It is a declaration, not a permission: your licence's release_ring claim decides which releases the install may run, and the module does not check this input against it. It is not release_channel, which picks the stable or previous image pair from MANIFEST.json."
+
+  validation {
+    condition     = contains(["canary", "beta", "stable"], var.release_ring)
+    error_message = "release_ring must be \"canary\", \"beta\" or \"stable\", in lowercase. It is not release_channel: \"previous\" is a channel, not a ring."
   }
 }
 

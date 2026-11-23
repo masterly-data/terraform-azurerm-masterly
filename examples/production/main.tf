@@ -206,3 +206,13 @@ output "custom_domain_verification_id" {
   sensitive   = true
   description = "The asuid.<hostname> TXT record's value, the same for the frontend's and the edge's hostname (not a secret; sensitive because the provider marks it)."
 }
+
+output "outbound_allowlist" {
+  value       = module.masterly.outbound_allowlist
+  description = "What each subnet reaches outside the VNet, for your firewall: per subnet, entries of destination, kind, protocol, ports, why and source. docs/networking.md, \"The outbound_allowlist output\"."
+}
+
+output "deployment_stamp" {
+  value       = module.masterly.deployment_stamp
+  description = "What this install is: module_version, release_ring, capacity_profile, add_ons, environments and database_provider_profile."
+}

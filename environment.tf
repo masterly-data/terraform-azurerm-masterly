@@ -107,6 +107,11 @@ locals {
     ],
   ))
 
+  # Every Container Apps environment the install has, as keys: "aca" (aca-<prefix>) first while it
+  # is not retired, then the keys above. Known at plan; the outbound_allowlist output's keys and the
+  # deployment_stamp output's environments.
+  install_environment_keys = concat(var.retire_runtime_environment ? [] : ["aca"], sort(tolist(local.container_app_environment_keys)))
+
   baseline_container_app_environment_internal = {
     front   = var.aca_internal_load_balancer
     app     = true
