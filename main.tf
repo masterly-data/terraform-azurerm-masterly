@@ -1557,6 +1557,11 @@ locals {
     var.identity_binding == "dev" ? { MASTERLY_ALLOW_DEV_BINDING = "true" } : {},
     # The same value the api and the workers get, for the catalog's Consume card (empty unless set).
     local.public_api_url_env,
+    # The Front Door origin lock (MAS-5188): with the profile's id set, ca-frontend refuses every
+    # request whose X-Azure-FDID is not exactly it, the probes' /api/healthz and /api/readyz
+    # excepted. Written only when the input is set, so an install that is not behind a Front
+    # Door plans exactly as before.
+    var.front_door_id != null ? { MASTERLY_FRONT_DOOR_ID = lower(var.front_door_id) } : {},
     var.identity_binding == "oidc" ? merge(
       {
         MASTERLY_OIDC_CLIENT_ID    = var.oidc_client_id
