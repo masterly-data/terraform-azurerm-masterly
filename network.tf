@@ -672,35 +672,51 @@ moved {
 # inbound-only (above). Keyed by the environments that exist (local.install_environment_keys,
 # environment.tf), on what is known at plan.
 #
-# The Container Apps platform set is what Microsoft Learn's "Securing a virtual network in Azure
-# Container Apps" listed when we read it on 2026-11-23. Microsoft versions that set, so every entry
-# names its source: compare an entry with the page, not with this file, before you rely on it.
-# docs/networking.md ("The outbound_allowlist output") carries the same date.
+# The Container Apps platform set is two lists on Microsoft Learn, as read on 2026-11-23: the
+# service tags are the NSG allow rules of "Securing a virtual network in Azure Container Apps",
+# and the FQDNs are the application rules of "Azure Container Apps environment integration with
+# Azure Firewall". Microsoft versions both, so every entry names its source: compare an entry with
+# the page, not with this file, before you rely on it. docs/networking.md ("The outbound_allowlist
+# output") carries the same date.
 #
 # Entries are keyed by a string known at plan, never by an unknown name, so a destination that is
 # only known after apply (the vault's or the namespace's name on a fresh install) leaves that one
 # entry unknown and not the whole list. The same destination from two workloads on one subnet is
 # one entry.
 locals {
-  outbound_learn_source    = "Microsoft Learn, Securing a virtual network in Azure Container Apps (https://learn.microsoft.com/azure/container-apps/firewall-integration), read 2026-11-23"
   outbound_adr_source      = "ADR 0120 §5, the Container Apps platform set the module publishes for every subnet"
   outbound_registry_source = "Microsoft Learn, Configure rules to access an Azure container registry behind a firewall (https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules), read 2026-11-23"
 
+  # The platform set's two lists on Learn, by the kind of entry each gives.
+  outbound_learn_source = {
+    service_tag = "Microsoft Learn, Securing a virtual network in Azure Container Apps, NSG allow rules (https://learn.microsoft.com/azure/container-apps/firewall-integration#nsg-allow-rules), read 2026-11-23"
+    fqdn        = "Microsoft Learn, Azure Container Apps environment integration with Azure Firewall, application rules (https://learn.microsoft.com/azure/container-apps/use-azure-firewall#application-rules), read 2026-11-23"
+  }
+
   # Every subnet, whatever runs there: what the environment itself needs to start a replica.
+  # The two registry service tags and login.microsoft.com are Learn's rows for images in an Azure
+  # container registry and for Key Vault. They stay with registry_private_endpoint: ca-edge can
+  # still pull edge.image from another Azure container registry, and a tag too many does not stop
+  # a replica where a tag too few does.
   outbound_platform_entries = {
     for e in [
       { destination = "MicrosoftContainerRegistry", kind = "service_tag", why = "Microsoft Container Registry: Azure pulls the environment's own platform containers from it. Blocked, the environment provisions but no replica starts" },
       { destination = "AzureFrontDoor.FirstParty", kind = "service_tag", why = "Microsoft Container Registry's content delivery, which the MicrosoftContainerRegistry service tag depends on" },
       { destination = "mcr.microsoft.com", kind = "fqdn", why = "Microsoft Container Registry, for a firewall that admits by name" },
       { destination = "*.data.mcr.microsoft.com", kind = "fqdn", why = "Microsoft Container Registry's data endpoints, which serve the image layers" },
+      { destination = "packages.aks.azure.com", kind = "fqdn", why = "Where the nodes under the environment download their own components. Learn lists it for every environment, whatever the apps use" },
+      { destination = "acs-mirror.azureedge.net", kind = "fqdn", why = "Where the nodes under the environment download their own components, beside packages.aks.azure.com. Learn lists it for every environment, whatever the apps use" },
       { destination = "AzureActiveDirectory", kind = "service_tag", why = "Microsoft Entra ID: the managed identities get their tokens from it, for the registry pull, Key Vault references, and Postgres and Redis with database_auth = \"entra\"" },
       { destination = "login.microsoftonline.com", kind = "fqdn", why = "Microsoft Entra ID, for a firewall that admits by name" },
       { destination = "*.login.microsoftonline.com", kind = "fqdn", why = "Microsoft Entra ID's regional sign-in endpoints for managed identities" },
+      { destination = "login.microsoft.com", kind = "fqdn", why = "Microsoft Entra ID's sign-in endpoint by its bare name, which Learn lists for pulls from an Azure container registry and for Key Vault. A rule for *.login.microsoft.com does not match it" },
       { destination = "*.login.microsoft.com", kind = "fqdn", why = "Microsoft Entra ID's sign-in endpoints for managed identities" },
       { destination = "*.identity.azure.net", kind = "fqdn", why = "The managed identity endpoints the environment's identities use" },
       { destination = "AzureMonitor", kind = "service_tag", why = "Azure Monitor: the environment sends the apps' console and system logs through it. Blocked, new rows stop arriving in ContainerAppConsoleLogs and ContainerAppSystemLogs while the apps keep serving" },
-      # Learn's page does not list Azure management for the environment itself: ADR 0120 §5 adds it
-      # to the platform set, so these two name the ADR as their source and not the page.
+      { destination = "AzureContainerRegistry", kind = "service_tag", why = "Azure Container Registry, for a firewall or NSG that admits by service tag: the apps' images are pulled from an Azure container registry. Blocked, a new revision has no ready replica. Not needed while every image is pulled over a private endpoint (registry_private_endpoint = true) or from a registry of another kind" },
+      { destination = "Storage.${local.location_key}", kind = "service_tag", why = "Azure Storage in the install's region (Learn's Storage.<Region>, with the region as the location input names it, where Microsoft's list of service tags capitalises it): an Azure container registry serves its image layers from storage. Not needed where AzureContainerRegistry is not. A registry in another region serves its layers from that region's storage, which *.blob.core.windows.net in the registry's own entries covers by name" },
+      # Learn's pages do not list Azure management for the environment itself: ADR 0120 §5 adds it
+      # to the platform set, so these two name the ADR as their source and not a page.
       { destination = "AzureResourceManager", kind = "service_tag", why = "Azure management (Azure Resource Manager), part of the Container Apps platform set ADR 0120 §5 publishes for every subnet", source = local.outbound_adr_source },
       { destination = "management.azure.com", kind = "fqdn", why = "Azure management (Azure Resource Manager), for a firewall that admits by name", source = local.outbound_adr_source },
       ] : "${e.kind}:${e.destination}:443" => {
@@ -709,7 +725,7 @@ locals {
       protocol    = "TCP"
       ports       = ["443"]
       why         = e.why
-      source      = lookup(e, "source", local.outbound_learn_source)
+      source      = lookup(e, "source", local.outbound_learn_source[e.kind])
     }
   }
 
@@ -881,8 +897,13 @@ locals {
 
   # What each workload reaches, beyond the registry and the platform set. Postgres, Redis, Service
   # Bus and Communication Services sit only with ca-api, ca-workers and caj-migrate, so a subnet
-  # holding only ca-frontend and ca-edge (front) never lists a data endpoint (ADR 0120 §5). The
-  # licence refresh and telemetry run in ca-workers with enable_workers, and in ca-api without it.
+  # holding only ca-frontend and ca-edge (front) never lists a data endpoint (ADR 0120 §5).
+  #
+  # The control plane (license_issuer_url, telemetry_url) sits with ca-workers alone when
+  # enable_workers is set, though ca-api gets the same URLs and install credential. The application
+  # starts its licence refresh and fleet snapshot loops only in the process that runs the pipeline
+  # (api/app.py, _run_install_loops, on the application's main): ca-api while it runs the pipeline
+  # in-process, and the workers process on a scaled install.
   outbound_workload_entries = {
     "ca-frontend" = merge(
       try(local.outbound_url_entries["oidc_authority"], {}),

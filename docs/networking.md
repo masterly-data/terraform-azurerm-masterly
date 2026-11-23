@@ -240,14 +240,15 @@ application) is the one it cannot list.
 
 | Destination | When the install reaches it | What fails when it is blocked |
 |---|---|---|
-| The Container Apps outbound set: the FQDNs and service tags in Microsoft's [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration), including Microsoft Container Registry (`MicrosoftContainerRegistry`, `AzureFrontDoor.FirstParty`, `mcr.microsoft.com`, `*.data.mcr.microsoft.com`) and Microsoft Entra ID | Always, on every subnet: the environment's own platform components | The environment provisions but cannot start a replica: each revision stays with no ready replica. Microsoft versions the set: `outbound_allowlist` carries it as read on 2026-11-23, so check it against the page before you rely on it |
+| The Container Apps outbound set: the service tags in the NSG allow rules of Microsoft's [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration#nsg-allow-rules) and the FQDNs in the application rules of [Azure Container Apps environment integration with Azure Firewall](https://learn.microsoft.com/azure/container-apps/use-azure-firewall#application-rules). It includes Microsoft Container Registry (`MicrosoftContainerRegistry`, `AzureFrontDoor.FirstParty`, `mcr.microsoft.com`, `*.data.mcr.microsoft.com`), the hosts the environment's nodes download their components from (`packages.aks.azure.com`, `acs-mirror.azureedge.net`) and Microsoft Entra ID | Always, on every subnet: the environment's own platform components | The environment provisions but cannot start a replica: each revision stays with no ready replica. Microsoft versions the set: `outbound_allowlist` carries it as read on 2026-11-23, so check it against the pages before you rely on it |
 | Azure management (`management.azure.com`, service tag `AzureResourceManager`) | Always, on every subnet: part of the platform set ADR 0120 §5 publishes | Treat it as part of the platform set above: the module lists it on every subnet so that a firewall built from the output does not drop it |
-| Microsoft Entra ID for managed identities (`login.microsoftonline.com`, service tag `AzureActiveDirectory`; part of the set above) | Always: the apps' identities get tokens for the registry (`managed_identity` and `customer_registry` modes), Key Vault references (`enable_key_vault`), and Postgres and Redis with `database_auth = "entra"` | Every pull, secret reference or database sign-in that uses an identity fails: a new revision has no ready replica, or the apps cannot open their database connection |
+| Microsoft Entra ID for managed identities (service tag `AzureActiveDirectory`; `login.microsoftonline.com`, `*.login.microsoftonline.com`, `login.microsoft.com`, `*.login.microsoft.com` and `*.identity.azure.net`; part of the set above). `login.microsoft.com` is listed by its bare name, which a rule for `*.login.microsoft.com` does not match | Always: the apps' identities get tokens for the registry (`managed_identity` and `customer_registry` modes), Key Vault references (`enable_key_vault`), and Postgres and Redis with `database_auth = "entra"` | Every pull, secret reference or database sign-in that uses an identity fails: a new revision has no ready replica, or the apps cannot open their database connection |
 | The image registry: its login server (`masterly.azurecr.io` by default, or `registry_location`) and its data endpoint (`<registry>.<region>.data.azurecr.io` with dedicated data endpoints, otherwise the registry's `*.blob.core.windows.net` storage; see [Configure rules to access an Azure container registry behind a firewall](https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules)) | Always, **unless** `registry_private_endpoint = true`, which keeps pulls on the registry's private endpoint in the VNet | The image pull fails: a new revision (a fresh install, an upgrade or a restart onto a new replica) has no ready replica, and `ContainerAppSystemLogs` records the failed pull |
+| Azure Container Registry and its storage by service tag (`AzureContainerRegistry`, and `Storage.<region>` for the install's `location`; part of the set above) | On every subnet, for a firewall or NSG that admits by service tag. Needed while an image is pulled from an Azure container registry over its public endpoint; the output still lists both with `registry_private_endpoint = true`, where you can leave them out unless `edge.image` names another Azure container registry | As the image registry row above. A registry in another region serves its layers from that region's storage: admit `*.blob.core.windows.net`, or that region's `Storage` tag |
 | Docker Hub (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`) | `edge` set with `edge.image` unset: `ca-edge` pulls the upstream Envoy image anonymously | `ca-edge`'s image pull fails, so its revision has no ready replica. Mirror the image instead (see [Where the edge's image comes from](#where-the-edges-image-comes-from)) |
 | Your identity provider's issuer and its endpoints: the discovery document under `oidc_authority`, the token endpoint it names, and the signing keys at `oidc_jwks_uri` (all `https://login.microsoftonline.com/<tenant>/...` when only `oidc_tenant_id` is set) | `identity_binding = "oidc"`: `ca-frontend`'s BFF signs users in against the authority, and `ca-api` fetches the signing keys. With `builtin_auth`, Azure's built-in authentication on `ca-frontend` reaches Microsoft Entra ID (`login.microsoftonline.com`), which the platform set already lists on every subnet. With `edge.jwt_authn` set, `ca-edge` itself also fetches the signing keys at `oidc_jwks_uri`, from `login.microsoftonline.com` on 443, through `egress_firewall` when that is set | With the token endpoint or discovery document unreachable, sign-in fails with an error after the IdP redirects back. With the keys unreachable, `ca-api` cannot validate a token, so authenticated requests are refused; with `edge.jwt_authn` set, `ca-edge` cannot either, and answers every request to `/v1` and `/mcp` with `401` |
-| Masterly's control plane: the host of `license_issuer_url` | `license_issuer_url` set (licence refresh) | Licence refresh fails. After seven days without a successful refresh the install is read-only: reads, exports and sign-in continue, writes are refused, until refresh succeeds again |
-| Masterly's control plane: the host of `telemetry_url` | `telemetry_url` set (fleet telemetry) | Usage reports do not reach the control plane. Licence refresh is a separate call (ADR 0074) and is not affected |
+| Masterly's control plane: the host of `license_issuer_url` | `license_issuer_url` set (licence refresh), from `ca-workers` with `enable_workers` and from `ca-api` without it | Licence refresh fails. After seven days without a successful refresh the install is read-only: reads, exports and sign-in continue, writes are refused, until refresh succeeds again |
+| Masterly's control plane: the host of `telemetry_url` | `telemetry_url` set (fleet telemetry), from the same app as the licence refresh | Usage reports do not reach the control plane. Licence refresh is a separate call (ADR 0074) and is not affected |
 | Azure Monitor (service tag `AzureMonitor`) | Always: the environment sends the apps' console and system logs through Azure Monitor (`logs_destination = "azure-monitor"`) | New rows stop arriving in `ContainerAppConsoleLogs` and `ContainerAppSystemLogs`, so the log-search alerts and the diagnostic bundle see nothing new while the apps keep serving |
 | Key Vault (`<vault>.vault.azure.net`) | `enable_key_vault` outside `mode = "production"`, where the vault keeps public network access. In production it is reached over its private endpoint | A revision whose secrets are Key Vault references does not start: it has no ready replica |
 | Your Key Vault holding the frontend or edge certificate | `frontend_custom_domain` or `edge_custom_domain` set, unless that vault has a private endpoint the environment reaches | The environment cannot read the certificate, so the binding of your hostname fails, at the first apply or at the next certificate rotation |
@@ -260,9 +261,11 @@ The platform claims above come from Microsoft Learn:
 [Networking in Azure Container Apps environment](https://learn.microsoft.com/azure/container-apps/networking)
 (the environment types),
 [Control outbound traffic with user defined routes](https://learn.microsoft.com/azure/container-apps/user-defined-routes)
-(routes are honoured on workload-profiles environments only), and
-[Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration)
-(the required outbound set).
+(routes are honoured on workload-profiles environments only),
+[Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration#nsg-allow-rules)
+(the required outbound set's service tags, in its NSG allow rules), and
+[Azure Container Apps environment integration with Azure Firewall](https://learn.microsoft.com/azure/container-apps/use-azure-firewall#application-rules)
+(the set's FQDNs, in its application rules).
 
 ### The outbound_allowlist output
 
@@ -285,8 +288,9 @@ Where each entry comes from, and which subnets carry it:
 
 | Entries | Source | On |
 |---|---|---|
-| Microsoft Container Registry, Microsoft Entra ID (managed identities), Azure Monitor | Microsoft Learn, [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration), read 2026-11-23 | Every subnet |
-| Azure management | ADR 0120 §5, which adds it to the platform set (the Learn page above does not list it) | Every subnet |
+| The platform set's service tags: `MicrosoftContainerRegistry`, `AzureFrontDoor.FirstParty`, `AzureActiveDirectory`, `AzureMonitor`, `AzureContainerRegistry` and `Storage.<region>` | Microsoft Learn, [Securing a virtual network in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/firewall-integration#nsg-allow-rules), its NSG allow rules, read 2026-11-23 | Every subnet |
+| The platform set's FQDNs: `mcr.microsoft.com`, `*.data.mcr.microsoft.com`, `packages.aks.azure.com`, `acs-mirror.azureedge.net`, `login.microsoftonline.com`, `*.login.microsoftonline.com`, `login.microsoft.com`, `*.login.microsoft.com` and `*.identity.azure.net` | Microsoft Learn, [Azure Container Apps environment integration with Azure Firewall](https://learn.microsoft.com/azure/container-apps/use-azure-firewall#application-rules), its application rules, read 2026-11-23 | Every subnet |
+| Azure management | ADR 0120 §5, which adds it to the platform set (the Learn pages above do not list it) | Every subnet |
 | The image registry's login server, and `*.data.azurecr.io` and `*.blob.core.windows.net` for an Azure container registry | `registry_location`, `api_image` and `frontend_image`; Microsoft Learn, [Configure rules to access an Azure container registry behind a firewall](https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules), read 2026-11-23 | Every subnet, unless `registry_private_endpoint` |
 | Docker Hub | `edge` with `edge.image` unset | Where `ca-edge` runs |
 | The registry `edge.image` names (with its data endpoints for an Azure container registry) | `edge.image` | Where `ca-edge` runs |
@@ -304,7 +308,21 @@ Each entry sits only on the subnet where the workload that reaches it runs, and 
 `migrate_job_environment` moves it. So `front`, which holds `ca-frontend` and `ca-edge` only,
 never lists Postgres, Redis, Service Bus or Communication Services, and `aca` lists the union of
 what still runs there. `core`, `outbound` and `extension` hold nothing yet, so their lists are the
-platform set and the registry. The install's own Postgres, Redis, a private vault or namespace,
+platform set and the registry.
+
+Masterly's control plane is on one subnet, not two. With `enable_workers`, `ca-api` holds the same
+`license_issuer_url`, `telemetry_url` and install credential as `ca-workers`, but it does not
+call the control plane: the application starts its licence refresh and fleet snapshot loops only
+in the process that runs the pipeline. That is `ca-api` while it runs the pipeline in-process,
+and the workers process once `ca-workers` exists. So the two hosts are listed where `ca-workers`
+runs, and where `ca-api` runs only without `enable_workers`.
+
+`Storage.<region>` is written with the region as `location` names it, lower-cased and without
+spaces (`Storage.swedencentral`); Microsoft's list of service tags capitalises it
+(`Storage.SwedenCentral`). The platform set, these two registry tags included, does not follow
+`registry_private_endpoint`.
+
+The install's own Postgres, Redis, a private vault or namespace,
 and the registry's private endpoint stay inside the VNet and are not listed. The Key Vault,
 Service Bus and Communication Services names carry the install's random suffix, so a fresh
 install's plan shows those destinations as known after apply.
@@ -329,7 +347,8 @@ terraform output -json outbound_allowlist | jq '.workers[] | [.kind, .destinatio
 The output needs your root configuration to re-export it (`output "outbound_allowlist" { value =
 module.<name>.outbound_allowlist }`), as `examples/production` does. It changes nothing in Azure:
 the module adds no outbound NSG rule and no route from it. Microsoft versions the platform set,
-so compare the entries whose `source` names a Learn page with that page when you build or review
+so compare the entries whose `source` names a Learn page with that page (the NSG allow rules for
+the service tags, the Azure Firewall application rules for the FQDNs) when you build or review
 your rules, and the targets you configure in the application (the last row of the table above)
 are yours to add.
 

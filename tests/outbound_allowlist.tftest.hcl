@@ -172,20 +172,81 @@ run "outbound_allowlist_platform_set_on_every_subnet" {
     error_message = "Every entry must have destination, kind (fqdn or service_tag), protocol, ports, why and source, none empty."
   }
 
-  # The platform entries name the Learn page they come from and the date it was read; Azure
-  # management, which the page does not list, names ADR 0120 §5.
+  # The platform entries name the Learn page they come from and the date it was read: the NSG
+  # allow rules for a service tag, the Azure Firewall application rules for an FQDN. Azure
+  # management, which neither page lists, names ADR 0120 §5.
   assert {
     condition = alltrue(flatten([
       for k, l in output.outbound_allowlist : [
         for e in l : (
           contains(["AzureResourceManager", "management.azure.com"], e.destination)
           ? strcontains(e.source, "ADR 0120")
-          : strcontains(e.source, "firewall-integration") && strcontains(e.source, "read 2026-11-23")
+          : strcontains(e.source, e.kind == "service_tag" ? "firewall-integration#nsg-allow-rules" : "use-azure-firewall#application-rules") && strcontains(e.source, "read 2026-11-23")
         )
         if contains(["MicrosoftContainerRegistry", "mcr.microsoft.com", "AzureActiveDirectory", "login.microsoftonline.com", "AzureMonitor", "AzureResourceManager", "management.azure.com"], e.destination)
       ]
     ]))
     error_message = "The platform set's entries must name Microsoft Learn's page and the date it was read, and Azure management ADR 0120 §5."
+  }
+}
+
+# The platform set is Learn's two lists in full, on every subnet: the application rules of "Azure
+# Container Apps environment integration with Azure Firewall" (the FQDNs) and the NSG allow rules
+# of "Securing a virtual network in Azure Container Apps" (the service tags). A firewall built
+# from a shorter list can stop the environment's nodes or an image pull. login.microsoft.com is an
+# entry of its own, because a rule for *.login.microsoft.com does not match the bare name.
+run "outbound_allowlist_platform_set_holds_learns_two_lists" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    split_processing      = true
+    extensions            = true
+    edge                  = {}
+  }
+
+  assert {
+    condition = alltrue([
+      for k, l in output.outbound_allowlist : length(setsubtract(
+        ["mcr.microsoft.com", "*.data.mcr.microsoft.com", "packages.aks.azure.com", "acs-mirror.azureedge.net", "login.microsoft.com", "login.microsoftonline.com", "*.login.microsoftonline.com", "*.login.microsoft.com", "*.identity.azure.net"],
+        [for e in l : e.destination if e.kind == "fqdn" && contains(e.ports, "443") && strcontains(e.source, "use-azure-firewall#application-rules") && strcontains(e.source, "read 2026-11-23")],
+      )) == 0
+    ])
+    error_message = "Every subnet must list the application rules' FQDNs, packages.aks.azure.com, acs-mirror.azureedge.net and the bare login.microsoft.com among them, each naming Learn's Azure Firewall page and the date it was read."
+  }
+
+  assert {
+    condition = alltrue([
+      for k, l in output.outbound_allowlist : length(setsubtract(
+        ["MicrosoftContainerRegistry", "AzureFrontDoor.FirstParty", "AzureActiveDirectory", "AzureMonitor", "AzureContainerRegistry", "Storage.swedencentral"],
+        [for e in l : e.destination if e.kind == "service_tag" && contains(e.ports, "443") && strcontains(e.source, "firewall-integration#nsg-allow-rules") && strcontains(e.source, "read 2026-11-23")],
+      )) == 0
+    ])
+    error_message = "Every subnet must list the NSG allow rules' service tags, AzureContainerRegistry and Storage.<region> among them, each naming Learn's NSG allow rules and the date they were read."
+  }
+
+  assert {
+    condition = alltrue([
+      for k, l in output.outbound_allowlist : length([for e in l : e if e.destination == "login.microsoft.com"]) == 1 && length([for e in l : e if e.destination == "*.login.microsoft.com"]) == 1
+    ])
+    error_message = "login.microsoft.com and *.login.microsoft.com must each be one entry on every subnet."
+  }
+}
+
+# The Storage tag names the install's region, in the form the location input is normalised to.
+run "outbound_allowlist_storage_tag_names_the_region" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    location              = "West Europe"
+  }
+
+  assert {
+    condition = alltrue([
+      for k, l in output.outbound_allowlist : contains([for e in l : e.destination], "Storage.westeurope") && !contains([for e in l : e.destination], "Storage.swedencentral")
+    ])
+    error_message = "With location = \"West Europe\" every subnet must list Storage.westeurope."
   }
 }
 
@@ -227,7 +288,17 @@ run "outbound_allowlist_no_registry_with_private_endpoint" {
         for e in l : !strcontains(e.destination, "azurecr.io") && e.destination != "*.blob.core.windows.net"
       ]
     ]))
-    error_message = "With registry_private_endpoint the pull stays in the VNet, so no subnet may list the registry."
+    error_message = "With registry_private_endpoint the pull stays in the VNet, so no subnet may list the registry's hosts."
+  }
+
+  # The platform set does not follow registry_private_endpoint: its registry service tags stay.
+  assert {
+    condition = alltrue([
+      for k, l in output.outbound_allowlist : contains([for e in l : e.destination], "AzureContainerRegistry") &&
+      contains([for e in l : e.destination], "Storage.swedencentral") &&
+      contains([for e in l : e.destination], "login.microsoft.com")
+    ])
+    error_message = "With registry_private_endpoint every subnet must still list the platform set's AzureContainerRegistry, Storage.<region> and login.microsoft.com."
   }
 }
 
