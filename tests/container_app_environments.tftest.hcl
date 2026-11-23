@@ -1446,7 +1446,7 @@ run "retire_runtime_environment_unset_keeps_aca_env" {
   # The refusals below can only name the variable they fail on, so the message is read from the
   # source: it lists local.runtime_environment_workloads.
   assert {
-    condition     = can(regex("error_message = \"retire_runtime_environment = true would delete aca-<name_prefix> while these still run in it: \\$\\{join\\(\"; \", local\\.runtime_environment_workloads\\)\\}", file("${path.module}/variables-environment.tf")))
+    condition     = can(regex("error_message = \"retire_runtime_environment = true would delete aca-<name_prefix> while these still run in it: \\$\\{join\\(\"; \", local\\.runtime_environment_workloads\\)\\}", file("${path.module}/main.tf")))
     error_message = "The retire refusal must name what is left on aca-<prefix> (local.runtime_environment_workloads)."
   }
 
@@ -1479,7 +1479,7 @@ run "retire_refused_with_the_apps_on_aca_env" {
     }
   }
 
-  expect_failures = [var.retire_runtime_environment]
+  expect_failures = [azurerm_resource_group.aca]
 }
 
 # With only ca-workers left on aca-<prefix>, the refusal names ca-workers alone: the moved apps
@@ -1520,7 +1520,7 @@ run "retire_refused_with_ca_workers_on_runtime" {
     enable_workers             = true
   }
 
-  expect_failures = [var.retire_runtime_environment]
+  expect_failures = [azurerm_resource_group.aca]
 }
 
 # The apps and ca-workers have moved; caj-migrate is still on aca-<prefix>.
@@ -1557,7 +1557,7 @@ run "retire_refused_with_the_migrate_job_on_runtime" {
     workers_environment        = "workers"
   }
 
-  expect_failures = [var.retire_runtime_environment]
+  expect_failures = [azurerm_resource_group.aca]
 }
 
 # migrations = "start" creates no migrate job, so migrate_job_environment left at "runtime" does

@@ -59,18 +59,16 @@ variable "environment_zone_redundant" {
   }
 }
 
-# Removes aca-<prefix> once every workload has moved off it. The subnet it ran on, snet-aca, its
-# NSG and aca_subnet_id stay: only the environment and its diagnostic setting go.
+# Removes aca-<prefix> once every workload has moved off it, and with it the runtime subnet: on a
+# network the module builds, snet-aca, its NSG and the private-endpoint rule from it (network.tf);
+# on an injected network, the need for aca_subnet_id (main.tf).
 variable "retire_runtime_environment" {
   type        = bool
   default     = false
   nullable    = false
-  description = "Whether to delete aca-<name_prefix>, the Container Apps environment the apps ran in before the front, app and workers environments, once nothing runs in it. False (the default) keeps it, and an upgrade plans no change to it. True deletes aca-<name_prefix> and its diagnostic setting, diag-<name_prefix>-aca-env, and the aca_environment_id output becomes null. Set it only after every move is applied, in the order docs/networking.md gives under \"Retiring the runtime environment\": ca-workers and caj-migrate to the workers environment (workers_environment and migrate_job_environment = \"workers\"), then ca-frontend, ca-edge and ca-api together (frontend_environment and edge_environment = \"front\", api_environment = \"app\"), which also moves the custom-domain certificates. The plan refuses true while any of these is still placed on aca-<name_prefix>, and names what is left; the migrate job is counted only with migrations = \"job\", and ca-workers only with enable_workers. Anything you created in aca-<name_prefix> yourself is not visible to the module: move or delete it first, because Azure deletes the environment with every app and job in it. snet-aca, its NSG and aca_subnet_id stay. Setting it back to false creates a new, empty aca-<name_prefix>."
+  description = "Whether to delete aca-<name_prefix>, the Container Apps environment the apps ran in before the front, app and workers environments, once nothing runs in it. False (the default) keeps it, and an upgrade plans no change to it. True deletes aca-<name_prefix> and its diagnostic setting, diag-<name_prefix>-aca-env, and the aca_environment_id output becomes null. Set it only after every move is applied, in the order docs/networking.md gives under \"Retiring the runtime environment\": ca-workers and caj-migrate to the workers environment (workers_environment and migrate_job_environment = \"workers\"), then ca-frontend, ca-edge and ca-api together (frontend_environment and edge_environment = \"front\", api_environment = \"app\"), which also moves the custom-domain certificates. The plan refuses true while any of these is still placed on aca-<name_prefix>, and names what is left; the migrate job is counted only with migrations = \"job\", and ca-workers only with enable_workers. Anything you created in aca-<name_prefix> yourself is not visible to the module: move or delete it first, because Azure deletes the environment with every app and job in it. The runtime subnet goes with it: on a network the module builds, the plan also deletes snet-aca, its network security group and the private-endpoint subnet's rule admitting it (Azure releases the subnet only once the environment's deletion completes, so a second apply may be needed); on an injected network, aca_subnet_id is no longer needed, and a new install retired from its first apply has no runtime subnet at all. Setting it back to false creates a new, empty aca-<name_prefix>, which needs a runtime subnet of /23 or larger again (aca_subnet_id, or room in vnet_address_space)."
 
-  # Azure deletes an environment with everything in it, so nothing the module places there may
-  # be left: local.runtime_environment_workloads (environment.tf) lists what still is.
-  validation {
-    condition     = !var.retire_runtime_environment || length(local.runtime_environment_workloads) == 0
-    error_message = "retire_runtime_environment = true would delete aca-<name_prefix> while these still run in it: ${join("; ", local.runtime_environment_workloads)}. Move them first, in the order docs/networking.md gives under \"Retiring the runtime environment\", apply, and then set retire_runtime_environment = true; or keep it false."
-  }
+  # The refusal while anything still runs in aca-<name_prefix> is a precondition on
+  # azurerm_resource_group.aca (main.tf), not a validation here: it reads the environment layout,
+  # which reads this input, and a validation that did would be a dependency cycle.
 }

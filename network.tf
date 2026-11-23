@@ -72,8 +72,14 @@ resource "azurerm_virtual_network" "this" {
 # The runtime environment (aca-<prefix>) was sized for a /23 or larger, and Azure now
 # requires the subnet to be delegated to Microsoft.App/environments (the first apply
 # failed with ManagedEnvironmentSubnetDelegationError without it).
+#
+# Only while aca-<prefix> exists: with retire_runtime_environment nothing runs here, so the
+# subnet, its NSG and their association are not created, and on an install that had them the plan
+# deletes the three. Azure releases a subnet a deleted environment ran in only after the
+# environment's own deletion completes; an apply that deletes both in one run may need a second
+# apply for the subnet (docs/networking.md, "Retiring the runtime environment").
 resource "azurerm_subnet" "aca" {
-  count = local.inject_network ? 0 : 1
+  count = !local.inject_network && local.runtime_subnet ? 1 : 0
 
   name                 = "snet-aca"
   resource_group_name  = azurerm_resource_group.aca.name
@@ -102,7 +108,8 @@ resource "azurerm_subnet" "private_endpoints" {
 # The environment subnets of ADR 0120 §4: front, app and workers, one workload-profiles
 # Container Apps environment each. They sit beside snet-aca rather than replacing it, so the
 # apps can move across while the runtime subnet still serves them; snet-aca, its NSG and the
-# endpoints subnet keep their addresses and plan no change. A workload-profiles environment
+# endpoints subnet keep their addresses and plan no change until retire_runtime_environment
+# removes snet-aca. A workload-profiles environment
 # accepts a /27 or larger and, like snet-aca, needs the delegation. Prefixes: main.tf.
 resource "azurerm_subnet" "environment" {
   for_each = local.env_subnet_prefixes
@@ -143,7 +150,7 @@ resource "azurerm_subnet" "environment" {
 # the baseline those subnets are expected to carry instead.
 
 resource "azurerm_network_security_group" "aca" {
-  count = local.inject_network ? 0 : 1
+  count = !local.inject_network && local.runtime_subnet ? 1 : 0
 
   name                = "nsg-${var.name_prefix}-aca"
   resource_group_name = azurerm_resource_group.aca.name
@@ -260,23 +267,30 @@ resource "azurerm_network_security_group" "private_endpoints" {
   # a private Service Bus namespace have no public network presence, so this rule is the whole
   # of who may open a connection to them — and it is now enforced rather than implied,
   # because the subnet above has private_endpoint_network_policies = "Enabled".
-  security_rule {
-    name                       = "allow-data-plane-from-apps"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_address_prefix      = local.aca_subnet_prefix
-    source_port_range          = "*"
-    destination_address_prefix = local.private_endpoints_subnet_prefix
-    destination_port_ranges    = local.private_endpoint_ports
-    description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the runtime subnet only."
+  #
+  # From snet-aca only while it exists: a retired install (retire_runtime_environment) has no
+  # runtime subnet, and its apps reach the data plane from the app and workers subnets below.
+  dynamic "security_rule" {
+    for_each = local.runtime_subnet ? { aca = local.aca_subnet_prefix } : {}
+
+    content {
+      name                       = "allow-data-plane-from-apps"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = local.private_endpoints_subnet_prefix
+      destination_port_ranges    = local.private_endpoint_ports
+      description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the runtime subnet only."
+    }
   }
 
   # ADR 0120 §5: the app and workers environments reach the data plane on the same ports. The
   # front environment never does on these ports: it is the one that faces the callers, and when
   # it is external, the internet (its one exception, the vault on 443, is below). The rule above
-  # stays while the apps still run in snet-aca.
+  # stays while snet-aca does.
   dynamic "security_rule" {
     for_each = { for k in ["app", "workers"] : k => local.env_subnet_prefixes[k] if contains(keys(local.env_subnet_prefixes), k) }
 
@@ -485,7 +499,7 @@ resource "azurerm_network_security_group" "environment" {
 # network_security_group_id argument, so this is the association, not a second way of
 # writing one.
 resource "azurerm_subnet_network_security_group_association" "aca" {
-  count = local.inject_network ? 0 : 1
+  count = !local.inject_network && local.runtime_subnet ? 1 : 0
 
   subnet_id                 = azurerm_subnet.aca[0].id
   network_security_group_id = azurerm_network_security_group.aca[0].id
@@ -548,7 +562,9 @@ resource "azurerm_route_table" "egress" {
 resource "azurerm_subnet_route_table_association" "aca" {
   count = !local.inject_network && var.egress_firewall != null ? 1 : 0
 
-  subnet_id      = azurerm_subnet.aca[0].id
+  # Through a splat: a retired install has no snet-aca, and the precondition below refuses it
+  # rather than the plan failing on an index.
+  subnet_id      = one(azurerm_subnet.aca[*].id)
   route_table_id = local.egress_route_table_id
 
   lifecycle {

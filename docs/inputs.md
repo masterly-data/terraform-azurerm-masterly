@@ -167,7 +167,7 @@ In `variables-core.tf`.
 | `frontend_max_replicas` | `number` | `3` | Maximum frontend replicas. |
 | `app_resources` | `map(...)` | `{}` | CPU (vCPU) and memory per replica, by app: keys "api", "frontend" and "workers". |
 | `tags` | `map(string)` | `{}` | Tags applied to every resource (merge the required governance tags here: cost-center, data-residency, deployment-model, owner, lifecycle). |
-| `aca_subnet_id` | `string` | `null` | Join an existing network instead of creating one (hub-and-spoke / landing zone): the id of a subnet delegated to Microsoft.App/environments, /23 or larger. |
+| `aca_subnet_id` | `string` | `null` | On an injected network (hub-and-spoke / landing zone), the id of the runtime subnet that aca-<name_prefix>, the runtime Container Apps environment, runs in: delegated to Microsoft.App/environments, and /23 or larger,... |
 | `private_endpoints_subnet_id` | `string` | `null` | Subnet for the Postgres, Key Vault, Redis and registry (registry_private_endpoint) private endpoints when joining an existing network. |
 | `api_ingress_external` | `bool` | `false` | Whether the api is reachable beyond the Container App Environment. |
 | `frontend_environment` | `string` | `"aca"` | The Container Apps environment ca-frontend runs in. |
@@ -178,8 +178,8 @@ In `variables-core.tf`.
 | `frontend_ingress_external` | `bool` | `true` | Whether the frontend has ingress beyond the Container App Environment itself. |
 | `aca_internal_load_balancer` | `bool` | `false` | Give the Container App Environment an internal load balancer, so it has no public endpoint and its apps answer only inside the VNet — reached over VPN or ExpressRoute. |
 | `vnet_address_space` | `list(string)` | `["10.20.0.0/16"]` | Address space of the install's VNet. |
-| `aca_subnet_prefix` | `string` | `null` | Explicit CIDR of the ACA runtime subnet (must be /23 or larger and inside vnet_address_space). |
-| `private_endpoints_subnet_prefix` | `string` | `null` | Explicit CIDR of the private-endpoints subnet (inside vnet_address_space, clear of the runtime subnet). |
+| `aca_subnet_prefix` | `string` | `null` | Explicit CIDR of the runtime subnet, snet-aca, that aca-<name_prefix> runs in: /23 or larger, the size that environment is created on, and inside vnet_address_space. |
+| `private_endpoints_subnet_prefix` | `string` | `null` | Explicit CIDR of the private-endpoints subnet, inside vnet_address_space and clear of every other subnet; a /28 holds every private endpoint the module creates. |
 
 ## Environment subnets (ADR 0120)
 
@@ -190,9 +190,9 @@ In `variables-core.tf`.
 | `front_subnet_prefix` | `string` | `null` | Explicit CIDR of the front environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
 | `app_subnet_prefix` | `string` | `null` | Explicit CIDR of the app environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
 | `workers_subnet_prefix` | `string` | `null` | Explicit CIDR of the workers environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
-| `front_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the front environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
-| `app_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
-| `workers_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+| `front_subnet_id` | `string` | `null` | On an injected network (private_endpoints_subnet_id), the id of the front environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id where that is set. |
+| `app_subnet_id` | `string` | `null` | On an injected network (private_endpoints_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_id wi... |
+| `workers_subnet_id` | `string` | `null` | On an injected network (private_endpoints_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_i... |
 
 ## Add-on environments (ADR 0120 §4)
 
@@ -205,9 +205,9 @@ In `variables-core.tf`.
 | `core_subnet_prefix` | `string` | `null` | With split_processing, an explicit CIDR of the core environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
 | `outbound_subnet_prefix` | `string` | `null` | With split_processing, an explicit CIDR of the outbound environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
 | `extension_subnet_prefix` | `string` | `null` | With extensions, an explicit CIDR of the extension environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
-| `core_subnet_id` | `string` | `null` | With split_processing on an injected network (aca_subnet_id), the id of the core environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
-| `outbound_subnet_id` | `string` | `null` | With split_processing on an injected network (aca_subnet_id), the id of the outbound environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
-| `extension_subnet_id` | `string` | `null` | With extensions on an injected network (aca_subnet_id), the id of the extension environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+| `core_subnet_id` | `string` | `null` | With split_processing on an injected network (private_endpoints_subnet_id), the id of the core environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id... |
+| `outbound_subnet_id` | `string` | `null` | With split_processing on an injected network (private_endpoints_subnet_id), the id of the outbound environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subne... |
+| `extension_subnet_id` | `string` | `null` | With extensions on an injected network (private_endpoints_subnet_id), the id of the extension environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id... |
 
 ## Async bus (ADR 0029)
 

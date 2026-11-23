@@ -503,8 +503,8 @@ variable "egress_firewall" {
   # replace the hub's routing from outside the platform team's configuration, and accepting the
   # input while attaching nothing would be a control that is silently not there.
   validation {
-    condition     = var.egress_firewall == null || var.aca_subnet_id == null
-    error_message = "egress_firewall is for a network the module builds. With aca_subnet_id set, the hub's route table (0.0.0.0/0 to your firewall) goes on the injected ACA subnet, attached by the platform team that owns it: a subnet holds one route table, and the module attaching its own would replace the hub's. Remove egress_firewall."
+    condition     = var.egress_firewall == null || (var.aca_subnet_id == null && var.private_endpoints_subnet_id == null)
+    error_message = "egress_firewall is for a network the module builds. With aca_subnet_id or private_endpoints_subnet_id set, the hub's route table (0.0.0.0/0 to your firewall) goes on the injected ACA subnet, attached by the platform team that owns it: a subnet holds one route table, and the module attaching its own would replace the hub's. Remove egress_firewall."
   }
 
   # Microsoft Learn (read 2026-11-14) documents forced tunnelling only for an internal
@@ -896,13 +896,13 @@ variable "tags" {
 variable "aca_subnet_id" {
   type        = string
   default     = null
-  description = "Join an existing network instead of creating one (hub-and-spoke / landing zone): the id of a subnet delegated to Microsoft.App/environments, /23 or larger. Set this and private_endpoints_subnet_id together and the module creates no VNet, no subnets, and needs no network permissions outside this resource group — the platform team keeps ownership of the spoke. Leave both unset and the module builds its own VNet from vnet_address_space."
+  description = "On an injected network (hub-and-spoke / landing zone), the id of the runtime subnet that aca-<name_prefix>, the runtime Container Apps environment, runs in: delegated to Microsoft.App/environments, and /23 or larger, the size aca-<name_prefix> is created on. Needed only while that environment exists: with retire_runtime_environment = true the install has no runtime environment, and private_endpoints_subnet_id with front_subnet_id, app_subnet_id and workers_subnet_id is the whole injected network, so a new install retired from its first apply leaves this unset. With an injected network the module creates no VNet, no subnets, and needs no network permissions outside this resource group — the platform team keeps ownership of the spoke. The plan refuses this without private_endpoints_subnet_id, and refuses private_endpoints_subnet_id without this while retire_runtime_environment is false. On a retired install it may stay set, and the module creates nothing on it; without it the module reads the install's virtual network from front_subnet_id instead. Leave it and private_endpoints_subnet_id unset and the module builds its own VNet from vnet_address_space."
 }
 
 variable "private_endpoints_subnet_id" {
   type        = string
   default     = null
-  description = "Subnet for the Postgres, Key Vault, Redis and registry (registry_private_endpoint) private endpoints when joining an existing network. Required with aca_subnet_id, and must have private endpoint network policies disabled. Must not be the ACA subnet: a delegated subnet cannot hold private endpoints."
+  description = "Subnet for the Postgres, Key Vault, Redis and registry (registry_private_endpoint) private endpoints when joining an existing network. Setting it is what joins an existing network: required with aca_subnet_id, and on a retired install (retire_runtime_environment = true) set with front_subnet_id, app_subnet_id and workers_subnet_id alone. Leave its private endpoint network policies enabled if the network security group rules on it are to apply to the endpoints (docs/networking.md). Must not be a delegated subnet (the runtime or an environment subnet): a delegated subnet cannot hold private endpoints. A /28 holds every private endpoint the module creates."
 }
 
 variable "api_ingress_external" {
@@ -1014,29 +1014,35 @@ variable "aca_internal_load_balancer" {
 variable "vnet_address_space" {
   type        = list(string)
   default     = ["10.20.0.0/16"]
-  description = "Address space of the install's VNet. The runtime subnet (/23, the size the aca-<name_prefix> environment was created on), the private-endpoint subnet (/24) and the front, app and workers environment subnets (a /24 each) are carved from the first prefix unless explicit subnet prefixes are set (aca_subnet_prefix, private_endpoints_subnet_prefix, front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix)."
+  description = "Address space of the install's VNet. With a first prefix of /21 or larger, the runtime subnet (/23, the size the aca-<name_prefix> environment was created on; not created with retire_runtime_environment = true), the private-endpoint subnet (/24) and the front, app and workers environment subnets (a /24 each) are carved from it unless explicit subnet prefixes are set (aca_subnet_prefix, private_endpoints_subnet_prefix, front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix). With retire_runtime_environment = true there is no runtime subnet, and a first prefix of /22 to /24 is carved in quarters: front, app and workers in the first three, the private endpoints in the fourth unless private_endpoints_subnet_prefix places them elsewhere, for example in a /28 that is the VNet's second prefix (a /24 gives three /26 environment subnets; docs/networking.md, \"A /24 and a /28\"). A smaller first prefix needs explicit prefixes."
 
   # Deriving the subnets needs room to carve a /23 plus a /24 at the layout the module
-  # uses; a first prefix smaller than /21 must bring explicit subnet prefixes instead.
+  # uses; a first prefix smaller than /21 must bring explicit subnet prefixes instead. Without the
+  # runtime subnet (retire_runtime_environment) a /22 to /24 is carved in quarters (main.tf), and a
+  # smaller one needs the private-endpoint and the three environment prefixes.
   validation {
     condition = (
       (var.aca_subnet_prefix != null && var.private_endpoints_subnet_prefix != null) ||
-      tonumber(split("/", var.vnet_address_space[0])[1]) <= 21
+      tonumber(split("/", var.vnet_address_space[0])[1]) <= 21 ||
+      (var.retire_runtime_environment && (
+        tonumber(split("/", var.vnet_address_space[0])[1]) <= 24 ||
+        (var.private_endpoints_subnet_prefix != null && var.front_subnet_prefix != null)
+      ))
     )
-    error_message = "Subnets are derived from the first VNet prefix only when it is /21 or larger. For a smaller address space (enterprise IPAM allocations), set aca_subnet_prefix (a /23 or larger — ACA consumption requirement) and private_endpoints_subnet_prefix explicitly."
+    error_message = "Subnets are derived from the first VNet prefix only when it is /21 or larger, or, with retire_runtime_environment = true and so no runtime subnet, /24 or larger. For a smaller address space (enterprise IPAM allocations), set aca_subnet_prefix (a /23 or larger, for aca-<name_prefix>) and private_endpoints_subnet_prefix explicitly; with retire_runtime_environment = true, private_endpoints_subnet_prefix with front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix instead."
   }
 }
 
 variable "aca_subnet_prefix" {
   type        = string
   default     = null
-  description = "Explicit CIDR of the ACA runtime subnet (must be /23 or larger and inside vnet_address_space). Null (default) derives the first /23 of the first VNet prefix."
+  description = "Explicit CIDR of the runtime subnet, snet-aca, that aca-<name_prefix> runs in: /23 or larger, the size that environment is created on, and inside vnet_address_space. Null (default) derives the first /23 of the first VNet prefix. Ignored with retire_runtime_environment = true: the install then has no runtime subnet, and the module creates none."
 }
 
 variable "private_endpoints_subnet_prefix" {
   type        = string
   default     = null
-  description = "Explicit CIDR of the private-endpoints subnet (inside vnet_address_space, clear of the runtime subnet). Null (default) derives a /24 clear of the runtime /23."
+  description = "Explicit CIDR of the private-endpoints subnet, inside vnet_address_space and clear of every other subnet; a /28 holds every private endpoint the module creates. Null (default) derives the /24 at index 4 of the first VNet prefix, clear of the runtime /23, or, with retire_runtime_environment = true on a first prefix of /22 to /24, its last quarter."
 }
 
 # --- Environment subnets (ADR 0120) -------------------------------------------------------
@@ -1050,7 +1056,7 @@ variable "private_endpoints_subnet_prefix" {
 variable "front_subnet_prefix" {
   type        = string
   default     = null
-  description = "Explicit CIDR of the front environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with app_subnet_prefix and workers_subnet_prefix, or none of them. Null (default) derives a /24 from the first VNet prefix when it is /21 or larger (the /24 at index 5, beside the runtime /23 and the private-endpoint /24); with a smaller VNet, or explicit runtime and private-endpoint prefixes that already cover that /24, the module creates no environment subnets. Ignored when the network is injected (aca_subnet_id): set front_subnet_id instead."
+  description = "Explicit CIDR of the front environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with app_subnet_prefix and workers_subnet_prefix, or none of them. Null (default) derives a /24 from the first VNet prefix when it is /21 or larger (the /24 at index 5, beside the runtime /23 and the private-endpoint /24), or, with retire_runtime_environment = true on a first prefix of /22 to /24, its first quarter (a /26 of a /24); with a smaller VNet, or explicit runtime and private-endpoint prefixes that already cover that subnet, the module creates no environment subnets. Ignored when the network is injected (private_endpoints_subnet_id): set front_subnet_id instead."
 
   validation {
     condition = var.front_subnet_prefix == null || try(
@@ -1073,7 +1079,7 @@ variable "front_subnet_prefix" {
 variable "app_subnet_prefix" {
   type        = string
   default     = null
-  description = "Explicit CIDR of the app environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with front_subnet_prefix and workers_subnet_prefix, or none of them. Null (default) derives the /24 at index 6 of the first VNet prefix, on the same terms as front_subnet_prefix. Its network security group admits HTTPS from the front subnet only, and the private-endpoint subnet admits it on the data-plane ports. Ignored when the network is injected (aca_subnet_id): set app_subnet_id instead."
+  description = "Explicit CIDR of the app environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with front_subnet_prefix and workers_subnet_prefix, or none of them. Null (default) derives the /24 at index 6 of the first VNet prefix (or the second quarter, as front_subnet_prefix says), on the same terms as front_subnet_prefix. Its network security group admits HTTPS from the front subnet only, and the private-endpoint subnet admits it on the data-plane ports. Ignored when the network is injected (private_endpoints_subnet_id): set app_subnet_id instead."
 
   validation {
     condition = var.app_subnet_prefix == null || try(
@@ -1089,7 +1095,7 @@ variable "app_subnet_prefix" {
 variable "workers_subnet_prefix" {
   type        = string
   default     = null
-  description = "Explicit CIDR of the workers environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with front_subnet_prefix and app_subnet_prefix, or none of them. Null (default) derives the /24 at index 7 of the first VNet prefix, on the same terms as front_subnet_prefix. Its network security group admits only the Container Apps platform's own traffic, and the private-endpoint subnet admits it on the data-plane ports. Ignored when the network is injected (aca_subnet_id): set workers_subnet_id instead."
+  description = "Explicit CIDR of the workers environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Set it with front_subnet_prefix and app_subnet_prefix, or none of them. Null (default) derives the /24 at index 7 of the first VNet prefix (or the third quarter, as front_subnet_prefix says), on the same terms as front_subnet_prefix. Its network security group admits only the Container Apps platform's own traffic, and the private-endpoint subnet admits it on the data-plane ports. Ignored when the network is injected (private_endpoints_subnet_id): set workers_subnet_id instead."
 
   validation {
     condition = var.workers_subnet_prefix == null || try(
@@ -1105,19 +1111,19 @@ variable "workers_subnet_prefix" {
 variable "front_subnet_id" {
   type        = string
   default     = null
-  description = "On an injected network (aca_subnet_id), the id of the front environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. Set it with app_subnet_id and workers_subnet_id, or none of them; the three must be different subnets, and none of them aca_subnet_id or private_endpoints_subnet_id. The module attaches no network security group to it: docs/networking.md gives the inbound rules it should carry."
+  description = "On an injected network (private_endpoints_subnet_id), the id of the front environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id where that is set. Required, with app_subnet_id and workers_subnet_id, on an injected network without aca_subnet_id (retire_runtime_environment = true), where the module reads the install's virtual network from it. Set it with app_subnet_id and workers_subnet_id, or none of them; the three must be different subnets, and none of them aca_subnet_id or private_endpoints_subnet_id. The module attaches no network security group to it: docs/networking.md gives the inbound rules it should carry."
 }
 
 variable "app_subnet_id" {
   type        = string
   default     = null
-  description = "On an injected network (aca_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. Set it with front_subnet_id and workers_subnet_id, or none of them. The module attaches no network security group to it: it should admit HTTPS from the front subnet only, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
+  description = "On an injected network (private_endpoints_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_id without it). Set it with front_subnet_id and workers_subnet_id, or none of them. The module attaches no network security group to it: it should admit HTTPS from the front subnet only, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
 }
 
 variable "workers_subnet_id" {
   type        = string
   default     = null
-  description = "On an injected network (aca_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. Set it with front_subnet_id and app_subnet_id, or none of them. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
+  description = "On an injected network (private_endpoints_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_id without it). Set it with front_subnet_id and app_subnet_id, or none of them. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md)."
 }
 
 # --- Add-on environments (ADR 0120 §4) ---------------------------------------------------
@@ -1145,7 +1151,7 @@ variable "extensions" {
 variable "core_subnet_prefix" {
   type        = string
   default     = null
-  description = "With split_processing, an explicit CIDR of the core environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 8 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when split_processing is false. Ignored when the network is injected (aca_subnet_id): set core_subnet_id instead."
+  description = "With split_processing, an explicit CIDR of the core environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 8 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when split_processing is false. Ignored when the network is injected (private_endpoints_subnet_id): set core_subnet_id instead."
 
   validation {
     condition = var.core_subnet_prefix == null || try(
@@ -1161,7 +1167,7 @@ variable "core_subnet_prefix" {
 variable "outbound_subnet_prefix" {
   type        = string
   default     = null
-  description = "With split_processing, an explicit CIDR of the outbound environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 9 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when split_processing is false. Ignored when the network is injected (aca_subnet_id): set outbound_subnet_id instead."
+  description = "With split_processing, an explicit CIDR of the outbound environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 9 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when split_processing is false. Ignored when the network is injected (private_endpoints_subnet_id): set outbound_subnet_id instead."
 
   validation {
     condition = var.outbound_subnet_prefix == null || try(
@@ -1177,7 +1183,7 @@ variable "outbound_subnet_prefix" {
 variable "extension_subnet_prefix" {
   type        = string
   default     = null
-  description = "With extensions, an explicit CIDR of the extension environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 10 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when extensions is false. Ignored when the network is injected (aca_subnet_id): set extension_subnet_id instead."
+  description = "With extensions, an explicit CIDR of the extension environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. Null (default) derives the /24 at index 10 of the first VNet prefix when it is /20 or larger; with a smaller VNet, set it. Refused when extensions is false. Ignored when the network is injected (private_endpoints_subnet_id): set extension_subnet_id instead."
 
   validation {
     condition = var.extension_subnet_prefix == null || try(
@@ -1193,19 +1199,19 @@ variable "extension_subnet_prefix" {
 variable "core_subnet_id" {
   type        = string
   default     = null
-  description = "With split_processing on an injected network (aca_subnet_id), the id of the core environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. It must differ from every other subnet id. Set it with outbound_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
+  description = "With split_processing on an injected network (private_endpoints_subnet_id), the id of the core environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_id without it). It must differ from every other subnet id. Set it with outbound_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
 }
 
 variable "outbound_subnet_id" {
   type        = string
   default     = null
-  description = "With split_processing on an injected network (aca_subnet_id), the id of the outbound environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. It must differ from every other subnet id. Set it with core_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
+  description = "With split_processing on an injected network (private_endpoints_subnet_id), the id of the outbound environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_id without it). It must differ from every other subnet id. Set it with core_subnet_id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and your private-endpoint subnet should admit it on the data-plane ports (docs/networking.md). Refused when split_processing is false."
 }
 
 variable "extension_subnet_id" {
   type        = string
   default     = null
-  description = "With extensions on an injected network (aca_subnet_id), the id of the extension environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. It must differ from every other subnet id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and no Masterly subnet, your private-endpoint subnet above all, may admit it (docs/networking.md). Refused when extensions is false."
+  description = "With extensions on an injected network (private_endpoints_subnet_id), the id of the extension environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id (or front_subnet_id without it). It must differ from every other subnet id. The module attaches no network security group to it: it should admit only the Container Apps platform's own traffic, and no Masterly subnet, your private-endpoint subnet above all, may admit it (docs/networking.md). Refused when extensions is false."
 }
 
 # --- Async bus (ADR 0029) ---------------------------------------------------------
