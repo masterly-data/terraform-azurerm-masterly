@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-142 inputs in 29 groups.
+150 inputs in 30 groups.
 
 ## Groups
 
@@ -24,6 +24,7 @@ each one that is missing.
 - [Trusting a private CA (MAS-446)](#trusting-a-private-ca-mas-446) (1)
 - [Data plane seam (ADR 0065)](#data-plane-seam-adr-0065) (33)
 - [Environment subnets (ADR 0120)](#environment-subnets-adr-0120) (6)
+- [Add-on environments (ADR 0120 §4)](#add-on-environments-adr-0120-4) (8)
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
 - [The BFF's DPoP key](#the-bffs-dpop-key) (1)
@@ -193,6 +194,21 @@ In `variables-core.tf`.
 | `app_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the app environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
 | `workers_subnet_id` | `string` | `null` | On an injected network (aca_subnet_id), the id of the workers environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
 
+## Add-on environments (ADR 0120 §4)
+
+In `variables-core.tf`.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `split_processing` | `bool` | `false` | Whether the install gets the core and outbound Container Apps environments (ADR 0120 §4), each on a subnet of its own beside the front, app and workers environments. |
+| `extensions` | `bool` | `false` | Whether the install gets an extension Container Apps environment of its own (ADR 0120 §4 and §7, ADR 0122 §6.2), so extension code never shares an environment with Masterly's. |
+| `core_subnet_prefix` | `string` | `null` | With split_processing, an explicit CIDR of the core environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `outbound_subnet_prefix` | `string` | `null` | With split_processing, an explicit CIDR of the outbound environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `extension_subnet_prefix` | `string` | `null` | With extensions, an explicit CIDR of the extension environment's subnet, /27 or larger, inside vnet_address_space and clear of every other subnet. |
+| `core_subnet_id` | `string` | `null` | With split_processing on an injected network (aca_subnet_id), the id of the core environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+| `outbound_subnet_id` | `string` | `null` | With split_processing on an injected network (aca_subnet_id), the id of the outbound environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+| `extension_subnet_id` | `string` | `null` | With extensions on an injected network (aca_subnet_id), the id of the extension environment's subnet: /27 or larger, delegated to Microsoft.App/environments, in the same virtual network as aca_subnet_id. |
+
 ## Async bus (ADR 0029)
 
 In `variables-core.tf`.
@@ -260,8 +276,8 @@ In `variables-environment.tf`.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `environment_private_dns_enabled` | `bool` | `true` | Whether the module creates the private DNS that resolves the front, app and workers Container Apps environments inside the VNet. |
-| `environment_zone_redundant` | `bool` | `false` | Whether the front, app and workers Container Apps environments are zone-redundant: Azure spreads each environment's infrastructure and its apps' replicas across the region's availability zones, so an app keeps running... |
+| `environment_private_dns_enabled` | `bool` | `true` | Whether the module creates the private DNS that resolves the front, app and workers Container Apps environments, and core, outbound and extension with their add-ons, inside the VNet. |
+| `environment_zone_redundant` | `bool` | `false` | Whether the front, app and workers Container Apps environments, and with split_processing the core and outbound environments, are zone-redundant: Azure spreads each environment's infrastructure and its apps' replicas... |
 | `retire_runtime_environment` | `bool` | `false` | Whether to delete aca-<name_prefix>, the Container Apps environment the apps ran in before the front, app and workers environments, once nothing runs in it. |
 
 ## Images and registry pull credential

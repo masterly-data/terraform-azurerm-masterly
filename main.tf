@@ -70,6 +70,27 @@ locals {
     workers = cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, 7)
   }
 
+  # The add-on environment subnets (ADR 0120 §4): core and outbound with split_processing, extension
+  # with extensions. Kept apart from the baseline three, whose all-or-none rules stay as they are,
+  # and never derived without their add-on, so an install with both off plans no change. With an
+  # add-on on, an explicit prefix wins; with none, a first VNet prefix of /20 or larger derives the
+  # /24 at index 8, 9 or 10, clear of the derived layout above. A key with neither is null, and the
+  # plan refuses it (network.tf) rather than leave the add-on without its subnet.
+  add_on_keys = concat(var.split_processing ? ["core", "outbound"] : [], var.extensions ? ["extension"] : [])
+  add_on_subnet_prefix_inputs = {
+    core      = var.core_subnet_prefix
+    outbound  = var.outbound_subnet_prefix
+    extension = var.extension_subnet_prefix
+  }
+  add_on_subnet_index = { core = 8, outbound = 9, extension = 10 }
+  add_on_subnet_candidates = local.inject_network ? {} : {
+    for k in local.add_on_keys : k => (
+      local.add_on_subnet_prefix_inputs[k] != null ? local.add_on_subnet_prefix_inputs[k] :
+      local.vnet_prefix_bits <= 20 ? cidrsubnet(var.vnet_address_space[0], 24 - local.vnet_prefix_bits, local.add_on_subnet_index[k]) : null
+    )
+  }
+  add_on_subnets_missing = [for k, p in local.add_on_subnet_candidates : k if p == null]
+
   # Every subnet the module would carve, and which of them overlap another. Terraform has no
   # CIDR-contains function: two prefixes overlap exactly when their network addresses agree at
   # the shorter of their two lengths, and a prefix lies inside another when it is at least as
@@ -79,6 +100,7 @@ locals {
     for k, p in merge(
       { aca = local.aca_subnet_prefix, private_endpoints = local.private_endpoints_subnet_prefix },
       local.env_subnet_candidates,
+      local.add_on_subnet_candidates,
     ) : k => p if p != null
   }
   subnet_layout_overlaps = toset(flatten([
@@ -101,6 +123,16 @@ locals {
       )
     ])
   ])
+  add_on_subnets_outside_vnet = toset([
+    for k, p in local.add_on_subnet_candidates : k
+    if p != null && !anytrue([
+      for v in var.vnet_address_space : try(
+        tonumber(split("/", p)[1]) >= tonumber(split("/", v)[1]) &&
+        cidrhost("${cidrhost(p, 0)}/${split("/", v)[1]}", 0) == cidrhost(v, 0),
+        false
+      )
+    ])
+  ])
 
   # Created only when the module owns the network and all three prefixes are known and clear of
   # every other subnet. Partial explicit prefixes are refused by the variables' validations,
@@ -112,7 +144,18 @@ locals {
     length(setintersection(local.subnet_layout_overlaps, ["front", "app", "workers"])) == 0 &&
     length(local.env_subnets_outside_vnet) == 0
   )
-  env_subnet_prefixes = { for k, p in local.env_subnet_candidates : k => p if local.create_env_subnets }
+  # The add-on subnets on the same terms, and only beside the three: an add-on whose subnets cannot
+  # be made is refused at plan (network.tf and main.tf), never left half-built.
+  create_add_on_subnets = (
+    local.create_env_subnets &&
+    length(local.add_on_subnets_missing) == 0 &&
+    length(setintersection(local.subnet_layout_overlaps, local.add_on_keys)) == 0 &&
+    length(local.add_on_subnets_outside_vnet) == 0
+  )
+  env_subnet_prefixes = merge(
+    { for k, p in local.env_subnet_candidates : k => p if local.create_env_subnets },
+    { for k, p in local.add_on_subnet_candidates : k => p if local.create_add_on_subnets },
+  )
 
   # --- Network: create the VNet, or join one the platform team already owns -------------
   # Three topologies the module has to serve without a fork (docs/networking.md):
@@ -140,20 +183,39 @@ locals {
     workers = var.workers_subnet_id
   }
   env_subnet_ids_given = compact(values(local.env_subnet_id_inputs))
+
+  # The add-on subnets on an injected spoke: core_subnet_id and outbound_subnet_id with
+  # split_processing, extension_subnet_id with extensions. They count among the injected ids, so
+  # the uniqueness and same-VNet preconditions cover them as well.
+  add_on_subnet_id_inputs = {
+    core      = var.core_subnet_id
+    outbound  = var.outbound_subnet_id
+    extension = var.extension_subnet_id
+  }
+  add_on_subnet_ids_given = compact(values(local.add_on_subnet_id_inputs))
   injected_subnet_ids = [
-    for id in concat(compact([var.aca_subnet_id, var.private_endpoints_subnet_id]), local.env_subnet_ids_given) : lower(id)
+    for id in concat(compact([var.aca_subnet_id, var.private_endpoints_subnet_id]), local.env_subnet_ids_given, local.add_on_subnet_ids_given) : lower(id)
   ]
 
-  # What the outputs publish: the three subnets' ids and prefixes, null where the install has
-  # no such subnet or, on an injected spoke, where the module cannot know the prefix.
-  env_subnet_ids = {
-    for k in ["front", "app", "workers"] : k => (
-      local.inject_network ? local.env_subnet_id_inputs[k] :
-      local.create_env_subnets ? azurerm_subnet.environment[k].id : null
-    )
-  }
+  # What the outputs publish: the subnets' ids and prefixes, null where the install has no such
+  # subnet or, on an injected spoke, where the module cannot know the prefix. The add-on keys appear
+  # only with their add-on on.
+  env_subnet_ids = merge(
+    {
+      for k in ["front", "app", "workers"] : k => (
+        local.inject_network ? local.env_subnet_id_inputs[k] :
+        local.create_env_subnets ? azurerm_subnet.environment[k].id : null
+      )
+    },
+    {
+      for k in local.add_on_keys : k => (
+        local.inject_network ? local.add_on_subnet_id_inputs[k] :
+        local.create_add_on_subnets ? azurerm_subnet.environment[k].id : null
+      )
+    },
+  )
   env_subnet_published_prefixes = {
-    for k in ["front", "app", "workers"] : k => try(local.env_subnet_prefixes[k], null)
+    for k in concat(["front", "app", "workers"], local.add_on_keys) : k => try(local.env_subnet_prefixes[k], null)
   }
 
   # --- Data residency: check the promise against where the resources actually land ------
@@ -447,17 +509,52 @@ resource "azurerm_resource_group" "aca" {
 
     precondition {
       condition     = length(distinct(local.injected_subnet_ids)) == length(local.injected_subnet_ids)
-      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id must be three different subnets, and none of them may be aca_subnet_id or private_endpoints_subnet_id: each environment's subnet carries its own inbound rules, and private endpoints cannot sit in a delegated subnet."
+      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id must be three different subnets, and none of them may be aca_subnet_id or private_endpoints_subnet_id: each environment's subnet carries its own inbound rules, and private endpoints cannot sit in a delegated subnet. The same holds for core_subnet_id, outbound_subnet_id and extension_subnet_id: each must differ from every other subnet id."
     }
 
     # A conditional, not `||`: Terraform before 1.12 evaluates both operands of `||`, and
     # lower(null) would then error instead of leaving the precondition above to refuse it.
     precondition {
       condition = var.aca_subnet_id == null ? true : alltrue([
-        for id in local.env_subnet_ids_given :
+        for id in concat(local.env_subnet_ids_given, local.add_on_subnet_ids_given) :
         lower(try(regex("^(.*)/subnets/[^/]+$", id)[0], id)) == lower(try(regex("^(.*)/subnets/[^/]+$", var.aca_subnet_id)[0], var.aca_subnet_id))
       ])
-      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id must be subnets of the same virtual network as aca_subnet_id: the install's private DNS zones are linked to that network, and its private endpoints answer only to callers that resolve them."
+      error_message = "front_subnet_id, app_subnet_id and workers_subnet_id (and core_subnet_id, outbound_subnet_id and extension_subnet_id where set) must be subnets of the same virtual network as aca_subnet_id: the install's private DNS zones are linked to that network, and its private endpoints answer only to callers that resolve them."
+    }
+
+    # The add-on environments (ADR 0120 §4). Their inputs mean nothing without the add-on, and an
+    # add-on means nothing without the subnets it runs on, so each half is refused without the other.
+    precondition {
+      condition = (
+        (var.split_processing || alltrue([for v in [var.core_subnet_prefix, var.outbound_subnet_prefix, var.core_subnet_id, var.outbound_subnet_id] : v == null])) &&
+        (var.extensions || (var.extension_subnet_prefix == null && var.extension_subnet_id == null))
+      )
+      error_message = "core_subnet_prefix, outbound_subnet_prefix, core_subnet_id and outbound_subnet_id are the subnets of split_processing, and extension_subnet_prefix and extension_subnet_id that of extensions: set split_processing or extensions to true, or leave its subnet inputs unset."
+    }
+
+    precondition {
+      condition     = length(local.add_on_subnet_ids_given) == 0 || var.aca_subnet_id != null
+      error_message = "core_subnet_id, outbound_subnet_id and extension_subnet_id join an existing network, so they need aca_subnet_id and private_endpoints_subnet_id beside them. On a network the module builds, set core_subnet_prefix, outbound_subnet_prefix and extension_subnet_prefix instead, or let a VNet of /20 or larger derive them."
+    }
+
+    precondition {
+      condition = !local.inject_network || (
+        (!var.split_processing || (var.core_subnet_id != null && var.outbound_subnet_id != null)) &&
+        (!var.extensions || var.extension_subnet_id != null)
+      )
+      error_message = "On an injected network (aca_subnet_id) split_processing needs core_subnet_id and outbound_subnet_id, and extensions needs extension_subnet_id: the module creates no subnet there, and each add-on environment needs one of its own. Set the ids, or leave the add-on off."
+    }
+
+    # Read from the environment keys, which are known at plan. On a network the module builds, an
+    # add-on subnet that overlaps another also removes the baseline subnet it overlaps from the
+    # plan; the VNet's precondition names that overlap (network.tf), so it is not reported twice.
+    precondition {
+      condition = (
+        length(local.add_on_keys) == 0 ||
+        length(setsubtract(["front", "app", "workers"], local.container_app_environment_keys)) == 0 ||
+        length(setintersection(local.subnet_layout_overlaps, local.add_on_keys)) > 0
+      )
+      error_message = "split_processing and extensions add environments beside the front, app and workers environments, and this install does not have all three: environment_subnet_ids is missing one or more of them. On an injected network set front_subnet_id, app_subnet_id and workers_subnet_id; on a network the module builds set front_subnet_prefix, app_subnet_prefix and workers_subnet_prefix, or use a VNet of /21 or larger. Or leave split_processing and extensions false."
     }
 
     # Read from the environment keys, which are known at plan, never from a subnet id.

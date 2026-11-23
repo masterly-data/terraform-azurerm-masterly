@@ -49,6 +49,23 @@ resource "azurerm_virtual_network" "this" {
       condition     = !local.env_subnet_prefixes_given || length(setintersection(local.subnet_layout_overlaps, ["front", "app", "workers"])) == 0
       error_message = "The environment subnet prefixes must not overlap each other, the runtime subnet (aca_subnet_prefix) or the private-endpoint subnet (private_endpoints_subnet_prefix); overlapping: ${join(", ", sort(local.subnet_layout_overlaps))}. Each environment's subnet carries its own inbound rules, so no two subnets may share an address."
     }
+
+    # The add-on subnets (split_processing, extensions) are refused whether explicit or derived: an
+    # add-on someone turned on must get its subnets or stop the plan, never be skipped.
+    precondition {
+      condition     = length(local.add_on_subnets_missing) == 0
+      error_message = "split_processing and extensions each need subnets of their own, and this VNet cannot derive them: ${join(", ", sort(local.add_on_subnets_missing))}. Set core_subnet_prefix and outbound_subnet_prefix (split_processing) or extension_subnet_prefix (extensions), each /27 or larger and clear of every other subnet, or use a first vnet_address_space prefix of /20 or larger, from which the module derives the /24s at index 8, 9 and 10."
+    }
+
+    precondition {
+      condition     = length(local.add_on_subnets_outside_vnet) == 0
+      error_message = "The add-on environment subnet prefixes must lie inside vnet_address_space; outside it: ${join(", ", sort(local.add_on_subnets_outside_vnet))}."
+    }
+
+    precondition {
+      condition     = length(setintersection(local.subnet_layout_overlaps, local.add_on_keys)) == 0
+      error_message = "The add-on environment subnets must not overlap each other or any other subnet of the install (snet-aca, the private-endpoint subnet, front, app and workers); overlapping: ${join(", ", sort(local.subnet_layout_overlaps))}. Each environment's subnet carries its own inbound rules, so no two subnets may share an address. Set core_subnet_prefix, outbound_subnet_prefix or extension_subnet_prefix to a free range."
+    }
   }
 }
 
@@ -148,9 +165,31 @@ resource "azurerm_network_security_group" "aca" {
   # Port 80 is admitted beside 443 because Azure's edge answers it with a 301 to https://
   # (see ingress_allow_insecure on the api). Dropping it here would turn that redirect into a
   # timeout for anyone who typed the host without a scheme.
+  #
+  # VirtualNetwork covers the extension subnet, and extension code reaches nothing of
+  # Masterly's (ADR 0120 §7, ADR 0122 §6.2), so with the extensions add-on a deny of that
+  # subnet comes first. 100 is the lowest priority Azure accepts, so the deny takes it and this
+  # rule moves to 105 — only with the add-on, so an install without it plans no change here.
+  dynamic "security_rule" {
+    for_each = local.extension_subnet_denied ? { extension = local.env_subnet_prefixes["extension"] } : {}
+
+    content {
+      name                       = "deny-from-extension-subnet"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Deny"
+      protocol                   = "*"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = "*"
+      destination_port_range     = "*"
+      description                = "The extension environment reaches nothing of Masterly's, whatever the rules below admit."
+    }
+  }
+
   security_rule {
     name                       = "allow-app-ingress"
-    priority                   = 100
+    priority                   = local.extension_subnet_denied ? 105 : 100
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
@@ -279,6 +318,27 @@ resource "azurerm_network_security_group" "private_endpoints" {
     }
   }
 
+  # ADR 0120 §4: with split_processing, the core and outbound environments are the workers
+  # environment split in two, and both reach the data plane on the same ports. Beside the rules
+  # above, with priorities of their own, so an install without the add-on plans no change here. The
+  # extension subnet never appears: extension code has no database and no Masterly identity (§7).
+  dynamic "security_rule" {
+    for_each = { for k in ["core", "outbound"] : k => local.env_subnet_prefixes[k] if contains(keys(local.env_subnet_prefixes), k) }
+
+    content {
+      name                       = "allow-data-plane-from-${security_rule.key}-subnet"
+      priority                   = security_rule.key == "core" ? 140 : 150
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = local.private_endpoints_subnet_prefix
+      destination_port_ranges    = local.private_endpoint_ports
+      description                = "Postgres, Key Vault, the Redis session registry and a private Service Bus namespace, from the ${security_rule.key} environment's subnet."
+    }
+  }
+
   security_rule {
     name                       = "deny-all-inbound"
     priority                   = 4000
@@ -324,7 +384,16 @@ locals {
       description = "HTTPS from the front environment's subnet only."
     }]
     workers = []
+
+    # The add-on environments (ADR 0120 §4) admit no caller: nothing they run serves a request.
+    core      = []
+    outbound  = []
+    extension = []
   }
+
+  # The extension subnet exists on a network the module builds: snet-aca and the front, which may
+  # admit VirtualNetwork, deny it ahead of their ingress rule.
+  extension_subnet_denied = contains(keys(local.env_subnet_prefixes), "extension")
 }
 
 resource "azurerm_network_security_group" "environment" {
@@ -335,12 +404,32 @@ resource "azurerm_network_security_group" "environment" {
   location            = var.location
   tags                = local.tags
 
+  # The front's caller rule may admit VirtualNetwork, which covers the extension subnet: with the
+  # extensions add-on, the same deny as on snet-aca comes first, at 100, and the caller rule moves
+  # to 105.
+  dynamic "security_rule" {
+    for_each = each.key == "front" && local.extension_subnet_denied ? { extension = local.env_subnet_prefixes["extension"] } : {}
+
+    content {
+      name                       = "deny-from-extension-subnet"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Deny"
+      protocol                   = "*"
+      source_address_prefix      = security_rule.value
+      source_port_range          = "*"
+      destination_address_prefix = "*"
+      destination_port_range     = "*"
+      description                = "The extension environment reaches nothing of Masterly's, whatever the rules below admit."
+    }
+  }
+
   dynamic "security_rule" {
     for_each = local.env_subnet_callers[each.key]
 
     content {
       name                       = security_rule.value.name
-      priority                   = 100
+      priority                   = each.key == "front" && local.extension_subnet_denied ? 105 : 100
       direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"

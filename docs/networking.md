@@ -345,7 +345,8 @@ that opens by itself.
 
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
-| 100 | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443 | Reach the apps. 80 carries Azure's 301 to `https://`, so dropping it turns that redirect into a timeout |
+| 100 | Deny | `snet-extension` | any | Only with [`extensions`](#the-add-on-environments) (`deny-from-extension-subnet`): extension code reaches nothing of Masterly's, though `VirtualNetwork` covers its subnet |
+| 100 (105 with `extensions`) | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443 | Reach the apps. 80 carries Azure's 301 to `https://`, so dropping it turns that redirect into a timeout |
 | 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement: the platform's load balancer reaches the environment on the ephemeral range |
 | 120 | Allow | `snet-aca` | any | Container Apps platform requirement: traffic within the infrastructure subnet |
 | 4000 | Deny | any | any | Everything not admitted above |
@@ -358,7 +359,14 @@ that opens by itself.
 | 110 | Allow | `snet-app` | the same ports | The app environment (present with the [environment subnets](#the-environment-subnets)) |
 | 120 | Allow | `snet-workers` | the same ports | The workers environment (likewise) |
 | 130 | Allow | `snet-front` | TCP 443, to the Key Vault private endpoint's address (/32) only | Only with `frontend_environment = "front"` and the vault's private endpoint: `ca-frontend` resolves its vault secret references |
+| 140 | Allow | `snet-core` | the same ports as 100 | The core environment, only with [`split_processing`](#the-add-on-environments) (`allow-data-plane-from-core-subnet`) |
+| 150 | Allow | `snet-outbound` | the same ports as 100 | The outbound environment, likewise (`allow-data-plane-from-outbound-subnet`) |
 | 4000 | Deny | any | any | Everything not admitted above |
+
+`snet-extension` is never a source here, nor of an allow rule on any other Masterly NSG the module
+writes: extension code has no database and no Masterly identity (ADR 0120 §7), so nothing admits it
+to the data plane. Apart from its own group's intra-subnet platform rule, it is the source of the
+deny at 100 on `snet-aca` and on `snet-front` only.
 
 `snet-front` is otherwise never a source here: the front environment is the one that faces your
 users, and the internet when it is external, so it opens no connection to Postgres, PgBouncer,
@@ -484,7 +492,8 @@ its load balancer.
 
 | Priority | Access | Source | Protocol / ports | Why |
 |---|---|---|---|---|
-| 100 | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443, 31080, 31443 | Reach the front environment's apps |
+| 100 | Deny | `snet-extension` | any | Only with [`extensions`](#the-add-on-environments) (`deny-from-extension-subnet`), as on `snet-aca` |
+| 100 (105 with `extensions`) | Allow | `Internet` — or `VirtualNetwork` with `aca_internal_load_balancer = true` | TCP 80, 443, 31080, 31443 | Reach the front environment's apps |
 | 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement |
 | 120 | Allow | `snet-front` | any | Container Apps platform requirement: traffic within the subnet |
 | 4000 | Deny | any | any | Everything not admitted above |
@@ -518,14 +527,84 @@ an empty list admits everyone. To filter at the network instead, put the front b
 Application Gateway with `aca_internal_load_balancer = true`: the rule then admits
 `VirtualNetwork` only.
 
+### The add-on environments
+
+Two add-ons, never a named profile, add environments beside front, app and workers (ADR 0120 §4).
+Both are off by default, and an install with both off plans no change.
+
+- **`split_processing = true`** adds **core** (`aca-<name_prefix>-core` on `snet-core`) and
+  **outbound** (`aca-<name_prefix>-outbound` on `snet-outbound`): the workers environment split in
+  two, so that work which needs only the database and Service Bus runs apart from work that calls
+  out.
+- **`extensions = true`** adds **extension** (`aca-<name_prefix>-extension` on `snet-extension`),
+  so extension code never shares an environment with Masterly's (ADR 0120 §7, ADR 0122 §6.2). The
+  environment carries no certificate identity and no Masterly identity.
+
+Each is a workload-profiles environment declaring the `Consumption` profile, always with an
+internal load balancer, sending its console and system logs to the install's workspace, and with a
+private DNS zone as for the other internal environments. They are created empty: no app or job
+runs in them in this version, and the workers environment stays until the worker pools move
+(MAS-3025).
+
+What each may reach:
+
+| Environment | Reaches | Reached by |
+|---|---|---|
+| core | The private endpoints on the data-plane ports (rule 140 above). Nothing on the internet: your firewall denies its egress | Nothing: the platform's own traffic only |
+| outbound | The private endpoints on the data-plane ports (rule 150 above), and your targets and model endpoints through your firewall | Nothing: the platform's own traffic only |
+| extension | Nothing of Masterly's: no private endpoint, no Masterly environment | Nothing: the platform's own traffic only |
+
+The module writes no outbound rule and no route table for these subnets: `egress_firewall` still
+routes `snet-aca` only. So their egress is narrowed by your firewall or the hub's route table
+(`0.0.0.0/0` to the firewall) attached to them, which denies the internet to core and lets
+outbound reach only the targets you allow (MAS-1771). Attach it before anything runs there.
+
+On a network the module builds, `core_subnet_prefix`, `outbound_subnet_prefix` and
+`extension_subnet_prefix` set the ranges, each /27 or larger, inside `vnet_address_space` and clear
+of every other subnet. Unset, with the add-on on and a first VNet prefix of /20 or larger, the
+module takes the /24s at index 8, 9 and 10 of it: `10.20.8.0/24`, `10.20.9.0/24` and
+`10.20.10.0/24` on the default `10.20.0.0/16`. Nothing is derived without the add-on. The plan
+refuses an add-on whose subnets cannot be made (no prefix and too small a VNet, a prefix that
+overlaps another subnet or lies outside the VNet), an add-on on an install without the front, app
+and workers environments, and a prefix or id set with its add-on off. On an injected network,
+`split_processing` needs `core_subnet_id` and `outbound_subnet_id`, and `extensions` needs
+`extension_subnet_id`, each a subnet of its own in the same VNet as `aca_subnet_id`.
+`environment_subnet_ids`, `environment_subnet_prefixes` and `container_app_environments` gain the
+new keys only with their add-on on.
+
+Each subnet the module builds carries its own NSG, with the platform rows only:
+
+**`snet-core`**, **`snet-outbound`** and **`snet-extension`** (each its own NSG,
+`nsg-<name_prefix>-core`, `-outbound` and `-extension`):
+
+| Priority | Access | Source | Protocol / ports | Why |
+|---|---|---|---|---|
+| 110 | Allow | `AzureLoadBalancer` | TCP 30000-32767 | Container Apps platform requirement |
+| 120 | Allow | the subnet itself | any | Container Apps platform requirement: traffic within the subnet |
+| 4000 | Deny | any | any | Everything not admitted above |
+
+No allow rule on them names `VirtualNetwork` or `Internet`, and no NSG of front, app, workers,
+core or outbound names `snet-extension` as the source of an allow rule. On an internal install
+(`aca_internal_load_balancer = true`) `snet-front` and `snet-aca` admit `VirtualNetwork` on the
+ingress ports, which covers `snet-extension` as it covers every caller on the VNet. So with
+`extensions` on, both carry `deny-from-extension-subnet` at priority 100, the lowest Azure
+accepts, and `allow-app-ingress` moves from 100 to 105 behind it: the extension environment
+reaches neither `ca-frontend`, `ca-edge` nor `ca-api`, whatever `ingress_allowed_cidrs` says.
+Without `extensions` neither rule changes. The deny is there on a public install too, where it
+changes nothing today.
+
 ### Zone redundancy
 
-`environment_zone_redundant = true` makes the front, app and workers environments zone-redundant:
-Azure spreads each environment and its apps' replicas across the region's availability zones, so
-an app keeps running when one zone fails (ADR 0120, 2026-11-20 amendment). It is off by default.
+`environment_zone_redundant = true` makes the front, app and workers environments zone-redundant,
+and with `split_processing` the core and outbound environments too, as the workers environment
+split in two: Azure spreads each environment and its apps' replicas across the region's
+availability zones, so an app keeps running when one zone fails (ADR 0120, 2026-11-20 amendment).
+It is off by default. The extension environment never is, whatever the input says: the amendment
+covers the baseline environments only, and zone redundancy there is a decision for the sandbox
+runtime (MAS-3032).
 
 - **Choose it when you create the install.** Azure fixes zone redundancy when it creates an
-  environment. Turning it on later replaces all three environments and every app in them: the
+  environment. Turning it on later replaces all of these environments and every app in them: the
   apps' FQDNs change, a custom domain's certificate and binding are created again on the new front
   environment, and the apps start on the module's images until CD's release runs again. The new
   front environment has a new `custom_domain_verification_id`: update the `asuid` TXT record to it
@@ -534,13 +613,14 @@ an app keeps running when one zone fails (ADR 0120, 2026-11-20 amendment). It is
   [the subnet sizes above](#the-environment-subnets) hold.
 - **An app needs two replicas to run in two zones.** The plan warns
   (`environment_zone_redundancy_needs_two_replicas`) when `ca-api`, `ca-frontend` or `ca-workers`
-  runs in one of the three environments with a minimum below two. `capacity_profile =
-  "enterprise"` sets two for all three. `ca-edge` is not counted: its minimum is fixed at one
+  runs in the front, app or workers environment with a minimum below two (no app runs in core or
+  outbound yet). `capacity_profile = "enterprise"` sets two for all three apps. `ca-edge` is not counted: its minimum is fixed at one
   replica, so it can run in a single zone and stop with it until it scales out again. No input
   changes that today; an install whose machine clients must survive a zone failure should know it.
-- **It covers the three environments only.** Apps still on `aca-<name_prefix>` are not
-  zone-redundant: move them first (`frontend_environment`, `edge_environment`, `api_environment`,
-  `workers_environment`).
+- **It covers front, app and workers, and core and outbound, only.** Apps still on
+  `aca-<name_prefix>` are not zone-redundant: move them first (`frontend_environment`,
+  `edge_environment`, `api_environment`, `workers_environment`). The extension environment is
+  never zone-redundant.
 - **The database is the other half.** Without `postgres_zone_redundant_ha = true` the Postgres
   server is in one zone, and a zone failure is recovered by a point-in-time restore whatever the
   apps do ([docs/scaling.md](scaling.md#zone-redundant-ha)). An install that must survive a zone
@@ -569,6 +649,20 @@ yours too, and the baseline each should carry is the tables in
   everything else.
 - **your endpoints subnet**: add the app and workers subnets' ranges as sources on the
   data-plane ports, beside `snet-aca`'s, and never the front subnet's.
+
+With [the add-ons](#the-add-on-environments), `core_subnet_id`, `outbound_subnet_id` and
+`extension_subnet_id` are yours as well, and the module attaches no NSG to them either:
+
+- **core**, **outbound** and **extension**: `AzureLoadBalancer` on TCP 30000-32767; any traffic
+  within the subnet; deny everything else. Never `VirtualNetwork`.
+- **your endpoints subnet**: add the core and outbound subnets' ranges as sources on the
+  data-plane ports. **Never add the extension subnet's range**, and never admit it to the front,
+  app, workers, core or outbound subnets either: the network is the only thing isolating extension
+  code from Masterly's data plane (ADR 0122). A rule sourced from `VirtualNetwork` admits it too:
+  where your front or `snet-aca` subnet admits `VirtualNetwork`, put a deny of the extension
+  subnet's range ahead of that rule, as the module does on a network it builds.
+- **egress**: the hub's route table on core and outbound (`0.0.0.0/0` to your firewall), with the
+  firewall denying core the internet and allowing outbound only your targets and model endpoints.
 
 **How big a spoke.** Each environment subnet takes /27 at the least. A workload-profiles
 environment uses one address per node and per replica, so a /24 each leaves room to scale.
