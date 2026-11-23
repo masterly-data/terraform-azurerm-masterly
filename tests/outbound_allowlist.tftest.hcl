@@ -730,8 +730,30 @@ run "outbound_allowlist_no_key_vault_or_service_bus_in_production" {
 run "outbound_allowlist_admin_database_host_on_caj_migrate_only" {
   command = plan
 
+  # migrations = "job" is refused in demo, so this is the production shape of the run above, with
+  # the job moved to the workers environment: ca-api and ca-workers stay on aca.
   variables {
-    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    mode                        = "production"
+    identity_binding            = "oidc"
+    oidc_allowed_issuers        = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience               = "api-client-id"
+    oidc_jwks_uri               = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id              = "bff-client-id"
+    oidc_client_secret          = "s3cret"
+    oidc_authority              = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri           = "https://app.example.com/api/auth/callback"
+    license_token               = "eyJ.fake.jwt"
+    license_public_jwk          = "{\"kty\":\"EC\"}"
+    initial_owner_email         = "owner@example.com"
+    enable_key_vault            = true
+    enable_redis                = true
+    redis_offering              = "managed"
+    enable_workers              = true
+    enable_service_bus          = true
+    servicebus_sku              = "Premium"
+    api_min_replicas            = 2
+    api_max_replicas            = 3
+    frontend_min_replicas       = 1
     migrations                  = "job"
     migrate_job_environment     = "workers"
     external_database_url       = "postgres://u:p@db.example.com:5432/m"
