@@ -755,7 +755,8 @@ locals {
 
   # scheme://[userinfo@]host[:port][/path][?query], read for its host and port only, never its
   # userinfo. A URL with an @ after its authority (a password holding an unencoded /, ? or #)
-  # matches nothing, so it gives no entry rather than a fragment of the password.
+  # matches nothing, so it gives no entry rather than a fragment of the password. An IPv6 host
+  # matches with its brackets, which the entries trim: a firewall rule names the bare address.
   outbound_url_pattern = "^[A-Za-z][A-Za-z0-9+.-]*://(?:[^/?#]*@)?([^/?#:@\\[\\]]+|\\[[^\\]/?#@]+\\])(?::([0-9]{1,5}))?(?:[/?#][^@]*)?$"
 
   outbound_edge_docker_hub = local.edge_enabled ? var.edge.image == null : false
@@ -782,8 +783,8 @@ locals {
 
   outbound_url_entries = {
     for name, url in local.outbound_url_inputs : name => {
-      "fqdn:${lower(regex(local.outbound_url_pattern, url)[0])}:${coalesce(regex(local.outbound_url_pattern, url)[1], "443")}" = {
-        destination = lower(regex(local.outbound_url_pattern, url)[0])
+      "fqdn:${trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]")}:${coalesce(regex(local.outbound_url_pattern, url)[1], "443")}" = {
+        destination = trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]")
         kind        = "fqdn"
         protocol    = "TCP"
         ports       = [coalesce(regex(local.outbound_url_pattern, url)[1], "443")]
@@ -800,8 +801,8 @@ locals {
       external_database_url       = var.external_database_url
       external_database_admin_url = local.migrate_job ? var.external_database_admin_url : null
       } : name => {
-      "fqdn:${nonsensitive(lower(regex(local.outbound_url_pattern, url)[0]))}:${nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "5432"))}" = {
-        destination = nonsensitive(lower(regex(local.outbound_url_pattern, url)[0]))
+      "fqdn:${nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))}:${nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "5432"))}" = {
+        destination = nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))
         kind        = "fqdn"
         protocol    = "TCP"
         ports       = [nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "5432"))]

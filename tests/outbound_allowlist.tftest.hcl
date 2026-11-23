@@ -676,3 +676,194 @@ run "outbound_allowlist_key_vault_only_when_enabled" {
     error_message = "With enable_key_vault outside production the vault must be listed where the apps run."
   }
 }
+
+# In production the vault and a Premium namespace are reached over their private endpoints: no
+# subnet lists either, while the database the install still reaches over the network stays.
+run "outbound_allowlist_no_key_vault_or_service_bus_in_production" {
+  command = plan
+
+  # The production example's shape, as in sizing.tftest.hcl.
+  variables {
+    mode                  = "production"
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    license_token         = "eyJ.fake.jwt"
+    license_public_jwk    = "{\"kty\":\"EC\"}"
+    initial_owner_email   = "owner@example.com"
+    enable_key_vault      = true
+    enable_redis          = true
+    redis_offering        = "managed"
+    enable_workers        = true
+    enable_service_bus    = true
+    servicebus_sku        = "Premium"
+    api_min_replicas      = 2
+    api_max_replicas      = 3
+    frontend_min_replicas = 1
+    external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    migrations            = "job"
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for k, l in output.outbound_allowlist : [
+        for e in l : !strcontains(e.destination, "vault.azure.net") && !strcontains(e.destination, "servicebus.windows.net")
+      ]
+    ]))
+    error_message = "In production no subnet may list the install's Key Vault or its Premium Service Bus namespace: both are reached over private endpoints."
+  }
+
+  assert {
+    condition     = anytrue([for k, l in output.outbound_allowlist : contains([for e in l : e.destination], "pg.example.com")])
+    error_message = "In production the BYO-DB host must still be listed."
+  }
+}
+
+# Threat (secret disclosure): the migrate job's admin DSN carries the migration role's
+# credentials. Only its host and port leave it, on the subnet caj-migrate runs on, and caj-migrate
+# lists the admin host instead of external_database_url's.
+run "outbound_allowlist_admin_database_host_on_caj_migrate_only" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs       = ["203.0.113.7/32"]
+    migrations                  = "job"
+    migrate_job_environment     = "workers"
+    external_database_url       = "postgres://u:p@db.example.com:5432/m"
+    external_database_admin_url = "postgres://admin:pw@admin-db.example.com:6432/m"
+  }
+
+  assert {
+    condition = jsonencode(distinct(flatten([
+      for k, l in output.outbound_allowlist : [
+        for e in l : "${k}=${e.destination}:${join(",", e.ports)}"
+        if strcontains(jsonencode(e), "admin-db.example.com") || contains(e.ports, "6432")
+      ]
+    ]))) == jsonencode(["workers=admin-db.example.com:6432"])
+    error_message = "external_database_admin_url must give admin-db.example.com:6432 on the subnet caj-migrate runs on (workers) and nowhere else."
+  }
+
+  assert {
+    condition     = alltrue([for e in output.outbound_allowlist["workers"] : e.source == "external_database_admin_url" if e.destination == "admin-db.example.com"])
+    error_message = "The admin database entry must name external_database_admin_url as its source."
+  }
+
+  # caj-migrate is the workers subnet's only workload here, and it connects as the admin role.
+  assert {
+    condition = (
+      !contains([for e in output.outbound_allowlist["workers"] : e.destination], "db.example.com") &&
+      contains([for e in output.outbound_allowlist["aca"] : e.destination], "db.example.com")
+    )
+    error_message = "With external_database_admin_url, caj-migrate must list the admin host, not external_database_url's, which stays with ca-api."
+  }
+
+  # The Learn sources carry https://, so the check is on the DSN's own scheme and userinfo.
+  assert {
+    condition = (
+      !strcontains(jsonencode(output.outbound_allowlist), "admin:pw") &&
+      !strcontains(jsonencode(output.outbound_allowlist), "u:p") &&
+      !strcontains(jsonencode(output.outbound_allowlist), "postgres://") &&
+      !strcontains(jsonencode(output.outbound_allowlist), "pw@")
+    )
+    error_message = "The allowlist must carry no scheme or userinfo from external_database_admin_url or external_database_url."
+  }
+}
+
+# An IPv6 host loses the URL's brackets, so a rule built from the entry names the bare address.
+run "outbound_allowlist_database_ipv6_host_without_brackets" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    external_database_url = "postgres://u:p@[2001:DB8::1]:5432/m"
+  }
+
+  assert {
+    condition = jsonencode(distinct(flatten([
+      for k, l in output.outbound_allowlist : [
+        for e in l : "${e.destination}|${join(",", e.ports)}" if e.source == "external_database_url"
+      ]
+    ]))) == jsonencode(["2001:db8::1|5432"])
+    error_message = "A bracketed IPv6 database host must give the bare, lower-case address on its port."
+  }
+}
+
+# The certificate vaults the custom domains name sit with the app each certificate is bound to.
+run "outbound_allowlist_certificate_vaults_follow_their_apps" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    frontend_environment  = "front"
+    edge_environment      = "front"
+    api_environment       = "app"
+    edge                  = { image = "masterly.azurecr.io/mirror/envoy:v1.40.2@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
+    frontend_custom_domain = {
+      hostname                        = "masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-front-certs.vault.azure.net/secrets/masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-front-certs"
+    }
+    edge_custom_domain = {
+      hostname                        = "api.masterly.example.com"
+      certificate_key_vault_secret_id = "https://kv-edge-certs.vault.azure.net/secrets/api-masterly-example-com"
+      key_vault_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-customer-certs/providers/Microsoft.KeyVault/vaults/kv-edge-certs"
+    }
+  }
+
+  assert {
+    condition = (
+      contains([for e in output.outbound_allowlist["front"] : "${e.destination}|${e.source}"], "kv-front-certs.vault.azure.net|frontend_custom_domain") &&
+      contains([for e in output.outbound_allowlist["front"] : "${e.destination}|${e.source}"], "kv-edge-certs.vault.azure.net|edge_custom_domain")
+    )
+    error_message = "Each custom domain's certificate vault must be listed on the subnet its app runs on (front), naming its input."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for k, l in output.outbound_allowlist : [for e in l : !strcontains(e.destination, "-certs.vault.azure.net")] if k != "front"
+    ]))
+    error_message = "The certificate vaults must be listed only where ca-frontend and ca-edge run."
+  }
+}
+
+# With edge.jwt_authn ca-edge fetches the tenant's signing keys. They are on login.microsoftonline.com,
+# which the platform set already lists, so the subnet keeps the one platform entry for that host.
+run "outbound_allowlist_edge_jwt_authn_reaches_the_signing_keys" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = { jwt_authn = { audiences = ["api://masterly-api"] } }
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition     = contains([for e in values(local.outbound_workload_entries["ca-edge"]) : "${e.destination}|${e.source}"], "login.microsoftonline.com|oidc_jwks_uri")
+    error_message = "With edge.jwt_authn, ca-edge must reach the signing keys' host."
+  }
+
+  assert {
+    condition     = length([for e in output.outbound_allowlist["aca"] : e if e.destination == "login.microsoftonline.com"]) == 1
+    error_message = "The signing keys' host and the platform set's Entra ID entry must be one entry on ca-edge's subnet."
+  }
+}
+
+run "outbound_allowlist_no_signing_keys_on_ca_edge_without_jwt_authn" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition     = alltrue([for e in values(local.outbound_workload_entries["ca-edge"]) : e.source != "oidc_jwks_uri"])
+    error_message = "Without edge.jwt_authn, ca-edge must not list the signing keys."
+  }
+}

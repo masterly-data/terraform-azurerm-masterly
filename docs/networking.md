@@ -312,7 +312,8 @@ install's plan shows those destinations as known after apply.
 The output carries hosts and ports only: never a URL's path or credentials, and the database
 entry is the host and port parsed out of `external_database_url` (5432 when the URL names no
 port). A host is written as the URL writes it, so a URL that names an IP address gives that
-address, with `kind = "fqdn"`: admit it as an address. A URL whose password holds an unencoded
+address, with `kind = "fqdn"`: admit it as an address. An IPv6 address loses the URL's brackets
+(`[2001:db8::1]` gives `2001:db8::1`). A URL whose password holds an unencoded
 `/`, `?` or `#` cannot be split safely and gives no entry; percent-encode the password, or admit
 the host yourself. Neither this output nor the `deployment_stamp` output is sensitive.
 
