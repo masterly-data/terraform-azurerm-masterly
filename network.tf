@@ -731,9 +731,11 @@ locals {
 
   # The registry the apps pull from: the login server and the hosts the image references name.
   # None with registry_private_endpoint, which keeps the pull on the registry's private endpoint.
-  outbound_registry_hosts = local.registry_private_endpoint ? [] : distinct(compact([
-    for r in [local.registry_server, local.api_image, local.frontend_image] : lower(split("/", r)[0])
-  ]))
+  # Normalize implicit HTTPS ports before deduplicating registry authorities.
+  outbound_registry_hosts = local.registry_private_endpoint ? [] : distinct([
+    for h in compact([for r in [local.registry_server, local.api_image, local.frontend_image] : lower(split("/", r)[0])]) :
+    "${split(":", h)[0]}:${try(split(":", h)[1], "443")}"
+  ])
 
   outbound_registry_entries = merge(
     {
@@ -746,7 +748,7 @@ locals {
         source      = "registry_location, api_image and frontend_image; ${local.outbound_registry_source}"
       }
     },
-    anytrue([for h in local.outbound_registry_hosts : endswith(h, ".azurecr.io")]) ? local.outbound_acr_data_entries : {},
+    anytrue([for h in local.outbound_registry_hosts : endswith(split(":", h)[0], ".azurecr.io")]) ? local.outbound_acr_data_entries : {},
   )
 
   # Where an Azure container registry serves its image layers, beside its login server.
@@ -805,11 +807,11 @@ locals {
   # and parse-success booleans, keeping the URL itself (including path and userinfo) sensitive.
   outbound_url_entries = {
     for name, url in local.outbound_url_inputs : name => {
-      "fqdn:${nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))}:${nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "443"))}" = {
+      "fqdn:${nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))}:${nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], startswith(lower(url), "http://") ? "80" : "443"))}" = {
         destination = nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))
         kind        = "fqdn"
         protocol    = "TCP"
-        ports       = [nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "443"))]
+        ports       = [nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], startswith(lower(url), "http://") ? "80" : "443"))]
         why         = local.outbound_url_why[name]
         source      = name
       }
@@ -894,7 +896,7 @@ locals {
         source      = "edge.image"
       }
     },
-    try(endswith(local.outbound_edge_image_host, ".azurecr.io"), false) ? local.outbound_acr_data_entries : {},
+    try(endswith(split(":", local.outbound_edge_image_host)[0], ".azurecr.io"), false) ? local.outbound_acr_data_entries : {},
   )
 
   outbound_control_plane_entries = merge(

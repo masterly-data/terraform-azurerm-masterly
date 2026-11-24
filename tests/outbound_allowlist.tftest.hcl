@@ -259,6 +259,8 @@ run "outbound_allowlist_registry_on_every_subnet" {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     split_processing      = true
     extensions            = true
+    api_image             = "masterly.azurecr.io:443/release/api:v0.138.0"
+    frontend_image        = "masterly.azurecr.io:443/release/frontend:v0.0.0"
   }
 
   assert {
@@ -267,7 +269,30 @@ run "outbound_allowlist_registry_on_every_subnet" {
       contains([for e in l : e.destination], "*.data.azurecr.io") &&
       contains([for e in l : e.destination], "*.blob.core.windows.net")
     ])
-    error_message = "Without registry_private_endpoint every subnet must list the registry's login server and its data endpoints."
+    error_message = "Without registry_private_endpoint every subnet must list the registry's login server and its data endpoints, including with explicit HTTPS ports."
+  }
+}
+
+run "outbound_allowlist_normalizes_registry_ports_and_edge_acr" {
+  command = plan
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    api_image             = "mirror.example.com:443/release/api:v0.138.0"
+    frontend_image        = "mirror.example.com/release/frontend:v0.0.0"
+    edge                  = { image = "mirror.azurecr.io:443/envoyproxy/envoy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    frontend_environment  = "front"
+    edge_environment      = "front"
+    api_environment       = "app"
+  }
+  assert {
+    condition = alltrue([for subnet, entries in output.outbound_allowlist :
+      length([for e in entries : e if e.destination == "mirror.example.com"]) == 1 &&
+      alltrue([for e in entries : join(",", e.ports) == "443" if e.destination == "mirror.example.com"]) &&
+      alltrue([for host in ["mirror.azurecr.io", "*.data.azurecr.io", "*.blob.core.windows.net"] :
+        contains([for e in entries : e.destination], host) == (subnet == "front")
+      ])
+    ])
+    error_message = "Implicit and explicit HTTPS registry ports must collapse to one entry; an explicit-port edge ACR must retain its data endpoints on front only."
   }
 }
 
@@ -459,12 +484,12 @@ run "outbound_allowlist_idp_hosts_follow_their_workloads" {
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     identity_binding      = "oidc"
-    oidc_allowed_issuers  = "https://idp.example.com/tenant/v2.0"
+    oidc_allowed_issuers  = "http://idp.example.com:8080/tenant/v2.0"
     oidc_audience         = "api-client-id"
-    oidc_jwks_uri         = "https://keys.example.com/tenant/discovery/keys"
+    oidc_jwks_uri         = sensitive("http://keys.example.com/tenant/discovery/keys")
     oidc_client_id        = "bff-client-id"
     oidc_client_secret    = "s3cret"
-    oidc_authority        = "https://idp.example.com/tenant/v2.0"
+    oidc_authority        = sensitive("http://idp.example.com:8080/tenant/v2.0")
     oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
     frontend_environment  = "front"
     edge_environment      = "front"
@@ -476,9 +501,12 @@ run "outbound_allowlist_idp_hosts_follow_their_workloads" {
       contains([for e in output.outbound_allowlist["front"] : e.destination], "idp.example.com") &&
       !contains([for e in output.outbound_allowlist["front"] : e.destination], "keys.example.com") &&
       contains([for e in output.outbound_allowlist["app"] : e.destination], "keys.example.com") &&
-      !contains([for e in output.outbound_allowlist["app"] : e.destination], "idp.example.com")
+      !contains([for e in output.outbound_allowlist["app"] : e.destination], "idp.example.com") &&
+      !issensitive(output.outbound_allowlist) &&
+      one([for e in output.outbound_allowlist["front"] : join(",", e.ports) if e.destination == "idp.example.com"]) == "8080" &&
+      one([for e in output.outbound_allowlist["app"] : join(",", e.ports) if e.destination == "keys.example.com"]) == "80"
     )
-    error_message = "The issuer's host must sit with ca-frontend (front) and the signing keys' host with ca-api (app)."
+    error_message = "The issuer's host must sit with ca-frontend (front) and the signing keys' host with ca-api (app), preserving explicit ports and defaulting HTTP to 80."
   }
 }
 
