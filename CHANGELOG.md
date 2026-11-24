@@ -25,6 +25,106 @@ inventing one now would be exactly the retyped-value failure the manifest exists
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-24
+
+### Added
+
+- **`outbound_allowlist` output: what each subnet reaches outside the VNet (ADR 0120 §5).** A map keyed by each environment the install has (`aca` until `retire_runtime_environment`, `front`, `app`, `workers`, and `core`, `outbound` and `extension` with their add-ons), each a list of entries with `destination`, `kind` (`fqdn` or `service_tag`), `protocol`, `ports`, `why` and `source`. Every subnet carries the Container Apps platform set and the image registry's hosts unless `registry_private_endpoint`. The platform set is Microsoft Learn's two lists as read on 2026-11-23: the service tags of the NSG allow rules in "Securing a virtual network in Azure Container Apps" (`MicrosoftContainerRegistry`, `AzureFrontDoor.FirstParty`, `AzureActiveDirectory`, `AzureMonitor`, `AzureContainerRegistry`, `Storage.<region>`) and the FQDNs of the application rules in "Azure Container Apps environment integration with Azure Firewall" (among them `packages.aks.azure.com`, `acs-mirror.azureedge.net` and the bare `login.microsoft.com`), plus Azure management, which ADR 0120 §5 adds. Docker Hub (its three pull hosts, for the Envoy image the module pins or an `edge.image` that names Docker Hub), the identity provider, the certificate vaults, a public Key Vault or Service Bus namespace, Communication Services, your own Postgres and Masterly's control plane sit only on the subnet where the workload that reaches them runs, so `front` never lists a data endpoint. The control plane's hosts are on `ca-workers`' subnet alone with `enable_workers`: api images from v0.133.4 onward, including v0.138.0 recorded in MANIFEST.json, run the licence refresh and the fleet reports in `ca-workers` then, and in `ca-api` only without `enable_workers`. With an `api_image` older than v0.133.4 pinned, admit the two hosts from `ca-api`'s subnet as well. It holds hosts and ports only, never a URL's credentials, and is not sensitive even when the calling root marks its URLs sensitive. If IdP discovery names a token endpoint on another host or port, admit that destination from `ca-frontend`'s subnet too; it cannot be derived from the inputs. The module still writes no outbound NSG rule or route from it. See `docs/networking.md`, "The outbound_allowlist output".
+- **`deployment_stamp` output (ADR 0120 §8):** `module_version` (MANIFEST.json's `latest`), `release_ring`, `capacity_profile`, `add_ons`, `environments` and `database_provider_profile` (`starter` or `byo-db`, the install's own database only). Not sensitive, and it carries no URL.
+- **`release_ring` input (ADR 0107):** `canary`, `beta` or `stable` (the default), reported in `deployment_stamp` and nowhere else. It is a declaration: your licence's `release_ring` claim decides what the install may run, and the module does not check one against the other. It is not `release_channel`. An upgrade plans no change.
+- **`MANIFEST.json`: an optional `edge_image` in each release entry.** It names the module's
+  default `ca-edge` (Envoy) image for that release beside its `api` and `frontend`, as one full
+  reference pinned by digest, `registry/repository:tag@sha256:<64 lowercase hex>`. An install that
+  sets `edge.image` runs that image instead. The field is outside `images` and `digests` (the edge
+  is upstream's image, not published under `release/`, and `images` still refuses an `edge` key),
+  and is added within `schema_version` 1: existing entries are unchanged and not back-filled. The
+  release check refuses a value with no digest or in any other shape, and on a tag refuses a newest
+  entry whose `edge_image` is not `edge_default_image` in `edge.tf`, or an `edge.tf` whose default
+  it cannot read. See `docs/release-manifest.md`.
+
+### Changed
+
+- **One workload identity per role (ADR 0120 §6): no Container App identity holds Key Vault Crypto Officer.** `ca-api` keeps its identity, `id-<prefix>-apps`, and `ca-workers` runs as `id-<prefix>-workers`, so the two never share an identity or an `AZURE_CLIENT_ID` except in the one shape below. The built-in Key Vault Crypto Officer, which could delete, purge, back up, restore and rotate every key in the vault, is replaced by two roles the module defines on the data resource group, beside `Masterly app secrets`: `Masterly signing key reader (<prefix>-<suffix>)`, `keys/read` alone (a key's properties and public half, never a signature), for `ca-api`; and `Masterly signing keys (<prefix>-<suffix>)`, exactly `keys/create/action`, `keys/read`, `keys/sign/action`, `secrets/getSecret/action` and `secrets/setSecret/action`, for `ca-workers`, which creates the erasure and audit checkpoint signing keys and signs with them. **`ca-api` must run api v0.138.0 or later**, where it holds no key client ("ca-api holds no Key Vault key client", MAS-3117; erasure key creation and signing run as a core-worker job, MAS-3578): on an earlier api image erasure fails, because that `ca-api` still creates and signs. Both roles are scoped to the vault, because Azure cannot scope a role assignment to a key that does not exist yet and Key Vault's conditions do not cover keys; the vault holds no keys besides its Environments' signing keys. Like `Masterly app secrets`, creating them needs `Microsoft.Authorization/roleDefinitions/write` (Owner or User Access Administrator); run `scripts/preflight.sh --principal <deployer object id>` first.
+- **`ca-workers` runs as its own identity on more installs without the Key Vault.** Until now an install with `enable_workers = true` and `enable_key_vault = false` (an evaluation install in `mode = "demo"`) ran `ca-workers` as `id-<prefix>-apps`. Upgrading moves it to `id-<prefix>-workers`, with its grants, where the module can make its pull work in the same apply: with `acr_id` set (the module grants AcrPull), a registry token, or public images. `id-<prefix>-apps` then gives up Service Bus Data Receiver and the jobs queue's Data Owner to it, as it already did on installs with the vault. With `acr_id` null and a registry the apps pull from as their identities, `ca-workers` stays on `id-<prefix>-apps`, because the new identity would be created in the apply that needs it to pull, before anyone could grant it AcrPull; set `acr_id` to move it. In production the one shape where `ca-workers` still runs as `id-<prefix>-apps` is `migrations = "start"` with `database_auth = "entra"` on the starter server, where both apps sign in to Postgres as that identity because both migrate; that identity then holds the signing keys role as well.
+- **`migrations` is required in `mode = "production"`** (MAS-5130). Set `"job"` for a new install, as `examples/production/` now does: the migrate job, `caj-migrate`, is then the only Postgres administrator, and `ca-api` and `ca-workers` connect as the DML-only roles it creates (`masterly_api`, `masterly_workers`), so no Container App identity is a database administrator. An explicit `"start"` plans, and every plan warns through the check `production_migrations_at_start`. Outside production, unset still means `"start"`. The input stays optional elsewhere and now defaults to null. Known gap of api v0.138.0, the default image: under `"job"`, deleting an Environment leaves its database on the server. The fix (MAS-5128) is on the backend's main branch and in no release yet; until one carries it, drop such databases by hand, as "Databases left by deleted Environments" under "The migrate job" in `docs/data-plane.md` describes.
+- **The plan refuses an api image older than the install needs.** With the Key Vault on, `api_image` must be v0.138.0 or later (ca-api holds key read only); with `migrations = "job"`, v0.136.0 or later. The release channel's default image is checked through `MANIFEST.json`. A reference with no semver tag the module can read (a digest alone, a mirror's own tag) plans with a warning (`api_image_version_is_known`) naming the floor, rather than being refused.
+
+  **Migration note — a production install with `migrations` unset**, which ran migrations at start on 0.26.0's default: the plan is refused until you set it. Add `migrations = "start"` to keep what runs today (nothing changes; on `database_auth = "entra"` the api's identity stays the server's Entra administrator, a documented departure, and every plan warns), then move to `"job"` deliberately, following "The migrate job" in `docs/data-plane.md`. An install that already set `migrations = "job"` is not affected.
+- **Breaking for an install already retired on a network the module builds.** With
+  `retire_runtime_environment = true` the install has no runtime subnet. On a network the module
+  builds, the module no longer creates `snet-aca`, its network security group
+  `nsg-<name_prefix>-aca` and their association, and `nsg-<name_prefix>-private-endpoints` loses
+  `allow-data-plane-from-apps`, the rule admitting `snet-aca`. On an injected network,
+  `aca_subnet_id` is no longer needed: `private_endpoints_subnet_id` with `front_subnet_id`,
+  `app_subnet_id` and `workers_subnet_id` is the whole network, and the module reads the virtual
+  network from `front_subnet_id` when `aca_subnet_id` is unset. With `retire_runtime_environment`
+  false (the default) nothing changes, and the plan now refuses `private_endpoints_subnet_id`
+  without `aca_subnet_id`, because `aca-<name_prefix>` would have nowhere to run.
+
+  Migration: an install that has not set `retire_runtime_environment` plans no change. An install
+  that set it on an earlier version plans, on a network the module builds, only the deletion of
+  `snet-aca`, `nsg-<name_prefix>-aca` and their association, and an in-place update of
+  `nsg-<name_prefix>-private-endpoints` removing `allow-data-plane-from-apps`; every other subnet
+  keeps its prefix. Read the plan before applying it: nothing else should change. Azure releases
+  the subnet only once `aca-<name_prefix>` is fully deleted, so an install that sets
+  `retire_runtime_environment` and upgrades in one apply may need a second apply for the subnet.
+  On an injected network the plan shows no change: `aca_subnet_id` may stay set, and the module
+  creates nothing on it. If you remove it and the plan shows the private DNS zone links replaced,
+  `aca_subnet_id` and `front_subnet_id` spell the virtual network's id differently; keep
+  `aca_subnet_id` set. Your platform team can delete or reuse the runtime subnet once
+  `aca-<name_prefix>` is gone. If you ever set `retire_runtime_environment` back to false, the
+  install needs a runtime subnet of /23 or larger again.
+
+- A retired install fits a small address space. With `retire_runtime_environment = true` and no
+  explicit environment prefixes, a first `vnet_address_space` prefix of /22 to /24 is carved in
+  quarters: front, app and workers in the first three, the private endpoints in the fourth unless
+  `private_endpoints_subnet_prefix` places them elsewhere. A /24 for the environments plus a /28 for
+  the private endpoints is a complete install (`docs/networking.md`, "A /24 and a /28"). Before,
+  `vnet_address_space` refused anything smaller than a /21 without an explicit runtime /23.
+
+- The refusal of `retire_runtime_environment = true` while a workload still runs in
+  `aca-<name_prefix>` is now a precondition on the `rg-<name_prefix>-aca` resource group rather
+  than a validation on the variable. It refuses the same plans with the same message; only the
+  address an error names has changed.
+
+- `egress_firewall` works on a retired install. With `retire_runtime_environment = true` on a
+  network the module builds, the route table is attached to every environment subnet the module
+  creates (front, app and workers, core and outbound with `split_processing`, extension with
+  `extensions`) instead of `snet-aca`, each checked at plan for its `Microsoft.App/environments`
+  delegation and a workload-profiles environment. The refusals of `egress_firewall` with a workload
+  moved off `aca-<name_prefix>` now apply only while that environment runs. An install that is not
+  retired plans no change: the route stays on `snet-aca` only. An install moving off
+  `aca-<name_prefix>` still removes `egress_firewall` before the moves and can set it again with
+  `retire_runtime_environment = true`; between the two, egress takes Azure's default path
+  (`docs/networking.md`, "Retiring the runtime environment").
+
+- `front_subnet_id`, `app_subnet_id` and `workers_subnet_id` must be a subnet's resource ID
+  (`/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>`,
+  in any case); the plan refuses anything else by name. The module reads the virtual network from
+  a subnet id case-insensitively, as Azure compares ids.
+
+### Removed
+
+- **The apps identity's and the workers identity's Key Vault Crypto Officer grants.** `ca-workers`' new grant, `kv_signing_keys_workers`, is created before `ca-workers`' update, and `kv_crypto_officer_workers` is removed after it, because `ca-workers` recorded a dependency on it. `ca-api`'s grant is replaced at its own address (a `moved` block from `kv_crypto_officer` to `kv_signing_key_reader`), destroy then create, as `Masterly app secrets` replaced Secrets Officer. `create_before_destroy` cannot be used there (it puts `ca-api` in a dependency cycle on applies that also remove an alert or diagnostic setting on it), and a new address cannot order the removal either, because nothing in a running install's state depends on that grant. So from the removal until Azure propagates the new grant, **which can take minutes**, `GET /v1/audit/signing-key`, the audit export and online verify can fail on `ca-api`, and succeed when retried. Nothing else `ca-api` does reads a key. **Apply the upgrade in a maintenance window** if those routes matter to you. Nothing replaces the Postgres server, the vault, the Service Bus namespace or an environment. `ca-api` keeps ACS Email Owner: api v0.138.0 sends organization invitations and notification verification codes from the request, in `ca-api`, so the grant cannot move to `ca-workers` alone yet.
+
+### Documentation
+
+- `docs/networking.md`: "What your firewall must admit" is per subnet and gains an Azure management row, the "No outbound rules" paragraph points to the new output, and the add-on environments' core row names the platform set and the registry it still reaches. `release_channel`'s description now says it is not `release_ring`.
+- **Leftover diagnostic settings after a destroy that stopped partway.** `docs/data-plane.md`,
+  "Destroying a production install", now says what to do when the targets of the module's
+  diagnostic settings were deleted outside Terraform, for example with their resource group, and
+  an apply under the same `name_prefix` fails on `azurerm_monitor_diagnostic_setting` with
+  `already exists - needs to be imported`. It lists the 16 settings the module creates with their
+  targets and the conditions that create them, and gives the `az monitor diagnostic-settings list`
+  and `delete` commands. The delete is for a destroyed install only, by exact name and target id:
+  never a prefix wildcard or a loop over `list`, and never against a live install. A destroy
+  Terraform completes needs no cleanup. No module behaviour changes.
+- The /23 requirement now applies only to the runtime subnet while `aca-<name_prefix>` runs, in the
+  variable descriptions (`aca_subnet_id`, `aca_subnet_prefix`, `private_endpoints_subnet_prefix`,
+  `vnet_address_space` and the environment subnet inputs), `docs/networking.md` and the README.
+  `docs/networking.md` adds a worked /24 + /28 layout, an injected-network example with no runtime
+  subnet, and what retiring does to the runtime subnet on each network shape.
+
 ## [0.26.0] - 2026-11-23
 
 ### Added
