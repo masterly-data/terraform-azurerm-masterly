@@ -793,7 +793,7 @@ locals {
   }
 
   outbound_url_why = {
-    oidc_authority         = "Your identity provider's issuer (oidc_authority): ca-frontend's BFF reads the discovery document and calls the token endpoint it names to sign users in"
+    oidc_authority         = "Your identity provider's issuer (oidc_authority): ca-frontend's BFF reads the discovery document to sign users in. If discovery names a token endpoint on another host or port, admit that destination from ca-frontend's subnet too: this entry covers only the issuer's host and port"
     oidc_jwks_uri          = "Your identity provider's signing keys (oidc_jwks_uri): ca-api fetches them to validate tokens, and so does ca-edge with edge.jwt_authn"
     license_issuer_url     = "Masterly's control plane (license_issuer_url): the daily licence refresh. After seven days without a successful refresh the install is read-only"
     telemetry_url          = "Masterly's control plane (telemetry_url): fleet usage reports"
@@ -801,17 +801,19 @@ locals {
     edge_custom_domain     = "Your Key Vault holding the edge_custom_domain certificate: the environment reads the certificate from it. Not needed when the environment reaches that vault over a private endpoint"
   }
 
+  # Callers may mark any URL sensitive. Declassify only its parsed host/port and the presence
+  # and parse-success booleans, keeping the URL itself (including path and userinfo) sensitive.
   outbound_url_entries = {
     for name, url in local.outbound_url_inputs : name => {
-      "fqdn:${trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]")}:${coalesce(regex(local.outbound_url_pattern, url)[1], "443")}" = {
-        destination = trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]")
+      "fqdn:${nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))}:${nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "443"))}" = {
+        destination = nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))
         kind        = "fqdn"
         protocol    = "TCP"
-        ports       = [coalesce(regex(local.outbound_url_pattern, url)[1], "443")]
+        ports       = [nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "443"))]
         why         = local.outbound_url_why[name]
         source      = name
       }
-    } if url != null && can(regex(local.outbound_url_pattern, url))
+    } if nonsensitive(url != null) && nonsensitive(can(regex(local.outbound_url_pattern, url)))
   }
 
   # BYO-DB. external_database_url (and the admin URL) are sensitive: only the parsed host and
@@ -906,9 +908,9 @@ locals {
   #
   # The control plane (license_issuer_url, telemetry_url) sits with ca-workers alone when
   # enable_workers is set, though ca-api gets the same URLs and install credential. The released
-  # api image v0.138.0, which MANIFEST.json names for module 0.26.0, runs the licence refresh and
-  # the fleet reports only in the process that runs the pipeline: ca-api without enable_workers,
-  # and ca-workers with it. tests/outbound_allowlist.tftest.hcl holds MANIFEST.json to that image.
+  # api images from v0.133.4 onward, including v0.138.0 recorded in MANIFEST.json, run the licence
+  # refresh and fleet reports only in the process that runs the pipeline: ca-api without
+  # enable_workers, and ca-workers with it. tests/outbound_allowlist.tftest.hcl checks the image floor.
   outbound_workload_entries = {
     "ca-frontend" = merge(
       try(local.outbound_url_entries["oidc_authority"], {}),

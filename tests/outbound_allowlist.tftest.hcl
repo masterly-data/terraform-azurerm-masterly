@@ -629,6 +629,81 @@ run "outbound_allowlist_control_plane_placement_cites_the_released_api" {
 
 # --- Threat: secret disclosure ------------------------------------------------------------------
 
+# A calling root can mark these URLs sensitive; only parsed destinations may leave the module.
+run "outbound_allowlist_sensitive_license_issuer_url" {
+  command = plan
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    license_token           = "eyJ.fake.jwt"
+    license_public_jwk      = "{\"kty\":\"EC\"}"
+    license_issuer_url      = sensitive("https://cp.masterlydata.com/v1/licenses/refresh")
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+    enable_workers          = true
+    workers_environment     = "workers"
+  }
+  assert {
+    condition = (
+      !issensitive(output.outbound_allowlist) &&
+      !strcontains(jsonencode(output.outbound_allowlist), "/v1/licenses/refresh") &&
+      jsonencode(flatten([for k, entries in output.outbound_allowlist : [
+        for e in entries : "${k}=${e.destination}:${join(",", e.ports)}" if e.source == "license_issuer_url"
+      ]])) == jsonencode(["workers=cp.masterlydata.com:443"])
+    )
+    error_message = "A sensitive license_issuer_url must plan with only its host and default port public, on ca-workers' subnet."
+  }
+}
+
+run "outbound_allowlist_sensitive_telemetry_url" {
+  command = plan
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    telemetry_url           = sensitive("https://telemetry.masterlydata.com:8443/v1/reports")
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+    enable_workers          = true
+    workers_environment     = "workers"
+  }
+  assert {
+    condition = (
+      !issensitive(output.outbound_allowlist) &&
+      !strcontains(jsonencode(output.outbound_allowlist), "/v1/reports") &&
+      jsonencode(flatten([for k, entries in output.outbound_allowlist : [
+        for e in entries : "${k}=${e.destination}:${join(",", e.ports)}" if e.source == "telemetry_url"
+      ]])) == jsonencode(["workers=telemetry.masterlydata.com:8443"])
+    )
+    error_message = "A sensitive telemetry_url must plan with only its host and explicit port public, on ca-workers' subnet."
+  }
+}
+
+run "outbound_allowlist_sensitive_identity_provider_urls" {
+  command = plan
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    identity_binding      = "oidc"
+    oidc_allowed_issuers  = "https://idp.example.com/tenant/v2.0"
+    oidc_audience         = "api-client-id"
+    oidc_jwks_uri         = sensitive("https://keys.example.com:8443/tenant/discovery/keys")
+    oidc_client_id        = "bff-client-id"
+    oidc_client_secret    = "s3cret"
+    oidc_authority        = sensitive("https://idp.example.com/tenant/v2.0")
+    oidc_redirect_uri     = "https://app.example.com/api/auth/callback"
+    frontend_environment  = "front"
+    edge_environment      = "front"
+    api_environment       = "app"
+  }
+  assert {
+    condition = (
+      !issensitive(output.outbound_allowlist) &&
+      !strcontains(jsonencode(output.outbound_allowlist), "/tenant/") &&
+      jsonencode(sort(flatten([for k, entries in output.outbound_allowlist : [
+        for e in entries : "${k}=${e.destination}:${join(",", e.ports)}" if contains(["oidc_authority", "oidc_jwks_uri"], e.source)
+      ]]))) == jsonencode(["app=keys.example.com:8443", "front=idp.example.com:443"])
+    )
+    error_message = "Sensitive IdP URLs must plan with only issuer and JWKS hosts/ports public, on their respective workloads' subnets."
+  }
+}
+
 # The allowlist is not sensitive: a DSN carrying a password must leave its host and port and
 # nothing else.
 run "outbound_allowlist_database_host_and_port_only" {

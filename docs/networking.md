@@ -234,9 +234,12 @@ your Application Gateway in front of the internal environment (`frontend_custom_
 
 Every destination the install's subnets reach outside the VNet, with what reaches it and what
 fails when the firewall drops it. Hosts written as an input are the host of that input's URL.
-The `outbound_allowlist` output lists the same destinations for your install, per subnet and only
-on the subnets whose workloads reach them; the last row (targets you configure in the
-application) is the one it cannot list.
+The `outbound_allowlist` output lists the destinations known from your install's inputs, per
+subnet and only on the subnets whose workloads reach them. It cannot list targets configured in
+the application (the last row), or an identity provider's token endpoint discovered at runtime.
+If discovery names a token endpoint on a different host or port from `oidc_authority`, add that
+destination to your firewall rules for `ca-frontend`'s subnet; the output lists only the hosts
+and ports of `oidc_authority` and `oidc_jwks_uri`.
 
 | Destination | When the install reaches it | What fails when it is blocked |
 |---|---|---|
@@ -269,7 +272,8 @@ The platform claims above come from Microsoft Learn:
 
 ### The outbound_allowlist output
 
-The `outbound_allowlist` output is the table above for your install, per subnet (ADR 0120 §5).
+The `outbound_allowlist` output covers the destinations known from inputs in the table above,
+per subnet (ADR 0120 §5), with the runtime-discovery and application-target exceptions noted above.
 It is a map keyed by each environment the install has: `aca` (`aca-<name_prefix>` on
 `snet-aca`) until `retire_runtime_environment` retires it, `front`, `app` and `workers` where
 their subnets exist, `core` and `outbound` with `split_processing`, and `extension` with
@@ -283,6 +287,9 @@ their subnets exist, `core` and `outbound` with `split_processing`, and `extensi
 | `ports` | The ports, as strings: `["443"]`, `["5671", "443"]` for Service Bus, the database's port for your own Postgres |
 | `why` | What reaches it, and what fails when it is blocked |
 | `source` | Where the entry comes from: a Microsoft Learn page with the date it was read, ADR 0120 §5, or the input that adds it |
+
+Entries sharing a kind, destination and port are merged within each subnet; the retained entry
+carries one reason and source, even when several workloads or inputs require that destination.
 
 Where each entry comes from, and which subnets carry it:
 
@@ -312,12 +319,11 @@ platform set and the registry.
 
 Masterly's control plane is on one subnet, not two. With `enable_workers`, `ca-api` holds the same
 `license_issuer_url`, `telemetry_url` and install credential as `ca-workers`, but it does not
-call the control plane: the api image this module is released against (v0.138.0, in
-`MANIFEST.json`) runs the licence refresh and the fleet reports only in the process that runs the
+call the control plane: api images from v0.133.4 onward, including v0.138.0 recorded in
+`MANIFEST.json`, run the licence refresh and the fleet reports only in the process that runs the
 pipeline. That is `ca-workers` once it exists, and `ca-api` otherwise. So the two hosts are listed
-where `ca-workers` runs, and where `ca-api` runs only without `enable_workers`. Api images have
-behaved this way since v0.133.4: if you pin an older `api_image`, admit the two hosts from
-`ca-api`'s subnet as well.
+where `ca-workers` runs, and where `ca-api` runs only without `enable_workers`. If you pin an
+`api_image` older than v0.133.4, admit the two hosts from `ca-api`'s subnet as well.
 
 `ca-edge`'s image on Docker Hub is listed as Docker Hub's three pull hosts, whichever name the
 reference carries: with `edge.image` unset, and with an `edge.image` that names `docker.io`,
