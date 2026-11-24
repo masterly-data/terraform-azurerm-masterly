@@ -298,6 +298,11 @@ def check_all(manifest: Path, directory: Path, changelog: Path) -> list[str]:
 
 def run(args) -> str | None:
     """The text to print, or None when the mode prints nothing. Raises Refused."""
+    # Provenance of these three paths: the operator's own --manifest, --summary-dir and --changelog,
+    # else the RELEASE_MANIFEST_PATH, CUSTOMER_SUMMARY_DIR and RELEASE_CHANGELOG_PATH defaults. The
+    # workflows pass $RUNNER_TEMP paths or leave the repository defaults, and never --write.
+    # Nothing a pull request author or an outside party controls reaches them, and every version
+    # is checked against X.Y.Z before it joins a path.
     manifest = Path(args.manifest or contract.MANIFEST_PATH)
     directory = Path(args.summary_dir or contract.SUMMARY_DIR)
     changelog = Path(args.changelog or release_notes.CHANGELOG_PATH)
@@ -388,6 +393,9 @@ LINK_BASE = "https://example.invalid/blob/v1.2.3/"
 
 
 def _stage(root: Path, summaries: dict, changelog: str = FIXTURE_CHANGELOG, tags: str = "v1.2.3\n"):
+    # Only --selftest reaches here, and root is always a tempfile.TemporaryDirectory(). Every name
+    # written is a literal (MANIFEST.json, CHANGELOG.md, tags.txt) or a fixture key such as
+    # "1.2.3.json" from this file, so no outside input chooses a path.
     manifest = {"schema_version": 1, "releases": {"1.2.3": {}, "1.2.2": {}, "1.1.0": {}}}
     (root / "MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
     (root / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
