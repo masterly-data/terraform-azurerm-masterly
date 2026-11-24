@@ -56,3 +56,21 @@ output "org_id" {
   value       = var.org_id
   description = "The Organization that owns this Install (ADR 0039)."
 }
+
+# What the install is, as far as the module knows at plan (ADR 0120 §8). The database profile is
+# derived from external_database_url, which is sensitive: only the boolean is unmarked, as in
+# entra-auth.tf, never the URL.
+output "deployment_stamp" {
+  value = {
+    module_version   = local.release_manifest.latest
+    release_ring     = var.release_ring
+    capacity_profile = var.capacity_profile
+    add_ons = concat(
+      var.split_processing ? ["split_processing"] : [],
+      var.extensions ? ["extensions"] : [],
+    )
+    environments              = local.install_environment_keys
+    database_provider_profile = nonsensitive(local.provision_postgres) ? "starter" : "byo-db"
+  }
+  description = "The install's deployment stamp (ADR 0120 §8): module_version, the newest release MANIFEST.json names (at a release tag it is that tag's version; a module taken from a commit between releases still reports the last release cut); release_ring, as release_ring declares it (a declaration only: your licence's release_ring claim decides what the install may run, and the ring is not release_channel); capacity_profile (null when unset); add_ons, the add-on inputs that are on (split_processing, extensions; empty when none); environments, the Container Apps environments the install has, by the keys outbound_allowlist uses (aca for aca-<name_prefix> until it is retired, then front, app, workers, core, outbound and extension where they exist); and database_provider_profile, \"starter\" when the module provisions the install's Postgres and \"byo-db\" with external_database_url. It describes the install's own database only, not the database of each Masterly Environment. It carries no secret and no URL."
+}

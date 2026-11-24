@@ -143,6 +143,8 @@ resource "azurerm_subnet" "environment" {
 # AllowInternetOutBound stays. Egress is narrowed by routing it, not by an NSG: egress_firewall
 # attaches a route table to snet-aca that sends 0.0.0.0/0 to the customer's firewall (below), and
 # on an injected spoke the hub's route table is the platform team's (docs/networking.md, "Egress").
+# What each subnet needs to reach is published for that firewall instead, as the
+# outbound_allowlist output (ADR 0120 §5; the locals at the end of this file), never as a rule here.
 #
 # Created ONLY when the module owns the network. On an injected spoke (topology 3) the
 # subnets belong to the platform team, and attaching an NSG to a subnet somebody else
@@ -662,4 +664,301 @@ moved {
 moved {
   from = azurerm_private_dns_zone_virtual_network_link.postgres
   to   = azurerm_private_dns_zone_virtual_network_link.postgres[0]
+}
+
+# --- The outbound allowlist (ADR 0120 §5) -----------------------------------------
+# What each subnet's workloads reach outside the VNet, published as the outbound_allowlist output
+# so your firewall can narrow egress per subnet. Nothing here writes a rule: the NSGs stay
+# inbound-only (above). Keyed by the environments that exist (local.install_environment_keys,
+# environment.tf), on what is known at plan.
+#
+# The Container Apps platform set is two lists on Microsoft Learn, as read on 2026-11-23: the
+# service tags are the NSG allow rules of "Securing a virtual network in Azure Container Apps",
+# and the FQDNs are the application rules of "Azure Container Apps environment integration with
+# Azure Firewall". Microsoft versions both, so every entry names its source: compare an entry with
+# the page, not with this file, before you rely on it. docs/networking.md ("The outbound_allowlist
+# output") carries the same date.
+#
+# Entries are keyed by a string known at plan, never by an unknown name, so a destination that is
+# only known after apply (the vault's or the namespace's name on a fresh install) leaves that one
+# entry unknown and not the whole list. The same destination from two workloads on one subnet is
+# one entry.
+locals {
+  outbound_adr_source      = "ADR 0120 §5, the Container Apps platform set the module publishes for every subnet"
+  outbound_registry_source = "Microsoft Learn, Configure rules to access an Azure container registry behind a firewall (https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules), read 2026-11-23"
+
+  # The platform set's two lists on Learn, by the kind of entry each gives.
+  outbound_learn_source = {
+    service_tag = "Microsoft Learn, Securing a virtual network in Azure Container Apps, NSG allow rules (https://learn.microsoft.com/azure/container-apps/firewall-integration#nsg-allow-rules), read 2026-11-23"
+    fqdn        = "Microsoft Learn, Azure Container Apps environment integration with Azure Firewall, application rules (https://learn.microsoft.com/azure/container-apps/use-azure-firewall#application-rules), read 2026-11-23"
+  }
+
+  # Every subnet, whatever runs there: what the environment itself needs to start a replica.
+  # The two registry service tags and login.microsoft.com are Learn's rows for images in an Azure
+  # container registry and for Key Vault. They stay with registry_private_endpoint: ca-edge can
+  # still pull edge.image from another Azure container registry, and a tag too many does not stop
+  # a replica where a tag too few does.
+  outbound_platform_entries = {
+    for e in [
+      { destination = "MicrosoftContainerRegistry", kind = "service_tag", why = "Microsoft Container Registry: Azure pulls the environment's own platform containers from it. Blocked, the environment provisions but no replica starts" },
+      { destination = "AzureFrontDoor.FirstParty", kind = "service_tag", why = "Microsoft Container Registry's content delivery, which the MicrosoftContainerRegistry service tag depends on" },
+      { destination = "mcr.microsoft.com", kind = "fqdn", why = "Microsoft Container Registry, for a firewall that admits by name" },
+      { destination = "*.data.mcr.microsoft.com", kind = "fqdn", why = "Microsoft Container Registry's data endpoints, which serve the image layers" },
+      { destination = "packages.aks.azure.com", kind = "fqdn", why = "Where the nodes under the environment download their own components. Learn lists it for every environment, whatever the apps use" },
+      { destination = "acs-mirror.azureedge.net", kind = "fqdn", why = "Where the nodes under the environment download their own components, beside packages.aks.azure.com. Learn lists it for every environment, whatever the apps use" },
+      { destination = "AzureActiveDirectory", kind = "service_tag", why = "Microsoft Entra ID: the managed identities get their tokens from it, for the registry pull, Key Vault references, and Postgres and Redis with database_auth = \"entra\"" },
+      { destination = "login.microsoftonline.com", kind = "fqdn", why = "Microsoft Entra ID, for a firewall that admits by name" },
+      { destination = "*.login.microsoftonline.com", kind = "fqdn", why = "Microsoft Entra ID's regional sign-in endpoints for managed identities" },
+      { destination = "login.microsoft.com", kind = "fqdn", why = "Microsoft Entra ID's sign-in endpoint by its bare name, which Learn lists for pulls from an Azure container registry and for Key Vault. A rule for *.login.microsoft.com does not match it" },
+      { destination = "*.login.microsoft.com", kind = "fqdn", why = "Microsoft Entra ID's sign-in endpoints for managed identities" },
+      { destination = "*.identity.azure.net", kind = "fqdn", why = "The managed identity endpoints the environment's identities use" },
+      { destination = "AzureMonitor", kind = "service_tag", why = "Azure Monitor: the environment sends the apps' console and system logs through it. Blocked, new rows stop arriving in ContainerAppConsoleLogs and ContainerAppSystemLogs while the apps keep serving" },
+      { destination = "AzureContainerRegistry", kind = "service_tag", why = "Azure Container Registry, for a firewall or NSG that admits by service tag: the apps' images are pulled from an Azure container registry. Blocked, a new revision has no ready replica. Not needed while every image is pulled over a private endpoint (registry_private_endpoint = true) or from a registry of another kind" },
+      { destination = "Storage.${local.location_key}", kind = "service_tag", why = "Azure Storage in the install's region (Learn's Storage.<Region>, with the region as the location input names it, where Microsoft's list of service tags capitalises it): an Azure container registry serves its image layers from storage. Not needed where AzureContainerRegistry is not. A registry in another region serves its layers from that region's storage, which *.blob.core.windows.net in the registry's own entries covers by name" },
+      # Learn's pages do not list Azure management for the environment itself: ADR 0120 §5 adds it
+      # to the platform set, so these two name the ADR as their source and not a page.
+      { destination = "AzureResourceManager", kind = "service_tag", why = "Azure management (Azure Resource Manager), part of the Container Apps platform set ADR 0120 §5 publishes for every subnet", source = local.outbound_adr_source },
+      { destination = "management.azure.com", kind = "fqdn", why = "Azure management (Azure Resource Manager), for a firewall that admits by name", source = local.outbound_adr_source },
+      ] : "${e.kind}:${e.destination}:443" => {
+      destination = e.destination
+      kind        = e.kind
+      protocol    = "TCP"
+      ports       = ["443"]
+      why         = e.why
+      source      = lookup(e, "source", local.outbound_learn_source[e.kind])
+    }
+  }
+
+  # The registry the apps pull from: the login server and the hosts the image references name.
+  # None with registry_private_endpoint, which keeps the pull on the registry's private endpoint.
+  # Normalize implicit HTTPS ports before deduplicating registry authorities.
+  outbound_registry_hosts = local.registry_private_endpoint ? [] : distinct([
+    for h in compact([for r in [local.registry_server, local.api_image, local.frontend_image] : lower(split("/", r)[0])]) :
+    "${split(":", h)[0]}:${try(split(":", h)[1], "443")}"
+  ])
+
+  outbound_registry_entries = merge(
+    {
+      for h in local.outbound_registry_hosts : "fqdn:${split(":", h)[0]}:${try(split(":", h)[1], "443")}" => {
+        destination = split(":", h)[0]
+        kind        = "fqdn"
+        protocol    = "TCP"
+        ports       = [try(split(":", h)[1], "443")]
+        why         = "The image registry's login server: every app's image is pulled from it, so a new revision has no ready replica while it is blocked. registry_private_endpoint = true keeps the pull inside the VNet instead"
+        source      = "registry_location, api_image and frontend_image; ${local.outbound_registry_source}"
+      }
+    },
+    anytrue([for h in local.outbound_registry_hosts : endswith(split(":", h)[0], ".azurecr.io")]) ? local.outbound_acr_data_entries : {},
+  )
+
+  # Where an Azure container registry serves its image layers, beside its login server.
+  outbound_acr_data_entries = {
+    "fqdn:*.data.azurecr.io:443" = {
+      destination = "*.data.azurecr.io"
+      kind        = "fqdn"
+      protocol    = "TCP"
+      ports       = ["443"]
+      why         = "An Azure container registry's dedicated data endpoints (<registry>.<region>.data.azurecr.io), which serve the image layers when the registry has them"
+      source      = local.outbound_registry_source
+    }
+    "fqdn:*.blob.core.windows.net:443" = {
+      destination = "*.blob.core.windows.net"
+      kind        = "fqdn"
+      protocol    = "TCP"
+      ports       = ["443"]
+      why         = "An Azure container registry's storage, which serves the image layers when the registry has no dedicated data endpoints"
+      source      = local.outbound_registry_source
+    }
+  }
+
+  # scheme://[userinfo@]host[:port][/path][?query], read for its host and port only, never its
+  # userinfo. A URL with an @ after its authority (a password holding an unencoded /, ? or #)
+  # matches nothing, so it gives no entry rather than a fragment of the password. An IPv6 host
+  # matches with its brackets, which the entries trim: a firewall rule names the bare address.
+  outbound_url_pattern = "^[A-Za-z][A-Za-z0-9+.-]*://(?:[^/?#]*@)?([^/?#:@\\[\\]]+|\\[[^\\]/?#@]+\\])(?::([0-9]{1,5}))?(?:[/?#][^@]*)?$"
+
+  # ca-edge's image is on Docker Hub when edge.image is unset (the image the module pins names
+  # docker.io) or names Docker Hub itself, under any of its three names and in any case. A pull
+  # from Docker Hub uses Docker Hub's pull hosts whichever name the reference carries.
+  outbound_docker_hub_names = ["docker.io", "index.docker.io", "registry-1.docker.io"]
+  outbound_edge_docker_hub  = local.edge_enabled && contains(local.outbound_docker_hub_names, split(":", lower(split("/", local.edge_image)[0]))[0])
+  outbound_edge_jwt_authn   = local.edge_enabled ? var.edge.jwt_authn != null : false
+
+  # The inputs that name a destination, each only where a workload uses it.
+  outbound_url_inputs = {
+    oidc_authority         = var.identity_binding == "oidc" ? local.oidc_authority : null
+    oidc_jwks_uri          = var.identity_binding == "oidc" || local.outbound_edge_jwt_authn ? local.oidc_jwks_uri : null
+    license_issuer_url     = local.license_refresh_configured ? var.license_issuer_url : null
+    telemetry_url          = local.telemetry_configured ? var.telemetry_url : null
+    frontend_custom_domain = local.frontend_custom_domain ? var.frontend_custom_domain.certificate_key_vault_secret_id : null
+    edge_custom_domain     = local.edge_custom_domain ? var.edge_custom_domain.certificate_key_vault_secret_id : null
+  }
+
+  outbound_url_why = {
+    oidc_authority         = "Your identity provider's issuer (oidc_authority): ca-frontend's BFF reads the discovery document to sign users in. If discovery names a token endpoint on another host or port, admit that destination from ca-frontend's subnet too: this entry covers only the issuer's host and port"
+    oidc_jwks_uri          = "Your identity provider's signing keys (oidc_jwks_uri): ca-api fetches them to validate tokens, and so does ca-edge with edge.jwt_authn"
+    license_issuer_url     = "Masterly's control plane (license_issuer_url): the daily licence refresh. After seven days without a successful refresh the install is read-only"
+    telemetry_url          = "Masterly's control plane (telemetry_url): fleet usage reports"
+    frontend_custom_domain = "Your Key Vault holding the frontend_custom_domain certificate: the environment reads the certificate from it. Not needed when the environment reaches that vault over a private endpoint"
+    edge_custom_domain     = "Your Key Vault holding the edge_custom_domain certificate: the environment reads the certificate from it. Not needed when the environment reaches that vault over a private endpoint"
+  }
+
+  # Callers may mark any URL sensitive. Declassify only its parsed host/port and the presence
+  # and parse-success booleans, keeping the URL itself (including path and userinfo) sensitive.
+  outbound_url_entries = {
+    for name, url in local.outbound_url_inputs : name => {
+      "fqdn:${nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))}:${nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], startswith(lower(url), "http://") ? "80" : "443"))}" = {
+        destination = nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))
+        kind        = "fqdn"
+        protocol    = "TCP"
+        ports       = [nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], startswith(lower(url), "http://") ? "80" : "443"))]
+        why         = local.outbound_url_why[name]
+        source      = name
+      }
+    } if nonsensitive(url != null) && nonsensitive(can(regex(local.outbound_url_pattern, url)))
+  }
+
+  # BYO-DB. external_database_url (and the admin URL) are sensitive: only the parsed host and
+  # port are unmarked, and only the null test on the URL, never the URL itself.
+  outbound_database_entries = {
+    for name, url in {
+      external_database_url       = var.external_database_url
+      external_database_admin_url = local.migrate_job ? var.external_database_admin_url : null
+      } : name => {
+      "fqdn:${nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))}:${nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "5432"))}" = {
+        destination = nonsensitive(trim(lower(regex(local.outbound_url_pattern, url)[0]), "[]"))
+        kind        = "fqdn"
+        protocol    = "TCP"
+        ports       = [nonsensitive(coalesce(regex(local.outbound_url_pattern, url)[1], "5432"))]
+        why         = name == "external_database_url" ? "Your own Postgres (BYO-DB): ca-api, ca-workers and caj-migrate connect to it. Not needed when the server is reached over peering or a private endpoint in the VNet" : "Your own Postgres, for caj-migrate's migration role (BYO-DB). Not needed when the server is reached over peering or a private endpoint in the VNet"
+        source      = name
+      }
+    } if nonsensitive(url != null) && nonsensitive(can(regex(local.outbound_url_pattern, url)))
+  }
+
+  # The install's own services, where they keep a public endpoint. Their names carry the install's
+  # random suffix, so a fresh install's plan shows these destinations as known after apply.
+  outbound_key_vault_entries = var.enable_key_vault && local.key_vault_public ? {
+    "key-vault" = {
+      destination = "${azurerm_key_vault.this[0].name}.vault.azure.net"
+      kind        = "fqdn"
+      protocol    = "TCP"
+      ports       = ["443"]
+      why         = "The install's Key Vault, public outside mode = \"production\": the environment resolves the apps' Key Vault references from it, so a revision whose secrets are references does not start while it is blocked. In production it is reached over its private endpoint and has no entry"
+      source      = "enable_key_vault"
+    }
+  } : {}
+
+  outbound_service_bus_entries = var.enable_service_bus && !local.servicebus_private ? {
+    "service-bus" = {
+      destination = "${azurerm_servicebus_namespace.this[0].name}.servicebus.windows.net"
+      kind        = "fqdn"
+      protocol    = "TCP"
+      ports       = ["5671", "443"]
+      why         = "The install's Service Bus namespace, public except Premium in production: ca-api sends and ca-workers receives the work handed over the bus"
+      source      = "enable_service_bus"
+    }
+  } : {}
+
+  outbound_acs_entries = var.email_acs_enabled ? {
+    "communication-services" = {
+      destination = trimprefix(module.acs_email[0].endpoint, "https://")
+      kind        = "fqdn"
+      protocol    = "TCP"
+      ports       = ["443"]
+      why         = "The install's Azure Communication Services resource: email is sent through it"
+      source      = "email_acs_enabled"
+    }
+  } : {}
+
+  outbound_docker_hub_entries = local.outbound_edge_docker_hub ? {
+    for h in ["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"] : "fqdn:${h}:443" => {
+      destination = h
+      kind        = "fqdn"
+      protocol    = "TCP"
+      ports       = ["443"]
+      why         = "Docker Hub: ca-edge pulls its image from it, anonymously: the upstream Envoy image the module pins, or the Docker Hub image edge.image names. Set edge.image to a mirror in your own registry to remove it"
+      source      = try(var.edge.image, null) == null ? "edge (edge.image unset)" : "edge.image"
+    }
+  } : {}
+
+  # edge.image on a registry other than Docker Hub and the install's is pulled from that
+  # registry's host.
+  outbound_edge_image_host = local.edge_enabled && !local.outbound_edge_docker_hub && !(local.edge_image_on_registry && local.registry_private_endpoint) ? lower(split("/", local.edge_image)[0]) : null
+  outbound_edge_image_entries = local.outbound_edge_image_host == null ? {} : merge(
+    {
+      "fqdn:${split(":", local.outbound_edge_image_host)[0]}:${try(split(":", local.outbound_edge_image_host)[1], "443")}" = {
+        destination = split(":", local.outbound_edge_image_host)[0]
+        kind        = "fqdn"
+        protocol    = "TCP"
+        ports       = [try(split(":", local.outbound_edge_image_host)[1], "443")]
+        why         = "The registry edge.image names: ca-edge's image is pulled from it"
+        source      = "edge.image"
+      }
+    },
+    try(endswith(split(":", local.outbound_edge_image_host)[0], ".azurecr.io"), false) ? local.outbound_acr_data_entries : {},
+  )
+
+  outbound_control_plane_entries = merge(
+    try(local.outbound_url_entries["license_issuer_url"], {}),
+    try(local.outbound_url_entries["telemetry_url"], {}),
+  )
+
+  # What each workload reaches, beyond the registry and the platform set. Postgres, Redis, Service
+  # Bus and Communication Services sit only with ca-api, ca-workers and caj-migrate, so a subnet
+  # holding only ca-frontend and ca-edge (front) never lists a data endpoint (ADR 0120 §5).
+  #
+  # The control plane (license_issuer_url, telemetry_url) sits with ca-workers alone when
+  # enable_workers is set, though ca-api gets the same URLs and install credential. The released
+  # api images from v0.133.4 onward, including v0.138.0 recorded in MANIFEST.json, run the licence
+  # refresh and fleet reports only in the process that runs the pipeline: ca-api without
+  # enable_workers, and ca-workers with it. tests/outbound_allowlist.tftest.hcl checks the image floor.
+  outbound_workload_entries = {
+    "ca-frontend" = merge(
+      try(local.outbound_url_entries["oidc_authority"], {}),
+      try(local.outbound_url_entries["frontend_custom_domain"], {}),
+      local.outbound_key_vault_entries,
+    )
+    "ca-edge" = merge(
+      local.outbound_docker_hub_entries,
+      local.outbound_edge_image_entries,
+      local.outbound_edge_jwt_authn ? try(local.outbound_url_entries["oidc_jwks_uri"], {}) : {},
+      try(local.outbound_url_entries["edge_custom_domain"], {}),
+    )
+    "ca-api" = merge(
+      var.identity_binding == "oidc" ? try(local.outbound_url_entries["oidc_jwks_uri"], {}) : {},
+      local.outbound_key_vault_entries,
+      local.outbound_service_bus_entries,
+      local.outbound_acs_entries,
+      try(local.outbound_database_entries["external_database_url"], {}),
+      var.enable_workers ? {} : local.outbound_control_plane_entries,
+    )
+    "ca-workers" = merge(
+      local.outbound_key_vault_entries,
+      local.outbound_service_bus_entries,
+      local.outbound_acs_entries,
+      try(local.outbound_database_entries["external_database_url"], {}),
+      local.outbound_control_plane_entries,
+    )
+    "caj-migrate" = merge(
+      local.outbound_key_vault_entries,
+      try(local.outbound_database_entries["external_database_admin_url"], local.outbound_database_entries["external_database_url"], {}),
+    )
+  }
+
+  # Which subnet each workload that exists runs on: "aca" is aca-<prefix> on snet-aca.
+  outbound_workload_subnet = merge(
+    { "ca-frontend" = var.frontend_environment, "ca-api" = var.api_environment },
+    local.edge_enabled ? { "ca-edge" = var.edge_environment } : {},
+    var.enable_workers ? { "ca-workers" = var.workers_environment == "workers" ? "workers" : "aca" } : {},
+    local.migrate_job ? { "caj-migrate" = var.migrate_job_environment == "workers" ? "workers" : "aca" } : {},
+  )
+
+  outbound_allowlist = {
+    for s in local.install_environment_keys : s => values(merge(
+      merge([for w, ws in local.outbound_workload_subnet : local.outbound_workload_entries[w] if ws == s]...),
+      local.outbound_registry_entries,
+      local.outbound_platform_entries,
+    ))
+  }
 }

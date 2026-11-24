@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-150 inputs in 30 groups.
+151 inputs in 30 groups.
 
 ## Groups
 
@@ -32,7 +32,7 @@ each one that is missing.
 - [Custom domain](#custom-domain) (2)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
 - [The front, app and workers environments (ADR 0120)](#the-front-app-and-workers-environments-adr-0120) (3)
-- [Images and registry pull credential](#images-and-registry-pull-credential) (6)
+- [Images and registry pull credential](#images-and-registry-pull-credential) (7)
 - [Key Vault database secret names](#key-vault-database-secret-names) (1)
 - [Diagnostics and alerts](#diagnostics-and-alerts) (12)
 - [Edge proxy](#edge-proxy) (2)
@@ -289,6 +289,7 @@ In `variables-identity.tf`.
 | `api_image` | `string` | `null` | Fully-qualified api image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing "." or ":", or localhos... |
 | `frontend_image` | `string` | `null` | Fully-qualified frontend image, as registry/repository:tag, registry/repository:tag@sha256:<digest> or registry/repository@sha256:<digest> (64 lowercase hex), where the registry is a host containing "." or ":", or loc... |
 | `release_channel` | `string` | `"stable"` | Which release in MANIFEST.json the default image references (api_image and frontend_image left null) resolve to. |
+| `release_ring` | `string` | `"stable"` | The release ring this install declares (ADR 0107): "canary", "beta" or "stable" (the default). |
 | `registry_location` | `string` | `null` | Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). |
 | `acr_login_server` | `string` | `null` | Deprecated: use registry_location. |
 | `registry_password` | `string, sensitive` | `null` | Deprecated: use registry_token. |
