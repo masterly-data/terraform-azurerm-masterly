@@ -177,13 +177,14 @@ no migrate Entra administrator, sets no `MASTERLY_MIGRATIONS`, and `ca-api` and 
 migrate at start. **`"job"` needs an api image from a backend release later than v0.135.0**: the
 migrate entry point (`masterly_app/apps/migrate.py`), `MASTERLY_MIGRATIONS`, and the creation of
 the app roles below under both `database_auth` values are in v0.136.0 and later, and the module's
-default image, v0.138.0, has them. **Known gap of v0.138.0:** under `"job"`, deleting an
-Environment leaves its database on the server, because the api no longer holds the right to drop
-it and the migrate job of that release does not drop it. The backend's fix (MAS-5128) is in no
-release yet; until your install runs one that names it, drop such databases by hand (below).
+default image, v0.140.0, has them. **Known gap of v0.138.0 and v0.139.0:** under `"job"`,
+deleting an Environment leaves its database on the server, because the api no longer holds the
+right to drop it and the migrate job of those releases does not drop it. The backend's fix
+(MAS-5128) is in v0.140.0, the module's default image from 0.27.0; an install on an earlier image
+drops such databases by hand (below).
 
-**Databases left by deleted Environments** (`"job"` on the starter server, until a backend release
-carries MAS-5128). Each Environment on the starter server has its own database,
+**Databases left by deleted Environments** (`"job"` on the starter server, with an api image older than
+v0.140.0, which carries MAS-5128). Each Environment on the starter server has its own database,
 `masterly_dp_<environment id>` (the backend's `MASTERLY_DATAPLANE_DATABASE_PREFIX`, `masterly_dp_`
 unless your install sets another), and the install's control plane records each Environment in the
 `cp_environments` table of the server's `postgres` database. A deleted Environment keeps its row,

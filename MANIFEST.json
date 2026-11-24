@@ -18,12 +18,12 @@
     "0.27.0": {
       "date": "2026-11-24",
       "images": {
-        "api": "masterly.azurecr.io/release/api:v0.138.0",
-        "frontend": "masterly.azurecr.io/release/frontend:v0.146.0"
+        "api": "masterly.azurecr.io/release/api:v0.140.0",
+        "frontend": "masterly.azurecr.io/release/frontend:v0.148.0"
       },
       "digests": {
-        "api": "sha256:24b2cbe1a8357627337e6033df34abf5971c90c1caf6980627dd6b4fec696fb7",
-        "frontend": "sha256:679e3899d8ad50fbb885e76d2198b7e6e162ef6937009da737f5db9f692a12c6"
+        "api": "sha256:7b3fd8167666fbcaed31dd4900ad9d45f84fef9887c34eecad9d940b6a7852c9",
+        "frontend": "sha256:bf809260c09100478241a22c3385dd8f418ce7cfe6df4647b6b92812e736e598"
       },
       "api_claims_version": 4,
       "edge_image": "docker.io/envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb"

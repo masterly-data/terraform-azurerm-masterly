@@ -84,8 +84,8 @@ module "masterly" {
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
   # The pair this module version was released against, from MANIFEST.json. Versioning names
   # the oldest image each app can run on, and the tags that have no published image.
-  api_image           = "masterly.azurecr.io/release/api:v0.138.0"
-  frontend_image      = "masterly.azurecr.io/release/frontend:v0.146.0"
+  api_image           = "masterly.azurecr.io/release/api:v0.140.0"
+  frontend_image      = "masterly.azurecr.io/release/frontend:v0.148.0"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -1347,7 +1347,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
-| `0.27.0` | `masterly.azurecr.io/release/api:v0.138.0` | `masterly.azurecr.io/release/frontend:v0.146.0` | 2026-11-24 |
+| `0.27.0` | `masterly.azurecr.io/release/api:v0.140.0` | `masterly.azurecr.io/release/frontend:v0.148.0` | 2026-11-24 |
 | `0.26.0` | `masterly.azurecr.io/release/api:v0.138.0` | `masterly.azurecr.io/release/frontend:v0.146.0` | 2026-11-23 |
 | `0.25.0` | `masterly.azurecr.io/release/api:v0.138.0` | `masterly.azurecr.io/release/frontend:v0.146.0` | 2026-11-20 |
 | `0.24.0` | `masterly.azurecr.io/release/api:v0.137.0` | `masterly.azurecr.io/release/frontend:v0.145.0` | 2026-11-10 |
