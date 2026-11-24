@@ -57,7 +57,9 @@ module "masterly" {
   # outside the token mode. To pull from that registry over the install's VNet, add
   # registry_private_endpoint = true with acr_id set: a private endpoint and a
   # privatelink.azurecr.io zone linked to the VNet (a Premium registry; the token mode
-  # refuses it).
+  # refuses it). To pull every app as one identity you create and grant yourself, rather
+  # than granting each app's own, add registry_identity_id = <its resource ID>; the module
+  # then writes no AcrPull grant.
   registry_credential_mode = "token"
   registry_token           = var.registry_token
   release_channel          = var.release_channel

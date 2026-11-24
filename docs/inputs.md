@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-151 inputs in 30 groups.
+152 inputs in 30 groups.
 
 ## Groups
 
@@ -32,7 +32,7 @@ each one that is missing.
 - [Custom domain](#custom-domain) (2)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
 - [The front, app and workers environments (ADR 0120)](#the-front-app-and-workers-environments-adr-0120) (3)
-- [Images and registry pull credential](#images-and-registry-pull-credential) (7)
+- [Images and registry pull credential](#images-and-registry-pull-credential) (8)
 - [Key Vault database secret names](#key-vault-database-secret-names) (1)
 - [Diagnostics and alerts](#diagnostics-and-alerts) (12)
 - [Edge proxy](#edge-proxy) (2)
@@ -293,6 +293,7 @@ In `variables-identity.tf`.
 | `registry_location` | `string` | `null` | Login server of the registry the apps pull from, as a bare host with an optional port and no scheme or path (e.g. masterly.azurecr.io, or your own registry such as acme.azurecr.io). |
 | `acr_login_server` | `string` | `null` | Deprecated: use registry_location. |
 | `registry_password` | `string, sensitive` | `null` | Deprecated: use registry_token. |
+| `registry_identity_id` | `string` | `null` | Resource ID of an existing user-assigned managed identity that every Container App and Container Apps job this module creates (ca-api, ca-frontend, ca-workers, caj-migrate, and ca-edge when its image is on the install... |
 
 ## Key Vault database secret names
 

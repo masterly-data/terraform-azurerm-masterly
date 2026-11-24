@@ -144,8 +144,8 @@ output "user_assigned_identity_ids" {
   # ingress_external: which identity an app runs as is a security posture a test must be
   # able to pin, and it cannot be read off the resource — `identity` is a dynamic block
   # that is absent entirely on an app with none.
-  value       = var.user_assigned_identity_ids
-  description = "User-assigned managed identity resource IDs attached to the app. Empty when the app has none."
+  value       = local.identity_ids
+  description = "User-assigned managed identity resource IDs attached to the app: its own, then the pull identity (registry_identity_id) when it pulls as one. Empty when the app has none."
 }
 
 output "ingress_allow_insecure" {

@@ -31,7 +31,13 @@ variable "acr_login_server" {
 variable "user_assigned_identity_ids" {
   type        = list(string)
   default     = []
-  description = "User-assigned managed identity resource IDs attached to the app. The first is used for registry pull."
+  description = "User-assigned managed identity resource IDs attached to the app. The first is used for registry pull, unless registry_identity_id is set."
+}
+
+variable "registry_identity_id" {
+  type        = string
+  default     = null
+  description = "Resource ID of a user-assigned identity, owned by the caller, that the app pulls its image with instead of the first of user_assigned_identity_ids. Attached to the app in addition to them, last, and only when the app has a registry block pulled as an identity (acr_login_server set, registry_username null). Null (the default) pulls with the first of user_assigned_identity_ids."
 }
 
 variable "revision_mode" {

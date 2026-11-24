@@ -309,6 +309,11 @@ Each part of the install runs as a user-assigned managed identity of its own, ho
 grants that part uses, so a compromised app reaches no more than its own role needs. `<prefix>` is
 `name_prefix`. With `acr_id` set, the module grants `AcrPull` to each identity below that pulls an
 image; with `acr_id` null, grant it yourself to the matching `*_identity_principal_id` output.
+With `registry_identity_id` set, none of them pulls: every app and job also carries that identity,
+which you created and granted pull yourself, and pulls as it, and the module grants `AcrPull` to
+none of the identities below, whatever `acr_id` says. Each still runs as itself: its grants,
+`AZURE_CLIENT_ID`, Key Vault references and database role are unchanged, and the `AcrPull` in the
+table below is then not held.
 
 | Identity | Runs | Holds | Never holds |
 |---|---|---|---|
@@ -351,7 +356,7 @@ verification codes from `ca-api` itself, while it handles the request, so the gr
 **Without the vault and with `acr_id` null**, where the apps pull from a registry as their
 identities and you grant AcrPull yourself, `ca-workers` also stays on `id-<prefix>-apps`:
 `id-<prefix>-workers` would be created in the apply that moves `ca-workers` to it, before you could
-grant it AcrPull. Set `acr_id`, or turn the vault on, and it moves.
+grant it AcrPull. Set `acr_id` or `registry_identity_id`, or turn the vault on, and it moves.
 
 **The one shape where two apps share an identity in production.** With `migrations = "start"` and
 `database_auth = "entra"` on the starter server, both `ca-api` and `ca-workers` migrate at start

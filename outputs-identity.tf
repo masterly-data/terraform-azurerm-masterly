@@ -17,7 +17,7 @@ output "image_references" {
 
 output "apps_identity_principal_id" {
   value       = module.apps_identity.principal_id
-  description = "Principal (object) id of ca-api's user-assigned identity, id-<prefix>-apps (ca-workers runs as it too only with migrations = \"start\" on database_auth = \"entra\" on the starter server) — grant AcrPull on your registry scope to this principal when acr_id is left null in the managed_identity or customer_registry mode. The frontend, the migrate job with migrations = \"job\", and the workers wherever workers_identity_principal_id is set have their own; grant each."
+  description = "Principal (object) id of ca-api's user-assigned identity, id-<prefix>-apps (ca-workers runs as it too only with migrations = \"start\" on database_auth = \"entra\" on the starter server) — grant AcrPull on your registry scope to this principal when acr_id is left null in the managed_identity or customer_registry mode. The frontend, the migrate job with migrations = \"job\", and the workers wherever workers_identity_principal_id is set have their own; grant each. With registry_identity_id set, no app pulls as its own identity, and only that identity needs the grant."
 }
 
 output "apps_identity_client_id" {
@@ -27,15 +27,15 @@ output "apps_identity_client_id" {
 
 output "frontend_identity_principal_id" {
   value       = module.frontend_identity.principal_id
-  description = "Principal (object) id of the frontend's own user-assigned identity — image pull only. Grant AcrPull on your registry scope to this principal too when acr_id is left null."
+  description = "Principal (object) id of the frontend's own user-assigned identity — image pull only. Grant AcrPull on your registry scope to this principal too when acr_id is left null, unless registry_identity_id is set (the frontend then pulls as that identity)."
 }
 
 output "migrate_identity_principal_id" {
   value       = one(module.migrate_identity[*].principal_id)
-  description = "Principal (object) id of the migrate job's own user-assigned identity (id-<prefix>-migrate, the job caj-migrate runs as), with migrations = \"job\"; null otherwise. Grant AcrPull on your registry scope to this principal too when acr_id is left null in the managed_identity or customer_registry mode, or the job cannot pull the api image."
+  description = "Principal (object) id of the migrate job's own user-assigned identity (id-<prefix>-migrate, the job caj-migrate runs as), with migrations = \"job\"; null otherwise. Grant AcrPull on your registry scope to this principal too when acr_id is left null in the managed_identity or customer_registry mode, or the job cannot pull the api image; not with registry_identity_id set, when the job pulls as that identity."
 }
 
 output "workers_identity_principal_id" {
   value       = one(module.workers_identity[*].principal_id)
-  description = "Principal (object) id of ca-workers' own user-assigned identity (id-<prefix>-workers, which ca-workers runs and pulls as), wherever ca-workers exists, except migrations = \"start\" with database_auth = \"entra\" on the starter server and an install without the Key Vault that pulls as its identities with acr_id null; null otherwise, where ca-workers runs as the apps identity. Grant AcrPull on your registry scope to this principal before applying when acr_id is left null in the managed_identity or customer_registry mode, or ca-workers cannot pull the api image."
+  description = "Principal (object) id of ca-workers' own user-assigned identity (id-<prefix>-workers, which ca-workers runs and pulls as), wherever ca-workers exists, except migrations = \"start\" with database_auth = \"entra\" on the starter server and an install without the Key Vault that pulls as its identities with acr_id null and registry_identity_id null; null otherwise, where ca-workers runs as the apps identity. Grant AcrPull on your registry scope to this principal before applying when acr_id is left null in the managed_identity or customer_registry mode, or ca-workers cannot pull the api image; not with registry_identity_id set, when ca-workers pulls as that identity."
 }

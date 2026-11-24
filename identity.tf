@@ -74,11 +74,11 @@ locals {
 
   # registry_location, else the deprecated acr_login_server (where "" renders no registry block).
   # With neither, Masterly's registry when something pulls from it (a credential mode, a pull
-  # credential or an AcrPull grant through acr_id); otherwise "", no registry block and public
-  # images, which is what acr_login_server = "" migrates to.
+  # credential, an AcrPull grant through acr_id or a pull identity); otherwise "", no registry block
+  # and public images, which is what acr_login_server = "" migrates to.
   registry_server = var.registry_location != null ? var.registry_location : (
     var.acr_login_server != null ? var.acr_login_server : (
-      var.registry_credential_mode != null || local.registry_token_set || local.registry_username_set || var.acr_id != null ? "masterly.azurecr.io" : ""
+      var.registry_credential_mode != null || local.registry_token_set || local.registry_username_set || var.acr_id != null || var.registry_identity_id != null ? "masterly.azurecr.io" : ""
     )
   )
 
@@ -106,6 +106,15 @@ locals {
     local.registry_token_set ? var.registry_token.password : var.registry_password
   )
   registry_password_secret_name = local.registry_token_mode ? "registry-password" : null
+
+  # The caller's pull identity (registry_identity_id): every app and job that pulls as an identity
+  # pulls as it, and the module grants pull to none of its own identities, which then never pull.
+  # Its variable refuses it with the token mode and with no registry, so wherever an app has a
+  # registry block here, it pulls with this identity.
+  registry_identity_id = var.registry_identity_id
+  # Whether the module grants AcrPull on acr_id to its own identities: an identity mode, acr_id set,
+  # and no shared pull identity.
+  acr_pull_own_identities = !local.registry_token_mode && var.acr_id != null && var.registry_identity_id == null
 
   # The images the apps are created with, after the channel and the explicit inputs are resolved
   # (module.release_channel below). Every app reads these, as does the licence claims-floor check.
@@ -172,14 +181,16 @@ module "release_channel" {
 # Optional: grant pull on the registry (the deploying principal needs
 # roleAssignments/write on the registry's scope — true for the demo install, where
 # platform-iac's principal manages the shared registry; customers typically grant
-# pull out of band and leave acr_id null). The token mode pulls with its credential, so
-# it creates no grant.
+# pull out of band and leave acr_id null). The token mode pulls with its credential, and
+# registry_identity_id pulls as the caller's identity, which the caller grants, so neither
+# creates a grant.
 #
-# EVERY identity needs the grant when acr_id is null and you grant out of band — see the
+# EVERY identity needs the grant when acr_id is null and you grant out of band (unless
+# registry_identity_id is set, when only that identity does) — see the
 # `apps_identity_principal_id` / `frontend_identity_principal_id` /
 # `migrate_identity_principal_id` / `workers_identity_principal_id` outputs.
 resource "azurerm_role_assignment" "acr_pull" {
-  count = !local.registry_token_mode && var.acr_id != null ? 1 : 0
+  count = local.acr_pull_own_identities ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -187,7 +198,7 @@ resource "azurerm_role_assignment" "acr_pull" {
 }
 
 resource "azurerm_role_assignment" "acr_pull_frontend" {
-  count = !local.registry_token_mode && var.acr_id != null ? 1 : 0
+  count = local.acr_pull_own_identities ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -195,7 +206,7 @@ resource "azurerm_role_assignment" "acr_pull_frontend" {
 }
 
 resource "azurerm_role_assignment" "acr_pull_migrate" {
-  count = local.migrate_job && !local.registry_token_mode && var.acr_id != null ? 1 : 0
+  count = local.migrate_job && local.acr_pull_own_identities ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -203,9 +214,9 @@ resource "azurerm_role_assignment" "acr_pull_migrate" {
 }
 
 # ca-workers pulls as its own identity once it runs as it (the registry block takes the app's
-# first identity, modules/aca-container-app).
+# first identity, modules/aca-container-app), unless registry_identity_id is set.
 resource "azurerm_role_assignment" "acr_pull_workers" {
-  count = local.workers_own_identity && !local.registry_token_mode && var.acr_id != null ? 1 : 0
+  count = local.workers_own_identity && local.acr_pull_own_identities ? 1 : 0
 
   scope                = var.acr_id
   role_definition_name = "AcrPull"

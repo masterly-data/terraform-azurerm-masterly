@@ -200,9 +200,10 @@ resource "azurerm_container_app_job" "migrate" {
   replica_timeout_in_seconds = 1800
   replica_retry_limit        = 0
 
+  # Its own identity, and the caller's pull identity (registry_identity_id) when it pulls with one.
   identity {
     type         = "UserAssigned"
-    identity_ids = [module.migrate_identity[0].id]
+    identity_ids = local.registry_server != "" && local.registry_username == null && local.registry_identity_id != null ? [module.migrate_identity[0].id, local.registry_identity_id] : [module.migrate_identity[0].id]
   }
 
   schedule_trigger_config {
@@ -211,12 +212,13 @@ resource "azurerm_container_app_job" "migrate" {
     replica_completion_count = 1
   }
 
-  # The apps' registry block (modules/aca-container-app), with the migrate identity.
+  # The apps' registry block (modules/aca-container-app), with the migrate identity, or the
+  # caller's pull identity when registry_identity_id is set.
   dynamic "registry" {
     for_each = local.registry_server == "" ? [] : [1]
     content {
       server               = local.registry_server
-      identity             = local.registry_username == null ? module.migrate_identity[0].id : null
+      identity             = local.registry_username == null ? (local.registry_identity_id != null ? local.registry_identity_id : module.migrate_identity[0].id) : null
       username             = local.registry_username
       password_secret_name = local.registry_password_secret_name
     }
