@@ -11,19 +11,19 @@ Published on the [Terraform Registry](https://registry.terraform.io/modules/mast
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "0.26.0"
+  version = "0.27.0"
 }
 ```
 
 <!-- release-manifest:pins:begin -->
-Pin the exact version, as the examples on this page do (`version = "0.26.0"`).
+Pin the exact version, as the examples on this page do (`version = "0.27.0"`).
 Terraform does not lock module versions: `.terraform.lock.hcl` records providers only, so
 with a range every fresh `terraform init` (a new laptop, a CI runner, a clean clone) takes
 the newest release the range admits. With an exact version your configuration is the
 record of what the install runs, and an upgrade is a reviewed one-line change.
-If you do want a range, `version = "~> 0.26.0"` takes patches of 0.26 only: releases
+If you do want a range, `version = "~> 0.27.0"` takes patches of 0.27 only: releases
 that add no capability, no new input or required setting and no database migration.
-`version = "~> 0.26"` also takes every later 0.x minor.
+`version = "~> 0.27"` also takes every later 0.x minor.
 Before 1.0.0 a minor may carry a breaking change, listed under its own heading
 in the changelog, so read it before you take one.
 [Versioning](#versioning) says what each kind of release promises.
@@ -68,7 +68,7 @@ Every input, grouped by subsystem, is in [docs/inputs.md](docs/inputs.md) (gener
 ```hcl
 module "masterly" {
   source  = "masterly-data/masterly/azurerm"
-  version = "0.26.0"
+  version = "0.27.0"
 
   # Production posture (ADR 0066): the app refuses fixture seams; the module refuses the
   # combination at plan time unless everything below is wired.
@@ -84,8 +84,8 @@ module "masterly" {
   initial_owner_email = "mdm-owner@acme.example" # one-shot Owner bootstrap on first OIDC sign-in
   # The pair this module version was released against, from MANIFEST.json. Versioning names
   # the oldest image each app can run on, and the tags that have no published image.
-  api_image           = "masterly.azurecr.io/release/api:v0.138.0"
-  frontend_image      = "masterly.azurecr.io/release/frontend:v0.146.0"
+  api_image           = "masterly.azurecr.io/release/api:v0.140.0"
+  frontend_image      = "masterly.azurecr.io/release/frontend:v0.148.0"
 
   # Durable seams (required for production): sealed secrets + multi-replica sessions +
   # the dedicated pipeline workers.
@@ -1347,6 +1347,7 @@ manifest rather than copying out of this table — the table itself is generated
 <!-- release-manifest:begin -->
 | Module version | `api_image` | `frontend_image` | Released |
 |---|---|---|---|
+| `0.27.0` | `masterly.azurecr.io/release/api:v0.140.0` | `masterly.azurecr.io/release/frontend:v0.148.0` | 2026-11-24 |
 | `0.26.0` | `masterly.azurecr.io/release/api:v0.138.0` | `masterly.azurecr.io/release/frontend:v0.146.0` | 2026-11-23 |
 | `0.25.0` | `masterly.azurecr.io/release/api:v0.138.0` | `masterly.azurecr.io/release/frontend:v0.146.0` | 2026-11-20 |
 | `0.24.0` | `masterly.azurecr.io/release/api:v0.137.0` | `masterly.azurecr.io/release/frontend:v0.145.0` | 2026-11-10 |

@@ -2,7 +2,7 @@
   "$comment": "The release manifest for terraform-azurerm-masterly. One entry per released module version, keyed by that version - the module version is the one customer-facing version (ADR 0062). A release is cut in a commit that merges to main before its vX.Y.Z tag exists, so on main the newest entries may not be published yet; a version is published once its tag exists, and the file at a tag lists only published versions. Each entry names the api and frontend images that module version was released against: the pair Masterly's own reference install had applied when the release was cut, optionally the digests of those builds, optionally a known_issue on a release later found faulty, and the licence claims version the api image verifies (api_claims_version; it may be absent from a release cut before the field, and then reads as 0). image_floors states, per app, the oldest image an install can run and the image tags that have no published image. Machine-readable on purpose - the README, the public docs and any pinned install are meant to READ this, never to retype it. The shape is a published contract: docs/release-manifest.md documents every field, what is stable and what may be added. Checked by scripts/check_release_manifest.py; see 'Cutting a release' in the README.",
   "schema_version": 1,
   "module": "masterly-data/masterly/azurerm",
-  "latest": "0.26.0",
+  "latest": "0.27.0",
   "image_floors": {
     "api": {
       "minimum": "v0.132.2",
@@ -15,6 +15,19 @@
     }
   },
   "releases": {
+    "0.27.0": {
+      "date": "2026-11-24",
+      "images": {
+        "api": "masterly.azurecr.io/release/api:v0.140.0",
+        "frontend": "masterly.azurecr.io/release/frontend:v0.148.0"
+      },
+      "digests": {
+        "api": "sha256:7b3fd8167666fbcaed31dd4900ad9d45f84fef9887c34eecad9d940b6a7852c9",
+        "frontend": "sha256:bf809260c09100478241a22c3385dd8f418ce7cfe6df4647b6b92812e736e598"
+      },
+      "api_claims_version": 4,
+      "edge_image": "docker.io/envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb"
+    },
     "0.26.0": {
       "date": "2026-11-23",
       "images": {
