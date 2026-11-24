@@ -300,7 +300,7 @@ def run(args) -> str | None:
     """The text to print, or None when the mode prints nothing. Raises Refused."""
     # Provenance of these three paths: the operator's own --manifest, --summary-dir and --changelog,
     # else the RELEASE_MANIFEST_PATH, CUSTOMER_SUMMARY_DIR and RELEASE_CHANGELOG_PATH defaults. The
-    # workflows pass $RUNNER_TEMP paths and never --write. Nothing a pull request author or an outside
+    # workflows pass $RUNNER_TEMP paths or leave the repository defaults, and never --write. Nothing a pull request author or an outside
     # party controls reaches them, and every version is checked against X.Y.Z before it joins a path.
     manifest = Path(args.manifest or contract.MANIFEST_PATH)
     directory = Path(args.summary_dir or contract.SUMMARY_DIR)
