@@ -1521,6 +1521,7 @@ module "api" {
 
   registry_username             = local.registry_username
   registry_password_secret_name = local.registry_password_secret_name
+  registry_identity_id          = local.registry_identity_id
 
   # Internal by default: the api sits behind the frontend's BFF and nothing outside the
   # environment needs it. Opt out when something must call /v1 directly — the published
@@ -1748,6 +1749,7 @@ module "frontend" {
 
   registry_username             = local.registry_username
   registry_password_secret_name = local.registry_password_secret_name
+  registry_identity_id          = local.registry_identity_id
 
   ingress_external    = var.frontend_ingress_external
   ingress_target_port = 3000

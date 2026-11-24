@@ -13,10 +13,17 @@ locals {
   # below, with a message that says why.
   registry = var.acr_login_server == "" ? null : {
     server               = var.acr_login_server
-    identity             = var.registry_username == null ? try(var.user_assigned_identity_ids[0], null) : null
+    identity             = var.registry_username == null ? (var.registry_identity_id != null ? var.registry_identity_id : try(var.user_assigned_identity_ids[0], null)) : null
     username             = var.registry_username
     password_secret_name = var.registry_username != null ? var.registry_password_secret_name : null
   }
+
+  # The identities attached to the app: its own, then the caller's pull identity when the registry
+  # block pulls as it. Its own stay first and unchanged, so whatever reads the app's identity
+  # (a vault reference, a scale rule, AZURE_CLIENT_ID) never names the pull identity, and with
+  # registry_identity_id null the list is exactly user_assigned_identity_ids.
+  pull_identity_attached = var.registry_identity_id != null && local.registry != null && var.registry_username == null
+  identity_ids           = local.pull_identity_attached ? concat(var.user_assigned_identity_ids, [var.registry_identity_id]) : var.user_assigned_identity_ids
 }
 
 resource "azurerm_container_app" "this" {
@@ -26,10 +33,10 @@ resource "azurerm_container_app" "this" {
   revision_mode                = var.revision_mode
 
   dynamic "identity" {
-    for_each = length(var.user_assigned_identity_ids) > 0 ? [1] : []
+    for_each = length(local.identity_ids) > 0 ? [1] : []
     content {
       type         = "UserAssigned"
-      identity_ids = var.user_assigned_identity_ids
+      identity_ids = local.identity_ids
     }
   }
 
@@ -299,9 +306,9 @@ resource "azurerm_container_app" "this" {
       condition = (
         var.acr_login_server == "" ||
         var.registry_username != null ||
-        length(var.user_assigned_identity_ids) > 0
+        length(local.identity_ids) > 0
       )
-      error_message = "acr_login_server requires managed-identity pull (user_assigned_identity_ids) or credential pull (registry_username)."
+      error_message = "acr_login_server requires managed-identity pull (user_assigned_identity_ids or registry_identity_id) or credential pull (registry_username)."
     }
 
     precondition {

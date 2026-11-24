@@ -41,6 +41,17 @@ inventing one now would be exactly the retyped-value failure the manifest exists
   release check refuses a value with no digest or in any other shape, and on a tag refuses a newest
   entry whose `edge_image` is not `edge_default_image` in `edge.tf`, or an `edge.tf` whose default
   it cannot read. See `docs/release-manifest.md`.
+- `registry_identity_id`: the resource ID of an existing user-assigned identity that every Container
+  App and Container Apps job the module creates (`ca-api`, `ca-frontend`, `ca-workers`, `caj-migrate`,
+  and `ca-edge` when its image is on the install's registry) pulls its image with. Each attaches it
+  beside its own identity and names it in its registry block; each still runs as its own identity,
+  with every grant, `AZURE_CLIENT_ID`, Key Vault reference and database role unchanged. The module
+  writes no role assignment for it, and with it set writes no `AcrPull` for its own identities
+  either, even with `acr_id` set, which then only connects the registry's private endpoint. Without
+  the Key Vault and with `acr_id` null, `ca-workers` then runs as its own identity, as no pull grant
+  has to reach it first. The plan refuses it with the token mode (`registry_token`, or the
+  deprecated `registry_username` and `registry_password`) and with `acr_login_server = ""`. Unset,
+  the default, an install plans exactly as before.
 
 ### Changed
 

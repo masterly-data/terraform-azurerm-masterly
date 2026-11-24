@@ -109,12 +109,13 @@ locals {
   #     pull. Through 0.26.0 every install without the vault kept ca-workers on the apps identity;
   #     it moves now where the module grants AcrPull itself (acr_id), pulls with a token, or pulls
   #     public images. An install with the vault moved in 0.24.0, with the out-of-band grant made
-  #     first, as its upgrade note says.
+  #     first, as its upgrade note says. With registry_identity_id set nothing pulls as
+  #     id-<prefix>-workers, so no grant has to reach it first and it moves there too.
   # Every `*_workers` grant and Redis policy counts on this, so an install without ca-workers gets
   # none of them. nonsensitive() on database_entra alone, the same narrow unmarking as main.tf's
   # presence tests: whether a DSN was supplied is not the secret, and a marked value here would hide
   # which identity ca-workers runs as from every plan.
-  workers_pull_needs_a_manual_grant = !var.enable_key_vault && !local.registry_token_mode && var.acr_id == null && local.registry_server != ""
+  workers_pull_needs_a_manual_grant = !var.enable_key_vault && !local.registry_token_mode && var.acr_id == null && local.registry_server != "" && var.registry_identity_id == null
   workers_own_identity              = var.enable_workers && (local.migrate_app_roles || !nonsensitive(local.database_entra)) && !local.workers_pull_needs_a_manual_grant
 
   # Whether ca-workers' env names its own identity's client id (workers_env, main.tf): where it runs
@@ -188,6 +189,7 @@ module "workers" {
 
   registry_username             = local.registry_username
   registry_password_secret_name = local.registry_password_secret_name
+  registry_identity_id          = local.registry_identity_id
 
   ingress_enabled = false
   command         = ["python", "-m", "masterly_app.workers"]

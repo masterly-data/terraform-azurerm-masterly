@@ -1217,3 +1217,327 @@ run "an_image_on_localhost_or_a_registry_port_plans" {
     error_message = "An image on localhost, or on a registry named by host and port, must plan."
   }
 }
+
+# --- A shared pull identity (registry_identity_id) ---------------------------------------------
+# Every app and job that pulls as an identity pulls as the caller's identity instead of its own,
+# carries it beside its own (its own first), and the module grants pull to none of its own
+# identities. The STG shape: a private registry in the customer_registry mode, acr_id null, no
+# credential, in production with the migrate job, ca-workers and ca-edge on the same registry.
+# The identities are pinned with override_module so the wiring is comparable at plan. The first
+# run is the same install without the input, which must pull as before.
+
+run "registry_identity_id_null_pulls_each_app_and_job_as_its_own_identity" {
+  command = plan
+
+  variables {
+    mode                     = "production"
+    identity_binding         = "oidc"
+    oidc_allowed_issuers     = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience            = "api-client-id"
+    oidc_jwks_uri            = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id           = "bff-client-id"
+    oidc_client_secret       = "s3cret"
+    oidc_authority           = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri        = "https://app.example.com/api/auth/callback"
+    license_token            = "eyJ.fake.jwt"
+    license_public_jwk       = "{\"kty\":\"EC\"}"
+    initial_owner_email      = "owner@example.com"
+    enable_key_vault         = true
+    enable_redis             = true
+    redis_offering           = "cache"
+    api_max_replicas         = 3
+    enable_workers           = true
+    migrations               = "job"
+    external_database_url    = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    api_image                = null
+    frontend_image           = null
+    acr_login_server         = null
+    registry_location        = "masterlycp.azurecr.io"
+    registry_credential_mode = "customer_registry"
+    edge                     = { image = "masterlycp.azurecr.io/mirror/envoy:v1.40.2@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+  override_module {
+    target  = module.frontend_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend", principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff", client_id = "ffffffff-ffff-ffff-ffff-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-frontend" }
+  }
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+  override_module {
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
+  }
+  override_module {
+    target  = module.edge_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-edge", principal_id = "99999999-9999-9999-9999-999999999999", client_id = "99999999-9999-9999-9999-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-edge" }
+  }
+
+  assert {
+    condition = (
+      module.api.registry.identity == module.apps_identity.id &&
+      module.api.user_assigned_identity_ids == tolist([module.apps_identity.id]) &&
+      module.frontend.registry.identity == module.frontend_identity.id &&
+      module.frontend.user_assigned_identity_ids == tolist([module.frontend_identity.id]) &&
+      module.workers[0].registry.identity == module.workers_identity[0].id &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id])
+    )
+    error_message = "With registry_identity_id null, each app must pull as its own identity and carry it alone."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app_job.migrate[0].registry[0].server == "masterlycp.azurecr.io" &&
+      azurerm_container_app_job.migrate[0].registry[0].identity == module.migrate_identity[0].id &&
+      azurerm_container_app_job.migrate[0].identity[0].identity_ids == toset([module.migrate_identity[0].id])
+    )
+    error_message = "With registry_identity_id null, caj-migrate must pull as id-<prefix>-migrate and carry it alone."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app.edge[0].registry[0].server == "masterlycp.azurecr.io" &&
+      azurerm_container_app.edge[0].registry[0].identity == module.edge_identity[0].id &&
+      azurerm_container_app.edge[0].identity[0].identity_ids == toset([module.edge_identity[0].id])
+    )
+    error_message = "With registry_identity_id null, ca-edge must pull as id-<prefix>-edge and carry it alone."
+  }
+}
+
+run "registry_identity_id_pulls_every_app_and_job_as_the_given_identity" {
+  command = plan
+
+  variables {
+    mode                     = "production"
+    identity_binding         = "oidc"
+    oidc_allowed_issuers     = "https://login.microsoftonline.com/aaa/v2.0"
+    oidc_audience            = "api-client-id"
+    oidc_jwks_uri            = "https://login.microsoftonline.com/organizations/discovery/v2.0/keys"
+    oidc_client_id           = "bff-client-id"
+    oidc_client_secret       = "s3cret"
+    oidc_authority           = "https://login.microsoftonline.com/organizations/v2.0"
+    oidc_redirect_uri        = "https://app.example.com/api/auth/callback"
+    license_token            = "eyJ.fake.jwt"
+    license_public_jwk       = "{\"kty\":\"EC\"}"
+    initial_owner_email      = "owner@example.com"
+    enable_key_vault         = true
+    enable_redis             = true
+    redis_offering           = "cache"
+    api_max_replicas         = 3
+    enable_workers           = true
+    migrations               = "job"
+    external_database_url    = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    api_image                = null
+    frontend_image           = null
+    acr_login_server         = null
+    registry_location        = "masterlycp.azurecr.io"
+    registry_credential_mode = "customer_registry"
+    registry_identity_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-pull/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-pull"
+    edge                     = { image = "masterlycp.azurecr.io/mirror/envoy:v1.40.2@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
+  }
+
+  override_module {
+    target  = module.apps_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-apps", principal_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", client_id = "aaaaaaaa-aaaa-aaaa-aaaa-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-apps" }
+  }
+  override_module {
+    target  = module.frontend_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-frontend", principal_id = "ffffffff-ffff-ffff-ffff-ffffffffffff", client_id = "ffffffff-ffff-ffff-ffff-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-frontend" }
+  }
+  override_module {
+    target  = module.workers_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-workers", principal_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_id = "bbbbbbbb-bbbb-bbbb-bbbb-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-workers" }
+  }
+  override_module {
+    target  = module.migrate_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate", principal_id = "dddddddd-dddd-dddd-dddd-dddddddddddd", client_id = "dddddddd-dddd-dddd-dddd-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-migrate" }
+  }
+  override_module {
+    target  = module.edge_identity
+    outputs = { id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-edge", principal_id = "99999999-9999-9999-9999-999999999999", client_id = "99999999-9999-9999-9999-cccccccccccc", tenant_id = "00000000-0000-0000-0000-000000000000", name = "id-masterly-edge" }
+  }
+
+  assert {
+    condition = alltrue([
+      for r in [module.api.registry, module.frontend.registry, module.workers[0].registry] :
+      r.server == "masterlycp.azurecr.io" && r.identity == var.registry_identity_id && r.username == null && r.password_secret_name == null
+    ])
+    error_message = "With registry_identity_id set, ca-api, ca-frontend and ca-workers must pull from the registry as that identity, with no username or password secret."
+  }
+
+  assert {
+    condition = (
+      module.api.user_assigned_identity_ids == tolist([module.apps_identity.id, var.registry_identity_id]) &&
+      module.frontend.user_assigned_identity_ids == tolist([module.frontend_identity.id, var.registry_identity_id]) &&
+      module.workers[0].user_assigned_identity_ids == tolist([module.workers_identity[0].id, var.registry_identity_id])
+    )
+    error_message = "Each app must carry its own identity first and the pull identity after it."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app_job.migrate[0].registry[0].server == "masterlycp.azurecr.io" &&
+      azurerm_container_app_job.migrate[0].registry[0].identity == var.registry_identity_id &&
+      azurerm_container_app_job.migrate[0].identity[0].identity_ids == toset([module.migrate_identity[0].id, var.registry_identity_id])
+    )
+    error_message = "caj-migrate must pull as registry_identity_id and carry it beside id-<prefix>-migrate."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app.edge[0].registry[0].server == "masterlycp.azurecr.io" &&
+      azurerm_container_app.edge[0].registry[0].identity == var.registry_identity_id &&
+      azurerm_container_app.edge[0].identity[0].identity_ids == toset([module.edge_identity[0].id, var.registry_identity_id])
+    )
+    error_message = "ca-edge, with its image on the install's registry, must pull as registry_identity_id and carry it beside id-<prefix>-edge."
+  }
+
+  # Only the pull moves: what each app runs as, and every vault reference, stay on its own identity.
+  assert {
+    condition = (
+      module.api.secret_ref_identity_ids == tolist([module.apps_identity.id]) &&
+      module.frontend.secret_ref_identity_ids == tolist([module.frontend_identity.id]) &&
+      module.workers[0].secret_ref_identity_ids == tolist([module.workers_identity[0].id]) &&
+      local.workers_own_identity
+    )
+    error_message = "With registry_identity_id set, each app must still resolve its vault references as its own identity."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.acr_pull) == 0 &&
+      length(azurerm_role_assignment.acr_pull_frontend) == 0 &&
+      length(azurerm_role_assignment.acr_pull_workers) == 0 &&
+      length(azurerm_role_assignment.acr_pull_migrate) == 0 &&
+      length(azurerm_role_assignment.acr_pull_edge) == 0
+    )
+    error_message = "The module must write no AcrPull grant with registry_identity_id set."
+  }
+}
+
+# With acr_id set too, still no AcrPull: the caller grants its pull identity. acr_id still names the
+# registry the private endpoint connects to. Set alone, the registry is Masterly's, as when a mode
+# is set.
+run "registry_identity_id_with_acr_id_grants_nothing_and_keeps_the_private_endpoint" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs     = ["203.0.113.7/32"]
+    acr_login_server          = null
+    enable_workers            = true
+    acr_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+    registry_private_endpoint = true
+    registry_identity_id      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-pull/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-pull"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.acr_pull) == 0 &&
+      length(azurerm_role_assignment.acr_pull_frontend) == 0 &&
+      length(azurerm_role_assignment.acr_pull_workers) == 0 &&
+      length(azurerm_role_assignment.acr_pull_migrate) == 0
+    )
+    error_message = "With registry_identity_id set, acr_id must grant AcrPull to none of the module's identities."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.registry) == 1 &&
+      azurerm_private_endpoint.registry[0].private_service_connection[0].private_connection_resource_id == var.acr_id
+    )
+    error_message = "acr_id must still connect the registry's private endpoint with registry_identity_id set."
+  }
+
+  assert {
+    condition = (
+      output.image_references.registry_server == "masterly.azurecr.io" &&
+      output.image_references.registry_credential_mode == "managed_identity" &&
+      alltrue([for r in [module.api.registry, module.frontend.registry, module.workers[0].registry] : r.identity == var.registry_identity_id])
+    )
+    error_message = "registry_identity_id with acr_id must pull from Masterly's registry, in the managed_identity mode, as the given identity."
+  }
+}
+
+# Without the vault and with acr_id null, ca-workers stays on the apps identity while its own would
+# need a pull grant first. With registry_identity_id nothing pulls as id-<prefix>-workers, so it
+# moves to it.
+run "registry_identity_id_moves_ca_workers_to_its_own_identity_without_the_vault" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    acr_login_server         = null
+    enable_workers           = true
+    registry_credential_mode = "managed_identity"
+    registry_identity_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-pull/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-pull"
+  }
+
+  assert {
+    condition     = local.workers_own_identity && !local.workers_pull_needs_a_manual_grant && module.workers[0].registry.identity == var.registry_identity_id
+    error_message = "With registry_identity_id set, ca-workers must run as its own identity and pull as the given one."
+  }
+}
+
+run "registry_identity_id_that_is_not_a_user_assigned_identity_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    acr_login_server         = null
+    registry_credential_mode = "managed_identity"
+    registry_identity_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.ContainerRegistry/registries/masterly"
+  }
+
+  expect_failures = [var.registry_identity_id]
+}
+
+run "registry_identity_id_with_the_token_mode_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs    = ["203.0.113.7/32"]
+    acr_login_server         = null
+    registry_credential_mode = "token"
+    registry_token = {
+      username = "00000000-0000-0000-0000-000000000000"
+      password = "sp-client-secret"
+    }
+    registry_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-pull/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-pull"
+  }
+
+  expect_failures = [var.registry_identity_id]
+}
+
+# The deprecated pair derives the token mode with no mode stated: refused the same way.
+run "registry_identity_id_with_the_deprecated_credential_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    acr_login_server      = null
+    registry_username     = "install-puller"
+    registry_password     = "pull-secret"
+    registry_identity_id  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-pull/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-pull"
+  }
+
+  expect_failures = [var.registry_identity_id]
+}
+
+# The file-wide acr_login_server = "" renders no registry block, so there is nothing to pull with it.
+run "registry_identity_id_with_no_registry_block_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    registry_identity_id  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-pull/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-pull"
+  }
+
+  expect_failures = [var.registry_identity_id]
+}

@@ -73,3 +73,24 @@ variable "registry_password" {
   sensitive   = true
   description = "Deprecated: use registry_token. The pull principal's client secret (ADR 0067), stored as the Container App secret registry-password on every app."
 }
+
+variable "registry_identity_id" {
+  type        = string
+  default     = null
+  description = "Resource ID of an existing user-assigned managed identity that every Container App and Container Apps job this module creates (ca-api, ca-frontend, ca-workers, caj-migrate, and ca-edge when its image is on the install's registry) pulls its image with, instead of its own identity. One pull identity per registry, created and granted pull once, out of band: the module attaches it to each of them beside the app's own identity and names it in the registry block, and that is all. It writes no role assignment for it, whatever acr_id says; grant it pull on your registry yourself (AcrPull, or under the registry's repository permissions mode its repository reader role, directly or through a group). Each app still runs as its own identity: every grant, AZURE_CLIENT_ID, Key Vault reference, scale rule and database role stays there. With it set, the module writes no AcrPull for the apps' own identities either, because none of them pulls; acr_id is then used only for the registry's private endpoint (registry_private_endpoint), and ca-workers runs as its own identity on an install without the Key Vault too, where it would otherwise stay on the apps identity until a pull grant could reach it. Pulls as an identity, so it is used in the managed_identity and customer_registry modes; the plan refuses it with registry_credential_mode = \"token\", a registry_token or the deprecated registry_username and registry_password, and with acr_login_server = \"\" (no registry block, nothing pulls). Set without registry_location or a mode, the registry is Masterly's, as when a mode is set. Null (the default) pulls each app as its own identity, as before this input existed."
+
+  validation {
+    condition     = var.registry_identity_id == null ? true : can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.registry_identity_id))
+    error_message = "registry_identity_id must be the resource ID of a user-assigned managed identity: /subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+
+  validation {
+    condition     = var.registry_identity_id == null || (var.registry_credential_mode != "token" && nonsensitive(var.registry_token == null) && var.registry_username == null)
+    error_message = "registry_identity_id pulls as an identity, and the token mode pulls with a credential: set one or the other. Remove registry_identity_id, or remove registry_token (or registry_username and registry_password) and registry_credential_mode = \"token\"."
+  }
+
+  validation {
+    condition     = var.registry_identity_id == null || var.acr_login_server != ""
+    error_message = "registry_identity_id needs a registry to pull from, and acr_login_server = \"\" renders none. Set registry_location to the registry the identity pulls from, or remove registry_identity_id."
+  }
+}

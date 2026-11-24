@@ -186,7 +186,8 @@ images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and
 `id-<prefix>-workers` (except with `migrations = "start"` on `database_auth = "entra"`), and with
 `migrations = "job"` the migrate job as `id-<prefix>-migrate` (see
 [docs/identity.md](docs/identity.md#workload-identities-one-per-role-adr-0120-6)), so an out-of-band
-`AcrPull` grant has to reach each of them.
+`AcrPull` grant has to reach each of them, unless they all pull as one identity you name in
+`registry_identity_id` (see "Getting the images").
 
 `api_internal_fqdn` keeps its name so existing configurations still plan, but the name is older
 than `api_ingress_external`: it holds the API's internal hostname only while the API is
@@ -328,6 +329,20 @@ pull; miss the third and the migrate job cannot pull, so no migration runs; miss
 `ca-workers` cannot pull its new revision. `workers_identity_principal_id` is known only once the
 identity exists: create it first (`terraform apply -target='module.masterly.module.workers_identity'`,
 with your own module name), grant it `AcrPull`, then apply the rest.
+
+**One pull identity for every app.** Instead of granting each identity, you can pull with one
+user-assigned identity you create and grant yourself, once: set `registry_identity_id` to its
+resource ID. Every app and job the module creates (`ca-api`, `ca-frontend`, `ca-workers`,
+`caj-migrate`, and `ca-edge` when its image is on your registry) then carries it beside its own
+identity and pulls as it, and the module writes no `AcrPull` grant at all, even with `acr_id` set
+(which then only connects the [private endpoint](#the-registry-over-a-private-endpoint)). The grant
+is yours to make on the registry: `AcrPull`, or, on a registry whose repository permissions are
+attribute-based, a repository reader role held directly or through a group. Only the pull changes:
+each app still runs as its own identity, with its own grants, `AZURE_CLIENT_ID`, Key Vault
+references and database role. It pulls as an identity, so it works in the `managed_identity` and
+`customer_registry` modes, and the plan refuses it with a registry token. This suits an install
+whose per-role identities are recreated often, or a registry where adding each new principal to a
+grant is itself a privileged step.
 
 **The default images.** Leave `api_image` and `frontend_image` unset and each resolves to
 `<registry_location>/release/<role>@<digest>`: the digest the `release_channel` release
