@@ -381,6 +381,76 @@ run "outbound_allowlist_no_docker_hub_with_a_mirrored_edge_image" {
   }
 }
 
+# An edge.image on Docker Hub is pulled from Docker Hub's three hosts, whichever of Docker Hub's
+# names the reference carries: docker.io alone admits no pull. The reference is the form
+# edge.image's own validation message gives as its example.
+run "outbound_allowlist_docker_hub_hosts_for_a_docker_io_edge_image" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = { image = "docker.io/envoyproxy/envoy:v1.41.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    frontend_environment  = "front"
+    edge_environment      = "front"
+    api_environment       = "app"
+  }
+
+  assert {
+    condition = (
+      length(setsubtract(["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"], [for e in output.outbound_allowlist["front"] : e.destination])) == 0 &&
+      alltrue([for e in output.outbound_allowlist["front"] : e.source == "edge.image" if strcontains(e.destination, "docker")])
+    )
+    error_message = "With edge.image on docker.io, ca-edge's subnet must list Docker Hub's three pull hosts, each with edge.image as its source."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for k, l in output.outbound_allowlist : [for e in l : e.destination != "docker.io" && !(k != "front" && strcontains(e.destination, "docker"))]
+    ]))
+    error_message = "No subnet may list the bare docker.io, which no pull uses, and no subnet but ca-edge's may list Docker Hub."
+  }
+}
+
+run "outbound_allowlist_docker_hub_hosts_for_an_index_docker_io_edge_image" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = { image = "Index.Docker.IO/envoyproxy/envoy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    frontend_environment  = "front"
+    edge_environment      = "front"
+    api_environment       = "app"
+  }
+
+  assert {
+    condition = (
+      length(setsubtract(["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"], [for e in output.outbound_allowlist["front"] : e.destination])) == 0 &&
+      alltrue([for e in output.outbound_allowlist["front"] : lower(e.destination) != "index.docker.io"])
+    )
+    error_message = "With edge.image on index.docker.io, in any case, ca-edge's subnet must list Docker Hub's three pull hosts and not the reference's host."
+  }
+}
+
+run "outbound_allowlist_docker_hub_hosts_for_a_registry_1_docker_io_edge_image" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = { image = "registry-1.docker.io/envoyproxy/envoy:v1.41.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    frontend_environment  = "front"
+    edge_environment      = "front"
+    api_environment       = "app"
+  }
+
+  assert {
+    condition = (
+      length(setsubtract(["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"], [for e in output.outbound_allowlist["front"] : e.destination])) == 0 &&
+      length([for e in output.outbound_allowlist["front"] : e if e.destination == "registry-1.docker.io"]) == 1
+    )
+    error_message = "With edge.image on registry-1.docker.io, ca-edge's subnet must list Docker Hub's three pull hosts, and registry-1.docker.io once."
+  }
+}
+
 # --- The identity provider ---------------------------------------------------------------------
 
 run "outbound_allowlist_idp_hosts_follow_their_workloads" {
@@ -502,6 +572,58 @@ run "outbound_allowlist_telemetry_host_with_workers" {
       !contains([for e in output.outbound_allowlist["aca"] : e.destination], "telemetry.masterlydata.com")
     )
     error_message = "telemetry_url's host and port must be listed on the subnet ca-workers runs on, and not where only ca-frontend and ca-api run."
+  }
+}
+
+# With every app on its own subnet, the control plane's two hosts are on ca-workers' subnet and on
+# no other: ca-api (app) holds the same URLs and credential but does not call them.
+run "outbound_allowlist_control_plane_on_ca_workers_subnet_alone" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs   = ["203.0.113.7/32"]
+    license_token           = "eyJ.fake.jwt"
+    license_public_jwk      = "{\"kty\":\"EC\"}"
+    license_issuer_url      = "https://cp.masterlydata.com/v1/licenses/refresh"
+    telemetry_url           = "https://telemetry.masterlydata.com/v1/reports"
+    telemetry_client_id     = "sa_01TEST"
+    telemetry_client_secret = "s3cret"
+    enable_workers          = true
+    workers_environment     = "workers"
+    frontend_environment    = "front"
+    edge_environment        = "front"
+    api_environment         = "app"
+  }
+
+  assert {
+    condition     = length(setsubtract(["cp.masterlydata.com", "telemetry.masterlydata.com"], [for e in output.outbound_allowlist["workers"] : e.destination])) == 0
+    error_message = "With enable_workers, the hosts of license_issuer_url and telemetry_url must be listed on the subnet ca-workers runs on."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for k, l in output.outbound_allowlist : [for e in l : !strcontains(e.destination, "masterlydata.com")] if k != "workers"
+    ]))
+    error_message = "With enable_workers, no subnet but ca-workers' may list the control plane: ca-api does not call it once ca-workers exists."
+  }
+}
+
+# The placement above rests on what the api image does: v0.138.0 runs the licence refresh and the
+# fleet reports only in the process that runs the pipeline. The output's description cites that
+# released version, so the release MANIFEST.json names as latest must not name an older api.
+run "outbound_allowlist_control_plane_placement_cites_the_released_api" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = (
+      sum([for i, p in split(".", regex(":v([0-9]+\\.[0-9]+\\.[0-9]+)$", local.release_manifest.releases[local.release_manifest.latest].images.api)[0]) : tonumber(p) * pow(1000000, 2 - i)]) >=
+      sum([for i, p in split(".", "0.138.0") : tonumber(p) * pow(1000000, 2 - i)])
+    )
+    error_message = "MANIFEST.json's latest release names an api image older than v0.138.0, the version outbound_allowlist's description cites for the control plane's placement. Check that image's behaviour and update the description, network.tf and docs/networking.md."
   }
 }
 

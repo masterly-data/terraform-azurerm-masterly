@@ -775,8 +775,12 @@ locals {
   # matches with its brackets, which the entries trim: a firewall rule names the bare address.
   outbound_url_pattern = "^[A-Za-z][A-Za-z0-9+.-]*://(?:[^/?#]*@)?([^/?#:@\\[\\]]+|\\[[^\\]/?#@]+\\])(?::([0-9]{1,5}))?(?:[/?#][^@]*)?$"
 
-  outbound_edge_docker_hub = local.edge_enabled ? var.edge.image == null : false
-  outbound_edge_jwt_authn  = local.edge_enabled ? var.edge.jwt_authn != null : false
+  # ca-edge's image is on Docker Hub when edge.image is unset (the image the module pins names
+  # docker.io) or names Docker Hub itself, under any of its three names and in any case. A pull
+  # from Docker Hub uses Docker Hub's pull hosts whichever name the reference carries.
+  outbound_docker_hub_names = ["docker.io", "index.docker.io", "registry-1.docker.io"]
+  outbound_edge_docker_hub  = local.edge_enabled && contains(local.outbound_docker_hub_names, split(":", lower(split("/", local.edge_image)[0]))[0])
+  outbound_edge_jwt_authn   = local.edge_enabled ? var.edge.jwt_authn != null : false
 
   # The inputs that name a destination, each only where a workload uses it.
   outbound_url_inputs = {
@@ -869,12 +873,13 @@ locals {
       kind        = "fqdn"
       protocol    = "TCP"
       ports       = ["443"]
-      why         = "Docker Hub: ca-edge pulls the upstream Envoy image the module pins from it, anonymously. Set edge.image to a mirror in your own registry to remove it"
-      source      = "edge (edge.image unset)"
+      why         = "Docker Hub: ca-edge pulls its image from it, anonymously: the upstream Envoy image the module pins, or the Docker Hub image edge.image names. Set edge.image to a mirror in your own registry to remove it"
+      source      = try(var.edge.image, null) == null ? "edge (edge.image unset)" : "edge.image"
     }
   } : {}
 
-  # edge.image on another registry than the install's is pulled from that registry's host.
+  # edge.image on a registry other than Docker Hub and the install's is pulled from that
+  # registry's host.
   outbound_edge_image_host = local.edge_enabled && !local.outbound_edge_docker_hub && !(local.edge_image_on_registry && local.registry_private_endpoint) ? lower(split("/", local.edge_image)[0]) : null
   outbound_edge_image_entries = local.outbound_edge_image_host == null ? {} : merge(
     {
@@ -900,10 +905,10 @@ locals {
   # holding only ca-frontend and ca-edge (front) never lists a data endpoint (ADR 0120 §5).
   #
   # The control plane (license_issuer_url, telemetry_url) sits with ca-workers alone when
-  # enable_workers is set, though ca-api gets the same URLs and install credential. The application
-  # starts its licence refresh and fleet snapshot loops only in the process that runs the pipeline
-  # (api/app.py, _run_install_loops, on the application's main): ca-api while it runs the pipeline
-  # in-process, and the workers process on a scaled install.
+  # enable_workers is set, though ca-api gets the same URLs and install credential. The released
+  # api image v0.138.0, which MANIFEST.json names for module 0.26.0, runs the licence refresh and
+  # the fleet reports only in the process that runs the pipeline: ca-api without enable_workers,
+  # and ca-workers with it. tests/outbound_allowlist.tftest.hcl holds MANIFEST.json to that image.
   outbound_workload_entries = {
     "ca-frontend" = merge(
       try(local.outbound_url_entries["oidc_authority"], {}),

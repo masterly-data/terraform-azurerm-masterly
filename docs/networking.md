@@ -245,7 +245,7 @@ application) is the one it cannot list.
 | Microsoft Entra ID for managed identities (service tag `AzureActiveDirectory`; `login.microsoftonline.com`, `*.login.microsoftonline.com`, `login.microsoft.com`, `*.login.microsoft.com` and `*.identity.azure.net`; part of the set above). `login.microsoft.com` is listed by its bare name, which a rule for `*.login.microsoft.com` does not match | Always: the apps' identities get tokens for the registry (`managed_identity` and `customer_registry` modes), Key Vault references (`enable_key_vault`), and Postgres and Redis with `database_auth = "entra"` | Every pull, secret reference or database sign-in that uses an identity fails: a new revision has no ready replica, or the apps cannot open their database connection |
 | The image registry: its login server (`masterly.azurecr.io` by default, or `registry_location`) and its data endpoint (`<registry>.<region>.data.azurecr.io` with dedicated data endpoints, otherwise the registry's `*.blob.core.windows.net` storage; see [Configure rules to access an Azure container registry behind a firewall](https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules)) | Always, **unless** `registry_private_endpoint = true`, which keeps pulls on the registry's private endpoint in the VNet | The image pull fails: a new revision (a fresh install, an upgrade or a restart onto a new replica) has no ready replica, and `ContainerAppSystemLogs` records the failed pull |
 | Azure Container Registry and its storage by service tag (`AzureContainerRegistry`, and `Storage.<region>` for the install's `location`; part of the set above) | On every subnet, for a firewall or NSG that admits by service tag. Needed while an image is pulled from an Azure container registry over its public endpoint; the output still lists both with `registry_private_endpoint = true`, where you can leave them out unless `edge.image` names another Azure container registry | As the image registry row above. A registry in another region serves its layers from that region's storage: admit `*.blob.core.windows.net`, or that region's `Storage` tag |
-| Docker Hub (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`) | `edge` set with `edge.image` unset: `ca-edge` pulls the upstream Envoy image anonymously | `ca-edge`'s image pull fails, so its revision has no ready replica. Mirror the image instead (see [Where the edge's image comes from](#where-the-edges-image-comes-from)) |
+| Docker Hub (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`) | `edge` set with `edge.image` unset, or naming Docker Hub (`docker.io`, `index.docker.io` or `registry-1.docker.io`): `ca-edge` pulls its Envoy image anonymously | `ca-edge`'s image pull fails, so its revision has no ready replica. Mirror the image instead (see [Where the edge's image comes from](#where-the-edges-image-comes-from)) |
 | Your identity provider's issuer and its endpoints: the discovery document under `oidc_authority`, the token endpoint it names, and the signing keys at `oidc_jwks_uri` (all `https://login.microsoftonline.com/<tenant>/...` when only `oidc_tenant_id` is set) | `identity_binding = "oidc"`: `ca-frontend`'s BFF signs users in against the authority, and `ca-api` fetches the signing keys. With `builtin_auth`, Azure's built-in authentication on `ca-frontend` reaches Microsoft Entra ID (`login.microsoftonline.com`), which the platform set already lists on every subnet. With `edge.jwt_authn` set, `ca-edge` itself also fetches the signing keys at `oidc_jwks_uri`, from `login.microsoftonline.com` on 443, through `egress_firewall` when that is set | With the token endpoint or discovery document unreachable, sign-in fails with an error after the IdP redirects back. With the keys unreachable, `ca-api` cannot validate a token, so authenticated requests are refused; with `edge.jwt_authn` set, `ca-edge` cannot either, and answers every request to `/v1` and `/mcp` with `401` |
 | Masterly's control plane: the host of `license_issuer_url` | `license_issuer_url` set (licence refresh), from `ca-workers` with `enable_workers` and from `ca-api` without it | Licence refresh fails. After seven days without a successful refresh the install is read-only: reads, exports and sign-in continue, writes are refused, until refresh succeeds again |
 | Masterly's control plane: the host of `telemetry_url` | `telemetry_url` set (fleet telemetry), from the same app as the licence refresh | Usage reports do not reach the control plane. Licence refresh is a separate call (ADR 0074) and is not affected |
@@ -292,8 +292,8 @@ Where each entry comes from, and which subnets carry it:
 | The platform set's FQDNs: `mcr.microsoft.com`, `*.data.mcr.microsoft.com`, `packages.aks.azure.com`, `acs-mirror.azureedge.net`, `login.microsoftonline.com`, `*.login.microsoftonline.com`, `login.microsoft.com`, `*.login.microsoft.com` and `*.identity.azure.net` | Microsoft Learn, [Azure Container Apps environment integration with Azure Firewall](https://learn.microsoft.com/azure/container-apps/use-azure-firewall#application-rules), its application rules, read 2026-11-23 | Every subnet |
 | Azure management | ADR 0120 §5, which adds it to the platform set (the Learn pages above do not list it) | Every subnet |
 | The image registry's login server, and `*.data.azurecr.io` and `*.blob.core.windows.net` for an Azure container registry | `registry_location`, `api_image` and `frontend_image`; Microsoft Learn, [Configure rules to access an Azure container registry behind a firewall](https://learn.microsoft.com/azure/container-registry/container-registry-firewall-access-rules), read 2026-11-23 | Every subnet, unless `registry_private_endpoint` |
-| Docker Hub | `edge` with `edge.image` unset | Where `ca-edge` runs |
-| The registry `edge.image` names (with its data endpoints for an Azure container registry) | `edge.image` | Where `ca-edge` runs |
+| Docker Hub's three pull hosts | `edge` with `edge.image` unset, or `edge.image` when it names Docker Hub | Where `ca-edge` runs |
+| The registry `edge.image` names, when it is not Docker Hub (with its data endpoints for an Azure container registry) | `edge.image` | Where `ca-edge` runs |
 | The issuer's host | `oidc_authority`, with `identity_binding = "oidc"` | Where `ca-frontend` runs |
 | The signing keys' host | `oidc_jwks_uri`, with `identity_binding = "oidc"`, and with `edge.jwt_authn` | Where `ca-api` runs, and `ca-edge` with `edge.jwt_authn` |
 | The certificate vault's host | `frontend_custom_domain`, `edge_custom_domain` | Where `ca-frontend`, and `ca-edge`, run |
@@ -312,10 +312,17 @@ platform set and the registry.
 
 Masterly's control plane is on one subnet, not two. With `enable_workers`, `ca-api` holds the same
 `license_issuer_url`, `telemetry_url` and install credential as `ca-workers`, but it does not
-call the control plane: the application starts its licence refresh and fleet snapshot loops only
-in the process that runs the pipeline. That is `ca-api` while it runs the pipeline in-process,
-and the workers process once `ca-workers` exists. So the two hosts are listed where `ca-workers`
-runs, and where `ca-api` runs only without `enable_workers`.
+call the control plane: the api image this module is released against (v0.138.0, in
+`MANIFEST.json`) runs the licence refresh and the fleet reports only in the process that runs the
+pipeline. That is `ca-workers` once it exists, and `ca-api` otherwise. So the two hosts are listed
+where `ca-workers` runs, and where `ca-api` runs only without `enable_workers`. Api images have
+behaved this way since v0.133.4: if you pin an older `api_image`, admit the two hosts from
+`ca-api`'s subnet as well.
+
+`ca-edge`'s image on Docker Hub is listed as Docker Hub's three pull hosts, whichever name the
+reference carries: with `edge.image` unset, and with an `edge.image` that names `docker.io`,
+`index.docker.io` or `registry-1.docker.io`. Any other registry is listed by the host in the
+reference.
 
 `Storage.<region>` is written with the region as `location` names it, lower-cased and without
 spaces (`Storage.swedencentral`); Microsoft's list of service tags capitalises it
@@ -1218,7 +1225,8 @@ By default `ca-edge` runs the upstream `envoyproxy/envoy` image from **Docker Hu
 pinned by digest), and pulls it anonymously. The environment then needs outbound HTTPS to Docker Hub
 (`registry-1.docker.io`, `auth.docker.io` and the content host it redirects to,
 `production.cloudflare.docker.com`): on a network whose egress goes through a firewall, allow
-those, or mirror the image.
+those, or mirror the image. An `edge.image` that names Docker Hub (`docker.io`, `index.docker.io`
+or `registry-1.docker.io`) needs the same three hosts, and `outbound_allowlist` lists them.
 
 To mirror it, copy the image, digest unchanged, to a registry the environment can reach and set
 `edge.image` to the copy, for example `myregistry.azurecr.io/envoyproxy/envoy:<tag>@sha256:<digest>`.
