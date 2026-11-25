@@ -849,15 +849,15 @@ locals {
     }
   } : {}
 
-  # The audit vault (keyvault.tf), reached by ca-api and ca-workers alone: they are the only
-  # workloads holding a role on it.
+  # The audit vault (keyvault.tf) is allowlisted for ca-api and ca-workers alone: they are the only
+  # workloads holding a role on it. Application use requires a release that reads its URL.
   outbound_audit_key_vault_entries = var.enable_key_vault && local.key_vault_public ? {
     "audit-key-vault" = {
       destination = "${azurerm_key_vault.audit[0].name}.vault.azure.net"
       kind        = "fqdn"
       protocol    = "TCP"
       ports       = ["443"]
-      why         = "The install's audit Key Vault, public outside mode = \"production\": ca-api reads the audit checkpoint key's public half and the signed head from it, and the core worker pool signs and writes them. In production it is reached over its private endpoint and has no entry"
+      why         = "The install's audit Key Vault, public outside mode = \"production\": reserved for the audit checkpoint key and head, for an application release that reads MASTERLY_AUDIT_KEYVAULT_URL. Until then those objects remain in the main vault under its existing grants. In production the audit vault has a private endpoint and no allowlist entry"
       source      = "enable_key_vault"
     }
   } : {}

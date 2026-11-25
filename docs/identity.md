@@ -339,14 +339,21 @@ the erasure and audit grants to reach those names alone. A role assignment canno
 does not exist yet, the application creates each signing key at runtime, and Key Vault's conditions
 cover secret actions only, so that scope needs a vault holding only those objects.
 
-The audit names have one (ADR 0033 §10, ADR 0120 §6): the **audit vault**, `kva-<prefix>-<suffix>`,
-for the key `audit-checkpoint-signing-<env>` and the secret `audit-checkpoint-head-<env>`. On it
-the core worker pool's identity holds the signing keys role, and `id-<prefix>-apps` the signing key
-reader role and the audit head reader role, `keys/read` and `getSecret` in total: `ca-api` can
-neither sign a checkpoint nor overwrite the head. No other principal and no built-in role is
-granted there. The module sets its URI on `ca-api` and `ca-workers` as
-`MASTERLY_AUDIT_KEYVAULT_URL`. Terraform writes nothing into it, so `key_vault_deployer_ip_rules`
-does not open it: in production its public endpoint stays off.
+**Audit checkpoint vault.** The module provisions the **audit vault**, `kva-<prefix>-<suffix>`,
+for the key `audit-checkpoint-signing-<env>` and the secret `audit-checkpoint-head-<env>`: the
+infrastructure portion of ADR 0033 §10 and ADR 0120 §6. The protection takes effect only once an
+application release reads `MASTERLY_AUDIT_KEYVAULT_URL`. Until then, the audit key and head remain
+in the main vault under its existing grants. The module change alone does not move them or remove
+`ca-api`'s main-vault secret-write access; application support requires a separate release.
+
+On the audit vault the core worker pool's identity holds the signing keys role. With workers on
+their own identity, `id-<prefix>-apps` holds the signing key reader role and the audit head reader
+role, `keys/read` and `getSecret` in total. Once a supporting application release uses this vault,
+these grants prevent `ca-api` from signing a checkpoint or overwriting the head there. No other
+principal and no built-in role is granted there. The module sets its URI on `ca-api` and
+`ca-workers` as `MASTERLY_AUDIT_KEYVAULT_URL` and publishes the output `audit_key_vault_uri`.
+Terraform writes nothing into it, so `key_vault_deployer_ip_rules` does not open it: in production
+its public endpoint stays off.
 
 The erasure names do not have one yet, so on the install's vault the signing roles reach every key,
 which holds no keys besides its Environments' signing keys, and neither role can delete or purge
@@ -372,8 +379,8 @@ grant it AcrPull. Set `acr_id` or `registry_identity_id`, or turn the vault on, 
 **The one shape where two apps share an identity in production.** With `migrations = "start"` and
 `database_auth = "entra"` on the starter server, both `ca-api` and `ca-workers` migrate at start
 and sign in to Postgres as the server's Entra administrator, `id-<prefix>-apps`, so `ca-workers`
-runs as that identity, which then also holds the signing keys role (on the audit vault too, so
-`ca-api` can sign audit checkpoints and overwrite the head), Service Bus Data Receiver and the jobs
+runs as that identity, which then also holds the signing keys role (key signing and secret-write
+permissions on both the main and audit vaults), Service Bus Data Receiver and the jobs
 queue's Data Owner. This is a departure from ADR 0120 §6, and in `mode = "production"`
 every plan warns about it (the check `production_migrations_at_start`). `migrations = "job"`, what
 a new production install sets, removes it: see

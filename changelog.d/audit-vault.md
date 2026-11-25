@@ -2,8 +2,8 @@
 
 - A dedicated **audit vault** (`azurerm_key_vault.audit`, `kva-<prefix>-<suffix>`) for the audit
   checkpoint signing key `audit-checkpoint-signing-<env>` and head `audit-checkpoint-head-<env>`
-  alone, implementing the ADR 0033 §10 and ADR 0120 §6 rows that scope the core pool's signing
-  grant and `ca-api`'s key read and head read to those names. With
+  alone, implementing the infrastructure portion of the ADR 0033 §10 and ADR 0120 §6 rows that
+  scope the core pool's signing grant and `ca-api`'s key read and head read to those names. With
   `enable_key_vault` it is created in the data resource group with the main vault's RBAC mode,
   soft-delete retention, purge protection in production and network ACLs. The deployer firewall
   (`key_vault_deployer_ip_rules`) applies to the main vault only: Terraform writes nothing into
@@ -31,8 +31,12 @@
 
 ### Security
 
-- On the audit vault `ca-api` can read the audit checkpoint key's public half and the signed head,
-  and can neither sign a checkpoint nor overwrite the head. The residual, named in the README:
+- The protection takes effect only once an application release reads `MASTERLY_AUDIT_KEYVAULT_URL`.
+  Until then, the audit key and head remain in the main vault under its existing grants.
+  This module change alone does not move them or remove `ca-api`'s main-vault secret-write access.
+  With a supporting application release and workers on their own identity, the audit vault's
+  grants permit `ca-api` to read the key's public half and head, but not sign or overwrite them.
+  Application support is a separate release prerequisite. The residual, named in the README:
   with `enable_workers = true` and `ca-workers` running as the apps identity
   (`migrations = "start"` with `database_auth = "entra"` on the starter server), `ca-api` shares
   that identity and holds the five actions on the audit vault. The upgrade only adds resources;

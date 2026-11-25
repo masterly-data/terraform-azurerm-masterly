@@ -1,5 +1,5 @@
 # The audit vault (keyvault.tf, azurerm_key_vault.audit; ADR 0033 §10, ADR 0120 §6): a second
-# vault holding the audit checkpoint key and head alone, its private endpoint and diagnostic
+# vault reserved for the audit checkpoint key and head, its private endpoint and diagnostic
 # setting, the two roles granted on it and to whom, MASTERLY_AUDIT_KEYVAULT_URL on ca-api and
 # ca-workers alone, its outbound allowlist entry, the apps' ordering after its grants, and the
 # audit_key_vault_uri output.
@@ -193,6 +193,36 @@ variables {
   postgres_backup_retention_days = 14
   ingress_allowed_cidrs          = ["203.0.113.7/32", "198.51.100.0/24"]
   migrations                     = "job"
+}
+
+# --- Application release prerequisite ------------------------------------------------------------
+
+run "audit_vault_documentation_requires_application_release_support" {
+  command = plan
+
+  variables {
+    mode             = "demo"
+    migrations       = "start"
+    enable_key_vault = false
+  }
+
+  # Check the audit sections specifically: the erasure section already has its own release floor,
+  # which must not hide an unqualified audit claim. Include the changelog after release folding.
+  assert {
+    condition = alltrue([
+      for section in [
+        try(regex("(?s)### Audit checkpoint vault\n(.*?)\n## ", file("${path.module}/README.md"))[0], ""),
+        try(regex("(?s)\\*\\*Audit checkpoint vault\\.\\*\\*(.*?)\nThe erasure names", file("${path.module}/docs/identity.md"))[0], ""),
+        join("\n", concat([file("${path.module}/CHANGELOG.md")], [for fragment in fileset(path.module, "changelog.d/*.md") : file("${path.module}/${fragment}")]))
+        ] : alltrue([
+          for qualifier in [
+            "only once an application release reads `MASTERLY_AUDIT_KEYVAULT_URL`",
+            "Until then, the audit key and head remain in the main vault under its existing grants."
+          ] : strcontains(replace(section, "/\\s+/", " "), qualifier)
+      ])
+    ])
+    error_message = "Audit-vault documentation must state that protection requires an application release reading MASTERLY_AUDIT_KEYVAULT_URL and that until then the key and head remain in the main vault under its existing grants."
+  }
 }
 
 # --- The vault off -------------------------------------------------------------------------------
