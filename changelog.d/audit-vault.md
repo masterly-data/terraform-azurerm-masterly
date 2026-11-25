@@ -5,10 +5,12 @@
   alone, implementing the ADR 0033 §10 and ADR 0120 §6 rows that scope the core pool's signing
   grant and `ca-api`'s key read and head read to those names. With
   `enable_key_vault` it is created in the data resource group with the main vault's RBAC mode,
-  soft-delete retention, purge protection in production and network ACLs; in production it gets a
-  private endpoint (`pe-<prefix>-kv-audit`) in the main vault's privatelink zone (an injected
-  `key_vault_private_dns_zone_id` is honoured), and an AuditEvent + AllMetrics diagnostic setting
-  wherever the main vault has one.
+  soft-delete retention, purge protection in production and network ACLs. The deployer firewall
+  (`key_vault_deployer_ip_rules`) applies to the main vault only: Terraform writes nothing into
+  the audit vault, so in production its public endpoint stays off whatever that list says. In
+  production it gets a private endpoint (`pe-<prefix>-kv-audit`) in the main vault's privatelink
+  zone (an injected `key_vault_private_dns_zone_id` is honoured), and an AuditEvent + AllMetrics
+  diagnostic setting wherever the main vault has one.
 - Grants on the audit vault, and no other: `Masterly signing keys` for the core worker pool's
   identity (`ca-workers`' own, or the apps identity where `ca-workers` runs as it), and for
   `ca-api`'s identity `Masterly signing key reader` (`keys/read`) plus a new custom role,

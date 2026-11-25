@@ -235,12 +235,23 @@ run "audit_vault_production_with_workers_own_identity" {
       azurerm_key_vault.audit[0].soft_delete_retention_days == var.key_vault_soft_delete_retention_days &&
       azurerm_key_vault.audit[0].purge_protection_enabled &&
       azurerm_key_vault.audit[0].network_acls[0].default_action == "Deny" &&
-      azurerm_key_vault.audit[0].public_network_access_enabled == azurerm_key_vault.this[0].public_network_access_enabled &&
-      tolist(azurerm_key_vault.audit[0].network_acls[0].ip_rules) == tolist(azurerm_key_vault.this[0].network_acls[0].ip_rules) &&
       azurerm_key_vault.audit[0].name == "kva-masterly-a1b2c3" &&
       azurerm_key_vault.audit[0].name != azurerm_key_vault.this[0].name
     )
-    error_message = "In production the audit vault must be RBAC, keep the main vault's soft-delete retention, arm purge protection, default-deny, and match the main vault's public access."
+    error_message = "In production the audit vault must be RBAC, keep the main vault's soft-delete retention, arm purge protection and default-deny."
+  }
+
+  # The deployer firewall is the main vault's alone: key_vault_deployer_ip_rules is set in this
+  # file, and opens the main vault's public endpoint to that address, but the audit vault, which
+  # Terraform writes nothing into, keeps its public endpoint off and lists no address.
+  assert {
+    condition = (
+      azurerm_key_vault.this[0].public_network_access_enabled &&
+      tolist(azurerm_key_vault.this[0].network_acls[0].ip_rules) == tolist(["203.0.113.7"]) &&
+      !azurerm_key_vault.audit[0].public_network_access_enabled &&
+      length(azurerm_key_vault.audit[0].network_acls[0].ip_rules) == 0
+    )
+    error_message = "In production the audit vault's public endpoint must stay off and list no IP rule, whatever key_vault_deployer_ip_rules opens on the main vault."
   }
 
   # Its private endpoint, in the main vault's privatelink zone, on the same subnet.

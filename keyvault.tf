@@ -102,7 +102,8 @@ variable "key_vault_deployer_ip_rules" {
     neither stated.
 
     default_action stays Deny either way — this is a firewalled public endpoint, not an open
-    one. Key Vault rejects /31 and /32 prefixes: give a single address as a bare IP.
+    one. Key Vault rejects /31 and /32 prefixes: give a single address as a bare IP. It opens
+    the main vault only: the audit vault holds nothing Terraform writes, and stays private.
   EOT
 
   validation {
@@ -402,8 +403,11 @@ resource "azurerm_role_assignment" "kv_signing_keys_workers" {
 # either, and the destroy ordering the install secrets need (below) does not apply. The application
 # reads its URL from MASTERLY_AUDIT_KEYVAULT_URL, on ca-api and ca-workers alone.
 #
-# Its network posture is the main vault's: RBAC, the same soft-delete retention, purge protection
-# and a private endpoint in production, public with an outbound allowlist entry in demo.
+# Its posture is the main vault's: RBAC, the same soft-delete retention, purge protection and a
+# private endpoint in production, public with an outbound allowlist entry in demo. One difference:
+# key_vault_deployer_ip_rules does not apply here. Terraform creates no key or secret in this vault
+# (the application creates them on first use, through the private endpoint), so the deployer never
+# needs its data plane, and in production its public endpoint stays off whatever that list says.
 resource "azurerm_key_vault" "audit" {
   count = var.enable_key_vault ? 1 : 0
 
@@ -420,12 +424,12 @@ resource "azurerm_key_vault" "audit" {
   soft_delete_retention_days = var.key_vault_soft_delete_retention_days
   purge_protection_enabled   = var.mode == "production"
 
-  public_network_access_enabled = local.key_vault_public || local.key_vault_deployer_firewall
+  public_network_access_enabled = local.key_vault_public
 
   network_acls {
     bypass         = "AzureServices"
     default_action = local.key_vault_public ? "Allow" : "Deny"
-    ip_rules       = local.key_vault_public ? [] : var.key_vault_deployer_ip_rules
+    ip_rules       = []
   }
 
   tags = local.tags

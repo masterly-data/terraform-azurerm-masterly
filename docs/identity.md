@@ -345,7 +345,8 @@ the core worker pool's identity holds the signing keys role, and `id-<prefix>-ap
 reader role and the audit head reader role, `keys/read` and `getSecret` in total: `ca-api` can
 neither sign a checkpoint nor overwrite the head. No other principal and no built-in role is
 granted there. The module sets its URI on `ca-api` and `ca-workers` as
-`MASTERLY_AUDIT_KEYVAULT_URL`.
+`MASTERLY_AUDIT_KEYVAULT_URL`. Terraform writes nothing into it, so `key_vault_deployer_ip_rules`
+does not open it: in production its public endpoint stays off.
 
 The erasure names do not have one yet, so on the install's vault the signing roles reach every key,
 which holds no keys besides its Environments' signing keys, and neither role can delete or purge
