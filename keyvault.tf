@@ -407,8 +407,9 @@ resource "azurerm_role_assignment" "kv_signing_keys_workers" {
 resource "azurerm_key_vault" "audit" {
   count = var.enable_key_vault ? 1 : 0
 
-  # 4 + 13 + 1 + 6 = 24, the most a vault name can be, and never the main vault's name.
-  name                = "kva-${substr(var.name_prefix, 0, 13)}-${random_string.install.result}"
+  # 4 + 13 + 1 + 6 = 24, the most a vault name can be, and never the main vault's name. A cut that
+  # ends in a hyphen loses it: Azure refuses two hyphens in a row in a vault name.
+  name                = "kva-${replace(substr(var.name_prefix, 0, 13), "/-+$/", "")}-${random_string.install.result}"
   resource_group_name = azurerm_resource_group.data.name
   location            = var.location
   tenant_id           = data.azurerm_client_config.current.tenant_id

@@ -455,6 +455,18 @@ run "audit_vault_shared_identity_gives_ca_api_the_five_actions" {
     error_message = "With ca-workers on the apps identity, the signing keys role on the audit vault must go to the apps identity."
   }
 
+  # The residual, spelled out: the role it holds there is the five actions, sign and set included.
+  assert {
+    condition = toset(azurerm_role_definition.signing_keys[0].permissions[0].data_actions) == toset([
+      "Microsoft.KeyVault/vaults/keys/create/action",
+      "Microsoft.KeyVault/vaults/keys/read",
+      "Microsoft.KeyVault/vaults/keys/sign/action",
+      "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+      "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+    ])
+    error_message = "In the shared-identity shape the apps identity's role on the audit vault must be the signing keys role's five actions."
+  }
+
   # Its roles there, and no one else's.
   assert {
     condition = (
@@ -606,15 +618,54 @@ run "audit_vault_name_fits_with_a_long_prefix" {
   }
 }
 
+# A prefix whose 13-character cut ends in a hyphen: Azure refuses "--" in a vault name.
+run "audit_vault_name_drops_a_trailing_hyphen_at_the_cut" {
+  command = apply
+
+  variables {
+    name_prefix = "masterly-dev-eu"
+  }
+
+  assert {
+    condition = (
+      azurerm_key_vault.audit[0].name == "kva-masterly-dev-a1b2c3" &&
+      !strcontains(azurerm_key_vault.audit[0].name, "--") &&
+      azurerm_key_vault.audit[0].name != azurerm_key_vault.this[0].name
+    )
+    error_message = "A name_prefix cut at a hyphen must not leave two hyphens in a row in the audit vault's name."
+  }
+}
+
+# --- Production, diagnostics off -----------------------------------------------------------------
+
+run "audit_vault_has_no_diagnostic_setting_where_the_main_vault_has_none" {
+  command = apply
+
+  variables {
+    enable_diagnostics = false
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_diagnostic_setting.key_vault) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.key_vault_audit) == 0 &&
+      length(azurerm_key_vault.audit) == 1
+    )
+    error_message = "With diagnostics off neither vault may have a diagnostic setting, and the audit vault must still be planned."
+  }
+}
+
 # --- Demo: public, with an allowlist entry for ca-api and ca-workers ----------------------------
 
 run "audit_vault_demo_is_public_and_allowlisted_for_api_and_workers" {
   command = apply
 
-  # Demo takes no migrate job; caj-migrate's allowlist entries are still derived.
+  # Demo takes no migrate job; caj-migrate's allowlist entries are still derived. Diagnostics are
+  # off by default in demo, so they are turned on here to see the audit vault's setting follow.
   variables {
-    mode       = "demo"
-    migrations = "start"
+    mode               = "demo"
+    migrations         = "start"
+    enable_diagnostics = true
   }
 
   assert {
@@ -626,7 +677,9 @@ run "audit_vault_demo_is_public_and_allowlisted_for_api_and_workers" {
       !azurerm_key_vault.audit[0].purge_protection_enabled &&
       azurerm_key_vault.audit[0].soft_delete_retention_days == var.key_vault_soft_delete_retention_days &&
       length(azurerm_private_endpoint.key_vault_audit) == 0 &&
-      length(azurerm_monitor_diagnostic_setting.key_vault_audit) == length(azurerm_monitor_diagnostic_setting.key_vault)
+      length(azurerm_monitor_diagnostic_setting.key_vault) == 1 &&
+      length(azurerm_monitor_diagnostic_setting.key_vault_audit) == 1 &&
+      azurerm_monitor_diagnostic_setting.key_vault_audit[0].target_resource_id == azurerm_key_vault.audit[0].id
     )
     error_message = "In demo the audit vault must be public like the main vault, with no purge protection and no private endpoint, and a diagnostic setting wherever the main vault has one."
   }
@@ -655,6 +708,33 @@ run "audit_vault_demo_is_public_and_allowlisted_for_api_and_workers" {
       local.workers_env["MASTERLY_AUDIT_KEYVAULT_URL"] == "https://kva-masterly-a1b2c3.vault.azure.net/"
     )
     error_message = "In demo with ca-workers on its own identity, the signing keys grant on the audit vault must be its, and its env must carry the audit vault's URI."
+  }
+}
+
+# --- Demo without workers: ca-api's two reads, and no signing grant ------------------------------
+
+# With enable_workers off the core loop runs in ca-api, which main gives no signing grant either;
+# the card mirrors that, so the audit vault carries ca-api's keys/read and getSecret alone.
+run "audit_vault_without_workers_grants_only_the_api_reads" {
+  command = apply
+
+  variables {
+    mode               = "demo"
+    migrations         = "start"
+    enable_workers     = false
+    enable_service_bus = false
+  }
+
+  assert {
+    condition = (
+      length(azurerm_key_vault.audit) == 1 &&
+      length(azurerm_role_assignment.audit_kv_signing_keys) == 0 &&
+      length(azurerm_role_assignment.audit_kv_signing_keys_workers) == 0 &&
+      azurerm_role_assignment.audit_kv_signing_key_reader[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      azurerm_role_assignment.audit_kv_head_reader[0].principal_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" &&
+      local.api_env["MASTERLY_AUDIT_KEYVAULT_URL"] == "https://kva-masterly-a1b2c3.vault.azure.net/"
+    )
+    error_message = "Without workers the audit vault must carry ca-api's two read grants and no signing keys grant, and ca-api's env must carry the audit vault's URI."
   }
 }
 
