@@ -1200,8 +1200,9 @@ nothing else in the install has a role on it. The residual: with `enable_workers
 the starter server), that one identity is `ca-api`'s too, so `ca-api` holds the five actions on the
 audit vault. With `enable_workers = false` no identity gets the signing keys role on either vault.
 The erasure keys still sit in the main vault, where the two roles above remain vault-wide. Back up
-the audit vault as you back up the main one. In `mode = "production"` the vault's purge protection means a key deleted in error
-stays recoverable for the soft-delete window and cannot be purged at all.
+the audit vault as you back up the main one. In `mode = "production"` each vault's purge protection
+means a key deleted in error stays recoverable for the soft-delete window and cannot be purged at
+all.
 
 ## Rotating the session secret
 

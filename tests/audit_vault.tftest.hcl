@@ -195,6 +195,32 @@ variables {
   migrations                     = "job"
 }
 
+# --- The vault off -------------------------------------------------------------------------------
+
+run "audit_vault_off_plans_nothing" {
+  command = plan
+
+  variables {
+    mode             = "demo"
+    migrations       = "start"
+    enable_key_vault = false
+  }
+
+  assert {
+    condition = (
+      length(azurerm_key_vault.audit) == 0 &&
+      length(azurerm_private_endpoint.key_vault_audit) == 0 &&
+      length(azurerm_monitor_diagnostic_setting.key_vault_audit) == 0 &&
+      length(azurerm_role_definition.audit_head_reader) == 0 &&
+      length(azurerm_role_assignment.audit_kv_signing_key_reader) + length(azurerm_role_assignment.audit_kv_head_reader) + length(azurerm_role_assignment.audit_kv_signing_keys) + length(azurerm_role_assignment.audit_kv_signing_keys_workers) == 0 &&
+      output.audit_key_vault_uri == null &&
+      !contains(keys(local.api_env), "MASTERLY_AUDIT_KEYVAULT_URL") &&
+      alltrue([for w, m in local.outbound_workload_entries : !contains(keys(m), "audit-key-vault")])
+    )
+    error_message = "With enable_key_vault off the module must plan no audit vault, endpoint, diagnostic setting, role or grant, set no MASTERLY_AUDIT_KEYVAULT_URL, and output null."
+  }
+}
+
 # --- Production, ca-workers on its own identity --------------------------------------------------
 
 run "audit_vault_production_with_workers_own_identity" {
@@ -735,31 +761,5 @@ run "audit_vault_without_workers_grants_only_the_api_reads" {
       local.api_env["MASTERLY_AUDIT_KEYVAULT_URL"] == "https://kva-masterly-a1b2c3.vault.azure.net/"
     )
     error_message = "Without workers the audit vault must carry ca-api's two read grants and no signing keys grant, and ca-api's env must carry the audit vault's URI."
-  }
-}
-
-# --- The vault off -------------------------------------------------------------------------------
-
-run "audit_vault_off_plans_nothing" {
-  command = plan
-
-  variables {
-    mode             = "demo"
-    migrations       = "start"
-    enable_key_vault = false
-  }
-
-  assert {
-    condition = (
-      length(azurerm_key_vault.audit) == 0 &&
-      length(azurerm_private_endpoint.key_vault_audit) == 0 &&
-      length(azurerm_monitor_diagnostic_setting.key_vault_audit) == 0 &&
-      length(azurerm_role_definition.audit_head_reader) == 0 &&
-      length(azurerm_role_assignment.audit_kv_signing_key_reader) + length(azurerm_role_assignment.audit_kv_head_reader) + length(azurerm_role_assignment.audit_kv_signing_keys) + length(azurerm_role_assignment.audit_kv_signing_keys_workers) == 0 &&
-      output.audit_key_vault_uri == null &&
-      !contains(keys(local.api_env), "MASTERLY_AUDIT_KEYVAULT_URL") &&
-      alltrue([for w, m in local.outbound_workload_entries : !contains(keys(m), "audit-key-vault")])
-    )
-    error_message = "With enable_key_vault off the module must plan no audit vault, endpoint, diagnostic setting, role or grant, set no MASTERLY_AUDIT_KEYVAULT_URL, and output null."
   }
 }

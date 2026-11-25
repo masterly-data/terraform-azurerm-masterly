@@ -2,8 +2,8 @@
 # Opt-in (default off; dev/demo run the in-process store): when enabled, this provisions a
 # per-install vault (RBAC mode, no access policies) and grants the apps identity a custom
 # data-plane role that reads, writes and deletes secrets and nothing more (app_secrets, below),
-# plus Crypto Officer for the erasure keys of ADR 0081 (the grant below says why that one is
-# vault-scoped). The api is flipped to
+# plus key read for the erasure keys of ADR 0081 (the grants below say why those are vault-scoped),
+# and a second, audit vault for the audit checkpoint key and head. The api is flipped to
 # MASTERLY_SECRET_STORE=keyvault and handed the vault URI; auth is the managed identity via
 # AZURE_CLIENT_ID — no secret.
 # Sealed material (BYO-DB connection strings, GitOps tokens) then survives restarts.
@@ -277,10 +277,10 @@ moved {
 # Key Vault's attribute-based conditions (preview) cover secret data actions only, not keys, so the
 # narrower scope the amendment asks for needs a vault holding only the names it covers. The audit
 # names (the key audit-checkpoint-signing-<env> and the secret audit-checkpoint-head-<env>) have one:
-# the audit vault below (ADR 0033 §10, ADR 0120 §6), where these two roles are granted again and
-# nothing else is. The erasure names still sit in this vault, so here the roles reach every key in
-# it, which holds no keys besides its Environments' signing keys, and the role carries no delete or
-# purge. In mode = "production" purge protection is armed on the vault above as well. Losing a
+# the audit vault below (ADR 0033 §10, ADR 0120 §6), where these two roles are granted again, with
+# a getSecret-only head reader role for ca-api, and nothing else is. The erasure names still sit in
+# this vault, so here the roles reach every key in it, which holds no keys besides its
+# Environments' signing keys, and the role carries no delete or purge. In mode = "production" purge protection is armed on the vault above as well. Losing a
 # signing key is consequential all the same: see "Erasure keys belong in your secret backup" in the
 # README.
 #
