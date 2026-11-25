@@ -242,6 +242,7 @@ module "workers" {
     azurerm_private_dns_zone_virtual_network_link.redis,
     azurerm_private_endpoint.key_vault,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
+    azurerm_private_endpoint.key_vault_audit,
     azurerm_role_assignment.kv_app_secrets,
     azurerm_role_assignment.sb_sender,
     # On an install where ca-workers moves to its own identity, the first two edges also make
@@ -255,10 +256,13 @@ module "workers" {
     azurerm_redis_cache_access_policy_assignment.apps,
     # Where ca-workers runs as the apps identity, the signing keys grant it creates and signs with.
     azurerm_role_assignment.kv_signing_keys,
+    # The same on the audit vault (keyvault.tf), for the audit checkpoint key and head.
+    azurerm_role_assignment.audit_kv_signing_keys,
     # Its own identity's grants, when it runs as it.
     azurerm_role_assignment.acr_pull_workers,
     azurerm_role_assignment.kv_app_secrets_workers,
     azurerm_role_assignment.kv_signing_keys_workers,
+    azurerm_role_assignment.audit_kv_signing_keys_workers,
     azurerm_role_assignment.sb_sender_workers,
     azurerm_role_assignment.sb_receiver_workers,
     azurerm_role_assignment.sb_scaler_workers,

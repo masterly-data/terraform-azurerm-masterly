@@ -1642,6 +1642,7 @@ module "api" {
     azurerm_private_dns_zone_virtual_network_link.redis,
     azurerm_private_endpoint.key_vault,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
+    azurerm_private_endpoint.key_vault_audit,
     # With registry_private_endpoint, the first image pull already takes the private path.
     azurerm_private_endpoint.registry,
     azurerm_private_dns_zone_virtual_network_link.registry,
@@ -1651,6 +1652,11 @@ module "api" {
     # Key read for the signing keys' public half. On an upgrade it replaces the Crypto Officer grant
     # at the same address (keyvault.tf), so this app is updated only after the new grant exists.
     azurerm_role_assignment.kv_signing_key_reader,
+    # Its read of the audit checkpoint key and head (keyvault.tf, the audit vault), and the signing
+    # keys grant there where ca-workers runs as the apps identity.
+    azurerm_role_assignment.audit_kv_signing_key_reader,
+    azurerm_role_assignment.audit_kv_head_reader,
+    azurerm_role_assignment.audit_kv_signing_keys,
     azurerm_role_assignment.sb_sender,
     azurerm_role_assignment.sb_receiver,
     # On "entra" the api authenticates as its identity at boot, so the database role and the

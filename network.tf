@@ -849,6 +849,19 @@ locals {
     }
   } : {}
 
+  # The audit vault (keyvault.tf), reached by ca-api and ca-workers alone: they are the only
+  # workloads holding a role on it.
+  outbound_audit_key_vault_entries = var.enable_key_vault && local.key_vault_public ? {
+    "audit-key-vault" = {
+      destination = "${azurerm_key_vault.audit[0].name}.vault.azure.net"
+      kind        = "fqdn"
+      protocol    = "TCP"
+      ports       = ["443"]
+      why         = "The install's audit Key Vault, public outside mode = \"production\": ca-api reads the audit checkpoint key's public half and the signed head from it, and the core worker pool signs and writes them. In production it is reached over its private endpoint and has no entry"
+      source      = "enable_key_vault"
+    }
+  } : {}
+
   outbound_service_bus_entries = var.enable_service_bus && !local.servicebus_private ? {
     "service-bus" = {
       destination = "${azurerm_servicebus_namespace.this[0].name}.servicebus.windows.net"
@@ -928,6 +941,7 @@ locals {
     "ca-api" = merge(
       var.identity_binding == "oidc" ? try(local.outbound_url_entries["oidc_jwks_uri"], {}) : {},
       local.outbound_key_vault_entries,
+      local.outbound_audit_key_vault_entries,
       local.outbound_service_bus_entries,
       local.outbound_acs_entries,
       try(local.outbound_database_entries["external_database_url"], {}),
@@ -935,6 +949,7 @@ locals {
     )
     "ca-workers" = merge(
       local.outbound_key_vault_entries,
+      local.outbound_audit_key_vault_entries,
       local.outbound_service_bus_entries,
       local.outbound_acs_entries,
       try(local.outbound_database_entries["external_database_url"], {}),

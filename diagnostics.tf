@@ -363,6 +363,24 @@ resource "azurerm_monitor_diagnostic_setting" "key_vault" {
   }
 }
 
+# The audit vault's (keyvault.tf), the same way: every read of the audit checkpoint key and head,
+# and every signature, lands in AZKVAuditLogs beside the main vault's.
+resource "azurerm_monitor_diagnostic_setting" "key_vault_audit" {
+  count = local.diag_key_vault ? 1 : 0
+
+  name                           = "diag-${var.name_prefix}-kv-audit"
+  target_resource_id             = azurerm_key_vault.audit[0].id
+  log_analytics_workspace_id     = module.logs.id
+  log_analytics_destination_type = "Dedicated"
+
+  enabled_log {
+    category = "AuditEvent"
+  }
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+
 # Management operations on the namespace, and the errors its clients hit (throttling, quota,
 # authorization). The per-operation runtime audit, the application metrics and the network
 # filtering logs are not sent: the first records every send and receive with its caller, and
