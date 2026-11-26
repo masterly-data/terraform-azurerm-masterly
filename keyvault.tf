@@ -2,8 +2,9 @@
 # Opt-in (default off; dev/demo run the in-process store): when enabled, this provisions a
 # per-install vault (RBAC mode, no access policies) and grants the apps identity a custom
 # data-plane role that reads, writes and deletes secrets and nothing more (app_secrets, below),
-# plus Crypto Officer for the erasure keys of ADR 0081 (the grant below says why that one is
-# vault-scoped). The api is flipped to
+# plus key read for the erasure keys of ADR 0081 (the grants below say why those are vault-scoped),
+# and a second, audit vault reserved for the audit checkpoint key and head (application release
+# prerequisite below). The api is flipped to
 # MASTERLY_SECRET_STORE=keyvault and handed the vault URI; auth is the managed identity via
 # AZURE_CLIENT_ID — no secret.
 # Sealed material (BYO-DB connection strings, GitOps tokens) then survives restarts.
@@ -102,7 +103,8 @@ variable "key_vault_deployer_ip_rules" {
     neither stated.
 
     default_action stays Deny either way — this is a firewalled public endpoint, not an open
-    one. Key Vault rejects /31 and /32 prefixes: give a single address as a bare IP.
+    one. Key Vault rejects /31 and /32 prefixes: give a single address as a bare IP. It opens
+    the main vault only: the audit vault holds nothing Terraform writes, and stays private.
   EOT
 
   validation {
@@ -273,14 +275,18 @@ moved {
 #                       and the high-water mark (which the app secrets role carries as well).
 #                       ca-workers' identity, wherever ca-workers runs.
 #
-# Scope: the vault. An Azure role assignment cannot be scoped to a key that does not exist yet, and
+# Scope: a vault. An Azure role assignment cannot be scoped to a key that does not exist yet, and
 # Key Vault's attribute-based conditions (preview) cover secret data actions only, not keys, so the
-# narrower scope the amendment asks for (the erasure and audit names alone) needs a vault holding only
-# those objects, which the application does not support yet: it reads one vault URL. Until it does,
-# these roles reach every key in this vault, which holds no keys besides its Environments' signing
-# keys, and the role carries no delete or purge. In mode = "production" purge protection is armed on
-# the vault above as well. Losing a signing key is consequential all the same: see "Erasure keys
-# belong in your secret backup" in the README.
+# narrower scope the amendment asks for needs a vault holding only the names it covers. The audit
+# names (the key audit-checkpoint-signing-<env> and the secret audit-checkpoint-head-<env>) get a
+# dedicated vault below (ADR 0033 §10, ADR 0120 §6), where these two roles are granted again, with
+# a getSecret-only head reader role for ca-api, and nothing else is. That boundary protects the
+# audit objects only once an application release reads MASTERLY_AUDIT_KEYVAULT_URL; until then
+# they remain in the main vault under its existing grants. The erasure names still sit in this
+# vault, so here the roles reach every key in it, which holds no keys besides its Environments'
+# signing keys, and the role carries no delete or purge. In mode = "production" purge protection
+# is armed on the vault above as well. Losing a signing key is consequential all the same: see
+# "Erasure keys belong in your secret backup" in the README.
 #
 # Creating either needs Microsoft.Authorization/roleDefinitions/write, as app_secrets does.
 resource "azurerm_role_definition" "signing_key_reader" {
@@ -384,6 +390,139 @@ resource "azurerm_role_assignment" "kv_signing_keys_workers" {
   scope              = azurerm_key_vault.this[0].id
   role_definition_id = azurerm_role_definition.signing_keys[0].role_definition_resource_id
   principal_id       = module.workers_identity[0].principal_id
+}
+
+# --- The audit vault: the audit checkpoint key and head alone (ADR 0033 §10, ADR 0120 §6) -------
+#
+# A second vault reserved for the audit names: the key audit-checkpoint-signing-<env> and the
+# secret audit-checkpoint-head-<env>. The protection takes effect only once an application release
+# reads MASTERLY_AUDIT_KEYVAULT_URL. Until then, the audit key and head remain in the main vault
+# under its existing grants. This module provisions the boundary and passes the URL; application
+# support is a separate release prerequisite.
+#
+# The core worker pool's identity gets the signing keys role on this vault (create, read and sign
+# keys; get and set secrets). With workers on their own identity, ca-api's identity gets only
+# keys/read and getSecret here. If they share the apps identity, ca-api also gets the five signing
+# actions (the residual below). No other principal or built-in role is granted, so no principal
+# gets delete, purge, backup or restore on this vault through these grants.
+#
+# Terraform writes no data-plane object here, so the deployer and the planner get no grant on it
+# either, and the destroy ordering the install secrets need (below) does not apply. The module
+# sets MASTERLY_AUDIT_KEYVAULT_URL on ca-api and ca-workers alone.
+#
+# Its posture is the main vault's: RBAC, the same soft-delete retention, purge protection and a
+# private endpoint in production, public with an outbound allowlist entry in demo. One difference:
+# key_vault_deployer_ip_rules does not apply here. Terraform creates no key or secret in this vault,
+# so the deployer never needs its data plane. In production its public endpoint stays off whatever
+# that list says.
+resource "azurerm_key_vault" "audit" {
+  count = var.enable_key_vault ? 1 : 0
+
+  # 4 + 13 + 1 + 6 = 24, the most a vault name can be, and never the main vault's name. A cut that
+  # ends in a hyphen loses it: Azure refuses two hyphens in a row in a vault name.
+  name                = "kva-${replace(substr(var.name_prefix, 0, 13), "/-+$/", "")}-${random_string.install.result}"
+  resource_group_name = azurerm_resource_group.data.name
+  location            = var.location
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  sku_name            = "standard"
+
+  rbac_authorization_enabled = true
+
+  soft_delete_retention_days = var.key_vault_soft_delete_retention_days
+  purge_protection_enabled   = var.mode == "production"
+
+  public_network_access_enabled = local.key_vault_public
+
+  network_acls {
+    bypass         = "AzureServices"
+    default_action = local.key_vault_public ? "Allow" : "Deny"
+    ip_rules       = []
+  }
+
+  tags = local.tags
+}
+
+# The audit head reader grant permits only getSecret, defined like
+# signing_key_reader (its keys/read is granted on this vault too).
+resource "azurerm_role_definition" "audit_head_reader" {
+  count = var.enable_key_vault ? 1 : 0
+
+  name        = "Masterly audit head reader (${var.name_prefix}-${random_string.install.result})"
+  scope       = azurerm_resource_group.data.id
+  description = "Read the secrets in the Masterly install's audit Key Vault: the signed audit checkpoint head. No write, delete, purge, backup, restore or recover."
+
+  permissions {
+    actions = []
+    data_actions = [
+      "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+    ]
+  }
+
+  assignable_scopes = [azurerm_resource_group.data.id]
+}
+
+# ca-api's read grants: keys/read and getSecret on the audit vault. The shared-identity signing
+# grant below is the exception when ca-workers also runs as the apps identity.
+resource "azurerm_role_assignment" "audit_kv_signing_key_reader" {
+  count = var.enable_key_vault ? 1 : 0
+
+  scope              = azurerm_key_vault.audit[0].id
+  role_definition_id = azurerm_role_definition.signing_key_reader[0].role_definition_resource_id
+  principal_id       = module.apps_identity.principal_id
+}
+
+resource "azurerm_role_assignment" "audit_kv_head_reader" {
+  count = var.enable_key_vault ? 1 : 0
+
+  scope              = azurerm_key_vault.audit[0].id
+  role_definition_id = azurerm_role_definition.audit_head_reader[0].role_definition_resource_id
+  principal_id       = module.apps_identity.principal_id
+}
+
+# The core pool's signing keys grant, as on the main vault: the apps identity where ca-workers runs
+# as it, which gives ca-api the five actions on this vault too (the README names that shape), and
+# ca-workers' own identity where it has one. With enable_workers off the checkpoint signer runs in
+# ca-api, which gets no signing grant here, as on the main vault.
+resource "azurerm_role_assignment" "audit_kv_signing_keys" {
+  count = var.enable_key_vault && var.enable_workers && !local.workers_own_identity ? 1 : 0
+
+  scope              = azurerm_key_vault.audit[0].id
+  role_definition_id = azurerm_role_definition.signing_keys[0].role_definition_resource_id
+  principal_id       = module.apps_identity.principal_id
+}
+
+resource "azurerm_role_assignment" "audit_kv_signing_keys_workers" {
+  count = local.workers_own_identity && var.enable_key_vault ? 1 : 0
+
+  scope              = azurerm_key_vault.audit[0].id
+  role_definition_id = azurerm_role_definition.signing_keys[0].role_definition_resource_id
+  principal_id       = module.workers_identity[0].principal_id
+}
+
+# Its private endpoint, beside the main vault's on the private endpoints subnet, in the same
+# privatelink zone (the module's or the injected one). The front subnet's NSG exception names the
+# main vault's endpoint alone, so ca-frontend has no route to this one.
+resource "azurerm_private_endpoint" "key_vault_audit" {
+  count = local.key_vault_private_endpoint ? 1 : 0
+
+  name                = "pe-${var.name_prefix}-kv-audit"
+  resource_group_name = azurerm_resource_group.data.name
+  location            = var.location
+  subnet_id           = local.private_endpoints_subnet_id
+
+  private_service_connection {
+    name                           = "psc-${var.name_prefix}-kv-audit"
+    private_connection_resource_id = azurerm_key_vault.audit[0].id
+    subresource_names              = ["vault"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "key-vault-audit"
+    private_dns_zone_ids = [local.key_vault_dns_zone_id]
+  }
+
+  tags = local.tags
 }
 
 # Private DNS + endpoint (production only): the vault's public hostname resolves to the
@@ -674,17 +813,24 @@ locals {
 locals {
   # Merged into the api's env in main.tf. AZURE_CLIENT_ID resolves the user-assigned
   # identity for DefaultAzureCredential (same key/value the servicebus binding sets —
-  # merge-safe).
+  # merge-safe). ca-workers' env is the api's, so both get the audit vault's URL; ca-frontend's
+  # env and caj-migrate's (migrate.tf) never merge this map.
   keyvault_env = var.enable_key_vault ? {
-    MASTERLY_SECRET_STORE = "keyvault"
-    MASTERLY_KEYVAULT_URL = azurerm_key_vault.this[0].vault_uri
-    AZURE_CLIENT_ID       = module.apps_identity.client_id
+    MASTERLY_SECRET_STORE       = "keyvault"
+    MASTERLY_KEYVAULT_URL       = azurerm_key_vault.this[0].vault_uri
+    MASTERLY_AUDIT_KEYVAULT_URL = azurerm_key_vault.audit[0].vault_uri
+    AZURE_CLIENT_ID             = module.apps_identity.client_id
   } : {}
 }
 
 output "key_vault_uri" {
   value       = var.enable_key_vault ? azurerm_key_vault.this[0].vault_uri : null
   description = "URI of the install's Key Vault (null when the in-process secret store is used)."
+}
+
+output "audit_key_vault_uri" {
+  value       = var.enable_key_vault ? azurerm_key_vault.audit[0].vault_uri : null
+  description = "URI of the install's audit Key Vault, reserved for the audit checkpoint signing key and head (ADR 0033 §10). Set on ca-api and ca-workers as MASTERLY_AUDIT_KEYVAULT_URL; application use requires a release that reads this variable. Null when enable_key_vault is off."
 }
 
 # The posture, assertable. Never the material: these are names and a count.

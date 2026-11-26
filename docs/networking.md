@@ -254,6 +254,7 @@ and ports of `oidc_authority` and `oidc_jwks_uri`.
 | Masterly's control plane: the host of `telemetry_url` | `telemetry_url` set (fleet telemetry), from the same app as the licence refresh | Usage reports do not reach the control plane. Licence refresh is a separate call (ADR 0074) and is not affected |
 | Azure Monitor (service tag `AzureMonitor`) | Always: the environment sends the apps' console and system logs through Azure Monitor (`logs_destination = "azure-monitor"`) | New rows stop arriving in `ContainerAppConsoleLogs` and `ContainerAppSystemLogs`, so the log-search alerts and the diagnostic bundle see nothing new while the apps keep serving |
 | Key Vault (`<vault>.vault.azure.net`) | `enable_key_vault` outside `mode = "production"`, where the vault keeps public network access. In production it is reached over its private endpoint | A revision whose secrets are Key Vault references does not start: it has no ready replica |
+| The audit vault (`kva-<prefix>-<suffix>.vault.azure.net`) | `enable_key_vault` outside `mode = "production"`, from `ca-api` and `ca-workers` only. In production it has a private endpoint, which the front subnet does not reach | Once an application release reads `MASTERLY_AUDIT_KEYVAULT_URL`, blocking this vault prevents access to the audit checkpoint key and head there. Until then those objects remain in the main vault under its existing grants |
 | Your Key Vault holding the frontend or edge certificate | `frontend_custom_domain` or `edge_custom_domain` set, unless that vault has a private endpoint the environment reaches | The environment cannot read the certificate, so the binding of your hostname fails, at the first apply or at the next certificate rotation |
 | Service Bus (`<namespace>.servicebus.windows.net`, TCP 5671 and 443) | `enable_service_bus` with a public namespace: any SKU outside production, and Standard in production. A Premium namespace in production is private | The apps cannot open their Service Bus connection, so work handed over the bus does not run |
 | Azure Communication Services (`*.communication.azure.com`) | `email_acs_enabled` | Email is not sent |
@@ -839,9 +840,10 @@ not the baseline.
 
 Without an Application Gateway (ca-edge on the front environment is the install's one entry), the
 minimum is the three environment subnets and the private endpoints alone: 3 × /27 and a /28, 112
-addresses. A /28 holds every private endpoint the module creates: Postgres, Key Vault, Redis and a
-private Service Bus namespace take one address each, and the registry's endpoint two (the registry
-and its regional data endpoint), at most six of the eleven addresses Azure leaves usable in a /28.
+addresses. A /28 holds every private endpoint the module creates: Postgres, the Key Vault, the audit
+vault, Redis and a private Service Bus namespace take one address each, and the registry's endpoint
+two (the registry and its regional data endpoint), at most seven of the eleven addresses Azure
+leaves usable in a /28.
 
 While the apps still run in the legacy environment, the spoke also holds its /23
 (`aca_subnet_id`): 880 addresses at the minimum, a /22 (688 with the /26 gateway, still a /22),

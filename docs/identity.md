@@ -318,12 +318,12 @@ table below is then not held.
 | Identity | Runs | Holds | Never holds |
 |---|---|---|---|
 | `id-<prefix>-frontend` | `ca-frontend` | `AcrPull`; Key Vault Secrets User on each of its own secrets only | Any vault-scope role, Service Bus, Redis, ACS, database access |
-| `id-<prefix>-apps` | `ca-api` | `AcrPull`; the app secrets role on the vault; the signing key reader role on the vault (`keys/read`: a key's public half, for the audit signing-key, export and verify routes); Service Bus Data Sender; ACS Email Owner; on `redis_auth = "entra"` a Redis data access policy; with `migrations = "job"` on the starter server, the DML-only database role `masterly_api` | Key Vault Crypto Officer or any key create or sign right; Service Bus receive; with `migrations = "job"`, any Postgres administrator |
-| `id-<prefix>-workers` | `ca-workers` | `AcrPull`; the app secrets role and the signing keys role on the vault; Service Bus Data Sender and Data Receiver, and Data Owner on the jobs queue only while `ca-workers` scales on it; ACS Email Owner; on `redis_auth = "entra"` a Redis data access policy; with `migrations = "job"` on the starter server, the DML-only database role `masterly_workers` | Key Vault Crypto Officer; any Postgres administrator |
+| `id-<prefix>-apps` | `ca-api` | `AcrPull`; the app secrets role on the vault; the signing key reader role on the vault (`keys/read`: a key's public half, for the audit signing-key, export and verify routes); on the audit vault, the signing key reader role and the audit head reader role (`getSecret`); Service Bus Data Sender; ACS Email Owner; on `redis_auth = "entra"` a Redis data access policy; with `migrations = "job"` on the starter server, the DML-only database role `masterly_api` | Key Vault Crypto Officer or any key create or sign right; Service Bus receive; with `migrations = "job"`, any Postgres administrator |
+| `id-<prefix>-workers` | `ca-workers` | `AcrPull`; the app secrets role and the signing keys role on the vault; the signing keys role on the audit vault; Service Bus Data Sender and Data Receiver, and Data Owner on the jobs queue only while `ca-workers` scales on it; ACS Email Owner; on `redis_auth = "entra"` a Redis data access policy; with `migrations = "job"` on the starter server, the DML-only database role `masterly_workers` | Key Vault Crypto Officer; any Postgres administrator |
 | `id-<prefix>-migrate` | `caj-migrate`, with `migrations = "job"`; attached to no Container App and no ingress | `AcrPull`; Key Vault Secrets User on each of its own secrets and on the BYO-DB secrets named in `migrate_byo_database_secret_names`; on `database_auth = "entra"`, the starter server's only Microsoft Entra administrator | Any vault-scope role, any key right, Service Bus, Redis, ACS |
 | `id-<prefix>-edge` | `ca-edge`, with `edge` set | `AcrPull` at most, for an image on the install's registry | Data, queue, secret or key rights |
 
-The vault roles are three roles the module defines on the data resource group, each with an
+The vault roles are four roles the module defines on the data resource group, each with an
 install-unique name, instead of the built-in Key Vault Secrets Officer and Crypto Officer, which
 also carry purge, backup, restore, recover and rotate:
 
@@ -332,12 +332,30 @@ also carry purge, backup, restore, recover and rotate:
 | `Masterly app secrets (<prefix>-<suffix>)` | `secrets/getSecret/action`, `secrets/setSecret/action`, `secrets/delete`, `secrets/readMetadata/action` | `id-<prefix>-apps`, `id-<prefix>-workers` |
 | `Masterly signing key reader (<prefix>-<suffix>)` | `keys/read` | `id-<prefix>-apps` |
 | `Masterly signing keys (<prefix>-<suffix>)` | `keys/create/action`, `keys/read`, `keys/sign/action`, `secrets/getSecret/action`, `secrets/setSecret/action` | `id-<prefix>-workers` |
+| `Masterly audit head reader (<prefix>-<suffix>)` | `secrets/getSecret/action` | `id-<prefix>-apps`, on the audit vault only |
 
-All three are assigned on the install's vault. ADR 0120's amendment of 2026-10-25 asks for the
-erasure grants to reach the erasure names alone. A role assignment cannot name a key that does not
-exist yet, the application creates each signing key at runtime, and Key Vault's conditions cover
-secret actions only, so that scope needs a vault holding only those objects, which the application
-does not support yet. Until it does, the signing roles reach every key in the install's vault,
+The first three are assigned on the install's vault. ADR 0120's amendment of 2026-10-25 asks for
+the erasure and audit grants to reach those names alone. A role assignment cannot name a key that
+does not exist yet, the application creates each signing key at runtime, and Key Vault's conditions
+cover secret actions only, so that scope needs a vault holding only those objects.
+
+**Audit checkpoint vault.** The module provisions the **audit vault**, `kva-<prefix>-<suffix>`,
+for the key `audit-checkpoint-signing-<env>` and the secret `audit-checkpoint-head-<env>`: the
+infrastructure portion of ADR 0033 §10 and ADR 0120 §6. The protection takes effect only once an
+application release reads `MASTERLY_AUDIT_KEYVAULT_URL`. Until then, the audit key and head remain
+in the main vault under its existing grants. The module change alone does not move them or remove
+`ca-api`'s main-vault secret-write access; application support requires a separate release.
+
+On the audit vault the core worker pool's identity holds the signing keys role. With workers on
+their own identity, `id-<prefix>-apps` holds the signing key reader role and the audit head reader
+role, `keys/read` and `getSecret` in total. Once a supporting application release uses this vault,
+these grants prevent `ca-api` from signing a checkpoint or overwriting the head there. No other
+principal and no built-in role is granted there. The module sets its URI on `ca-api` and
+`ca-workers` as `MASTERLY_AUDIT_KEYVAULT_URL` and publishes the output `audit_key_vault_uri`.
+Terraform writes nothing into it, so `key_vault_deployer_ip_rules` does not open it: in production
+its public endpoint stays off.
+
+The erasure names do not have one yet, so on the install's vault the signing roles reach every key,
 which holds no keys besides its Environments' signing keys, and neither role can delete or purge
 one. Defining the roles needs `Microsoft.Authorization/roleDefinitions/write` on the data resource
 group: Owner or User Access Administrator, not Role Based Access Control Administrator.
@@ -361,8 +379,9 @@ grant it AcrPull. Set `acr_id` or `registry_identity_id`, or turn the vault on, 
 **The one shape where two apps share an identity in production.** With `migrations = "start"` and
 `database_auth = "entra"` on the starter server, both `ca-api` and `ca-workers` migrate at start
 and sign in to Postgres as the server's Entra administrator, `id-<prefix>-apps`, so `ca-workers`
-runs as that identity, which then also holds the signing keys role, Service Bus Data Receiver and
-the jobs queue's Data Owner. This is a departure from ADR 0120 §6, and in `mode = "production"`
+runs as that identity, which then also holds the signing keys role (key signing and secret-write
+permissions on both the main and audit vaults), Service Bus Data Receiver and the jobs
+queue's Data Owner. This is a departure from ADR 0120 §6, and in `mode = "production"`
 every plan warns about it (the check `production_migrations_at_start`). `migrations = "job"`, what
 a new production install sets, removes it: see
 [The migrate job](data-plane.md#the-migrate-job).

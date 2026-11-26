@@ -160,8 +160,10 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
   }
 
   # The list below names every azurerm_role_assignment in the module, so a new one must be added.
+  # The four on the audit vault (keyvault.tf, audit_kv_*) are counted here and asserted, principal
+  # by principal, in tests/audit_vault.tftest.hcl, where that vault has an id of its own.
   assert {
-    condition     = length(regexall("resource \"azurerm_role_assignment\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) == 27
+    condition     = length(regexall("resource \"azurerm_role_assignment\"", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) == 31
     error_message = "A role assignment was added or removed: name it in this file's grant lists."
   }
 
