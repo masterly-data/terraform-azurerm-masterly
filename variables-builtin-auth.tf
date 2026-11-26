@@ -132,12 +132,11 @@ variable "builtin_auth_api" {
     ca-api refuses every call the frontend's server makes on a user's behalf, or does not start,
     and the application is unusable until it is turned off again. Turning it on or off changes
     the env of ca-frontend, ca-api and ca-workers and nothing else on them: ca-api carries
-    builtin_auth_client_secret whenever builtin_auth is
-    set. builtin_auth_recovery_until turns this gate off too, with ca-frontend's, for its window
-    of at most 60 minutes, and every write to ca-api's authentication configuration raises the
-    activity-log alert alert-<name_prefix>-api-auth-config-write. The application still
-    authenticates its callers as identity_binding sets; this gate is in front of that, not
-    instead of it.
+    builtin_auth_client_secret whenever builtin_auth is set. builtin_auth_recovery_until turns
+    this gate off too, with ca-frontend's, for its window of at most 60 minutes, and every write
+    to ca-api's authentication configuration raises the activity-log alert
+    alert-<name_prefix>-api-auth-config-write. The application still authenticates its callers
+    as identity_binding sets; this gate is in front of that, not instead of it.
 
     With it on, the module also creates the alert alert-<name_prefix>-api-401 (severity 1): more
     than 20 responses with status 401 from ca-api in 15 minutes. It fires only once an install
