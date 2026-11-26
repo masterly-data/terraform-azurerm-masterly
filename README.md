@@ -414,6 +414,11 @@ Who signs in, `ca-frontend` on your own domain and the built-in authentication a
   and `ca-edge` releases you run send that token: before then it refuses every call the frontend's
   server makes, as on 2026-10-22. See
   [docs/identity.md](docs/identity.md#the-apis-gate-builtin_auth_api).
+- **Built-in authentication on `ca-edge` (`builtin_auth_edge`) is off by default.** With
+  `builtin_auth` and `edge` set, `builtin_auth_edge = true` makes `ca-edge` answer `401` at the
+  platform on every path but `/v1`, `/v1/*`, `/mcp` and the protected-resource metadata paths,
+  which Envoy's `jwt_authn` validates. See
+  [docs/identity.md](docs/identity.md#ca-edges-backstop-builtin_auth_edge).
 
 ## Data plane (ADR 0065)
 
@@ -692,7 +697,8 @@ availability alerts and the action group are not part of that switch; see below:
   `frontend-auth-config-write`, on every write to `ca-frontend`'s built-in authentication
   configuration: the recovery fallback turning the gate off or back on, a change made outside
   Terraform, or an apply that changes `builtin_auth`. With `builtin_auth_api`, a second one,
-  `api-auth-config-write`, does the same for `ca-api`'s. Activity-log alerts take no severity. See
+  `api-auth-config-write`, does the same for `ca-api`'s, and with `builtin_auth_edge`,
+  `edge-auth-config-write` for `ca-edge`'s. Activity-log alerts take no severity. See
   [docs/identity.md](docs/identity.md#recovery-fallback-turning-the-gates-off-builtin_auth_recovery_until).
 - **API 401 alert** — with `builtin_auth_api` set, a metric alert, `api-401`, severity 1, on
   `ca-api`'s `Requests` metric filtered to status 401: more than 20 in a 15-minute window,

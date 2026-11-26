@@ -115,6 +115,8 @@ application, which decides the member and their roles. Neither layer relies on t
 | `ca-frontend` | Redirected to Entra sign-in | Users of `tenant_id` signing in through `client_id`. `frontend_excluded_paths` (empty by default) are served without sign-in. |
 | `ca-api`, `builtin_auth_api = false` (the default) | Not gated | The module configures no built-in auth on the api. |
 | `ca-api`, `builtin_auth_api = true` | `401`, on every path, with no redirect | Tokens for the audience `client_id` issued to `ca-frontend`'s workload identity (`id-<prefix>-frontend`) and, with `edge` set, `ca-edge`'s (`id-<prefix>-edge`). Nothing else: not a browser sign-in through `client_id`, and no other identity of the install. No path is excluded. |
+| `ca-edge`, `builtin_auth_edge = false` (the default) | Not gated at the platform | Envoy alone answers: `jwt_authn` (`edge.jwt_authn`) on the machine paths, and `404` elsewhere. |
+| `ca-edge`, `builtin_auth_edge = true` | `401`, with no redirect, on every path but the machine paths | Tokens issued to `client_id` by the issuer in `oidc_allowed_issuers`. `/v1`, `/v1/*`, `/mcp`, `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` reach Envoy without one. |
 
 Without `builtin_auth_api` the module gates the frontend only. The api is reached internally: the
 frontend's server-side calls go to `ca-api` inside the Container Apps environment, and the module
@@ -165,6 +167,40 @@ the api's gate. The application still authenticates every caller as `identity_bi
 - **A hand-made configuration is imported once.** An install that configured built-in auth on
   `ca-api` by hand imports it in the first apply that sets `builtin_auth_api`, as for the frontend
   below, with `["api"]` and the api's `authConfigs/current`.
+
+#### ca-edge's backstop (`builtin_auth_edge`)
+
+`builtin_auth_edge = true` (ADR 0120, as amended by ADR 0117 and clarified on 2026-11-22) puts a
+default-deny gate on `ca-edge`, behind Envoy's own token check. The platform lets the machine
+paths through without a token, because Envoy's `jwt_authn` validates them, and answers `401`,
+with no redirect, to every other request that does not carry a token issued to
+`builtin_auth.client_id` by the issuer in `oidc_allowed_issuers`. Off (the default), the module
+configures nothing on `ca-edge`.
+
+- **Exactly five paths are excluded.** An excluded path matches exactly, and `<path>/*` matches
+  the whole tree below it but never a sibling. So `/v1` and `/v1/*` let through `/v1` and
+  everything under it, but not `/v1x`. `/mcp` lets through that path only, so a path below
+  `/mcp` is refused at the platform. `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-protected-resource/mcp` are let through. `/` and every other path answer
+  `401`. Set `edge.jwt_authn` with it: the platform does not check a token on these paths, so
+  without `jwt_authn` nothing in front of `ca-api` does.
+- **It requires `builtin_auth`, `edge` and a single-tenant issuer.** The gate trusts the issuer
+  Envoy's `jwt_authn` trusts, so `oidc_allowed_issuers` (or `oidc_tenant_id`) must be exactly
+  one `https://login.microsoftonline.com/<tenant id>/v2.0`. A plan without `builtin_auth` or
+  `edge`, or with a list of issuers, `organizations`, `common`, a v1 or a non-Entra issuer, is
+  refused. That tenant should be `builtin_auth.tenant_id`: a plan where it is not warns through
+  the check `builtin_auth_edge_tenant_is_builtin_auth_tenant`, because a registration lives in
+  one tenant.
+- **No secret.** `ca-edge` serves no browser sign-in, so its registration names no client secret
+  and `ca-edge` carries none. Like the frontend's, its gate admits only tokens issued to the
+  registration itself.
+- **The recovery fallback never turns it off.** `builtin_auth_recovery_until` turns off
+  `ca-frontend`'s gate and `ca-api`'s, never this one.
+- **Alerted.** Every write to `ca-edge`'s auth configuration raises the activity-log alert
+  `alert-<prefix>-edge-auth-config-write`, which exists whenever the switch is on.
+- **Nothing else moves.** Turning the switch on or off adds or removes `ca-edge`'s
+  `authConfigs/current` (`module.masterly.azapi_resource.builtin_auth["edge"]`) and the alert;
+  `ca-edge`'s container app, its Envoy configuration, and the other gates stay as they are.
 
 To set it up, use an app registration in your tenant (one you already use for built-in auth is
 fine; the module takes over its configuration):
@@ -248,7 +284,9 @@ application's own sign-in, including its break-glass path. Set it to an RFC 3339
   confirm each one was intended. The api's alert covers every write after it exists, not the
   apply that turns `builtin_auth_api` on or off: turning it on creates the alert and `ca-api`'s
   configuration in the same apply, so that first write can land before the alert does, and
-  turning it off deletes the configuration and the alert together.
+  turning it off deletes the configuration and the alert together. With `builtin_auth_edge`,
+  `alert-<prefix>-edge-auth-config-write` does the same for `ca-edge`'s, which the window never
+  writes.
 
 The configuration is written with the `Azure/azapi` provider, because azurerm has no resource
 for it; the same provider starts the [migrate job](data-plane.md#the-migrate-job) at apply. The module

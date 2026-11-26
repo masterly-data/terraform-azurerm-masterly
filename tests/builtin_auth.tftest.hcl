@@ -1064,3 +1064,465 @@ run "builtin_auth_forward_proxy_standard_with_a_custom_header_is_refused" {
 
   expect_failures = [var.builtin_auth]
 }
+
+# --- ca-edge's backstop (builtin_auth_edge) ------------------------------------------------------
+# ADR 0120, as amended by ADR 0117 and clarified 2026-11-22: a plain excluded path matches
+# exactly, and "<path>/*" the tree below it but never a sibling. The alert's scope and ca-edge's
+# container app, whose ids are known only after an apply, are in builtin_auth_edge.tftest.hcl.
+
+# Switch unset, edge set: the gates are the ones earlier versions planned, and nothing on ca-edge.
+run "builtin_auth_edge_off_configures_nothing_on_ca_edge" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_tenant_id        = "11111111-1111-1111-1111-111111111111"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition = (
+      var.builtin_auth_edge == false &&
+      jsonencode(keys(local.builtin_auth_apps)) == jsonencode(["frontend"]) &&
+      !contains(keys(azapi_resource.builtin_auth), "edge") &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_edge_config_write) == 0
+    )
+    error_message = "With builtin_auth_edge unset, built-in auth must configure ca-frontend only, nothing under the key \"edge\", and no ca-edge auth-config alert."
+  }
+
+  # The body builtin_auth_gates_the_frontend_only pins, with edge set.
+  assert {
+    condition = jsonencode(azapi_resource.builtin_auth["frontend"].body) == jsonencode({
+      properties = {
+        platform = {
+          enabled = true
+        }
+        globalValidation = {
+          unauthenticatedClientAction = "RedirectToLoginPage"
+          excludedPaths               = []
+          redirectToProvider          = "azureactivedirectory"
+        }
+        identityProviders = {
+          azureActiveDirectory = {
+            registration = {
+              clientId                = "22222222-2222-2222-2222-222222222222"
+              clientSecretSettingName = "microsoft-provider-authentication-secret"
+              openIdIssuer            = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0"
+            }
+            validation = {
+              allowedAudiences = []
+              defaultAuthorizationPolicy = {
+                allowedApplications = ["22222222-2222-2222-2222-222222222222"]
+              }
+            }
+          }
+        }
+      }
+    })
+    error_message = "With builtin_auth_edge unset, ca-frontend's auth configuration must be as before this input existed."
+  }
+}
+
+# Switch unset, with builtin_auth_api: the frontend's and ca-api's gates, and still nothing on
+# ca-edge. builtin_auth_api.tftest.hcl pins ca-api's body.
+run "builtin_auth_edge_off_with_builtin_auth_api_gates_frontend_and_api" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_api           = true
+  }
+
+  assert {
+    condition = (
+      jsonencode(keys(local.builtin_auth_apps)) == jsonencode(["api", "frontend"]) &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_edge_config_write) == 0 &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_api_config_write) == 1
+    )
+    error_message = "With builtin_auth_api and without builtin_auth_edge, built-in auth must configure ca-frontend and ca-api only, with no ca-edge auth-config alert."
+  }
+
+  assert {
+    condition     = jsonencode(azapi_resource.builtin_auth["api"].body.properties.identityProviders.azureActiveDirectory.registration) == jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.registration)
+    error_message = "ca-api's gate must keep the registration ca-frontend's names, secret setting included."
+  }
+}
+
+# Switch on: ca-edge answers 401 at the platform outside the machine paths, with no redirect, no
+# forward proxy and no client secret, and nothing about ca-frontend's gate moves.
+run "builtin_auth_edge_on_returns_401_outside_the_machine_paths" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_tenant_id        = "11111111-1111-1111-1111-111111111111"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  assert {
+    condition = (
+      jsonencode(keys(local.builtin_auth_apps)) == jsonencode(["edge", "frontend"]) &&
+      azapi_resource.builtin_auth["edge"].name == "current" &&
+      azapi_resource.builtin_auth["edge"].type == "Microsoft.App/containerApps/authConfigs@2025-01-01"
+    )
+    error_message = "builtin_auth_edge must add ca-edge's authConfigs/current, under the key \"edge\", beside ca-frontend's."
+  }
+
+  # The whole body: on, Return401, the five machine paths excluded, the registration without a
+  # secret setting, and only the registration's own tokens admitted.
+  assert {
+    condition = jsonencode(azapi_resource.builtin_auth["edge"].body) == jsonencode({
+      properties = {
+        platform = {
+          enabled = true
+        }
+        globalValidation = {
+          unauthenticatedClientAction = "Return401"
+          excludedPaths = [
+            "/v1",
+            "/v1/*",
+            "/mcp",
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-protected-resource/mcp",
+          ]
+        }
+        identityProviders = {
+          azureActiveDirectory = {
+            registration = {
+              clientId     = "22222222-2222-2222-2222-222222222222"
+              openIdIssuer = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0"
+            }
+            validation = {
+              allowedAudiences = []
+              defaultAuthorizationPolicy = {
+                allowedApplications = ["22222222-2222-2222-2222-222222222222"]
+              }
+            }
+          }
+        }
+      }
+    })
+    error_message = "ca-edge's auth configuration must be on, answer 401 with no redirect outside the five machine paths, name no client secret, and admit only the registration's own tokens."
+  }
+
+  assert {
+    condition = (
+      azapi_resource.builtin_auth["edge"].body.properties.globalValidation.unauthenticatedClientAction == "Return401" &&
+      !contains(keys(azapi_resource.builtin_auth["edge"].body.properties.globalValidation), "redirectToProvider") &&
+      !contains(keys(azapi_resource.builtin_auth["edge"].body.properties), "httpSettings") &&
+      jsonencode(azapi_resource.builtin_auth["edge"].body.properties.globalValidation.excludedPaths) == jsonencode(local.builtin_auth_edge_excluded_paths)
+    )
+    error_message = "ca-edge's gate must answer 401 with no redirectToProvider and no httpSettings, and exclude exactly local.builtin_auth_edge_excluded_paths."
+  }
+
+  # The exclusions pinned: each matches exactly, and /v1/* the tree below /v1, so /v1x, /mcp/<sub>
+  # and / answer 401 at the platform.
+  assert {
+    condition = jsonencode(local.builtin_auth_edge_excluded_paths) == jsonencode([
+      "/v1",
+      "/v1/*",
+      "/mcp",
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-protected-resource/mcp",
+    ])
+    error_message = "local.builtin_auth_edge_excluded_paths must be exactly /v1, /v1/*, /mcp and the two protected-resource metadata paths, in that order."
+  }
+
+  # Threat: too wide an exclusion lets an unauthenticated request past the platform.
+  assert {
+    condition     = length(setintersection(toset(local.builtin_auth_edge_excluded_paths), toset(["/v1*", "/v1/**", "/mcp/*", "/", "/*"]))) == 0
+    error_message = "ca-edge's exclusions must contain no wider pattern: not /v1*, /v1/**, /mcp/*, / or /*."
+  }
+
+  # Threat: a foreign issuer. ca-edge's gate trusts the issuer Envoy's jwt_authn trusts.
+  assert {
+    condition     = azapi_resource.builtin_auth["edge"].body.properties.identityProviders.azureActiveDirectory.registration.openIdIssuer == local.oidc_allowed_issuers
+    error_message = "ca-edge's registration must name local.oidc_allowed_issuers as its issuer."
+  }
+
+  # Threat: a secret through the shared registration. ca-edge's names none; ca-frontend's still
+  # names the one it redeems sign-in codes with.
+  assert {
+    condition = (
+      !contains(keys(azapi_resource.builtin_auth["edge"].body.properties.identityProviders.azureActiveDirectory.registration), "clientSecretSettingName") &&
+      azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.registration.clientSecretSettingName == "microsoft-provider-authentication-secret"
+    )
+    error_message = "ca-edge's registration must name no client secret setting, and ca-frontend's must still name microsoft-provider-authentication-secret."
+  }
+
+  # Threat: the platform's identity headers reaching ca-api. The edge still strips them.
+  assert {
+    condition = alltrue([
+      for h in ["x-ms-client-principal", "x-ms-client-principal-id", "x-ms-client-principal-idp", "x-ms-client-principal-name"] :
+      contains(local.edge_stripped_request_headers, h)
+    ])
+    error_message = "With builtin_auth_edge on, ca-edge must still strip the four x-ms-client-principal headers before ca-api."
+  }
+
+  # ca-frontend's gate is the one builtin_auth_gates_the_frontend_only pins.
+  assert {
+    condition = jsonencode(azapi_resource.builtin_auth["frontend"].body) == jsonencode({
+      properties = {
+        platform = {
+          enabled = true
+        }
+        globalValidation = {
+          unauthenticatedClientAction = "RedirectToLoginPage"
+          excludedPaths               = []
+          redirectToProvider          = "azureactivedirectory"
+        }
+        identityProviders = {
+          azureActiveDirectory = {
+            registration = {
+              clientId                = "22222222-2222-2222-2222-222222222222"
+              clientSecretSettingName = "microsoft-provider-authentication-secret"
+              openIdIssuer            = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0"
+            }
+            validation = {
+              allowedAudiences = []
+              defaultAuthorizationPolicy = {
+                allowedApplications = ["22222222-2222-2222-2222-222222222222"]
+              }
+            }
+          }
+        }
+      }
+    })
+    error_message = "builtin_auth_edge must not move ca-frontend's auth configuration."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_activity_log_alert.builtin_auth_edge_config_write) == 1 &&
+      azurerm_monitor_activity_log_alert.builtin_auth_edge_config_write[0].name == "alert-masterly-edge-auth-config-write" &&
+      azurerm_monitor_activity_log_alert.builtin_auth_edge_config_write[0].location == "global" &&
+      azurerm_monitor_activity_log_alert.builtin_auth_edge_config_write[0].criteria[0].category == "Administrative" &&
+      azurerm_monitor_activity_log_alert.builtin_auth_edge_config_write[0].criteria[0].operation_name == "Microsoft.App/containerApps/authConfigs/write" &&
+      length(azurerm_monitor_activity_log_alert.builtin_auth_config_write) == 1
+    )
+    error_message = "builtin_auth_edge must add one alert, alert-masterly-edge-auth-config-write, on authConfigs writes, beside the frontend's."
+  }
+}
+
+# Threat: the backstop off during a frontend recovery window. The window turns ca-frontend's gate
+# off and leaves ca-edge's on.
+run "builtin_auth_edge_stays_on_in_the_recovery_window" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_tenant_id        = "11111111-1111-1111-1111-111111111111"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret  = "test-only-not-a-secret"
+    builtin_auth_edge           = true
+    builtin_auth_recovery_until = run.plan_time.in_30_minutes
+  }
+
+  assert {
+    condition = (
+      local.builtin_auth_recovery_open &&
+      azapi_resource.builtin_auth["edge"].body.properties.platform.enabled == true &&
+      azapi_resource.builtin_auth["frontend"].body.properties.platform.enabled == false
+    )
+    error_message = "With the recovery window open, ca-edge's gate must stay on while ca-frontend's is off."
+  }
+}
+
+# The frontend's forward proxy is the frontend's: ca-edge's gate has no httpSettings.
+run "builtin_auth_edge_takes_no_forward_proxy" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_tenant_id        = "11111111-1111-1111-1111-111111111111"
+    builtin_auth = {
+      tenant_id     = "11111111-1111-1111-1111-111111111111"
+      client_id     = "22222222-2222-2222-2222-222222222222"
+      forward_proxy = { convention = "Standard" }
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  assert {
+    condition = (
+      jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.httpSettings) == jsonencode({
+        forwardProxy = { convention = "Standard" }
+      }) &&
+      !contains(keys(azapi_resource.builtin_auth["edge"].body.properties), "httpSettings")
+    )
+    error_message = "builtin_auth.forward_proxy must set ca-frontend's httpSettings as without builtin_auth_edge, and none on ca-edge."
+  }
+}
+
+# The issuer comes from oidc_allowed_issuers, not builtin_auth.tenant_id: with two tenants, ca-edge
+# names the one Envoy trusts, and the plan warns.
+run "builtin_auth_edge_warns_when_its_tenant_is_not_builtin_auth_tenant" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_tenant_id        = "11111111-2222-3333-4444-555555555555"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  assert {
+    condition = (
+      azapi_resource.builtin_auth["edge"].body.properties.identityProviders.azureActiveDirectory.registration.openIdIssuer == local.oidc_allowed_issuers &&
+      azapi_resource.builtin_auth["edge"].body.properties.identityProviders.azureActiveDirectory.registration.openIdIssuer == "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0" &&
+      azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.registration.openIdIssuer == "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0"
+    )
+    error_message = "ca-edge's issuer must be oidc_allowed_issuers, and ca-frontend's builtin_auth.tenant_id's, each unchanged by the other."
+  }
+
+  expect_failures = [check.builtin_auth_edge_tenant_is_builtin_auth_tenant]
+}
+
+# Threat: a gate with no registration, no app or a foreign issuer. Each refused at plan.
+run "builtin_auth_edge_is_refused_without_builtin_auth" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_tenant_id        = "11111111-1111-1111-1111-111111111111"
+    builtin_auth_edge     = true
+  }
+
+  expect_failures = [var.builtin_auth_edge]
+}
+
+run "builtin_auth_edge_is_refused_without_edge" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    oidc_tenant_id        = "11111111-1111-1111-1111-111111111111"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  expect_failures = [var.builtin_auth_edge]
+}
+
+run "builtin_auth_edge_is_refused_without_an_issuer" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  expect_failures = [var.builtin_auth_edge]
+}
+
+run "builtin_auth_edge_is_refused_with_two_issuers" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_tenant_id        = "11111111-1111-1111-1111-111111111111"
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0,https://login.microsoftonline.com/66666666-7777-8888-9999-000000000000/v2.0"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  expect_failures = [var.builtin_auth_edge]
+}
+
+run "builtin_auth_edge_is_refused_with_a_non_entra_issuer" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_allowed_issuers  = "https://idp.example.com/11111111-1111-1111-1111-111111111111/v2.0"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  expect_failures = [var.builtin_auth_edge]
+}
+
+run "builtin_auth_edge_is_refused_with_a_multitenant_issuer" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_allowed_issuers  = "https://login.microsoftonline.com/organizations/v2.0"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  expect_failures = [var.builtin_auth_edge]
+}
+
+run "builtin_auth_edge_is_refused_with_a_v1_issuer" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
+    oidc_allowed_issuers  = "https://sts.windows.net/11111111-1111-1111-1111-111111111111/"
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+    builtin_auth_edge          = true
+  }
+
+  expect_failures = [var.builtin_auth_edge]
+}

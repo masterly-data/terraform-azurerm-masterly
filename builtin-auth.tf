@@ -24,6 +24,12 @@
 # application's own authentication is not told the gate is off. The activity-log alerts near the
 # end of this file, one per gated app, report both writes. A further alert, on ca-api's 401s,
 # exists with builtin_auth_api.
+#
+# ca-edge is not gated unless builtin_auth_edge is true (it is false by default). With it,
+# ca-edge answers 401 at the platform to every request without a valid token, on every path
+# except the machine paths Envoy's jwt_authn validates (ADR 0120, as amended by ADR 0117 and
+# clarified 2026-11-22): a default-deny backstop behind Envoy, not a second check of the same
+# paths. The recovery fallback never turns it off, because ca-edge serves no browser sign-in.
 
 locals {
   builtin_auth_enabled = var.builtin_auth != null
@@ -39,6 +45,40 @@ locals {
     clientSecretSettingName = local.builtin_auth_secret_name
     openIdIssuer            = "https://login.microsoftonline.com/${var.builtin_auth.tenant_id}/v2.0"
   } : null
+
+  # ca-edge's registration: the same client id, and the issuer Envoy's jwt_authn trusts
+  # (oidc_allowed_issuers, a single Entra v2.0 tenant issuer, which builtin_auth_edge's validation
+  # requires). No client secret: ca-edge never redeems a sign-in code, and carries no secret.
+  builtin_auth_edge_registration = local.builtin_auth_enabled ? {
+    clientId     = var.builtin_auth.client_id
+    openIdIssuer = local.oidc_allowed_issuers
+  } : null
+
+  # The registration each gate validates against, by the keys of builtin_auth_apps. Kept out of
+  # builtin_auth_apps for the reason builtin_auth_forward_proxy is: the edge's has no secret
+  # name, so its type differs from the others'. The frontend and ca-api keep the registration
+  # earlier versions wrote, so their bodies do not change.
+  builtin_auth_registrations = {
+    frontend = local.builtin_auth_registration
+    api      = local.builtin_auth_registration
+    edge     = local.builtin_auth_edge_registration
+  }
+
+  # The paths on ca-edge the platform lets through without a token: the machine paths, which
+  # Envoy's jwt_authn validates. An entry matches its path exactly, and "<path>/*" the whole tree
+  # below it but never a sibling: /v1x and /mcp/<sub> are refused (ADR 0120, clarified
+  # 2026-11-22). Every other path, / included, answers 401 at the platform.
+  builtin_auth_edge_excluded_paths = [
+    "/v1",
+    "/v1/*",
+    "/mcp",
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+  ]
+
+  # ca-edge gated: the switch, with builtin_auth and edge set (builtin_auth_edge's validations
+  # refuse it without them).
+  builtin_auth_edge_enabled = local.builtin_auth_enabled && local.edge_enabled && var.builtin_auth_edge
 
   # The paths on ca-api served without a token: none. A path that must be reached without one,
   # such as a webhook, is for ca-edge's proxy in front of ca-api to exempt, never ca-api's gate.
@@ -83,15 +123,31 @@ locals {
         allowed_additional_audience = []
       }
     } : {},
+    # ca-edge, with builtin_auth_edge: 401 without a token, outside the machine paths. Its gate
+    # stays on while the recovery fallback is open, whatever builtin_auth_recovery_until says,
+    # and it admits, like the frontend's, only tokens issued to the registration itself.
+    local.builtin_auth_edge_enabled ? {
+      edge = {
+        app_id                      = one(azurerm_container_app.edge[*].id)
+        platform_enabled            = true
+        unauthenticated_action      = "Return401"
+        redirect_to_provider        = null
+        excluded_paths              = local.builtin_auth_edge_excluded_paths
+        allowed_applications        = [var.builtin_auth.client_id]
+        allowed_additional_audience = []
+      }
+    } : {},
   ) : {}
 
   # The reverse proxy in front of each gate, by the keys of builtin_auth_apps: the frontend's is
-  # builtin_auth.forward_proxy, and ca-api, which only ca-frontend and ca-edge call, has none.
-  # Kept out of builtin_auth_apps, whose entries must share one type: the frontend's typed
-  # null and the api's untyped one would not.
+  # builtin_auth.forward_proxy, and ca-api, which only ca-frontend and ca-edge call, has none;
+  # nor has ca-edge, which is itself the proxy in front of ca-api. Kept out of builtin_auth_apps,
+  # whose entries must share one type: the frontend's typed null and the api's untyped one would
+  # not.
   builtin_auth_forward_proxy = local.builtin_auth_enabled ? {
     frontend = var.builtin_auth.forward_proxy
     api      = null
+    edge     = null
   } : {}
 
   # The api entries of builtin_auth, which configured ca-api's gate in 0.19.0 and 0.19.1 and are
@@ -136,6 +192,18 @@ check "builtin_auth_recovery_window_has_expired" {
   }
 }
 
+# ca-edge's gate validates builtin_auth.client_id against the issuer Envoy trusts
+# (oidc_allowed_issuers), while ca-frontend's validates it against builtin_auth.tenant_id. Two
+# different tenants are not refused, but a registration lives in one tenant, so one of the two
+# gates then refuses every token. A conditional, not `&&`, for the reason given on builtin_auth's
+# validations; an issuer with no tenant is builtin_auth_edge's validation to refuse, not this.
+check "builtin_auth_edge_tenant_is_builtin_auth_tenant" {
+  assert {
+    condition     = local.builtin_auth_edge_enabled && local.edge_jwt_authn_tenant != null ? lower(local.edge_jwt_authn_tenant) == lower(var.builtin_auth.tenant_id) : true
+    error_message = "builtin_auth_edge validates builtin_auth.client_id against the tenant in oidc_allowed_issuers, which is not builtin_auth.tenant_id: a registration lives in one tenant, so ca-edge's gate or ca-frontend's refuses every token. Set oidc_allowed_issuers (or oidc_tenant_id) to the tenant builtin_auth.client_id is registered in."
+  }
+}
+
 resource "azapi_resource" "builtin_auth" {
   for_each = local.builtin_auth_apps
 
@@ -159,7 +227,7 @@ resource "azapi_resource" "builtin_auth" {
       )
       identityProviders = {
         azureActiveDirectory = {
-          registration = local.builtin_auth_registration
+          registration = local.builtin_auth_registrations[each.key]
           validation = {
             # The registration's own client id is always an allowed audience; these are the
             # others.
@@ -225,6 +293,33 @@ resource "azurerm_monitor_activity_log_alert" "builtin_auth_api_config_write" {
   location            = "global"
   scopes              = [module.api.id]
   description         = "ca-api's built-in authentication configuration was written: the recovery fallback turned the gate off or back on, or the configuration was changed outside Terraform. Confirm the change was intended."
+
+  criteria {
+    category       = "Administrative"
+    operation_name = "Microsoft.App/containerApps/authConfigs/write"
+  }
+
+  dynamic "action" {
+    for_each = local.alert_action_group_ids
+    content {
+      action_group_id = action.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# The same for ca-edge's auth configuration, for as long as builtin_auth_edge gates it. The
+# recovery fallback never writes it, so every write this alert reports is this module turning the
+# backstop on or off, or a change made outside Terraform.
+resource "azurerm_monitor_activity_log_alert" "builtin_auth_edge_config_write" {
+  count = local.builtin_auth_edge_enabled ? 1 : 0
+
+  name                = "alert-${var.name_prefix}-edge-auth-config-write"
+  resource_group_name = azurerm_resource_group.aca.name
+  location            = "global"
+  scopes              = [one(azurerm_container_app.edge[*].id)]
+  description         = "ca-edge's built-in authentication configuration was written: builtin_auth_edge turned the backstop on or changed it, or the configuration was changed outside Terraform. Confirm the change was intended."
 
   criteria {
     category       = "Administrative"
