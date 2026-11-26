@@ -81,6 +81,13 @@ run "builtin_auth_edge_off_has_no_edge_gate_or_alert" {
     condition     = length(azurerm_container_app.edge[0].secret) == 0
     error_message = "ca-edge must carry no secret."
   }
+
+  # ca-edge's container args are the ones builtin_auth_api.tftest.hcl pins: the Envoy
+  # configuration, the third, by the digest of the configuration this version renders.
+  assert {
+    condition     = jsonencode([for index, a in azurerm_container_app.edge[0].template[0].container[0].args : index == 2 ? sha256(a) : a]) == jsonencode(["envoy", "--config-yaml", "3fa7977ce66aca883eb804fdedca8966a2af34be7b369f6566d398cd512d3c15"])
+    error_message = "With builtin_auth_edge unset, ca-edge's container args must be the ones earlier versions rendered, not ${jsonencode([for index, a in azurerm_container_app.edge[0].template[0].container[0].args : index == 2 ? sha256(a) : a])}."
+  }
 }
 
 # Threat: an out-of-band change going unreported. With the switch on, one alert on ca-edge's
@@ -142,5 +149,11 @@ run "builtin_auth_edge_on_alerts_on_edge_auth_config_writes" {
       length(regexall("builtin_auth_edge", file("${path.module}/edge.tf"))) == 0
     )
     error_message = "With builtin_auth_edge = true, ca-edge must carry no secret, and its Envoy configuration must be local.edge_envoy_config, which edge.tf builds without reading builtin_auth_edge."
+  }
+
+  # The switch reaches no container arg: they are the ones the run above, with it unset, pins.
+  assert {
+    condition     = jsonencode([for index, a in azurerm_container_app.edge[0].template[0].container[0].args : index == 2 ? sha256(a) : a]) == jsonencode(["envoy", "--config-yaml", "3fa7977ce66aca883eb804fdedca8966a2af34be7b369f6566d398cd512d3c15"])
+    error_message = "With builtin_auth_edge = true, ca-edge's container args must be the ones it has with the switch unset, not ${jsonencode([for index, a in azurerm_container_app.edge[0].template[0].container[0].args : index == 2 ? sha256(a) : a])}."
   }
 }
