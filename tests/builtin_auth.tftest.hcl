@@ -1133,6 +1133,16 @@ run "builtin_auth_edge_off_configures_nothing_on_ca_edge" {
 run "builtin_auth_edge_off_with_builtin_auth_api_gates_frontend_and_api" {
   command = plan
 
+  # The deployment's tenant is builtin_auth.tenant_id, as on a real install: with
+  # builtin_auth_api the check builtin_auth_tenant_is_the_deployment_tenant compares the two.
+  override_data {
+    target = data.azurerm_client_config.current
+    values = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      object_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    }
+  }
+
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     edge                  = {}

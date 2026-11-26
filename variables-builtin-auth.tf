@@ -114,13 +114,25 @@ variable "builtin_auth_api" {
     False (the default) leaves ca-api ungated at the platform, as before this input existed.
     It requires builtin_auth: the gate
     validates tokens against builtin_auth's registration, so a caller requests a token for the
-    audience builtin_auth.client_id (or api://<client_id>). A browser sign-in token for that same
+    audience builtin_auth.client_id, the bare client id. A browser sign-in token for that same
     registration is refused, because the registration itself is not an allowed application.
 
-    Turn it on only once the ca-frontend and ca-edge releases you run send their workload-identity
-    token to ca-api. Before that, ca-api refuses every call the frontend's server makes on a
-    user's behalf, and the application is unusable until it is turned off again. Turning it on or
-    off changes neither app: ca-api carries builtin_auth_client_secret whenever builtin_auth is
+    The module wires both ends of that token. With it on, ca-frontend gets MASTERLY_API_AUDIENCE
+    (builtin_auth.client_id) and AZURE_CLIENT_ID (its own identity's client id), so it requests
+    the token; ca-api, and ca-workers, which shares its env, get the six MASTERLY_WORKLOAD_*
+    settings and MASTERLY_L1_TOKEN_REQUIRED = "true", so the application verifies the token too
+    and refuses a request without one. MASTERLY_WORKLOAD_EDGE_CLIENT_ID is empty without edge,
+    and MASTERLY_WORKLOAD_RECOVERY_CLIENT_ID is empty until ca-recovery exists. Off, none of them
+    is set. builtin_auth.client_id's app registration must issue v2.0 access tokens
+    (requestedAccessTokenVersion = 2 in its manifest), and be in the tenant this module deploys
+    to: otherwise ca-api refuses every workload token, and the second case warns at plan.
+
+    Turn it on only once the ca-frontend, ca-edge and ca-api releases you run send and verify
+    the workload-identity token, with empty edge and recovery client ids accepted. Before that,
+    ca-api refuses every call the frontend's server makes on a user's behalf, or does not start,
+    and the application is unusable until it is turned off again. Turning it on or off changes
+    the env of ca-frontend, ca-api and ca-workers and nothing else on them: ca-api carries
+    builtin_auth_client_secret whenever builtin_auth is
     set. builtin_auth_recovery_until turns this gate off too, with ca-frontend's, for its window
     of at most 60 minutes, and every write to ca-api's authentication configuration raises the
     activity-log alert alert-<name_prefix>-api-auth-config-write. The application still

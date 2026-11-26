@@ -1271,6 +1271,7 @@ locals {
   api_env = merge(
     local.install_env,
     local.identity_env,
+    local.workload_trust_env, # the L1 token's trust (builtin-auth.tf), empty unless ca-api's gate is on
     local.private_egress_env, # the egress guard's allowlist (and deprecated override), empty unless set
     local.public_api_url_env, # the api's public base URL, empty unless set
     local.ca_bundle_env,      # SSL_CERT_FILE, pointed at the mounted bundle, empty unless set
@@ -1731,6 +1732,9 @@ locals {
     # excepted. Written only when the input is set, so an install that is not behind a Front
     # Door plans exactly as before.
     var.front_door_id != null ? { MASTERLY_FRONT_DOOR_ID = lower(var.front_door_id) } : {},
+    # The workload token ca-api's gate admits (builtin-auth.tf): its audience, and the identity
+    # the frontend requests it as. Empty unless ca-api's gate is on.
+    local.workload_token_env,
     var.identity_binding == "oidc" ? merge(
       {
         MASTERLY_OIDC_CLIENT_ID    = var.oidc_client_id

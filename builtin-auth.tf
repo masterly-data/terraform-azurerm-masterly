@@ -11,11 +11,19 @@
 # workload identity for builtin_auth's registration (ADR 0120 §2). The application still
 # authenticates its callers as identity_binding sets: neither layer relies on the other.
 #
+# With builtin_auth_api the module wires both ends of that token (local.workload_trust_env
+# below). ca-frontend is told the audience to request it for, the bare builtin_auth.client_id,
+# and which of its identities to request it as; ca-api is told the issuer, audience and client
+# ids to verify it against at L2 (ADR 0119), and to require it. That needs builtin_auth.client_id's
+# registration to issue v2.0 access tokens (requestedAccessTokenVersion = 2 in its manifest):
+# a v1 token's issuer is https://sts.windows.net/<tenant>/, which ca-api refuses.
+#
 # azurerm has no resource for an app's auth configuration, so it is written with azapi as the
 # child resource Azure defines for it, Microsoft.App/containerApps/authConfigs, whose only valid
 # name is "current". Its client secret is an ordinary Container App secret (main.tf,
 # secret_values), which the configuration names rather than holds. ca-api carries that secret
-# whenever builtin_auth is set, so turning builtin_auth_api on or off changes neither app.
+# whenever builtin_auth is set; turning builtin_auth_api on or off changes the two apps' env, and
+# nothing else on them.
 #
 # builtin_auth_recovery_until is the recovery fallback: it turns ca-frontend's gate off and, with
 # builtin_auth_api, ca-api's too, for at most 60 minutes, only behind a network restriction, and
@@ -91,6 +99,38 @@ locals {
     [module.frontend_identity.client_id],
     local.edge_enabled ? [one(module.edge_identity[*].client_id)] : [],
   )
+
+  # ca-api gated: the switch, with builtin_auth set (builtin_auth_api's validation refuses it
+  # without). main.tf reads the switch only through this and the two env maps below.
+  workload_trust_enabled = local.builtin_auth_enabled && var.builtin_auth_api
+
+  # ca-frontend's half of the L1 token, merged into local.frontend_env (main.tf): the audience its
+  # workload token is requested for, and the identity it is requested as. The audience is the
+  # bare client id, which Easy Auth always admits as an audience of its own registration and
+  # which a v2.0 token carries as aud; an api:// form would need an allowed_additional_audience
+  # entry. AZURE_CLIENT_ID names the frontend's identity because ca-frontend can carry a second
+  # one, the pull identity (registry_identity_id), and a token request that names none is then
+  # ambiguous. MASTERLY_SERVE_AUDIENCE waits for ca-serve's gate.
+  workload_token_env = local.workload_trust_enabled ? {
+    MASTERLY_API_AUDIENCE = var.builtin_auth.client_id
+    AZURE_CLIENT_ID       = module.frontend_identity.client_id
+  } : {}
+
+  # ca-api's half, merged into local.api_env (main.tf): the trust it verifies the L1 token
+  # against at L2 (ADR 0119), set together or not at all, and the requirement that a request
+  # carry one (layered design §18 M4). The issuer is the gate's own, so the two cannot drift. The
+  # client ids are those builtin_auth_api_allowed_applications admits; a role this install does
+  # not run is the empty string, never another identity's id: ca-edge without edge, and ca-recovery
+  # until it exists. Every value is a public identifier, none a secret.
+  workload_trust_env = local.workload_trust_enabled ? {
+    MASTERLY_WORKLOAD_ISSUER             = local.builtin_auth_registration.openIdIssuer
+    MASTERLY_WORKLOAD_API_AUDIENCE       = var.builtin_auth.client_id
+    MASTERLY_WORKLOAD_FRONTEND_CLIENT_ID = module.frontend_identity.client_id
+    MASTERLY_WORKLOAD_EDGE_CLIENT_ID     = local.edge_enabled ? one(module.edge_identity[*].client_id) : ""
+    MASTERLY_WORKLOAD_RECOVERY_CLIENT_ID = ""
+    MASTERLY_WORKLOAD_JWKS_URI           = "https://login.microsoftonline.com/${var.builtin_auth.tenant_id}/discovery/v2.0/keys"
+    MASTERLY_L1_TOKEN_REQUIRED           = "true"
+  } : {}
 
   # Per app: whether the gate is on, what an unauthenticated request gets, which paths skip the
   # gate, and who besides the registration itself may present a token. The frontend admits
@@ -201,6 +241,17 @@ check "builtin_auth_edge_tenant_is_builtin_auth_tenant" {
   assert {
     condition     = local.builtin_auth_edge_enabled && local.edge_jwt_authn_tenant != null ? lower(local.edge_jwt_authn_tenant) == lower(var.builtin_auth.tenant_id) : true
     error_message = "builtin_auth_edge validates builtin_auth.client_id against the tenant in oidc_allowed_issuers, which is not builtin_auth.tenant_id: a registration lives in one tenant, so ca-edge's gate or ca-frontend's refuses every token. Set oidc_allowed_issuers (or oidc_tenant_id) to the tenant builtin_auth.client_id is registered in."
+  }
+}
+
+# ca-frontend's and ca-edge's workload identities live in the deployment's tenant, so their tokens
+# carry its issuer, while ca-api's gate and its L2 trust name builtin_auth.tenant_id's. Two
+# different tenants are not refused, but ca-api then refuses every workload token. A conditional,
+# not `&&`, for the reason given on builtin_auth's validations.
+check "builtin_auth_tenant_is_the_deployment_tenant" {
+  assert {
+    condition     = local.workload_trust_enabled ? lower(var.builtin_auth.tenant_id) == lower(data.azurerm_client_config.current.tenant_id) : true
+    error_message = "builtin_auth_api trusts workload tokens issued by builtin_auth.tenant_id, but ca-frontend's and ca-edge's managed identities are in the deployment's tenant, which is not builtin_auth.tenant_id: ca-api refuses every call from them. Register builtin_auth.client_id in the tenant this module deploys to and set builtin_auth.tenant_id to it."
   }
 }
 
