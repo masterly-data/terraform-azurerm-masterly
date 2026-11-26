@@ -30,6 +30,8 @@ variable "builtin_auth" {
       ingress_allowed_cidrs, without this gate, and a plan that sets both warns. With it, ca-api
       answers 401 to every request without a token issued to ca-frontend's or ca-edge's
       workload identity for this registration; see builtin_auth_api.
+    - ca-edge is not gated at the platform unless builtin_auth_edge = true (false by default);
+      see builtin_auth_edge.
 
     tenant_id: the Entra tenant users sign in from (the issuer is
     https://login.microsoftonline.com/<tenant_id>/v2.0). client_id: the app registration the
@@ -134,6 +136,51 @@ variable "builtin_auth_api" {
     # A conditional, not `||`, for the reason given on builtin_auth's validations.
     condition     = var.builtin_auth_api ? var.builtin_auth != null : true
     error_message = "builtin_auth_api turns on built-in authentication on ca-api with builtin_auth's registration, so it requires builtin_auth. Set builtin_auth (and builtin_auth_client_secret), or set builtin_auth_api = false."
+  }
+}
+
+variable "builtin_auth_edge" {
+  type        = bool
+  default     = false
+  nullable    = false
+  description = <<-EOT
+    Built-in authentication on ca-edge, off by default: a backstop that answers 401 on every path
+    but /v1, /v1/*, /mcp and the protected-resource metadata paths, so a path below /mcp, and /,
+    is refused.
+
+    True turns on Container Apps built-in authentication on ca-edge (ADR 0120, as amended by ADR
+    0117 and clarified 2026-11-22). The platform lets through, without a token, exactly the
+    machine paths Envoy's jwt_authn (edge.jwt_authn) validates: /v1 and the whole tree below it
+    (/v1/*, but not a sibling such as /v1x), /mcp (that path only), and
+    /.well-known/oauth-protected-resource and /.well-known/oauth-protected-resource/mcp. Every
+    other path answers 401 at the platform with no redirect unless the request carries a token
+    issued to builtin_auth.client_id by the issuer in oidc_allowed_issuers. False (the default)
+    configures nothing on ca-edge, exactly as before this input existed. Set edge.jwt_authn with
+    it: the platform checks no token on the machine paths.
+
+    It requires builtin_auth and edge, and oidc_allowed_issuers (or oidc_tenant_id) naming a
+    single tenant's Entra issuer, https://login.microsoftonline.com/<tenant id>/v2.0, the one
+    Envoy's jwt_authn trusts; a plan without them is refused. That tenant should be
+    builtin_auth.tenant_id, and a plan where it is not warns. ca-edge carries no client secret:
+    it serves no browser sign-in. builtin_auth_recovery_until never turns this gate off. Every
+    write to ca-edge's authentication configuration raises the activity-log alert
+    alert-<name_prefix>-edge-auth-config-write.
+  EOT
+
+  # Conditionals, not `||`, for the reason given on builtin_auth's validations.
+  validation {
+    condition     = var.builtin_auth_edge ? var.builtin_auth != null : true
+    error_message = "builtin_auth_edge turns on built-in authentication on ca-edge with builtin_auth's registration, so it requires builtin_auth. Set builtin_auth (and builtin_auth_client_secret), or set builtin_auth_edge = false."
+  }
+
+  validation {
+    condition     = var.builtin_auth_edge ? var.edge != null : true
+    error_message = "builtin_auth_edge turns on built-in authentication on ca-edge, so it requires edge. Set edge, or set builtin_auth_edge = false."
+  }
+
+  validation {
+    condition     = var.builtin_auth_edge ? local.edge_jwt_authn_tenant != null : true
+    error_message = "builtin_auth_edge validates tokens against the issuer Envoy's jwt_authn trusts, so oidc_allowed_issuers (or oidc_tenant_id) must name exactly one issuer, https://login.microsoftonline.com/<tenant id>/v2.0: not a list, not organizations or common, not a v1 or non-Entra issuer. Set it, or set builtin_auth_edge = false."
   }
 }
 
