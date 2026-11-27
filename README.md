@@ -419,6 +419,14 @@ Who signs in, `ca-frontend` on your own domain and the built-in authentication a
   platform on every path but `/v1`, `/v1/*`, `/mcp` and the protected-resource metadata paths,
   which Envoy's `jwt_authn` validates. See
   [docs/identity.md](docs/identity.md#ca-edges-backstop-builtin_auth_edge).
+- **`ca-edge`'s own workload-identity token (`edge.workload_token`) is off by default.** With
+  `builtin_auth_api = true`, `ca-api` refuses the caller's token `ca-edge` forwards, so every SDK,
+  REST and MCP call through `ca-edge` gets `401` (a check warns). `edge.workload_token = true`,
+  with `edge.jwt_authn`, makes `ca-edge` move the caller's `Authorization` to
+  `X-Masterly-Credential` and send its own token in `Authorization`; it is refused without
+  `builtin_auth_api = true` or without `edge.jwt_authn`. Turn it on in the same apply as
+  `builtin_auth_api`. See
+  [docs/identity.md](docs/identity.md#ca-edges-workload-token-edgeworkload_token).
 
 ## Data plane (ADR 0065)
 

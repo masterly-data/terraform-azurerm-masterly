@@ -1199,6 +1199,10 @@ run "builtin_auth_edge_off_with_builtin_auth_api_gates_frontend_and_api" {
     condition     = jsonencode(azapi_resource.builtin_auth["api"].body.properties.identityProviders.azureActiveDirectory.registration) == jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.identityProviders.azureActiveDirectory.registration)
     error_message = "ca-api's gate must keep the registration ca-frontend's names, secret setting included."
   }
+
+  # edge set without edge.workload_token: ca-api's gate refuses the caller tokens ca-edge
+  # forwards, and the check says so.
+  expect_failures = [check.builtin_auth_api_edge_sends_its_workload_token]
 }
 
 # Switch on: ca-edge answers 401 at the platform outside the machine paths, with no redirect, no

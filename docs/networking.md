@@ -1110,8 +1110,11 @@ its base URL.
 **With `edge.jwt_authn` unset (the default) it does no authentication.** It forwards the caller's
 `Authorization` header to `ca-api` unchanged, and `ca-api` checks it, exactly as when `ca-api`
 itself is published with `api_ingress_external = true`. With it set, the edge validates the token
-first ([Token validation at the edge](#token-validation-at-the-edge-edgejwt_authn)). What the edge
-adds either way is a narrower door:
+first ([Token validation at the edge](#token-validation-at-the-edge-edgejwt_authn)), and with
+`edge.workload_token` set as well it moves the caller's token to `X-Masterly-Credential` and sends
+its own workload-identity token in `Authorization`, for `ca-api`'s built-in authentication
+([docs/identity.md](identity.md#ca-edges-workload-token-edgeworkload_token)). What the edge adds
+either way is a narrower door:
 
 - **Public ingress, on the allowlist.** `ca-edge` is published (external ingress) on
   `ingress_allowed_cidrs`, the same list the frontend uses, HTTPS-only (`http://` is redirected,
@@ -1178,10 +1181,13 @@ adds either way is a narrower door:
   configuration travels in the container's arguments (`args`), visible in the plan, and holds
   nothing secret; a change to it rolls a new revision. Because it is passed as arguments, the
   image's entrypoint still runs and starts Envoy as the image's unprivileged `envoy` user, not
-  root; the listener is on port 8080. A mirror set in `edge.image` must keep that entrypoint. The
+  root; the listener is on port 8080. A mirror set in `edge.image` must keep that entrypoint. With
+  `edge.workload_token` set, the arguments start a short `/bin/sh` script, which the entrypoint
+  also runs as `envoy`, that fills the managed identity endpoint's address into the configuration
+  and `exec`s Envoy; the mirror must then keep `/bin/sh` and `sed` too. The
   access log, one JSON line per request on the container's output (in your workspace with
-  diagnostics on), holds the path without its query string and no `Authorization`, cookie or
-  other credential-carrying header.
+  diagnostics on), holds the path without its query string and no `Authorization`,
+  `X-Masterly-Credential`, `DPoP`, cookie or other credential-carrying header.
 - **Its own identity.** `ca-edge` runs as `id-<prefix>-edge`, which holds no role on Postgres,
   Key Vault, Service Bus or Redis, and AcrPull only when its image is on the install's registry.
 
@@ -1199,7 +1205,8 @@ ADR 0120 §2), on every forwarded route: `/v1`, the ca-serve routes under it, an
   audiences is answered **`403`**, and anything else, a request with no token included, is
   answered **`401`**. The `413` and
   `404` answers are given without reading a token. A token that passes reaches `ca-api`
-  unchanged, and `ca-api` still checks it; the decoded token is never forwarded as a header, and
+  unchanged, in `Authorization` or, with `edge.workload_token`, in `X-Masterly-Credential`, and
+  `ca-api` still checks it; the decoded token is never forwarded as a header, and
   `x-jwt-payload` is still removed from every request. The access log holds no token.
 - **One issuer.** The edge trusts exactly one issuer, the install's Entra tenant: the same
   `oidc_allowed_issuers` value `ca-api` trusts. The plan is refused unless it is the single entry

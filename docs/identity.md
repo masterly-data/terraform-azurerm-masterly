@@ -149,7 +149,11 @@ the api's gate. The application still authenticates every caller as `identity_bi
   frontend's server makes on a user's behalf is refused, and the application is unusable until the
   switch is turned off again, as happened with 0.19.x on 2026-10-22. Upgrade both apps to releases
   that send it first, then turn this on. The `ca-api` release must also verify the token and
-  accept empty edge and recovery client ids (below), or it refuses to start.
+  accept empty edge and recovery client ids (below), or it refuses to start. `ca-edge` is Envoy,
+  configured by this module: it sends its token with `edge.workload_token = true`, set in the same
+  apply (see [ca-edge's workload token](#ca-edges-workload-token-edgeworkload_token)). With
+  `edge` set and `edge.workload_token` off, the check `builtin_auth_api_edge_sends_its_workload_token`
+  warns that every machine call through `ca-edge` gets `401`.
 - **The module wires both ends of the token.** With the switch on, `ca-frontend` gets
   `MASTERLY_API_AUDIENCE` (`builtin_auth.client_id`) and `AZURE_CLIENT_ID` (its own identity's
   client id, so a token request is not ambiguous when `registry_identity_id` gives it a second
@@ -226,6 +230,48 @@ configures nothing on `ca-edge`.
   `authConfigs/current` (`module.masterly.azapi_resource.builtin_auth["edge"]`) and the alert;
   `ca-edge`'s container app, its Envoy configuration, and the other gates stay as they are.
 
+#### ca-edge's workload token (`edge.workload_token`)
+
+`ca-api`'s gate (`builtin_auth_api`) admits only `ca-frontend`'s and `ca-edge`'s workload-identity
+tokens, never a caller's own. `edge.workload_token = true` (layered authentication, ADR 0120 §2)
+gives every request `ca-edge` forwards to `ca-api` two credentials: `Authorization` carries
+`ca-edge`'s own token (L1, for the gate), and `X-Masterly-Credential` carries the caller's
+`Authorization` value as it arrived, scheme included (L2, for the application). The caller's
+`DPoP` header is forwarded unchanged. Off (the default), the caller's `Authorization` reaches
+`ca-api` unchanged and `ca-edge`'s configuration is exactly as before.
+
+- **It requires `builtin_auth_api = true` and `edge.jwt_authn`.** The token is requested for the
+  audience `builtin_auth.client_id`, which only `ca-api`'s gate with its workload trust admits,
+  and `ca-edge` attaches it only after `jwt_authn` has validated the caller. A plan with the
+  switch on and either missing is refused.
+- **Turn it on in the same apply as `builtin_auth_api`.** It cannot go first (the plan is
+  refused without the gate), and after the gate every machine call through `ca-edge` gets `401`
+  until it is on. Upgrade `ca-frontend` and `ca-api` to releases that send and verify the
+  workload token first (above), then set both switches together. Turning it off again goes the
+  same way: turn off `builtin_auth_api` with it, or the check warns.
+- **Only on the forwarded routes.** `/v1` (the `ca-serve` routes included) and `/mcp` carry the
+  swap; the routes `ca-edge` answers itself (`413`, `404`) never fetch or carry the token.
+- **A caller's own `X-Masterly-Credential` is refused** with `400` at the edge, before any token
+  is fetched: the caller never chooses the credential the application reads as its own.
+- **It fails closed.** When no token can be had (the managed identity endpoint unreachable or
+  answering an error, or its variables unset), `ca-edge` answers `503` with an empty body and the
+  request never reaches `ca-api`; the caller's token is never sent on in `Authorization`.
+- **The token.** `ca-edge` requests it from the app's managed identity endpoint
+  (`IDENTITY_ENDPOINT`, with `IDENTITY_HEADER`, both set by Container Apps in the running
+  container) as `id-<prefix>-edge`, named by client id because `ca-edge` can also carry the pull
+  identity (`registry_identity_id`). Each Envoy worker caches it per audience and fetches a new one
+  5 minutes before it expires. Neither the token nor `IDENTITY_HEADER` is in the configuration,
+  the plan, the revision or the access log, which still holds no `Authorization`,
+  `X-Masterly-Credential` or `DPoP`.
+- **Envoy starts through `/bin/sh`.** The endpoint's address is known only in the running
+  container, so with the switch on `ca-edge`'s args are a short `/bin/sh` script that reads it from
+  `IDENTITY_ENDPOINT`, fills it into the configuration and `exec`s Envoy; it refuses to start
+  Envoy when the variable is unset or malformed. The image's entrypoint still drops from root to
+  the `envoy` user first, for this command as for Envoy itself. A mirrored `edge.image` must keep
+  the upstream image's `/bin/sh` and `sed`.
+- **What moves.** Turning it on or off rolls a new `ca-edge` revision (its args); `ca-api`'s and
+  the other apps' configurations stay as they are.
+
 To set it up, use an app registration in your tenant (one you already use for built-in auth is
 fine; the module takes over its configuration):
 
@@ -257,7 +303,7 @@ import {
 `module.masterly.azapi_resource.builtin_auth["api"]` (the api's `authConfigs/current`), and
 changes nothing else: the frontend's configuration, both apps and their secrets stay as they are.
 Set `builtin_auth_api = true` to keep it only once ca-frontend and ca-edge send their
-workload-identity token; before that it refuses every BFF call (see
+workload-identity token (ca-edge with `edge.workload_token`); before that it refuses every BFF call (see
 [The api's gate](#the-apis-gate-builtin_auth_api)). If your configuration still has the
 `for_each` import block those versions documented, with `"api"` in it, narrow it to the frontend
 as above or delete it first: without `builtin_auth_api = true`, an import block for `["api"]`

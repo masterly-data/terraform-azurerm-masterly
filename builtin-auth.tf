@@ -232,6 +232,18 @@ check "builtin_auth_recovery_window_has_expired" {
   }
 }
 
+# ca-api's gate admits ca-edge's workload token only, never a caller's own: with edge set and
+# edge.workload_token off, ca-edge sends the caller's token in Authorization and ca-api answers
+# every machine call through it with 401. A warning rather than a refusal, so an install that
+# turned builtin_auth_api on before edge.workload_token existed still plans. A conditional, not
+# `&&`, for the reason given on builtin_auth's validations.
+check "builtin_auth_api_edge_sends_its_workload_token" {
+  assert {
+    condition     = local.workload_trust_enabled && local.edge_enabled ? local.edge_workload_token_enabled : true
+    error_message = "builtin_auth_api turns ca-api's built-in authentication on, which admits only ca-frontend's and ca-edge's workload-identity tokens, but edge.workload_token is off: ca-edge forwards the caller's own token in Authorization, so every SDK, REST and MCP call through ca-edge gets 401 from ca-api. Set edge.workload_token = true (it needs edge.jwt_authn) in the same apply as builtin_auth_api."
+  }
+}
+
 # ca-edge's gate validates builtin_auth.client_id against the issuer Envoy trusts
 # (oidc_allowed_issuers), while ca-frontend's validates it against builtin_auth.tenant_id. Two
 # different tenants are not refused, but a registration lives in one tenant, so one of the two

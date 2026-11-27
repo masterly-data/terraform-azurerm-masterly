@@ -459,9 +459,9 @@ run "builtin_auth_api_off_leaves_the_edge_unchanged" {
   assert {
     condition = (
       azurerm_container_app.edge[0].template[0].container[0].args[2] == jsonencode(local.edge_envoy_config) &&
-      length(regexall("builtin_auth_api", file("${path.module}/edge.tf"))) == 0
+      length(regexall("var\\.builtin_auth_api", file("${path.module}/edge.tf"))) == 0
     )
-    error_message = "ca-edge's Envoy configuration must be local.edge_envoy_config, and edge.tf must not read builtin_auth_api."
+    error_message = "ca-edge's Envoy configuration must be local.edge_envoy_config, and edge.tf must not read var.builtin_auth_api (its description and edge.workload_token's precondition only name it)."
   }
 
   assert {
@@ -941,6 +941,10 @@ run "builtin_auth_api_on_admits_the_frontend_and_edge_identities" {
     condition     = azurerm_container_app.edge[0].template[0].container[0].args[2] == jsonencode(local.edge_envoy_config)
     error_message = "Turning builtin_auth_api on must leave ca-edge's Envoy configuration as local.edge_envoy_config."
   }
+
+  # edge.workload_token is off here, so ca-edge still sends the caller's token and the check warns
+  # that ca-api's gate refuses it (tests/edge_workload_token.tftest.hcl turns it on).
+  expect_failures = [check.builtin_auth_api_edge_sends_its_workload_token]
 
   assert {
     condition = (
