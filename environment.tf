@@ -192,6 +192,14 @@ locals {
   api_in_app_environment     = var.api_environment == "app"
   api_cross_environment_host = local.api_in_app_environment ? "ca-api.${try(module.environments["app"].default_domain, "")}" : null
 
+  # Whether ca-api is published beyond its environment, read everywhere api_ingress_external
+  # used to be: its ingress, plain HTTP, the CIDR allowlist and its guard, the api_url output and
+  # the built-in authentication check. Never with edge, which is then the only way in from
+  # outside, and never in the app environment, where api_ingress_external is refused. Without
+  # edge, api_ingress_external = true is refused at plan (main.tf), so an accepted plan never
+  # publishes ca-api; the local keeps every reader on that one rule.
+  api_published = var.api_ingress_external && !local.edge_enabled && !local.api_in_app_environment
+
   # The one origin ca-frontend's BFF calls ca-api on, scheme and host only. Both apps read it from
   # here so the two can never disagree: the BFF uses it as MASTERLY_API_BASE_URL, and ca-api as
   # MASTERLY_DPOP_INTERNAL_ORIGIN, the URL every session's DPoP proof must name (main.tf).

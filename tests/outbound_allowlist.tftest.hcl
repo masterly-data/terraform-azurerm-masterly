@@ -41,6 +41,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- Keys: exactly the subnets that exist ------------------------------------------------------
@@ -1018,6 +1026,8 @@ run "outbound_allowlist_no_key_vault_or_service_bus_in_production" {
     condition     = anytrue([for k, l in output.outbound_allowlist : contains([for e in l : e.destination], "pg.example.com")])
     error_message = "In production the BYO-DB host must still be listed."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat (secret disclosure): the migrate job's admin DSN carries the migration role's
@@ -1090,6 +1100,8 @@ run "outbound_allowlist_admin_database_host_on_caj_migrate_only" {
     )
     error_message = "The allowlist must carry no scheme or userinfo from external_database_admin_url or external_database_url."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # An IPv6 host loses the URL's brackets, so a rule built from the entry names the bare address.

@@ -1174,33 +1174,37 @@ run "builtin_auth_api_recovery_is_refused_without_a_network_restriction" {
   expect_failures = [var.builtin_auth_recovery_until]
 }
 
-# Threat: the published api ungated while the switch is on. With api_ingress_external, ca-api's
-# gate is planned and the published-api warning does not fire (no expect_failures). The run with
-# the switch off, which expects the warning, is builtin_auth_warns_when_the_api_is_published in
-# builtin_auth.tftest.hcl.
-run "builtin_auth_api_gates_the_published_api" {
+# Threat: the api reachable from outside ungated while the switch is on. api_ingress_external =
+# true is refused without edge and ignored with it, so ca-api stays internal behind ca-edge, its
+# gate is planned, and the published-api warning does not fire. The plan warns that
+# api_ingress_external is ignored. The run with the switch off is
+# builtin_auth_leaves_no_published_api_ungated_behind_the_edge in builtin_auth.tftest.hcl.
+run "builtin_auth_api_gates_the_api_behind_the_edge" {
   command = apply
 
   variables {
     builtin_auth_api     = true
+    edge                 = {}
     api_ingress_external = true
   }
 
   assert {
     condition = (
-      module.api.ingress_external == true &&
+      module.api.ingress_external == false &&
       contains(keys(azapi_resource.builtin_auth), "api") &&
       azapi_resource.builtin_auth["api"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api" &&
       azapi_resource.builtin_auth["api"].body.properties.platform.enabled == true &&
       azapi_resource.builtin_auth["api"].body.properties.globalValidation.unauthenticatedClientAction == "Return401"
     )
-    error_message = "With builtin_auth_api = true and api_ingress_external = true, the published ca-api must be gated."
+    error_message = "With builtin_auth_api = true and edge set, ca-api must stay internal and be gated, whatever api_ingress_external says."
   }
 
   assert {
     condition     = !local.builtin_auth_leaves_published_api_ungated
-    error_message = "With builtin_auth_api = true, the published api is gated and the published-api warning must not fire."
+    error_message = "With edge set, ca-api is not published, and the published-api warning must not fire."
   }
+
+  expect_failures = [check.api_ingress_external_is_ignored_with_edge]
 }
 
 # Threat: another tenant application admitted. On an install with every identity the module

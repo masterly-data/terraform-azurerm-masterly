@@ -31,6 +31,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- Azure Managed Redis (ADR 0071) ------------------------------------------------------
@@ -421,4 +429,6 @@ run "redis_managed_eviction_alert_aggregates_correctly" {
     condition     = azurerm_monitor_metric_alert.redis_evictions[0].criteria[0].aggregation == "Average"
     error_message = "evictedkeys is documented with the Average aggregation on Microsoft.Cache/redisEnterprise; Maximum silently changes what the alert means."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

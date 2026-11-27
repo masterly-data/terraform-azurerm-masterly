@@ -47,6 +47,14 @@ variables {
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
 
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
   # The install both runs see: production, with the vault on and the DPoP key on.
   mode                 = "production"
   identity_binding     = "oidc"
@@ -337,6 +345,8 @@ run "bff_dpop_key_in_the_vault_is_read_by_the_frontend_alone" {
     )
     error_message = "The frontend identity must hold no grant at vault scope: its only Key Vault grants are kv_secrets_user_frontend, each scoped to one secret."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The whole configuration, planned against the state the apply left: ca-frontend's references and
@@ -376,4 +386,6 @@ run "bff_dpop_key_in_the_vault_reaches_ca_frontend_alone" {
     )
     error_message = "ca-api, ca-workers and caj-migrate must carry no BFF DPoP key secret, vault reference or env."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

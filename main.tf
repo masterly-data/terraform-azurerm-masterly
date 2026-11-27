@@ -491,8 +491,19 @@ resource "azurerm_resource_group" "aca" {
       error_message = "The api image is v${coalesce(local.api_image_version, "?")}, older than this install needs: v${coalesce(local.api_image_floor, "?")} or later (${local.api_image_floor_reason}). Set api_image to that release or later, or leave it unset for the release channel's image."
     }
 
+    # Threat: ca-api published beside the edge, so a caller reaches /v1 past ca-edge's token
+    # checks and its built-in authentication. The api is reachable from outside only through
+    # the edge (ADR 0117). The app environment is excluded here: api_environment refuses the
+    # input there itself.
     precondition {
-      condition     = !var.api_ingress_external || length(var.ingress_allowed_cidrs) > 0
+      condition     = local.api_in_app_environment ? true : (!var.api_ingress_external || local.edge_enabled)
+      error_message = "api_ingress_external = true without edge would publish ca-api to the internet on its own, bypassing ca-edge's token checks and the platform sign-in gate: ca-api is reachable from outside only through the edge. Set edge, and point the Python SDK and other clients outside the environment at the edge_url output (/v1 and /mcp under it reach ca-api); with edge set, ca-api stays internal and api_ingress_external is ignored. Or set api_ingress_external = false."
+    }
+
+    # Unreachable in an accepted plan since the refusal above, and kept as the guard on the
+    # allowlist should ca-api ever be published again.
+    precondition {
+      condition     = !local.api_published || length(var.ingress_allowed_cidrs) > 0
       error_message = "api_ingress_external = true with an empty ingress_allowed_cidrs would publish /v1 to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. The api holds no session of its own — it trusts a bearer token — so it is the surface least able to survive being open. Name the CIDRs that may reach it."
     }
 
@@ -1533,7 +1544,10 @@ module "api" {
   # In the app environment (api_environment = "app") it is always external: the environment is
   # internal, so external means the VNet only, and it is what lets ca-frontend and ca-edge in
   # the front environment reach it. api_ingress_external = true is refused there.
-  ingress_external    = local.api_in_app_environment ? true : var.api_ingress_external
+  #
+  # Published only as local.api_published says (environment.tf): with edge set ca-api stays
+  # internal and api_ingress_external is ignored, and without edge that input is refused.
+  ingress_external    = local.api_in_app_environment ? true : local.api_published
   ingress_target_port = 8001
 
   # Plain HTTP is allowed only while the api is unreachable from outside the environment.
@@ -1556,14 +1570,14 @@ module "api" {
   #
   # In the app environment the callers are in another environment and call https://, so plain
   # HTTP is never served there.
-  ingress_allow_insecure = local.api_in_app_environment ? false : !var.api_ingress_external
+  ingress_allow_insecure = local.api_in_app_environment ? false : !local.api_published
 
   # The SAME allowlist the frontend gets. Until api_ingress_external existed this list was
   # frontend-only, which was fine while the api was unreachable — exposing it without also
   # narrowing it would have shipped a wide-open /v1 as the price of SDK access, which is a
   # worse problem than the one being solved. Empty stays UNRESTRICTED (Azure's semantics),
   # so a plan-time guard below refuses external api ingress with an empty list.
-  ingress_allowed_ip_security_restrictions = var.api_ingress_external ? [
+  ingress_allowed_ip_security_restrictions = local.api_published ? [
     for index, cidr in var.ingress_allowed_cidrs : {
       name             = "allow-${index}"
       ip_address_range = cidr

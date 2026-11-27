@@ -136,7 +136,14 @@ variable "ingress_target_port" {
 variable "ingress_allow_insecure" {
   type        = bool
   default     = false
-  description = "Allow plain-HTTP connections (otherwise redirect to HTTPS)."
+  description = "Allow plain-HTTP connections (otherwise redirect to HTTPS). Refused with external ingress: plain HTTP is for a hop inside the environment, which the environment encrypts."
+
+  # Threat: a published app serves plain HTTP, so a bearer token crosses the network in clear.
+  # Every app the root publishes (ca-frontend, and ca-api in the app environment) refuses it.
+  validation {
+    condition     = var.ingress_enabled && var.ingress_external ? !var.ingress_allow_insecure : true
+    error_message = "ingress_allow_insecure = true cannot be combined with external ingress: a published app must redirect http:// to https://, not serve it. Plain HTTP is allowed only on internal ingress."
+  }
 }
 
 variable "ingress_allowed_ip_security_restrictions" {

@@ -47,6 +47,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- edge unset ------------------------------------------------------------------------------
@@ -507,6 +515,8 @@ run "edge_identity_is_its_own_and_holds_no_data_role" {
     )
     error_message = "The rate limits must add no rate-limit service, no cluster but ca-api, no Redis reference, and no app, identity or grant for the edge."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "edge_identity_is_named_for_the_edge" {

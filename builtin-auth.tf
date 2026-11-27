@@ -107,7 +107,7 @@ locals {
         platform_enabled            = !local.builtin_auth_recovery_open
         unauthenticated_action      = "RedirectToLoginPage"
         redirect_to_provider        = "azureactivedirectory"
-        excluded_paths              = var.builtin_auth.frontend_excluded_paths
+        excluded_paths              = local.builtin_auth_frontend_excluded_paths
         allowed_applications        = [var.builtin_auth.client_id]
         allowed_additional_audience = []
       }
@@ -157,9 +157,20 @@ locals {
     var.builtin_auth.api_allowed_audiences,
   ) : []
 
+  # The paths ca-frontend serves without sign-in. Unset, production opens exactly the start page
+  # (/ and /start, ADR 0117) and demo opens none, as before; set, the list as given, which in
+  # production the variable's validation holds to that same pair.
+  builtin_auth_frontend_excluded_paths = !local.builtin_auth_enabled ? [] : (
+    var.builtin_auth.frontend_excluded_paths != null ? var.builtin_auth.frontend_excluded_paths : (
+      var.mode == "production" ? tolist(["/", "/start"]) : []
+    )
+  )
+
   # ca-api published to ingress_allowed_cidrs while builtin_auth gates the frontend only, that
-  # is, without builtin_auth_api. The check below warns while it holds.
-  builtin_auth_leaves_published_api_ungated = local.builtin_auth_enabled && var.api_ingress_external && !var.builtin_auth_api
+  # is, without builtin_auth_api. The check below warns while it holds. ca-api is published only
+  # as local.api_published says, which an accepted plan never is since api_ingress_external
+  # requires edge; the check stays as the guard should that change.
+  builtin_auth_leaves_published_api_ungated = local.builtin_auth_enabled && local.api_published && !var.builtin_auth_api
 
   # The recovery fallback (builtin_auth_recovery_until): ca-frontend's gate, and ca-api's with
   # builtin_auth_api, is off while the time is set and still after this plan, and on again at
@@ -182,6 +193,25 @@ check "builtin_auth_does_not_gate_the_published_api" {
   assert {
     condition     = !local.builtin_auth_leaves_published_api_ungated
     error_message = "builtin_auth gates ca-frontend only while builtin_auth_api is false, and api_ingress_external = true publishes ca-api to ingress_allowed_cidrs without that gate: a caller those CIDRs admit reaches the api without passing built-in authentication, and only the application's own authentication (identity_binding) stands in front of it. Narrow ingress_allowed_cidrs to the callers that need the api, set api_ingress_external = false if nothing outside the Container Apps environment calls it, or, once ca-frontend and ca-edge send their workload-identity token, set builtin_auth_api = true."
+  }
+}
+
+# Threat: a production install runs with no platform gate and nothing records it. The
+# opt-out is accepted (layered authentication keeps the gate optional until the private recovery
+# path is proven), and every plan quotes the reason recorded for it.
+check "builtin_auth_opted_out_in_production" {
+  assert {
+    condition     = var.mode == "production" && var.builtin_auth_opt_out != null ? false : true
+    error_message = "mode = \"production\" runs without the platform sign-in gate (builtin_auth) on ca-frontend, by builtin_auth_opt_out, whose recorded reason is: \"${try(var.builtin_auth_opt_out.reason, "")}\". Anyone ingress_allowed_cidrs admits reaches the frontend with only the application's own sign-in in front of it. Set builtin_auth (and builtin_auth_client_secret) and remove builtin_auth_opt_out once the reason no longer holds."
+  }
+}
+
+# With edge set, ca-api stays internal and api_ingress_external is ignored (environment.tf,
+# local.api_published).
+check "api_ingress_external_is_ignored_with_edge" {
+  assert {
+    condition     = local.edge_enabled ? !var.api_ingress_external : true
+    error_message = "api_ingress_external = true is ignored with edge set: ca-api stays internal, and is reachable from outside only through ca-edge. Point the Python SDK and other clients outside the environment at the edge_url output (/v1 and /mcp under it reach ca-api), and set api_ingress_external = false."
   }
 }
 

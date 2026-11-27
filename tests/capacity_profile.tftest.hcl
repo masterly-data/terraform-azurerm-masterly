@@ -39,6 +39,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- The value itself ----------------------------------------------------------------------
@@ -96,6 +104,15 @@ run "production_refuses_small_even_with_explicit_sku_and_ha" {
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
     migrations                     = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.capacity_profile]
@@ -552,6 +569,15 @@ run "production_refuses_a_resolved_burstable_sku" {
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
     migrations                     = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.postgres_sku_name]
@@ -591,6 +617,8 @@ run "production_plans_with_ha_unset" {
     condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
     error_message = "Production no longer requires zone-redundant HA: with HA unset and no profile, the starter server must plan with no standby."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # standard satisfies the Postgres production guards with nothing else set, so the three runs
@@ -631,6 +659,8 @@ run "production_standard_plans_with_the_sku_and_ha_unset" {
     )
     error_message = "standard in production must plan GP_Standard_D2ds_v5 with no HA (off by default) and an api floor of 2."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The enterprise profile's recovery objectives assume the standby, so production on enterprise
@@ -664,7 +694,7 @@ run "production_enterprise_without_ha_warns" {
     migrations                     = "job"
   }
 
-  expect_failures = [check.enterprise_production_without_postgres_ha]
+  expect_failures = [check.enterprise_production_without_postgres_ha, check.builtin_auth_opted_out_in_production]
 
   assert {
     condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
@@ -706,6 +736,8 @@ run "production_enterprise_with_ha_does_not_warn" {
     condition     = azurerm_postgresql_flexible_server.this[0].high_availability[0].mode == "ZoneRedundant"
     error_message = "enterprise in production with postgres_zone_redundant_ha = true must plan a ZoneRedundant standby."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "production_refuses_an_api_floor_of_zero_under_a_profile" {
@@ -735,6 +767,15 @@ run "production_refuses_an_api_floor_of_zero_under_a_profile" {
     postgres_backup_retention_days = 14
     api_min_replicas               = 0
     migrations                     = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.api_min_replicas]
@@ -767,6 +808,15 @@ run "production_refuses_a_frontend_floor_of_zero_under_a_profile" {
     postgres_backup_retention_days = 14
     frontend_min_replicas          = 0
     migrations                     = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.frontend_min_replicas]
@@ -799,6 +849,15 @@ run "production_refuses_a_workers_floor_of_zero_under_a_profile" {
     postgres_backup_retention_days = 14
     workers_min_replicas           = 0
     migrations                     = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.workers_min_replicas]
@@ -923,6 +982,15 @@ run "production_refuses_an_explicit_burstable_sku_under_standard" {
     postgres_pgbouncer             = false
     postgres_backup_retention_days = 14
     migrations                     = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.postgres_sku_name]
@@ -961,6 +1029,8 @@ run "production_plans_explicit_ha_off_under_standard" {
     condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
     error_message = "postgres_zone_redundant_ha = false under standard in production must plan with no standby."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # A profile does not raise a maximum: standard's api floor of 2 over the default maximum of 1.

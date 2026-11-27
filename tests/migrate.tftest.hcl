@@ -31,6 +31,14 @@ variables {
 
   alert_email = "ops@example.com"
 
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
   mode                           = "production"
   identity_binding               = "oidc"
   oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
@@ -72,12 +80,23 @@ run "migrate_job_follows_its_schedule_input" {
     condition     = length(azurerm_role_assignment.kv_byo_database_reader_migrate) == 0 && !contains(keys(local.migrate_env), "MASTERLY_ORG_NAME")
     error_message = "Unset runtime secret names grant no reads; an unset org_name must be omitted."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "migrate_byo_database_secrets_refuse_paths" {
   command = plan
   variables {
     migrate_byo_database_secret_names = ["secrets/environment-a-connection"]
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
   expect_failures = [var.migrate_byo_database_secret_names]
 }
@@ -86,6 +105,15 @@ run "migrate_byo_database_secrets_refuse_install_secrets" {
   command = plan
   variables {
     migrate_byo_database_secret_names = ["INSTALL-license-token"]
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
   expect_failures = [var.migrate_byo_database_secret_names]
 }
@@ -106,6 +134,8 @@ run "migrate_job_is_started_at_apply" {
     )
     error_message = "An azapi start action must start the migrate job, keyed on the resolved api image."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "migrate_job_start_follows_the_api_image" {
@@ -122,6 +152,8 @@ run "migrate_job_start_follows_the_api_image" {
     )
     error_message = "A new api_image must reach the migrate job and the input that replaces its start action."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat: the most privileged database principal holds image pull and read on its own secrets,
@@ -228,6 +260,8 @@ run "migrate_identity_holds_acr_pull_and_its_own_secrets_only" {
     )
     error_message = "With the vault on, the migrate job's DSN must be a vault secret of its own, carried by no Container App."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # With Redis on Entra, its access policy belongs to the apps' identity, never the job's.
@@ -260,6 +294,8 @@ run "migrate_identity_holds_no_redis_access" {
     condition     = !contains(keys(local.migrate_env), "MASTERLY_REDIS_AUTH") && tolist(local.migrate_secret_names) == tolist(["migrate-database-url"])
     error_message = "The migrate job carries no Redis setting or URL."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "migrate_identity_is_the_only_entra_administrator" {
@@ -329,6 +365,8 @@ run "migrate_identity_is_the_only_entra_administrator" {
     )
     error_message = "On entra the migrate job's URL must name id-<prefix>-migrate and its AZURE_CLIENT_ID must be the migrate identity's client id."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "migrate_job_gets_the_direct_url_with_pgbouncer" {
@@ -352,6 +390,8 @@ run "migrate_job_gets_the_direct_url_with_pgbouncer" {
     )
     error_message = "With postgres_pgbouncer the migrate job must carry MASTERLY_DATABASE_URL (6432) and MASTERLY_DATABASE_DIRECT_URL (5432)."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "external_database_url_alone_reaches_the_migrate_job_too" {
@@ -384,6 +424,8 @@ run "external_database_url_alone_reaches_the_migrate_job_too" {
     )
     error_message = "With external_database_url alone, ca-api and ca-workers must carry the secrets and env they carry on main."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "external_database_admin_url_refused_without_external_database_url" {
@@ -391,6 +433,15 @@ run "external_database_admin_url_refused_without_external_database_url" {
 
   variables {
     external_database_admin_url = "postgresql+asyncpg://masterly_owner:adminpw@pg.example.com:5432/postgres?ssl=require"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.external_database_admin_url]
@@ -404,6 +455,15 @@ run "migrate_job_refuses_production_without_the_vault" {
     enable_key_vault            = false
     external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     external_database_admin_url = "postgresql+asyncpg://masterly_owner:adminpw@pg.example.com:5432/postgres?ssl=require"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.mode]
@@ -446,6 +506,8 @@ run "migrate_job_pulls_with_the_token_and_trusts_the_ca_bundle" {
     )
     error_message = "With ca_bundle_pem the migrate job must mount the CA bundle at the path SSL_CERT_FILE names, as the apps do."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The app roles on "entra": two stable Postgres identifiers, each bound to its own identity's
@@ -667,6 +729,8 @@ run "migrate_app_roles_on_entra_name_their_identities" {
     ))
     error_message = "The shared grants must stay on the apps identity, without its Receiver, scaler grant or Entra administrator; no workers grant may name the frontend, migrate or apps identity; the frontend and migrate grants must be as on main."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat, ca-api's identity gains a role it should not (ADR 0120 §6). With migrations = "job" and
@@ -773,6 +837,8 @@ run "apps_identity_holds_only_its_own_roles_with_job" {
     )
     error_message = "With migrations = \"job\" the apps identity must hold one Redis access policy and be no Postgres Entra administrator."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # With postgres_pgbouncer each app also gets its own direct URL, under its own name.
@@ -811,6 +877,8 @@ run "migrate_app_roles_on_entra_get_their_own_direct_urls_with_pgbouncer" {
     ])
     error_message = "Each app's URLs must use the shared pooler (6432 with PgBouncer) and direct (5432) ports."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # When the queue scaler is off (no Service Bus), id-<prefix>-workers holds no Service Bus role.
@@ -831,6 +899,8 @@ run "migrate_app_roles_workers_hold_no_queue_role_without_service_bus" {
     )
     error_message = "Without Service Bus, id-<prefix>-workers must hold no Service Bus role, and without acr_id or ACS no AcrPull or ACS role."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The app roles on "password": one generated password each, held in a vault secret of its own and
@@ -972,6 +1042,8 @@ run "migrate_app_roles_on_password_read_their_vault_secrets" {
     )
     error_message = "On password, ca-workers must run as id-<prefix>-workers and each backend app must read its own URL, as its own role, from the vault alone."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat: the apps' Entra administrator, Receiver or scaler grant goes before ca-api and
@@ -1020,6 +1092,8 @@ run "migrate_app_removals_follow_the_apps_updates" {
     )
     error_message = "The migrate administrator must depend on the apps' one, and the apps' one on nothing (a depends_on there would cycle with the apps)."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Service Bus with "job" on the starter server, on "password" (the file's default) and on
@@ -1059,6 +1133,8 @@ run "migrate_app_roles_narrow_the_apps_service_bus_grants_on_password" {
     )
     error_message = "With migrations = \"job\" on password, the apps identity must hold Service Bus Sender alone, and id-<prefix>-workers Sender, Receiver and the queue's Data Owner."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "migrate_app_roles_narrow_the_apps_service_bus_grants_on_entra" {
@@ -1097,6 +1173,8 @@ run "migrate_app_roles_narrow_the_apps_service_bus_grants_on_entra" {
     )
     error_message = "With migrations = \"job\" on entra, the apps identity must hold Service Bus Sender alone and no Entra administrator, and id-<prefix>-workers Sender, Receiver and the queue's Data Owner."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # "start" on "entra" keeps the shared Service Bus grants on the apps identity, as on main.
@@ -1104,7 +1182,7 @@ run "shared_service_bus_grants_stay_with_start_on_entra" {
   command = plan
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations         = "start"
@@ -1140,7 +1218,7 @@ run "service_bus_grants_move_to_the_workers_identity_with_start_on_password" {
   command = plan
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations         = "start"
@@ -1209,6 +1287,8 @@ run "service_bus_grants_move_to_the_workers_identity_on_byo_database" {
     )
     error_message = "With migrations = \"job\" on BYO-DB the apps identity must hold Service Bus Sender alone, and id-<prefix>-workers Sender, Receiver and the queue's Data Owner."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # With migrations = "start" nothing of the app roles exists.
@@ -1216,7 +1296,7 @@ run "migrate_app_roles_absent_with_start" {
   command = plan
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations = "start"
@@ -1275,7 +1355,7 @@ run "migrate_app_roles_absent_with_start_on_entra" {
   command = plan
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations    = "start"
@@ -1353,6 +1433,8 @@ run "migrate_app_roles_absent_on_byo_database" {
     )
     error_message = "On BYO-DB ca-workers must run as id-<prefix>-workers with the shared database-url, ca-api as the apps identity, and neither with a per-app DSN."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The upgrade uses real modules, including ACA and identities, with shared ARM-shaped IDs.
@@ -1380,7 +1462,7 @@ run "before_migrate_job_uses_previous_defaults" {
   providers = { azurerm = azurerm.upgrade, random = random, azapi = azapi, time = time }
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations         = "start"
@@ -1581,6 +1663,8 @@ run "migrate_job_preserves_the_existing_install" {
     )
     error_message = "The upgrade must add id-<prefix>-workers' grants and each app's own DSN beside the remaining shared grants and the shared database-url secret, which stay in the vault and on ca-api, named by no env."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Apply last so every vault value is known without affecting the preceding plan regressions.
@@ -1629,6 +1713,8 @@ run "external_database_admin_url_reaches_only_the_migrate_job" {
     )
     error_message = "The admin DSN must remain sensitive in the job secret, with no vault copy, reference or grant."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Applied, so the secrets' ARM ids and the passwords are known: each grant is scoped to its own
@@ -1718,4 +1804,6 @@ run "migrate_app_role_secrets_are_read_one_by_one" {
     )
     error_message = "The job must get the app-role passwords only as vault secret names, with its ACA secrets as on main."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

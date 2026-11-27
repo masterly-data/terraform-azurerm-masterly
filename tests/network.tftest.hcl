@@ -38,6 +38,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # Landing zone: an injected central privatelink zone suppresses zone + link creation
@@ -1402,6 +1410,8 @@ run "private_egress_override_reaches_the_backend_apps" {
     condition     = !contains(module.frontend.env_names, "MASTERLY_ALLOW_PRIVATE_EGRESS")
     error_message = "The egress override is a backend setting -- the frontend must not carry it."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- The egress allowlist (MAS-655) ---------------------------------------------------------
@@ -1473,6 +1483,8 @@ run "private_egress_allowlist_reaches_the_backend_apps" {
     condition     = !contains(keys(local.api_env), "MASTERLY_ALLOW_PRIVATE_EGRESS")
     error_message = "An install on the allowlist must not also carry the deprecated override."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Guard: an entry without a prefix length is not a range.
@@ -1552,39 +1564,40 @@ run "the_api_is_internal_by_default" {
   }
 }
 
-run "api_ingress_can_be_opted_into_and_is_narrowed" {
+# ca-api is reachable from outside only through the edge: api_ingress_external = true is refused
+# without edge (security_profile.tftest.hcl) and ignored with it, so the api stays internal, with
+# no allowlist of its own, and the edge carries the frontend's.
+run "api_ingress_external_with_the_edge_keeps_the_api_internal" {
   command = plan
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
     api_ingress_external  = true
   }
 
   assert {
-    condition     = module.api.ingress_external == true
-    error_message = "api_ingress_external must reach the api app."
-  }
-
-  # The flag being set proves nothing about who can reach it. Until this assertion existed,
-  # removing the allowlist from the api entirely still passed every test in this file.
-  assert {
-    condition     = module.api.ingress_allowed_ip_ranges == ["203.0.113.7/32"]
-    error_message = "An externally-exposed api must carry the same allowlist the frontend does."
+    condition     = module.api.ingress_external == false && module.api.ingress_allowed_ip_ranges == []
+    error_message = "With edge set, ca-api must stay internal, with no allowlist of its own, whatever api_ingress_external says."
   }
 
   assert {
     condition     = module.frontend.ingress_allowed_ip_ranges == ["203.0.113.7/32"]
-    error_message = "The frontend allowlist must be unaffected by the api opting in."
+    error_message = "The frontend allowlist must be unaffected by api_ingress_external."
   }
 
   assert {
     condition     = !local.builtin_auth_leaves_published_api_ungated
-    error_message = "With builtin_auth unset, publishing the api must not raise the builtin_auth warning."
+    error_message = "With builtin_auth unset and the api internal, the builtin_auth warning must not fire."
   }
+
+  expect_failures = [check.api_ingress_external_is_ignored_with_edge]
 }
 
 # Guard: exposing /v1 to the whole internet as the price of SDK access would be a worse
-# problem than the one being solved. Empty means UNRESTRICTED in Azure, not deny-all.
+# problem than the one being solved. Empty means UNRESTRICTED in Azure, not deny-all. Without
+# edge the plan is refused on two counts now, both on the same resource: the api published
+# without edge, and the empty allowlist.
 run "external_api_without_an_allowlist_is_rejected" {
   command = plan
 
@@ -1607,19 +1620,29 @@ run "external_api_without_an_allowlist_is_rejected" {
 # The finding this closes: `allow_insecure_connections` was hardcoded true, which was
 # defensible while the api was unreachable and stopped being defensible the moment
 # api_ingress_external existed. Port 80 answering without a redirect, for callers whose
-# whole credential is a bearer token, is what the allowlist does not cover.
+# whole credential is a bearer token, is what the allowlist does not cover. ca-api is now
+# published only through ca-edge, so the apps outside callers reach are the frontend and the
+# edge, each HTTPS only; ca-api keeps the BFF's http:// hop because it stays internal.
 run "external_api_refuses_insecure" {
   command = plan
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
     api_ingress_external  = true
   }
 
   assert {
-    condition     = module.api.ingress_allow_insecure == false
-    error_message = "A published api must redirect http:// to https://, not serve it."
+    condition     = module.api.ingress_external == false && module.api.ingress_allow_insecure == true
+    error_message = "With edge set, ca-api must stay internal and keep the BFF's http:// hop."
   }
+
+  assert {
+    condition     = azurerm_container_app.edge[0].ingress[0].external_enabled == true && azurerm_container_app.edge[0].ingress[0].allow_insecure_connections == false
+    error_message = "ca-edge, the api's published address, must redirect http:// to https://, not serve it."
+  }
+
+  expect_failures = [check.api_ingress_external_is_ignored_with_edge]
 
   # The frontend is published in every topology, so it never had a reason to allow insecure.
   # Pinned anyway: this is the assertion that fails if someone widens the api's flip into a
@@ -1647,17 +1670,17 @@ run "api_url_is_null_while_the_api_is_internal" {
   }
 }
 
-# Published, api_url mirrors frontend_url: the hostname Azure reports, behind https://. The
-# hostname is computed, so at plan it is unknown and an assertion on it asserts nothing;
-# `override_module` pins the api app's outputs to known values so the URL's shape is checkable.
-# (apply is not an option — the mock provider hands out ids that the azurerm provider then
-# rejects as unparseable.) A published api refuses plain HTTP (external_api_refuses_insecure),
-# so an http:// base URL would be a broken one.
-run "api_url_is_an_https_url_once_the_api_is_published" {
+# With edge set ca-api stays internal whatever api_ingress_external says, so api_url stays null
+# and a client's base URL is edge_url. The hostname is computed, so at plan it is unknown and an
+# assertion on it asserts nothing; `override_module` pins the api app's outputs to known values
+# so api_internal_fqdn is checkable. (apply is not an option — the mock provider hands out ids
+# that the azurerm provider then rejects as unparseable.)
+run "api_url_is_null_behind_the_edge" {
   command = plan
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
     api_ingress_external  = true
   }
 
@@ -1668,15 +1691,15 @@ run "api_url_is_an_https_url_once_the_api_is_published" {
       name                      = "ca-api"
       fqdn                      = "ca-api.example.swedencentral.azurecontainerapps.io"
       memory                    = "1Gi"
-      ingress_external          = true
-      ingress_allow_insecure    = false
-      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
+      ingress_external          = false
+      ingress_allow_insecure    = true
+      ingress_allowed_ip_ranges = []
     }
   }
 
   assert {
-    condition     = output.api_url == "https://ca-api.example.swedencentral.azurecontainerapps.io"
-    error_message = "api_url must be https:// followed by the api's ingress hostname once api_ingress_external is true."
+    condition     = output.api_url == null
+    error_message = "api_url must be null with edge set: ca-api stays internal, and clients outside the environment use edge_url."
   }
 
   # The pre-existing output keeps its name and its value — the bare hostname — so a
@@ -1685,6 +1708,8 @@ run "api_url_is_an_https_url_once_the_api_is_published" {
     condition     = output.api_internal_fqdn == "ca-api.example.swedencentral.azurecontainerapps.io"
     error_message = "api_internal_fqdn must still carry the api's ingress hostname, unchanged."
   }
+
+  expect_failures = [check.api_ingress_external_is_ignored_with_edge]
 }
 
 # The other half of the same finding. Flipping the api to HTTPS-only would push the plaintext
@@ -1829,6 +1854,8 @@ run "app_availability_diagnostics_opt_out_in_production" {
     )
     error_message = "enable_app_availability_diagnostics = false must remove the app diagnostic settings and absence rules, and keep the replica and readiness alerts."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # true with diagnostics off is refused rather than ignored: the input would otherwise read as

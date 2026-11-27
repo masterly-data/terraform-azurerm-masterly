@@ -31,6 +31,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- The migrate job (migrate.tf) ------------------------------------------------------------
@@ -183,7 +191,7 @@ run "migrations_start_creates_no_workers_grant_with_every_feature_on" {
   }
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   assert {
     condition = (
@@ -249,7 +257,7 @@ run "migrations_start_creates_no_workers_redis_policy_on_azure_cache_for_redis" 
   }
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   assert {
     condition = (
@@ -378,6 +386,8 @@ run "sensitive_registry_username_plans_in_production_with_key_vault" {
     condition     = output.image_references.registry_credential_mode == "token" && output.image_references.registry_server == "masterly.azurecr.io"
     error_message = "A sensitive registry_username must still derive the token mode against Masterly's registry."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The same for registry_token passed from a sensitive object with the mode stated. The input is
@@ -432,6 +442,8 @@ run "sensitive_registry_token_plans_in_production_with_key_vault" {
     condition     = length(azurerm_role_assignment.acr_pull) == 0 && output.image_references.registry_credential_mode == "token"
     error_message = "A sensitive registry_token must still resolve to the token mode and grant no AcrPull."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # oidc_tenant_id (MAS-4145): a single-tenant Entra registration needs the tenant id alone; the
@@ -550,6 +562,15 @@ run "production_requires_migrations" {
     postgres_sku_name              = "GP_Standard_D2ds_v5"
     postgres_backup_retention_days = 14
     migrations                     = null
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.migrations]
@@ -626,6 +647,8 @@ run "production_job_makes_the_migrate_identity_the_only_administrator" {
     )
     error_message = "With migrations = \"job\" no Container App identity may be a Postgres administrator, and the migrate identity must be attached to no Container App."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Stated, "start" plans in production, and the check says what it keeps.
@@ -655,7 +678,7 @@ run "production_explicit_start_plans_with_a_warning" {
     migrations                     = "start"
   }
 
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   assert {
     condition     = !local.migrate_job && length(azurerm_container_app_job.migrate) == 0
@@ -720,6 +743,15 @@ run "api_image_below_the_key_vault_floor_is_refused" {
     postgres_backup_retention_days = 14
     migrations                     = "job"
     api_image                      = "masterly.azurecr.io/release/api:v0.137.0"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [azurerm_resource_group.aca]
@@ -750,6 +782,15 @@ run "api_image_below_the_floor_is_refused_with_a_digest_after_the_tag" {
     postgres_backup_retention_days = 14
     migrations                     = "job"
     api_image                      = "masterly.azurecr.io/release/api:v0.135.0@sha256:00b0c775ff83cd4b1d0a9c79e9290d3166f471b5576f43e4272ab0d031a9ed04"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [azurerm_resource_group.aca]
@@ -786,6 +827,8 @@ run "api_image_at_the_floor_plans" {
     condition     = local.api_image_version == "0.138.0" && local.api_image_floor == "0.138.0" && local.api_image_meets_floor
     error_message = "api v0.138.0 must meet the Key Vault floor."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "api_image_above_the_floor_compares_numerically" {
@@ -819,6 +862,8 @@ run "api_image_above_the_floor_compares_numerically" {
     condition     = local.api_image_version == "0.1000.0" && local.api_image_meets_floor
     error_message = "Versions must compare numerically, not as text: 0.1000.0 is above 0.138.0."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "api_image_default_is_checked_through_the_manifest" {
@@ -856,6 +901,8 @@ run "api_image_default_is_checked_through_the_manifest" {
     )
     error_message = "With api_image unset the api tag MANIFEST.json records for the channel's release must be checked, and meet the floor."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # A digest alone, as a mirror may pin: the plan cannot judge it, so it warns rather than refuses.
@@ -886,7 +933,7 @@ run "api_image_without_a_readable_tag_warns" {
     api_image                      = "mirror.example.com/masterly/api@sha256:00b0c775ff83cd4b1d0a9c79e9290d3166f471b5576f43e4272ab0d031a9ed04"
   }
 
-  expect_failures = [check.api_image_version_is_known]
+  expect_failures = [check.api_image_version_is_known, check.builtin_auth_opted_out_in_production]
 
   assert {
     condition     = local.api_image_version == null && local.api_image_meets_floor

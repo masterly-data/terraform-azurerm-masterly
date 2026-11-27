@@ -120,9 +120,20 @@ module "masterly" {
   # https://<hostname>/api/auth/callback from it. See "ca-frontend on your own domain".
   # frontend_custom_domain = { hostname = "...", certificate_key_vault_secret_id = "...", key_vault_id = "..." }
   # With ca-edge on, the same for the SDK and MCP clients' hostname, which must differ from the
-  # frontend's. See "ca-edge on your own domain" in docs/networking.md.
+  # frontend's. See "ca-edge on your own domain" in docs/networking.md. ca-edge is the only way
+  # to reach the api from outside: api_ingress_external = true is refused without it.
   # edge               = {}
   # edge_custom_domain = { hostname = "...", certificate_key_vault_secret_id = "...", key_vault_id = "..." }
+
+  # The platform sign-in gate (required in production): built-in authentication with Entra ID
+  # on ca-frontend, in front of the application's own sign-in. It opens exactly / and /start
+  # without sign-in. Or record why the install runs without it, instead:
+  # builtin_auth_opt_out = { reason = "..." }. See "Identity" below.
+  builtin_auth = {
+    tenant_id = "<tenant id>"
+    client_id = "<sign-in gate client id>"
+  }
+  builtin_auth_client_secret = var.builtin_auth_client_secret # from your secret store
 
   # License (ADR 0013): from your install bundle.
   license_token      = var.license_token # from your secret store
@@ -174,9 +185,11 @@ module "masterly" {
 ```
 
 Outputs include `frontend_url` (`https://<hostname>` with `frontend_custom_domain` set),
-`custom_domain_verification_id` (the `asuid.<hostname>` TXT value), `api_url` (the API's base URL for the Python SDK and other
-clients outside the environment — null unless `api_ingress_external = true`), `edge_url` and
-`edge_identity_principal_id` (ca-edge's base URL and identity — null unless `edge` is set, which
+`custom_domain_verification_id` (the `asuid.<hostname>` TXT value), `api_url` (null whenever
+`ca-api` is internal, which is every accepted plan: `api_ingress_external = true` is refused
+without `edge` and ignored with it), `edge_url` and
+`edge_identity_principal_id` (ca-edge's base URL, the address for the Python SDK and other clients
+outside the environment, and its identity — null unless `edge` is set, which
 it is not by default; `edge_url` is `https://<hostname>` with `edge_custom_domain` set), the apps resource
 group, the Container App names (the values the app repos' release workflows use to roll
 images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and `apps_identity_principal_id` /
@@ -189,9 +202,8 @@ images — `DEMO_RG`, `DEMO_APP_API`, `DEMO_APP_FRONTEND` in the demo case), and
 `AcrPull` grant has to reach each of them, unless they all pull as one identity you name in
 `registry_identity_id` (see "Getting the images").
 
-`api_internal_fqdn` keeps its name so existing configurations still plan, but the name is older
-than `api_ingress_external`: it holds the API's internal hostname only while the API is
-unpublished, and its published hostname once it is. Read `api_url` for a client's base URL. Like
+`api_internal_fqdn` keeps its name so existing configurations still plan: it holds the API's
+ingress hostname, internal whenever the API is. Read `edge_url` for a client's base URL. Like
 every ingress hostname, both are for a person or a client to use, not for wiring one app to
 another — apps in the same environment address the API by its Container App name.
 
@@ -273,7 +285,7 @@ check, and a rebuilt app, both go by.
 | `id-masterly-workers` UAMI (+ optional AcrPull) — **wherever `ca-workers` exists, except `migrations = "start"` with `database_auth = "entra"` on the starter server, and an install without the vault whose `acr_id` is null and whose apps pull from a registry as their identities** | **`ca-workers`' own identity**: it runs, pulls, scales and resolves its Key Vault references as it. With `migrations = "job"` on the starter server it also signs in to Postgres as `masterly_workers` (on `"entra"`, the role the migrate job binds to this identity); elsewhere it reads the shared `database-url`. It holds the backend grants `ca-workers` needs — the app secrets role and the **signing keys role** on the vault, the signing keys role alone on the audit vault (create a signing key that is absent, read it and sign with it, and get and set secrets; no delete, purge, update, import, backup, restore, rotate or recover), AcrPull (through `acr_id`), ACS Email Owner, Service Bus send + receive, Data Owner on the jobs queue when `ca-workers` scales on it, and its own Redis data access policy on `redis_auth = "entra"`. It is no Postgres administrator and holds no Key Vault Crypto Officer. See [docs/identity.md](docs/identity.md#workload-identities-one-per-role-adr-0120-6) and [The migrate job](docs/data-plane.md#the-migrate-job) |
 | `caj-migrate` Container Apps job — **only with `migrations = "job"`** | Schema migrations and new Environments' databases (ADR 0120): `python -m masterly_app.apps.migrate` on the api image, no ingress, on `migrate_job_schedule`, once at install, and from your CD before each release rolls the apps |
 | Postgres Flexible Server (`psql-masterly-<suffix>`) — **starter data plane, skipped on BYO-DB** | Private-endpoint-only; per-Environment databases are created on it by the api |
-| `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Internal by default; `api_ingress_external = true` publishes it behind `ingress_allowed_cidrs` and makes it HTTPS-only (see [Transport security](docs/networking.md#transport-security)) |
+| `ca-api` (internal ingress, :8001) | The product API; probes `/healthz` + `/readyz`; secrets (DSN, session secret, license, …) reach it as Container App secrets — **Key Vault references** when `enable_key_vault`, values otherwise. Always internal in the runtime environment: it is reached from outside only through `ca-edge`, and `api_ingress_external = true` is refused without `edge` and ignored with it (see [Transport security](docs/networking.md#transport-security)) |
 | `ca-frontend` (public ingress, :3000) | The GUI/BFF; on `oidc` it runs the authorization-code + PKCE dance against your IdP. Readiness (`/api/readyz`) gates traffic on the frontend's own runtime config resolving **and** the api answering, so a misconfigured revision never takes traffic |
 | Service Bus namespace + queue (opt-in, ADR 0029) | The `servicebus` bus binding; default is the broker-less polling binding. In `mode = "production"`, `enable_service_bus = true` also requires **`servicebus_sku`**, which has no default there: `"Premium"` (recommended) runs the namespace private, behind a **private endpoint** with public network access disabled, at about $677 per month; `"Standard"` keeps a public endpoint. See [Where this module departs from Azure's recommended baseline](#where-this-module-departs-from-azures-recommended-baseline). |
 | ACS email (opt-in, ADR 0040) | Customer-owned email; endpoint + sender auto-wired into the api |
@@ -406,6 +418,25 @@ Before you turn it on:
 
 Who signs in, `ca-frontend` on your own domain and the built-in authentication are documented in
 [docs/identity.md](docs/identity.md).
+
+- **`mode = "production"` is the security profile, and requires the platform sign-in gate.** A
+  production plan is refused unless `builtin_auth` (built-in authentication with Entra ID on
+  `ca-frontend`) or `builtin_auth_opt_out = { reason = "..." }` is set. `builtin_auth_opt_out`
+  is null by default; set, it records why the install runs without the gate, every plan warns
+  and quotes its reason, and it is refused with an empty reason or together with `builtin_auth`.
+  In `mode = "demo"` it is accepted and has no effect.
+- **In production the frontend gate opens exactly `/` and `/start`.** With
+  `builtin_auth.frontend_excluded_paths` unset, `ca-frontend` serves `/` and `/start` without
+  sign-in and gates everything else; any list other than `["/", "/start"]` is refused. The
+  frontend release you run should serve `/` as a redirect and `/start` as a self-contained page.
+  In demo, unset still means no excluded path, and any list of absolute paths is accepted.
+- **`ca-api` is reachable from outside only through `ca-edge`.** `api_ingress_external = true`
+  is refused at plan without `edge`, in every mode: set `edge` and point the Python SDK and
+  other clients at the `edge_url` output. With `edge` set `ca-api` stays internal whatever
+  `api_ingress_external` says, and a plan that sets it warns that it is ignored.
+- **Every published app is HTTPS only.** `ca-frontend`, `ca-edge`, and `ca-api` in the app
+  environment redirect `http://` to `https://`; a published app with plain HTTP is refused at
+  plan. Only the internal `http://ca-api` hop, which the environment encrypts, allows it.
 
 - **Built-in authentication on `ca-api` (`builtin_auth_api`) is off by default.** With
   `builtin_auth` set, `builtin_auth_api = true` makes `ca-api` answer `401`, on every path, to any
@@ -598,8 +629,8 @@ subnet. With `aca_internal_load_balancer = true` the source is `VirtualNetwork` 
 only your virtual network and the networks connected to it can reach the apps. Azure
 recommends that a rule not allow unrestricted ingress from any IP address.
 
-Why the module does this: in a public environment the frontend (and the api, when
-`api_ingress_external = true`) must be reachable from the Internet, so the rule has to admit
+Why the module does this: in a public environment the frontend (and `ca-edge`, with `edge`
+set) must be reachable from the Internet, so the rule has to admit
 it. Port 80 is admitted beside 443 because Azure's edge answers it with a 301 redirect to
 https, and dropping it would turn that redirect into a timeout. The rule is not where access
 is narrowed: `ingress_allowed_cidrs` narrows who may reach the apps at the Container Apps
@@ -944,9 +975,10 @@ export MASTERLY_API_TOKEN=<an Organization-scoped token with ops:read>   # optio
 It needs `az` and `jq`, Reader on `rg-masterly-aca` and `rg-masterly-data`, and Log
 Analytics Reader on the workspace. With `log_query_public_access = false`, run it from a network
 that reaches the workspace through your Azure Monitor Private Link Scope (see
-[The Log Analytics workspace](#the-log-analytics-workspace)). `--api-url` is the **api's** URL: reachable from your
-workstation only when `api_ingress_external = true`, or from inside the VNet on the private
-topologies — the frontend proxies `/v1` behind its own session cookie, not a bearer token.
+[The Log Analytics workspace](#the-log-analytics-workspace)). `--api-url` is the **api's** URL: reachable from inside the
+VNet on the private topologies, since `ca-api` is never published on its own
+(`api_ingress_external = true` is refused without `edge`) — the frontend proxies `/v1` behind
+its own session cookie, not a bearer token.
 Otherwise leave it out and attach the body from wherever your monitoring already polls it,
 with `--ops-metrics <file>`. It writes a directory, `masterly-diagnostics-<prefix>-<timestamp>/`,
 of plain JSON that you **read before you send**: the apps' configuration state, revisions and
@@ -1292,7 +1324,7 @@ The module generates a secret for this (`random_password.bff_shared_secret`) and
 App secret (a Key Vault reference with `enable_key_vault`). The BFF states the browser's address
 and presents the secret; the `api` believes that address only on a request carrying the same
 value, so a caller who does not hold it cannot choose its own address, whether it reaches the
-`api` through the BFF or directly on a published ingress (`api_ingress_external`).
+`api` through the BFF or through `ca-edge` (`edge`).
 
 It needs `api` image `v0.133.4` or later and `frontend` image `v0.139.0` or later. With an older
 image on either app the variable reaches the container and nothing reads it, and GUI attempts

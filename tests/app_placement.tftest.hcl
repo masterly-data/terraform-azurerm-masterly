@@ -38,6 +38,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- Default placement: everything stays on aca-<prefix> -------------------------------------
@@ -422,19 +430,22 @@ run "placement_on_a_missing_environment_is_refused" {
   expect_failures = [azurerm_resource_group.aca]
 }
 
-# Threat: ca-api in app published. api_ingress_external = true is refused there.
+# Threat: ca-api in app published. api_ingress_external = true is refused there. edge is set so
+# that only this refusal applies, not the refusal of api_ingress_external without edge; the plan
+# also warns that api_ingress_external is ignored with edge.
 run "api_ingress_external_with_api_in_app_is_refused" {
   command = plan
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
     frontend_environment  = "front"
     edge_environment      = "front"
     api_environment       = "app"
     api_ingress_external  = true
   }
 
-  expect_failures = [var.api_environment]
+  expect_failures = [var.api_environment, check.api_ingress_external_is_ignored_with_edge]
 }
 
 # Threat: egress believed forced when it is not. The route table is on snet-aca only.
@@ -575,6 +586,8 @@ run "default_placement_adds_no_front_rule_to_the_endpoints_nsg" {
     )
     error_message = "By default no private-endpoint NSG rule may name the front subnet."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat: the front subnet reaching more than the vault. Exactly one rule from the front subnet,
@@ -682,4 +695,6 @@ run "moved_placement_admits_the_front_subnet_to_the_vault_on_443_only" {
     )
     error_message = "ca-frontend's secret_refs must all still use module.frontend_identity.id."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

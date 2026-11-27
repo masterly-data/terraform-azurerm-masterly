@@ -96,6 +96,14 @@ variables {
 
   alert_email = "ops@example.com"
 
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
   mode                           = "production"
   identity_binding               = "oidc"
   oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
@@ -354,6 +362,8 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_managed_redis" {
     )
     error_message = "With \"job\" on the starter server ca-workers must read workers-database-url and workers-database-direct-url through id-<prefix>-workers."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The same comparison on Azure Cache for Redis and "password", without PgBouncer.
@@ -516,6 +526,8 @@ run "workers_identity_gains_only_what_the_apps_identity_held_on_azure_cache_for_
     )
     error_message = "With \"job\" on password, id-<prefix>-workers must hold all seven role assignments, AcrPull, the app secrets role, Crypto Officer and ACS Email Owner each on its own scope."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # "password" with PgBouncer: each app's pooled (6432) and direct (5432) URLs carry its own role and
@@ -546,6 +558,8 @@ run "backend_apps_get_their_own_password_urls_with_pgbouncer" {
     )
     error_message = "On password with PgBouncer, each app's pooled and direct URLs must carry its own role and password, in its own vault secrets alone."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # migrations = "start" on "password", with PgBouncer and Azure Managed Redis: ca-workers moves to
@@ -554,7 +568,7 @@ run "workers_own_identity_on_password_start" {
   command = apply
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations         = "start"
@@ -660,7 +674,7 @@ run "workers_own_identity_on_byo_database_with_start" {
   command = apply
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations            = "start"
@@ -850,6 +864,8 @@ run "workers_own_identity_on_byo_database_with_job" {
     )
     error_message = "On BYO-DB with \"job\" ca-workers must read the shared database-url through id-<prefix>-workers, and nothing may name a workers role or DSN."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat: a grant removed before its replacement exists stalls the jobs pipeline mid-upgrade.
@@ -859,7 +875,7 @@ run "workers_depends_on_every_grant_it_replaces" {
   command = plan
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations     = "start"
@@ -912,6 +928,15 @@ run "job_without_workers_is_refused_on_production" {
     enable_workers = false
     redis_offering = "managed"
     database_auth  = "password"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.enable_workers]

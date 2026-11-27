@@ -38,6 +38,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # Key Vault (ADR 0066): enabled provisions the vault + the app secrets role and grant and flips
@@ -409,6 +417,8 @@ run "production_secrets_are_vault_references" {
     condition     = length(azurerm_role_assignment.kv_secrets_officer_deployer) == 1
     error_message = "The deploying principal must be granted Key Vault Secrets Officer, or Terraform cannot seed the secrets."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The opposite branch, unchanged: with no vault there is nowhere to put them, so the apps
@@ -481,6 +491,15 @@ run "production_without_a_deployer_path_is_rejected" {
     external_database_url       = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     key_vault_deployer_ip_rules = []
     migrations                  = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.key_vault_deployer_ip_rules]
@@ -523,6 +542,8 @@ run "production_in_vnet_apply_keeps_the_vault_closed" {
     )
     error_message = "An in-VNet apply must leave the production vault with no public presence and no firewall exception."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat: Terraform destroys a dependent before its dependency. A secret that does not depend on the
@@ -605,6 +626,8 @@ run "production_with_injected_zone_still_plans_the_secrets" {
     )
     error_message = "The install secrets must still plan, one per install_secret_names, when the endpoint's DNS link is absent."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Demo has a public vault and no endpoint: both counted edges are empty and the secrets plan.
@@ -934,6 +957,8 @@ run "production_premium_service_bus_is_private" {
     ])
     error_message = "The endpoints subnet must admit AMQP over TLS (5671) from the runtime subnet when the namespace is private."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # A landing zone that centralizes private DNS supplies the zone: the module creates none and
@@ -975,6 +1000,8 @@ run "production_premium_service_bus_uses_injected_dns_zone" {
     )
     error_message = "An injected Service Bus zone must be used as given, with no zone or link created."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Guard: an injected zone of any other name would leave the namespace's hostname resolving to
@@ -1020,6 +1047,15 @@ run "production_service_bus_without_sku_is_rejected" {
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     enable_service_bus    = true
     migrations            = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.servicebus_sku]
@@ -1059,6 +1095,8 @@ run "production_without_service_bus_needs_no_sku" {
     )
     error_message = "Production with Service Bus disabled must plan without servicebus_sku and create no namespace."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # An empty string is what an unset TF_VAR_ or a rendered template produces. It must not pass
@@ -1128,6 +1166,8 @@ run "production_standard_service_bus_keeps_public_endpoint" {
     )
     error_message = "A Standard namespace gets no private endpoint, no zone and no AMQP port."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Outside production nothing changes: a Premium namespace keeps public access, as Key Vault
@@ -1217,6 +1257,15 @@ run "production_scale_to_zero_is_rejected" {
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     migrations            = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.api_min_replicas, var.frontend_min_replicas]
@@ -1251,6 +1300,15 @@ run "production_workers_scale_to_zero_is_rejected" {
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     migrations            = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.workers_min_replicas]
@@ -1290,6 +1348,8 @@ run "production_workers_floor_of_one_plans" {
     condition     = output.workers_app_name == "ca-workers"
     error_message = "A production install with workers_min_replicas = 1 must plan the workers app."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Credential-based image pull (ADR 0067 option 1): direct pull from Masterly's registry
@@ -1367,6 +1427,8 @@ run "both_app_identities_keep_their_names" {
     condition     = module.workers_identity[0].name == "id-masterly-workers"
     error_message = "The workers' identity name must stay id-<prefix>-workers."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The split itself. Identity ids and principal ids are computed, so at plan they are
@@ -1779,6 +1841,8 @@ run "the_frontend_holds_secrets_user_on_its_own_secrets_only" {
     ])
     error_message = "Every frontend grant must be Key Vault Secrets User on the frontend's own identity, never Officer."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Planned against the state the_frontend_holds_secrets_user_on_its_own_secrets_only above leaves: its conditions read values that are known only
@@ -1941,4 +2005,6 @@ run "migrate_job_runs_the_migrate_role_as_its_own_identity" {
     )
     error_message = "The migrate job must carry MASTERLY_DATABASE_URL from its own secret, and no direct URL without the pooler."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

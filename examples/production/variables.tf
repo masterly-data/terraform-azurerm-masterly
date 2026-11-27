@@ -78,6 +78,17 @@ variable "oidc_redirect_uri" {
   default     = "https://redirect-not-yet-known.invalid/api/auth/callback"
 }
 
+variable "builtin_auth_client_id" {
+  type        = string
+  description = "Application (client) id of the Entra app registration the platform sign-in gate (builtin_auth) signs users in with, in the oidc_tenant_id tenant."
+}
+
+variable "builtin_auth_client_secret" {
+  type        = string
+  sensitive   = true
+  description = "Client secret of the sign-in gate's registration (secret)."
+}
+
 variable "frontend_custom_domain" {
   type = object({
     hostname                        = string

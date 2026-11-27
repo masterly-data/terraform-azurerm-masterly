@@ -9,7 +9,7 @@ group heading, and on the Terraform Registry. **Required** means the input has n
 Production (`mode = "production"`) refuses a plan until more inputs are set: the plan names
 each one that is missing.
 
-153 inputs in 30 groups.
+154 inputs in 30 groups.
 
 ## Groups
 
@@ -28,7 +28,7 @@ each one that is missing.
 - [Async bus (ADR 0029)](#async-bus-adr-0029) (3)
 - [OIDC sign-in and break-glass](#oidc-sign-in-and-break-glass) (7)
 - [The BFF's DPoP key](#the-bffs-dpop-key) (1)
-- [Built-in sign-in](#built-in-sign-in) (4)
+- [Built-in sign-in](#built-in-sign-in) (5)
 - [Custom domain](#custom-domain) (2)
 - [The install's Log Analytics workspace](#the-installs-log-analytics-workspace) (3)
 - [The front, app and workers environments (ADR 0120)](#the-front-app-and-workers-environments-adr-0120) (3)
@@ -248,6 +248,7 @@ In `variables-builtin-auth.tf`.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `builtin_auth` | `object(...)` | `null` | Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on ca-frontend, and on ca-api with builtin_auth_api: a gate at the platform, in front of the application's own sign-in. |
+| `builtin_auth_opt_out` | `object({ reason = string })` | `null` | The recorded decision to run a production install without builtin_auth, the platform sign-in gate on ca-frontend. |
 | `builtin_auth_api` | `bool` | `false` | Built-in authentication on ca-api, off by default; callers request the audience builtin_auth.client_id, and turning it on before ca-frontend and ca-edge send that token refuses every BFF call, as on 2026-10-22. |
 | `builtin_auth_edge` | `bool` | `false` | Built-in authentication on ca-edge, off by default: a backstop that answers 401 on every path but /v1, /v1/*, /mcp and the protected-resource metadata paths, so a path below /mcp, and /, is refused. |
 | `builtin_auth_recovery_until` | `string` | `null` | The recovery fallback for builtin_auth: an RFC 3339 UTC time (for example 2026-11-14T15:30:00Z) until which ca-frontend's built-in authentication, and with builtin_auth_api ca-api's, is turned off. |

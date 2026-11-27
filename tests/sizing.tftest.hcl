@@ -31,6 +31,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- Sizing and scaling: app_resources, frontend_max_replicas, the workers' scale rule and
@@ -133,6 +141,8 @@ run "production_example_runs_the_api_at_one_vcpu" {
     )
     error_message = "Apps not listed in app_resources must keep 0.5 vCPU / 1Gi."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Either half of a size determines the other, at Container Apps' 1 vCPU : 2 GiB.
@@ -463,6 +473,8 @@ run "postgres_auto_grow_on_by_default_in_production" {
     condition     = azurerm_postgresql_flexible_server.this[0].auto_grow_enabled == true
     error_message = "Unset, a production install with the starter server must turn storage autogrow on."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "postgres_auto_grow_false_wins_in_production" {
@@ -499,6 +511,8 @@ run "postgres_auto_grow_false_wins_in_production" {
     condition     = azurerm_postgresql_flexible_server.this[0].auto_grow_enabled == false
     error_message = "postgres_auto_grow = false must win over the production default."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "postgres_auto_grow_true_wins_in_evaluation" {

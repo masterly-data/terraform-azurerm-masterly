@@ -93,6 +93,19 @@ module "masterly" {
   # custom domain it is left null: the placeholder names another host, which the module refuses.
   oidc_redirect_uri = var.frontend_custom_domain == null ? var.oidc_redirect_uri : null
 
+  # --- Platform sign-in gate ------------------------------------------------------
+  # production requires builtin_auth, Container Apps built-in authentication with Entra ID on
+  # ca-frontend, in front of the application's own sign-in. It opens exactly / and /start
+  # without sign-in. Register https://<frontend host>/.auth/login/aad/callback as a web
+  # redirect URI on builtin_auth_client_id's registration and enable ID token issuance.
+  # Running production without it is a decision you record instead: remove these lines and set
+  # builtin_auth_opt_out = { reason = "..." }, which every plan then quotes in a warning.
+  builtin_auth = {
+    tenant_id = var.oidc_tenant_id
+    client_id = var.builtin_auth_client_id
+  }
+  builtin_auth_client_secret = var.builtin_auth_client_secret
+
   # --- Machine entry point --------------------------------------------------------
   # ca-edge, the Envoy entry point for the Python SDK and MCP clients, is off unless edge is
   # set (edge = {} for its defaults). It is published on ingress_allowed_cidrs, which must

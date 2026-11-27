@@ -114,6 +114,14 @@ variables {
 
   alert_email = "ops@example.com"
 
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
   enable_service_bus    = true
   servicebus_sku        = "Standard"
   migrations            = "job"
@@ -183,6 +191,8 @@ run "ca_workers_access_on_aca_env" {
     condition     = one(azurerm_container_app_job.migrate[0].identity[0].identity_ids) == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
     error_message = "On aca-<prefix>, caj-migrate must run as id-<prefix>-migrate alone."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Both moved, against the baseline's state: the same assertions, value for value.
@@ -234,4 +244,6 @@ run "ca_workers_access_in_the_workers_environment" {
     condition     = one(azurerm_container_app_job.migrate[0].identity[0].identity_ids) == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-masterly-migrate"
     error_message = "In the workers environment, caj-migrate must still run as id-<prefix>-migrate alone."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

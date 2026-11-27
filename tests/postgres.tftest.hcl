@@ -38,6 +38,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # Evaluation defaults: dev identity behind an allowlist provisions the starter Postgres,
@@ -655,6 +663,8 @@ run "production_starter_postgres_grade_plans" {
   # `criteria[0].query` was written and removed: interpolating the server id makes the whole
   # string unknown at plan time, so terraform test rejects the condition as unevaluable rather
   # than failing it. Only an apply-mode run against real Azure could pin it.
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Guard: mode=production refuses the burstable Postgres default on the provisioned starter
@@ -685,6 +695,15 @@ run "production_burstable_postgres_is_rejected" {
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
     migrations                     = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.postgres_sku_name]
@@ -717,6 +736,15 @@ run "production_short_retention_is_rejected" {
     postgres_zone_redundant_ha = true
     # postgres_backup_retention_days stays the 7-day default -> refused
     migrations = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.postgres_backup_retention_days]
@@ -756,6 +784,8 @@ run "production_without_ha_plans" {
     condition     = length(azurerm_postgresql_flexible_server.this[0].high_availability) == 0
     error_message = "A production starter server with postgres_zone_redundant_ha unset must plan with no high_availability block."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- Geo-redundant backup on the starter Postgres server (MAS-1087) ----------------------
@@ -796,6 +826,8 @@ run "production_geo_backup_on_in_a_supported_region" {
     condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == true
     error_message = "mode=production in Sweden Central must create the starter server with geo-redundant backup on."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The display form of the location resolves through the same key as the lookup.
@@ -832,6 +864,8 @@ run "production_geo_backup_on_with_the_display_form_location" {
     condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == true
     error_message = "\"Sweden Central\" and \"swedencentral\" must resolve to the same geo-redundant backup default."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Poland Central has no geo-redundant backup for Postgres flexible server. Turning it on there
@@ -869,6 +903,8 @@ run "production_geo_backup_off_in_an_unsupported_region" {
     condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
     error_message = "mode=production in Poland Central must leave geo-redundant backup off: the region does not support it."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # A region the module has not checked against Microsoft's table is treated as unsupported, so
@@ -906,6 +942,8 @@ run "production_geo_backup_off_in_an_unlisted_region" {
     condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
     error_message = "A region absent from the module's geo-redundant backup lookup must default to off."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The customer's explicit false wins over the production default in a supported region.
@@ -942,6 +980,8 @@ run "production_geo_backup_explicit_false_wins" {
     condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
     error_message = "postgres_geo_redundant_backup = false must override the production default."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Evaluation installs leave it off by default, in a supported region too.
@@ -1045,6 +1085,8 @@ run "existing_server_created_without_geo_backup" {
     condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
     error_message = "Setup: the existing server must be created with geo-redundant backup off."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "existing_server_keeps_its_geo_backup_setting" {
@@ -1090,4 +1132,6 @@ run "existing_server_keeps_its_geo_backup_setting" {
     condition     = azurerm_postgresql_flexible_server.this[0].geo_redundant_backup_enabled == false
     error_message = "A changed geo-redundant backup default must not change an existing server's setting — changing it replaces the server and destroys its data."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

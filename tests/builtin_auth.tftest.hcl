@@ -225,14 +225,16 @@ run "builtin_auth_ignores_the_api_entries_with_a_warning" {
   expect_failures = [check.builtin_auth_api_entries_are_ignored]
 }
 
-# With the api published and builtin_auth_api unset, builtin_auth still gates ca-frontend only,
-# and the plan warns that the published api has no platform gate. With the switch on the
-# warning does not fire (builtin_auth_api_gates_the_published_api in builtin_auth_api.tftest.hcl).
-run "builtin_auth_warns_when_the_api_is_published" {
+# api_ingress_external = true is refused without edge and ignored with it, so ca-api is never
+# published beside the gated frontend: with builtin_auth_api unset, builtin_auth still gates
+# ca-frontend only, ca-api stays internal behind ca-edge, and the published-api warning does not
+# fire. The plan warns instead that api_ingress_external is ignored (security_profile.tftest.hcl).
+run "builtin_auth_leaves_no_published_api_ungated_behind_the_edge" {
   command = plan
 
   variables {
     ingress_allowed_cidrs = ["203.0.113.7/32"]
+    edge                  = {}
     api_ingress_external  = true
     builtin_auth = {
       tenant_id = "11111111-1111-1111-1111-111111111111"
@@ -241,49 +243,17 @@ run "builtin_auth_warns_when_the_api_is_published" {
     builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
-  override_module {
-    target = module.api
-    outputs = {
-      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
-      name                      = "ca-api"
-      fqdn                      = "ca-api.example.swedencentral.azurecontainerapps.io"
-      memory                    = "1Gi"
-      ingress_external          = true
-      ingress_allow_insecure    = false
-      ingress_allowed_ip_ranges = ["203.0.113.7/32"]
-    }
-  }
-
-  override_module {
-    target = module.frontend
-    outputs = {
-      id                        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-frontend"
-      name                      = "ca-frontend"
-      fqdn                      = "ca-frontend.example.swedencentral.azurecontainerapps.io"
-      memory                    = "1Gi"
-      ingress_external          = true
-      ingress_allow_insecure    = false
-      ingress_allowed_ip_ranges = []
-    }
+  assert {
+    condition     = !local.builtin_auth_leaves_published_api_ungated && module.api.ingress_external == false
+    error_message = "With edge set, ca-api must stay internal, so builtin_auth leaves no published api ungated and the plan must not warn about one."
   }
 
   assert {
-    condition     = local.builtin_auth_leaves_published_api_ungated
-    error_message = "With builtin_auth set and api_ingress_external = true, the published api is ungated and the plan must warn."
+    condition     = toset(keys(azapi_resource.builtin_auth)) == toset(["frontend"])
+    error_message = "builtin_auth without builtin_auth_api must not bring back a built-in auth configuration on ca-api."
   }
 
-  assert {
-    condition = (
-      toset(keys(azapi_resource.builtin_auth)) == toset(["frontend"]) &&
-      length([
-        for k, r in azapi_resource.builtin_auth : k
-        if r.parent_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-masterly-aca/providers/Microsoft.App/containerApps/ca-api"
-      ]) == 0
-    )
-    error_message = "Publishing the api must not bring back a built-in auth configuration on ca-api."
-  }
-
-  expect_failures = [check.builtin_auth_does_not_gate_the_published_api]
+  expect_failures = [check.api_ingress_external_is_ignored_with_edge]
 }
 
 run "builtin_auth_excluded_paths_reach_the_frontend" {

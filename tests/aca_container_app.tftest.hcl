@@ -63,3 +63,64 @@ run "a_scale_rule_with_the_attached_identity_or_none_plans" {
     error_message = "Both scale rules must reach the app."
   }
 }
+
+# Threat: a published app serves plain HTTP, so a bearer token crosses the network in clear.
+# The root never asks for it (security_profile.tftest.hcl asserts every app it publishes), so the
+# refusal is proven here, where it can be reached.
+run "external_ingress_with_plain_http_is_refused" {
+  command = plan
+
+  module {
+    source = "./modules/aca-container-app"
+  }
+
+  variables {
+    ingress_enabled        = true
+    ingress_external       = true
+    ingress_target_port    = 8001
+    ingress_allow_insecure = true
+  }
+
+  expect_failures = [var.ingress_allow_insecure]
+}
+
+# Plain HTTP on internal ingress (ca-api's in-environment hop), and external ingress without it,
+# both plan.
+run "internal_ingress_with_plain_http_plans" {
+  command = plan
+
+  module {
+    source = "./modules/aca-container-app"
+  }
+
+  variables {
+    ingress_enabled        = true
+    ingress_external       = false
+    ingress_target_port    = 8001
+    ingress_allow_insecure = true
+  }
+
+  assert {
+    condition     = output.ingress_external == false && output.ingress_allow_insecure == true
+    error_message = "Internal ingress may keep plain HTTP for the hop inside the environment."
+  }
+}
+
+run "external_ingress_without_plain_http_plans" {
+  command = plan
+
+  module {
+    source = "./modules/aca-container-app"
+  }
+
+  variables {
+    ingress_enabled     = true
+    ingress_external    = true
+    ingress_target_port = 3000
+  }
+
+  assert {
+    condition     = output.ingress_external == true && output.ingress_allow_insecure == false
+    error_message = "External ingress must default to HTTPS only."
+  }
+}

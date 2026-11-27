@@ -37,6 +37,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # Default placement: nothing moves, so every sleep is keyed on aca-<prefix> and no app is replaced.
@@ -201,6 +209,8 @@ run "workers_and_migrate_moved_key_their_sleeps_on_the_workers_environment" {
     ])
     error_message = "Every environment_move sleep must have destroy_duration = local.environment_move_wait, no create_duration, and the environment id as its only trigger."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Step 3: ca-frontend and ca-edge move to the front environment and ca-api to the app environment.

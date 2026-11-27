@@ -172,6 +172,14 @@ variables {
 
   alert_email = "ops@example.com"
 
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
   mode                           = "production"
   identity_binding               = "oidc"
   oidc_tenant_id                 = "11111111-2222-3333-4444-555555555555"
@@ -493,6 +501,8 @@ run "audit_vault_production_with_workers_own_identity" {
     condition     = output.audit_key_vault_uri == azurerm_key_vault.audit[0].vault_uri && output.audit_key_vault_uri != output.key_vault_uri
     error_message = "audit_key_vault_uri must be the audit vault's URI, not the main vault's."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- The residual: ca-workers on the apps identity -----------------------------------------------
@@ -503,7 +513,7 @@ run "audit_vault_production_with_workers_own_identity" {
 run "audit_vault_shared_identity_gives_ca_api_the_five_actions" {
   command = apply
 
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations    = "start"
@@ -638,6 +648,8 @@ run "audit_vault_no_other_principal" {
     ]) == toset(["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"])
     error_message = "The audit vault's grants must name the apps and workers identities alone."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- The DNS zone, injected ----------------------------------------------------------------------
@@ -657,6 +669,8 @@ run "audit_vault_private_endpoint_uses_the_injected_zone" {
     )
     error_message = "With key_vault_private_dns_zone_id set, the audit vault's private endpoint must use that zone, and the module must create no Key Vault zone."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- The name, with the longest prefix -----------------------------------------------------------
@@ -683,6 +697,8 @@ run "audit_vault_name_fits_with_a_long_prefix" {
     condition     = azurerm_role_definition.audit_head_reader[0].name == "Masterly audit head reader (masterlyprodsweden123-a1b2c3)"
     error_message = "The audit head reader role's name must carry the prefix and the install suffix."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # A prefix whose 13-character cut ends in a hyphen: Azure refuses "--" in a vault name.
@@ -701,6 +717,8 @@ run "audit_vault_name_drops_a_trailing_hyphen_at_the_cut" {
     )
     error_message = "A name_prefix cut at a hyphen must not leave two hyphens in a row in the audit vault's name."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- Production, diagnostics off -----------------------------------------------------------------
@@ -720,6 +738,8 @@ run "audit_vault_has_no_diagnostic_setting_where_the_main_vault_has_none" {
     )
     error_message = "With diagnostics off neither vault may have a diagnostic setting, and the audit vault must still be planned."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- Demo: public, with an allowlist entry for ca-api and ca-workers ----------------------------

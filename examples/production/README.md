@@ -31,6 +31,12 @@ runs the Key Vault private-endpoint-only, and Terraform has to write the install
 into it. Set `key_vault_deployer_ip_rules` to the egress address of whatever runs the apply,
 or `key_vault_deployer_in_vnet = true` if that already runs inside the VNet.
 
+Production also requires the platform sign-in gate, `builtin_auth` (built-in authentication with
+Entra ID on ca-frontend, which this example sets from `builtin_auth_client_id` and
+`builtin_auth_client_secret`), or `builtin_auth_opt_out = { reason = "..." }` recording why the
+install runs without it; every plan with the opt-out warns and quotes the reason. In production
+the gate opens exactly `/` and `/start` without sign-in.
+
 Production also refuses a plan with no alert notification target. Set `alert_email` (required
 by this example), or pass `alert_action_group_id` to the module instead; `alerts_routed_externally`
 is the escape hatch for alerts routed outside Terraform.
@@ -54,7 +60,8 @@ exists: `https://<hostname>/api/auth/callback`, which the module gives the front
 
 ## The machine entry point on your own domain
 
-ca-edge, the entry point for the Python SDK and MCP clients, is off by default. Set
+ca-edge, the entry point for the Python SDK and MCP clients, is off by default, and it is the
+only way to reach the api from outside: `api_ingress_external = true` is refused without it. Set
 `edge = {}` to run it, with `ingress_allowed_cidrs` listing the networks your clients call
 from: the module refuses the edge with an empty list, which means unrestricted. The same list
 also restricts the frontend, so include your users' networks too. Then set
@@ -84,6 +91,7 @@ Supply them as environment variables, not in a file:
 export TF_VAR_registry_token='{"username":"<appId>","password":"..."}'
 export TF_VAR_license_token='...'
 export TF_VAR_oidc_client_secret='...'
+export TF_VAR_builtin_auth_client_secret='...'
 ```
 
 `*.tfvars` is gitignored in this repository on purpose. Note also that **Terraform state

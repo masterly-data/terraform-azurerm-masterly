@@ -15,7 +15,7 @@ variable "name_prefix" {
 variable "mode" {
   type        = string
   default     = "demo"
-  description = "The app's startup posture (ADR 0066): demo (dev-shaped seams on real infrastructure — evaluation) or production (crash-fast; every seam durable). production wires MASTERLY_CONTROLPLANE_STORE=postgres and requires the inputs below."
+  description = "The app's startup posture (ADR 0066): demo (dev-shaped seams on real infrastructure — evaluation) or production (crash-fast; every seam durable). production wires MASTERLY_CONTROLPLANE_STORE=postgres and requires the inputs below. production is also the security profile: it requires builtin_auth, the platform sign-in gate, or builtin_auth_opt_out with the recorded reason; it holds builtin_auth.frontend_excluded_paths to the start page, [\"/\", \"/start\"]. In every mode ca-api is reachable from outside only through edge (api_ingress_external is refused without it), and every published app refuses plain HTTP."
 
   validation {
     condition     = contains(["demo", "production"], var.mode)
@@ -909,7 +909,7 @@ variable "private_endpoints_subnet_id" {
 variable "api_ingress_external" {
   type        = bool
   default     = false
-  description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session. Set true only when something outside the environment must call /v1 directly — the Python SDK, a customer's own pipeline, an integration — and narrow it with ingress_allowed_cidrs, which is applied to the api whenever this is true — an empty list is refused at plan, because empty means unrestricted in Azure. builtin_auth does not gate the api unless builtin_auth_api = true, and a plan that sets builtin_auth and this without builtin_auth_api warns. On an internal environment (aca_internal_load_balancer) `external` still means \"reachable from the VNet\", not from the internet."
+  description = "Whether the api is reachable beyond the Container App Environment. FALSE by default and that default is deliberate: the api sits behind the frontend's BFF, which is the only thing that should hold a session, and is reachable from outside only through ca-edge. True is refused at plan without edge, in every mode: something outside the environment that must call /v1 directly (the Python SDK, a customer's own pipeline, an integration) sets edge and calls the edge_url output, where ca-edge checks the caller's token before /v1 and /mcp reach ca-api. With edge set, ca-api stays internal whatever this says, and a plan that sets it true warns that it is ignored; api_url is then null. Refused with api_environment = \"app\"."
 }
 
 # Where ca-frontend, ca-edge and ca-api run (ADR 0120 §4-§5). The three move together or not at all. The callers reach the api by its short app name inside

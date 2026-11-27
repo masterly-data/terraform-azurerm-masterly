@@ -40,6 +40,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- The three environments ------------------------------------------------------------------
@@ -752,6 +760,8 @@ run "migrate_job_stays_on_aca_env" {
     )
     error_message = "On aca-<prefix>, caj-migrate runs as id-<prefix>-migrate and no other identity."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- ca-workers and caj-migrate in the workers environment --------------------------------------
@@ -832,6 +842,8 @@ run "workers_environment_moves_only_ca_workers" {
     )
     error_message = "workers_environment must move ca-workers only: caj-migrate, ca-api and ca-frontend stay on module.aca_env."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "migrate_job_environment_moves_only_caj_migrate" {
@@ -907,6 +919,8 @@ run "migrate_job_environment_moves_only_caj_migrate" {
     )
     error_message = "migrate_job_environment must move caj-migrate only: ca-workers, ca-api and ca-frontend stay on module.aca_env."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Both moved: neither gains ingress, and neither gains or loses access. The identity, env, secret
@@ -1052,6 +1066,8 @@ run "workloads_moved_to_the_workers_environment_keep_their_access" {
     )
     error_message = "In the workers environment, caj-migrate must keep id-<prefix>-migrate and no other identity."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Only "runtime" and "workers" are accepted.
@@ -1456,6 +1472,8 @@ run "retire_runtime_environment_unset_keeps_aca_env" {
     condition     = can(regex("length\\(module\\.aca_env\\) == 1 &&\\n\\s+try\\(length\\(one\\(module\\.aca_env\\[\\*\\]\\.workload_profile_names\\)\\) > 0, true\\)", file("${path.module}/network.tf")))
     error_message = "The egress route table's precondition must refuse with no aca-<prefix> and read its profiles through one(module.aca_env[*])."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat: aca-<prefix> deleted from under a running workload. ca-frontend, ca-edge, ca-api and
@@ -1555,6 +1573,15 @@ run "retire_refused_with_the_migrate_job_on_runtime" {
     edge_environment           = "front"
     api_environment            = "app"
     workers_environment        = "workers"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [azurerm_resource_group.aca]
@@ -1689,6 +1716,8 @@ run "retire_with_everything_moved_removes_aca_env" {
     )
     error_message = "With aca-<prefix> retired, ca-frontend, ca-edge, ca-api, ca-workers, caj-migrate and both certificates must plan only module.environments ids."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Threat: egress believed forced while open. Retired with everything moved, egress_firewall is

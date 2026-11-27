@@ -31,6 +31,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # Exactly one diagnostic setting carries the apps' logs, and it is on the environment. A plan
@@ -242,6 +250,8 @@ run "workspace_query_access_and_retention_follow_the_inputs" {
     condition     = module.logs.table_total_retention_days["AZKVAuditLogs"] == 730
     error_message = "AZKVAuditLogs's total retention must be set, to security_log_retention_days (no archive tier)."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Guard: both retentions are refused below 30 days, the least the workspace accepts.
@@ -402,6 +412,8 @@ run "production_mode_load_alerts_on_byo_db" {
     condition     = length(azurerm_monitor_metric_alert.servicebus_dead_letters) == 0
     error_message = "Without enable_service_bus there is no dead-letter queue to alert on."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The load thresholds are inputs, and moving one moves the alert (MAS-1291).
@@ -917,6 +929,8 @@ run "edge_gets_a_metrics_only_diagnostic_setting_and_all_three_alerts" {
     )
     error_message = "edge-silent must fire on an empty result (Count < 1, one period) and say machine access is what is down."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The availability alert does not need diagnostics; the 5xx, silent rule and setting do.
@@ -1034,6 +1048,15 @@ run "production_without_a_notification_target_is_refused" {
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     migrations            = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.alert_email]
@@ -1066,6 +1089,15 @@ run "production_without_a_notification_target_is_refused_with_diagnostics_off" {
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     migrations            = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.alert_email]
@@ -1104,6 +1136,8 @@ run "production_without_a_target_plans_with_the_escape_hatch" {
     condition     = length(azurerm_monitor_action_group.alerts) == 0
     error_message = "The escape hatch creates no action group; it only satisfies the check."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "production_without_a_target_plans_with_the_escape_hatch_and_diagnostics_off" {
@@ -1139,6 +1173,8 @@ run "production_without_a_target_plans_with_the_escape_hatch_and_diagnostics_off
     condition     = length(azurerm_monitor_metric_alert.app_unavailable) == 3
     error_message = "The availability alerts exist with diagnostics off and the escape hatch set."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Either target alone satisfies the check: alert_email (the file-wide value) in the first,
@@ -1174,6 +1210,8 @@ run "production_with_only_alert_email_plans" {
     condition     = length(azurerm_monitor_action_group.alerts) == 1
     error_message = "alert_email alone must satisfy the production check and create the action group."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "production_with_only_alert_action_group_id_plans" {
@@ -1208,6 +1246,8 @@ run "production_with_only_alert_action_group_id_plans" {
     condition     = length(azurerm_monitor_action_group.alerts) == 0
     error_message = "alert_action_group_id alone must satisfy the production check and create no module action group."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The refusal is production's: a demo install with no target and the hatch unset plans.

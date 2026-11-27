@@ -52,7 +52,16 @@ variables {
   postgres_backup_retention_days = 14
   database_auth                  = "password"
   alert_email                    = "ops@example.com"
-  key_vault_deployer_ip_rules    = ["203.0.113.7"]
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
+  key_vault_deployer_ip_rules = ["203.0.113.7"]
 }
 
 # The job names the workers environment (migrate_job_environment), so targeting it applies the
@@ -87,6 +96,8 @@ run "migrate_job_is_seeded_with_the_api_image" {
     condition     = azurerm_container_app_job.migrate[0].template[0].container[0].image == "masterly.azurecr.io/release/api:v0.138.0"
     error_message = "Terraform must seed the migrate job with the resolved api image on create."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "migrate_job_keeps_the_image_cd_owns" {
@@ -112,4 +123,6 @@ run "migrate_job_keeps_the_image_cd_owns" {
     condition     = terraform_data.migrate_image[0].output == "masterly.azurecr.io/release/api:v0.139.1"
     error_message = "The start action's replace trigger must still follow the resolved api image."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

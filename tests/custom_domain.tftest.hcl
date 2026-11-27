@@ -88,6 +88,14 @@ variables {
 
   alert_email = "ops@example.com"
 
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
   mode                           = "production"
   identity_binding               = "oidc"
   oidc_tenant_id                 = "11111111-2222-3333-4444-555555555555"
@@ -149,6 +157,8 @@ run "custom_domain_unset_keeps_the_frontend_fqdn" {
     condition     = nonsensitive(output.custom_domain_verification_id) == "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
     error_message = "custom_domain_verification_id must be the environment's custom-domain verification id."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Set, on a public environment.
@@ -262,6 +272,8 @@ run "custom_domain_binds_the_hostname_on_a_public_environment" {
     )
     error_message = "With frontend_custom_domain set, the redirect must be https://<hostname>/api/auth/callback, frontend_url https://<hostname>, and custom_domain_verification_id the environment's verification id."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Set, behind the customer's Application Gateway on an internal environment: the same binding.
@@ -317,6 +329,8 @@ run "custom_domain_binds_the_hostname_on_an_internal_environment" {
     )
     error_message = "On an internal environment the redirect, frontend_url and custom_domain_verification_id must follow the hostname as on a public one."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # --- edge_custom_domain ----------------------------------------------------------------------
@@ -348,6 +362,8 @@ run "edge_custom_domain_unset_keeps_the_edge_fqdn" {
     condition     = azurerm_container_app.edge[0].ingress[0].fqdn != null && output.edge_url == "https://${azurerm_container_app.edge[0].ingress[0].fqdn}"
     error_message = "With edge_custom_domain unset, edge_url must be https://<ca-edge fqdn>."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Set: the hostname on ca-edge, read through a certificate identity of its own.
@@ -504,6 +520,8 @@ run "edge_custom_domain_binds_the_hostname_on_ca_edge" {
     )
     error_message = "With edge_custom_domain set, edge_url must be https://<edge hostname>, and custom_domain_verification_id the environment's verification id."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Both: each hostname on its own app, with its own certificate and its own certificate identity,
@@ -578,4 +596,6 @@ run "edge_and_frontend_custom_domains_bind_both" {
     condition     = output.frontend_url == "https://masterly.example.com" && output.edge_url == "https://api.masterly.example.com"
     error_message = "With both custom domains set, frontend_url and edge_url must each be https://<its hostname>."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }

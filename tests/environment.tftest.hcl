@@ -31,6 +31,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- Telemetry to the control plane (ADR 0034/0056) --------------------------------------
@@ -200,6 +208,8 @@ run "public_api_url_is_absent_by_default" {
     )
     error_message = "public_api_url unset must not put MASTERLY_PUBLIC_API_URL on any app -- an install that does not set it must plan exactly as before this input existed."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 run "public_api_url_reaches_all_three_apps" {
@@ -226,7 +236,8 @@ run "public_api_url_reaches_all_three_apps" {
 
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
 
-    api_ingress_external  = true
+    # Outside callers reach the api through the edge (api_ingress_external is refused without it).
+    edge                  = {}
     ingress_allowed_cidrs = ["203.0.113.7/32"]
     public_api_url        = "https://api.example.com/masterly//"
     migrations            = "job"
@@ -257,6 +268,8 @@ run "public_api_url_reaches_all_three_apps" {
     condition     = contains(module.frontend.env_names, "MASTERLY_PUBLIC_API_URL")
     error_message = "MASTERLY_PUBLIC_API_URL must reach ca-frontend -- the catalog's Consume card shows it."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # A bare origin with no path is the common case and must plan clean.
@@ -566,6 +579,15 @@ run "demo_environments_refused_on_production" {
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.internal.example.com:5432/postgres?ssl=require"
 
     demo_environments = ["dev-eu"]
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   expect_failures = [var.demo_environments]
@@ -789,6 +811,8 @@ run "ca_bundle_reaches_the_backend_apps" {
     condition     = contains(keys(local.api_vault_secret_refs), "ca-bundle-pem")
     error_message = "With enable_key_vault, ca_bundle_pem must be stored as a Key Vault reference like the install's other secrets, not as a value-based Container App secret."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Guard: an empty or whitespace-only bundle would set SSL_CERT_FILE at an empty trust store.

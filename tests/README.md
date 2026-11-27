@@ -21,8 +21,9 @@ Each per-concern plan file starts with the same two parts. Copy them into a new 
   too, because `time_sleep.environment_move` would otherwise really wait its 180s `destroy_duration`
   at teardown);
 - the same file-wide `variables` block: location, org_id, install_id, the two images,
-  acr_login_server, key_vault_deployer_ip_rules and alert_email, with the comments that say why the
-  last two are set for every run.
+  acr_login_server, key_vault_deployer_ip_rules, alert_email and builtin_auth_opt_out, with the
+  comments that say why the last three are set for every run (the four builtin_auth files leave
+  builtin_auth_opt_out out: their runs set builtin_auth, which the opt-out would contradict).
 
 To change one of those values, change it in every plan file at once. The block is repeated on
 purpose. A shared `terraform.tfvars.json` here would reach every test file, and it changed the

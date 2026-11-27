@@ -38,6 +38,14 @@ variables {
   # every production run states one. Runs about the target override it; the refusal
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
+
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
 # --- Authentication to Postgres and Redis (ADR 0066, amended 2026-09-24) ------------------------
@@ -145,6 +153,8 @@ run "production_new_install_defaults_to_entra" {
     condition     = output.redis_url_wired == true
     error_message = "The keyless Redis URL must still resolve to a non-empty value."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The same default on the Azure Cache for Redis offering: Entra on, access keys off, and the
@@ -197,6 +207,8 @@ run "production_new_install_cache_offering_defaults_to_entra" {
     )
     error_message = "BYO-DB must keep DSN authentication whatever the mode, while Redis follows its own default."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Evaluation installs keep the password and the key, exactly as before this input existed: no
@@ -307,6 +319,8 @@ run "production_opt_down_keeps_password_and_key" {
     )
     error_message = "The opt-down must be recorded on the resources, like the default."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # The existing-install gate, Postgres half: a production install upgraded from a version before
@@ -339,6 +353,15 @@ run "production_existing_password_server_is_refused" {
     postgres_zone_redundant_ha     = true
     postgres_backup_retention_days = 14
     migrations                     = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   override_data {
@@ -383,6 +406,15 @@ run "production_existing_key_cache_is_refused" {
     api_max_replicas      = 2
     external_database_url = "postgresql+asyncpg://masterly:pw@pg.example.com:5432/postgres?ssl=require"
     migrations            = "job"
+
+    # A refusal under test, not the sign-in gate: builtin_auth meets production's gate rule
+    # without the opt-out's warning.
+    builtin_auth_opt_out = null
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
   }
 
   override_data {
@@ -469,6 +501,8 @@ run "existing_entra_server_stays_entra_and_other_installs_are_ignored" {
     condition     = output.database_auth == "entra" && output.redis_auth == "entra"
     error_message = "A server recorded as \"entra\" must stay on Entra, and another install's untagged cache must not count as this install's."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Outside production there is no departure to state, so an existing server keeps whatever it
@@ -573,6 +607,8 @@ run "production_explicit_entra_reads_only_the_server" {
     )
     error_message = "A server created on \"entra\" must be sent no administrator password, and record that it holds none."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # BYO-DB: database_auth = "entra" is refused, because there is no server of this module's to

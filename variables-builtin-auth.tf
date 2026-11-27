@@ -6,7 +6,7 @@ variable "builtin_auth" {
     client_id                = string
     api_allowed_applications = optional(list(string), [])
     api_allowed_audiences    = optional(list(string), [])
-    frontend_excluded_paths  = optional(list(string), [])
+    frontend_excluded_paths  = optional(list(string))
     forward_proxy = optional(object({
       convention               = string
       custom_host_header_name  = optional(string)
@@ -18,18 +18,18 @@ variable "builtin_auth" {
     Container Apps built-in authentication (often called EasyAuth) with Microsoft Entra ID, on
     ca-frontend, and on ca-api with builtin_auth_api: a gate at the platform, in front of the
     application's own sign-in. Null (the default) configures none, exactly as before this input
-    existed. It is independent of identity_binding: with identity_binding = "oidc" a browser
-    signs in twice, once at the platform (who may reach the frontend at all) and once in the
-    application (which member, which roles), and neither layer relies on the other.
+    existed; with mode = "production" a plan refuses null unless builtin_auth_opt_out records why
+    the install runs without it. It is independent of identity_binding: with identity_binding =
+    "oidc" a browser signs in twice, once at the platform (who may reach the frontend at all) and
+    once in the application (which member, which roles), and neither layer relies on the other.
 
     - ca-frontend redirects an unauthenticated browser to Entra sign-in.
     - ca-api is not gated unless builtin_auth_api = true (false by default). Without it, ca-api
       is reached internally, by the frontend's server-side calls to http://ca-api inside the
-      Container Apps environment; the application authenticates its callers as identity_binding
-      sets. With api_ingress_external = true, ca-api is also published to
-      ingress_allowed_cidrs, without this gate, and a plan that sets both warns. With it, ca-api
-      answers 401 to every request without a token issued to ca-frontend's or ca-edge's
-      workload identity for this registration; see builtin_auth_api.
+      Container Apps environment, and from outside only through ca-edge (edge); the application
+      authenticates its callers as identity_binding sets. With it, ca-api answers 401 to every
+      request without a token issued to ca-frontend's or ca-edge's workload identity for this
+      registration; see builtin_auth_api.
     - ca-edge is not gated at the platform unless builtin_auth_edge = true (false by default);
       see builtin_auth_edge.
 
@@ -38,8 +38,11 @@ variable "builtin_auth" {
     platform signs users in with. Register https://<frontend host>/.auth/login/aad/callback as a
     web redirect URI on it and enable ID token issuance; its client secret is
     builtin_auth_client_secret. frontend_excluded_paths: paths on ca-frontend served without
-    sign-in; every path listed is reachable by anyone ingress_allowed_cidrs admits, so leave it
-    empty unless a page must be public.
+    sign-in; every path listed is reachable by anyone ingress_allowed_cidrs admits. With mode =
+    "production" the gate opens exactly the start page: unset means ["/", "/start"], and any
+    other list is refused, so leave it unset there (ca-frontend should serve / as a redirect and
+    /start as a self-contained page). With mode = "demo" unset means [] (no path), as before,
+    and any list of absolute paths is accepted; leave it empty unless a page must be public.
 
     forward_proxy: for ca-frontend behind a reverse proxy that replaces the Host header, such as
     Azure Front Door or an Application Gateway sending the app's default hostname. Without it the
@@ -70,8 +73,23 @@ variable "builtin_auth" {
   }
 
   validation {
-    condition     = var.builtin_auth == null ? true : alltrue([for p in var.builtin_auth.frontend_excluded_paths : startswith(p, "/")])
+    # Conditionals, for the reason given on the first validation: unset is null.
+    condition = var.builtin_auth == null ? true : (
+      var.builtin_auth.frontend_excluded_paths == null ? true : alltrue([for p in var.builtin_auth.frontend_excluded_paths : startswith(p, "/")])
+    )
     error_message = "builtin_auth.frontend_excluded_paths entries must be absolute paths starting with \"/\"."
+  }
+
+  # Threat: the frontend gate opens more than the start page. In production it opens exactly /
+  # and /start (ADR 0117); a wider list would serve pages without sign-in to anyone the CIDRs
+  # admit.
+  validation {
+    condition = var.builtin_auth == null ? true : (
+      var.mode != "production" ? true : (
+        var.builtin_auth.frontend_excluded_paths == null ? true : jsonencode(var.builtin_auth.frontend_excluded_paths) == jsonencode(["/", "/start"])
+      )
+    )
+    error_message = "With mode = \"production\", builtin_auth.frontend_excluded_paths must be unset or exactly [\"/\", \"/start\"]: the sign-in gate opens the start page and nothing else, because every excluded path is served without sign-in to anyone ingress_allowed_cidrs admits. Leave it unset."
   }
 
   validation {
@@ -95,6 +113,39 @@ variable "builtin_auth" {
   validation {
     condition     = var.builtin_auth == null || var.builtin_auth_client_secret != null
     error_message = "builtin_auth requires builtin_auth_client_secret: the platform redeems the sign-in code with it."
+  }
+}
+
+variable "builtin_auth_opt_out" {
+  type        = object({ reason = string })
+  default     = null
+  description = <<-EOT
+    The recorded decision to run a production install without builtin_auth, the platform
+    sign-in gate on ca-frontend. Null (the default) records none.
+
+    With mode = "production" a plan needs builtin_auth or this, and refuses neither: the gate
+    is on by default in production, and turning it off is a decision someone states. reason says
+    why, in words a later operator can act on (for example "SSO is enforced by our own reverse
+    proxy in front of the frontend"); an empty or blank reason is refused. Every plan with it
+    then warns, quoting the reason. Refused together with builtin_auth, which it would
+    contradict. With mode = "demo" it is accepted and has no effect.
+  EOT
+
+  validation {
+    # try(): a null reason is refused here rather than failing the trim.
+    condition     = var.builtin_auth_opt_out == null ? true : try(trimspace(var.builtin_auth_opt_out.reason), "") != ""
+    error_message = "builtin_auth_opt_out.reason must say why this install runs without builtin_auth, the platform sign-in gate: an empty or blank reason records nothing."
+  }
+
+  validation {
+    condition     = var.builtin_auth_opt_out == null ? true : var.builtin_auth == null
+    error_message = "builtin_auth_opt_out cannot be set together with builtin_auth: the opt-out records running without the platform sign-in gate that builtin_auth turns on. Remove builtin_auth_opt_out, or remove builtin_auth."
+  }
+
+  # Threat: a production install runs with no platform gate and nothing records it.
+  validation {
+    condition     = var.mode != "production" ? true : (var.builtin_auth != null || var.builtin_auth_opt_out != null)
+    error_message = "mode = \"production\" requires builtin_auth or builtin_auth_opt_out: the platform sign-in gate on ca-frontend is on by default in production. Set builtin_auth (and builtin_auth_client_secret), or set builtin_auth_opt_out = { reason = \"...\" } to record why this install runs without it."
   }
 }
 

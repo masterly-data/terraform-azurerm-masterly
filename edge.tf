@@ -805,6 +805,13 @@ resource "azurerm_container_app" "edge" {
     # NOT ignored: nothing but this configuration moves it.
     ignore_changes = [workload_profile_name]
 
+    # Threat: the published edge serves plain HTTP, so a bearer token crosses the network in
+    # clear. The ingress above states it; this holds it there.
+    postcondition {
+      condition     = !self.ingress[0].external_enabled || !self.ingress[0].allow_insecure_connections
+      error_message = "ca-edge is published and must redirect http:// to https://, not serve it: allow_insecure_connections must be false."
+    }
+
     precondition {
       condition     = length(local.edge_allowed_cidrs) > 0
       error_message = "edge with an empty ingress_allowed_cidrs (or edge_ingress_allowed_cidrs) would publish ca-edge, and /v1 and /mcp behind it, to the whole internet: an empty list means UNRESTRICTED in Azure, not deny-all. List the CIDRs that may reach it (the networks your SDK and MCP clients call from), or leave edge unset."

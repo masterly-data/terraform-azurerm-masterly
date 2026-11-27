@@ -59,6 +59,14 @@ variables {
 
   alert_email = "ops@example.com"
 
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
   mode                           = "production"
   identity_binding               = "oidc"
   oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
@@ -91,7 +99,7 @@ run "app_secrets_role_reads_writes_and_deletes_secrets_and_nothing_more" {
   command = apply
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     migrations = "start"
@@ -287,6 +295,8 @@ run "app_secrets_role_on_ca_workers_own_identity" {
     )
     error_message = "ca-api's identity must hold the signing key reader role and ca-workers' own the signing keys role, and neither Crypto Officer."
   }
+
+  expect_failures = [check.builtin_auth_opted_out_in_production]
 }
 
 # Without the vault there is no role to define.

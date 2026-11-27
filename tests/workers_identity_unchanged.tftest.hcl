@@ -91,6 +91,14 @@ variables {
 
   alert_email = "ops@example.com"
 
+  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
+  # validation), so every run states the opt-out, which has no effect in demo. In production every
+  # plan warns, quoting its reason, so each production run expects
+  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
+  # instead. The runs about the sign-in gate are in the builtin_auth files and
+  # security_profile.tftest.hcl.
+  builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
+
   mode                           = "production"
   identity_binding               = "oidc"
   oidc_allowed_issuers           = "https://login.microsoftonline.com/aaa/v2.0"
@@ -125,7 +133,7 @@ run "start_on_entra_is_unchanged_on_managed_redis" {
   command = apply
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     database_auth = "entra"
@@ -202,7 +210,7 @@ run "start_on_entra_is_unchanged_on_azure_cache_for_redis" {
   command = apply
 
   # migrations = "start" in production plans, with the check's warning (migrate.tf).
-  expect_failures = [check.production_migrations_at_start]
+  expect_failures = [check.production_migrations_at_start, check.builtin_auth_opted_out_in_production]
 
   variables {
     database_auth  = "entra"
