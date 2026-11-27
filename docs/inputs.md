@@ -173,7 +173,7 @@ In `variables-core.tf`.
 | `frontend_environment` | `string` | `"aca"` | The Container Apps environment ca-frontend runs in. |
 | `edge_environment` | `string` | `"aca"` | The Container Apps environment ca-edge runs in, with edge set. |
 | `api_environment` | `string` | `"aca"` | The Container Apps environment ca-api runs in. |
-| `public_api_url` | `string` | `null` | The api's public base URL, as an absolute https:// URL with no query string, fragment or credentials — the api Container App's external FQDN ("https://ca-api.<environment default domain>") or your own domain in front... |
+| `public_api_url` | `string` | `null` | The api's public base URL, as an absolute https:// URL with no query string, fragment or credentials — the edge_url output ("https://ca-edge.<environment default domain>") or your own domain in front of the edge ("ht... |
 | `front_door_id` | `string` | `null` | The id of the Azure Front Door profile in front of ca-frontend: its resource_guid, which Front Door stamps on every request it relays as X-Azure-FDID and overwrites whatever a client sent (`az afd profile show -g <gro... |
 | `frontend_ingress_external` | `bool` | `true` | Whether the frontend has ingress beyond the Container App Environment itself. |
 | `aca_internal_load_balancer` | `bool` | `false` | Give the Container App Environment an internal load balancer, so it has no public endpoint and its apps answer only inside the VNet — reached over VPN or ExpressRoute. |

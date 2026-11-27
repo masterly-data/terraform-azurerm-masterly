@@ -1054,7 +1054,7 @@ front, app and workers subnets, /27 or larger each, plus the runtime subnet, /23
 `aca-<name_prefix>` runs) and the provisioned Postgres is reachable **only via
 a private endpoint**; private DNS keeps the server FQDN unchanged for the apps. The
 frontend stays the single public surface, behind the optional ingress IP allowlist, unless you
-publish the api (`api_ingress_external`) or set `edge` ([The edge proxy](#the-edge-proxy-ca-edge)).
+set `edge` ([The edge proxy](#the-edge-proxy-ca-edge)), the only way to reach the api from outside.
 
 Landing-zone accommodations:
 
@@ -1082,22 +1082,23 @@ Landing-zone accommodations:
 ## The API's public address
 
 `public_api_url` tells the install the address something outside it calls the API on: an
-absolute `https://` URL with no query string, fragment or credentials — the `api_url` output, or
-your own domain in front of the API. When it is set, the module puts it on `ca-api`,
+absolute `https://` URL with no query string, fragment or credentials — the `edge_url` output, or
+your own domain in front of the edge. When it is set, the module puts it on `ca-api`,
 `ca-workers` and `ca-frontend` as `MASTERLY_PUBLIC_API_URL`, with any trailing slash dropped.
 The frontend shows it in the catalog's Consume card; the API and the workers build the callback
 URL of an external pipeline step from it. Unset (the default), no app gets the variable.
 
 The module writes the value; it cannot tell whether the value works. It does when all three hold:
 
-- `api_ingress_external = true` — otherwise nothing outside the environment reaches the API;
+- `edge` is set — otherwise nothing outside the environment reaches the API (`api_ingress_external
+  = true` is refused without it, and ignored with it: `ca-api` stays internal);
 - `ingress_allowed_cidrs` admits whoever calls the API — for an external pipeline step, the
   outbound addresses of the service that runs your code;
 - on an internal environment (`aca_internal_load_balancer`), "external" means reachable from the
   VNet, so the caller must be on the VNet or a network connected to it.
 
-The `api_url` output is known only after the API is published, so on a new install either set
-your own domain from the start or apply once, then set `public_api_url` from `api_url` and apply
+The `edge_url` output is known only after the edge is created, so on a new install either set
+your own domain from the start or apply once, then set `public_api_url` from `edge_url` and apply
 again.
 
 ## The edge proxy (ca-edge)
@@ -1108,8 +1109,8 @@ exactly as before. Set `edge = {}` to run it with the module's defaults; the `ed
 its base URL.
 
 **With `edge.jwt_authn` unset (the default) it does no authentication.** It forwards the caller's
-`Authorization` header to `ca-api` unchanged, and `ca-api` checks it, exactly as when `ca-api`
-itself is published with `api_ingress_external = true`. With it set, the edge validates the token
+`Authorization` header to `ca-api` unchanged, and `ca-api` checks it. `ca-api` itself stays
+internal: `api_ingress_external = true` is refused without `edge` and ignored with it. With it set, the edge validates the token
 first ([Token validation at the edge](#token-validation-at-the-edge-edgejwt_authn)). What the edge
 adds either way is a narrower door:
 
@@ -1309,9 +1310,9 @@ it:
 ## Transport security
 
 Everything published by the install is HTTPS-only. `ca-frontend` and, with `edge` set,
-`ca-edge` always redirect `http://` to `https://`, and `ca-api` does the same **as soon as
-`api_ingress_external = true`** — a
-published api trusts a bearer token and nothing else, so serving it on port 80 would put
+`ca-edge` always redirect `http://` to `https://`, and so does `ca-api` whenever its ingress is
+external (`api_environment = "app"`, where external means the VNet), and the plan refuses any
+published app that allows plain HTTP — a published api trusts a bearer token and nothing else, so serving it on port 80 would put
 the whole credential on the wire for anyone in the path. An IP allowlist bounds who can
 reach an endpoint; it says nothing about what a network in between can read.
 

@@ -103,6 +103,25 @@ run "demo_builtin_auth_plans_as_before" {
   }
 }
 
+# Demo still accepts any absolute paths, as before; production holds them to the start page below.
+run "demo_excluded_paths_accept_another_page" {
+  command = plan
+
+  variables {
+    builtin_auth = {
+      tenant_id               = "11111111-1111-1111-1111-111111111111"
+      client_id               = "22222222-2222-2222-2222-222222222222"
+      frontend_excluded_paths = ["/", "/login"]
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  assert {
+    condition     = jsonencode(azapi_resource.builtin_auth["frontend"].body.properties.globalValidation.excludedPaths) == jsonencode(["/", "/login"])
+    error_message = "In demo, frontend_excluded_paths = [\"/\", \"/login\"] must still be accepted and reach ca-frontend as given."
+  }
+}
+
 # The opt-out is accepted in demo and changes nothing.
 run "demo_opt_out_has_no_effect" {
   command = plan

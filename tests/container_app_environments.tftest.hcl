@@ -41,12 +41,8 @@ variables {
   # has its own runs in diagnostics.tftest.hcl.
   alert_email = "ops@example.com"
 
-  # A production plan needs builtin_auth or a recorded opt-out (builtin_auth_opt_out's
-  # validation), so every run states the opt-out, which has no effect in demo. In production every
-  # plan warns, quoting its reason, so each production run expects
-  # check.builtin_auth_opted_out_in_production, and a production refusal run sets builtin_auth
-  # instead. The runs about the sign-in gate are in the builtin_auth files and
-  # security_profile.tftest.hcl.
+  # Production needs builtin_auth or a recorded opt-out (no effect in demo). Production runs expect
+  # its warning, check.builtin_auth_opted_out_in_production, except targeted ones and refusals.
   builtin_auth_opt_out = { reason = "Test install: the platform sign-in gate is not under test in this file." }
 }
 
