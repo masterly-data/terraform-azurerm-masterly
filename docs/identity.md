@@ -135,7 +135,8 @@ that sets either succeeds and warns (`builtin_auth_api_entries_are_ignored`). Re
 
 `builtin_auth_api = true` (ADR 0120 §2) puts the platform gate on `ca-api` too. It validates
 tokens against `builtin_auth`'s registration, so it requires `builtin_auth`, and a caller requests
-its token for the audience `builtin_auth.client_id` (or `api://<client_id>`). Only `ca-frontend`'s
+its token for the audience `builtin_auth.client_id`, the bare client id: Easy Auth always admits a
+registration's own client id as an audience, and the module adds no other. Only `ca-frontend`'s
 and `ca-edge`'s workload identities are allowed applications: a browser's ID token for the same
 registration carries that audience but is refused, because the registration itself is not one of
 them. Every other request gets `401`; no path is excluded: a path that must be reached without
@@ -147,20 +148,43 @@ the api's gate. The application still authenticates every caller as `identity_bi
   token. On a `ca-frontend` or `ca-edge` release that does not yet send that token, every call the
   frontend's server makes on a user's behalf is refused, and the application is unusable until the
   switch is turned off again, as happened with 0.19.x on 2026-10-22. Upgrade both apps to releases
-  that send it first, then turn this on.
+  that send it first, then turn this on. The `ca-api` release must also verify the token and
+  accept empty edge and recovery client ids (below), or it refuses to start.
+- **The module wires both ends of the token.** With the switch on, `ca-frontend` gets
+  `MASTERLY_API_AUDIENCE` (`builtin_auth.client_id`) and `AZURE_CLIENT_ID` (its own identity's
+  client id, so a token request is not ambiguous when `registry_identity_id` gives it a second
+  identity), and requests the token for that audience. `ca-api`, and `ca-workers`, which shares its
+  environment, get the trust the application verifies the token against (ADR 0119):
+  `MASTERLY_WORKLOAD_ISSUER` (the gate's `https://login.microsoftonline.com/<tenant>/v2.0`),
+  `MASTERLY_WORKLOAD_JWKS_URI` (`…/<tenant>/discovery/v2.0/keys`),
+  `MASTERLY_WORKLOAD_API_AUDIENCE` (the same audience), `MASTERLY_WORKLOAD_FRONTEND_CLIENT_ID`,
+  `MASTERLY_WORKLOAD_EDGE_CLIENT_ID` (`ca-edge`'s identity with `edge`, empty without it),
+  `MASTERLY_WORKLOAD_RECOVERY_CLIENT_ID` (empty until `ca-recovery` exists), and
+  `MASTERLY_L1_TOKEN_REQUIRED = "true"`. Off, none of them is set. `MASTERLY_SERVE_AUDIENCE` is
+  left unset until `ca-serve` has a gate of its own.
+- **The registration must issue v2.0 access tokens.** Set `requestedAccessTokenVersion` to `2`
+  in the app registration's manifest (`api.requestedAccessTokenVersion` in the Microsoft Graph
+  form). Without it Entra issues v1 tokens, whose issuer is `https://sts.windows.net/<tenant>/`,
+  and the application refuses every workload token.
+- **The registration must be in the deployment's tenant.** The workload identities' tokens come
+  from the tenant the module deploys to, so `builtin_auth.tenant_id` must be that tenant; a plan
+  where it is not warns through the check `builtin_auth_tenant_is_the_deployment_tenant`.
 - **A broken gate is alerted on.** With the switch on, `alert-<name_prefix>-api-401` (severity 1)
   fires when `ca-api` returns more than 20 responses with status 401 in 15 minutes, which is what
   a wrong allowed-client list looks like. It routes through `alert_email` or
   `alert_action_group_id`, does not need `enable_diagnostics`, and also counts the application's
   own 401s, which are occasional and sit below the threshold.
 - **Nothing else moves.** `ca-api` carries `builtin_auth_client_secret` whenever `builtin_auth` is
-  set, so turning the switch on or off changes neither app, only the api's `authConfigs/current`
-  (`module.masterly.azapi_resource.builtin_auth["api"]`, the address 0.19.0 and 0.19.1 used).
+  set, so turning the switch on or off changes the env above, a new revision of each of the three
+  apps, and the api's `authConfigs/current` (`module.masterly.azapi_resource.builtin_auth["api"]`,
+  the address 0.19.0 and 0.19.1 used), and nothing else on them.
 - **The recovery fallback turns it off too.** While `builtin_auth_recovery_until` is open, at most
   60 minutes and only behind a network restriction, it turns this gate off along with
   `ca-frontend`'s, so that under an Entra outage a caller reaches `ca-api` with the application's
   own authentication alone in front of it (ADR 0117, amended 2026-11-02). Only the gate changes:
-  the rest of the api's configuration, its ingress and its environment stay as they are. Every
+  the rest of the api's configuration, its ingress and its environment stay as they are, and
+  `MASTERLY_L1_TOKEN_REQUIRED` stays `"true"`, so a request in the window that carries no workload
+  token is refused by the application until it learns the window (MAS-5233, MAS-5228). Every
   write to the api's auth configuration raises the activity-log alert
   `alert-<prefix>-api-auth-config-write`, which exists whenever the switch is on. See
   [Recovery fallback](#recovery-fallback-turning-the-gates-off-builtin_auth_recovery_until).
@@ -211,8 +235,11 @@ fine; the module takes over its configuration):
    Container App secret `microsoft-provider-authentication-secret` (a Key Vault reference with
    `enable_key_vault`), the name Azure gives it. It is on `ca-frontend`, which uses it, and also
    on `ca-api`, which uses it with `builtin_auth_api` and carries it either way, so that turning
-   the switch on or off, or upgrading from 0.19.0 or 0.19.1, changes neither app.
-3. Set `builtin_auth = { tenant_id = "...", client_id = "..." }`.
+   the switch on or off, or upgrading from 0.19.0 or 0.19.1, never moves the secret.
+3. Set `builtin_auth = { tenant_id = "...", client_id = "..." }`, with the tenant the module
+   deploys to.
+4. Before `builtin_auth_api`: set `requestedAccessTokenVersion` to `2` in the registration's
+   manifest, so the workload tokens are v2.0.
 
 An install that already configured built-in auth on the frontend by hand imports that
 configuration once, in the first apply that sets `builtin_auth`, or the apply fails because it

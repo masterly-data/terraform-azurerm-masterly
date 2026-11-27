@@ -35,8 +35,9 @@ variable "builtin_auth" {
 
     tenant_id: the Entra tenant users sign in from (the issuer is
     https://login.microsoftonline.com/<tenant_id>/v2.0). client_id: the app registration the
-    platform signs users in with. Register https://<frontend host>/.auth/login/aad/callback as a
-    web redirect URI on it and enable ID token issuance; its client secret is
+    platform signs users in with. Both are UUIDs in lower case, as Entra writes them in a
+    token; an upper-case id is refused. Register https://<frontend host>/.auth/login/aad/callback
+    as a web redirect URI on it and enable ID token issuance; its client secret is
     builtin_auth_client_secret. frontend_excluded_paths: paths on ca-frontend served without
     sign-in; every path listed is reachable by anyone ingress_allowed_cidrs admits. With mode =
     "production" the gate opens exactly the start page: unset means ["/", "/start"], and any
@@ -64,12 +65,15 @@ variable "builtin_auth" {
   validation {
     # A conditional, not `||`: Terraform before 1.12 evaluates both sides of `||`, and the
     # right side reads attributes of a null object when the input is unset. The deprecated api
-    # entries are not checked: an ignored value cannot fail a plan.
+    # entries are not checked: an ignored value cannot fail a plan. Lower case only: with
+    # builtin_auth_api the module copies both ids verbatim into ca-api's workload trust (the
+    # issuer, the JWKS URI and the audience), and Entra writes them in lower case in a token's
+    # iss and aud, so an upper-case id would make ca-api refuse every workload token.
     condition = var.builtin_auth == null ? true : alltrue([
       for id in [var.builtin_auth.tenant_id, var.builtin_auth.client_id] :
-      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))
+      can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))
     ])
-    error_message = "builtin_auth.tenant_id and client_id must be UUIDs: the tenant's directory id and the registration's application (client) id, not an object id or a name."
+    error_message = "builtin_auth.tenant_id and client_id must be UUIDs in lower case (as Entra writes them in a token's issuer and audience): the tenant's directory id and the registration's application (client) id, not an object id or a name."
   }
 
   validation {
@@ -165,18 +169,29 @@ variable "builtin_auth_api" {
     False (the default) leaves ca-api ungated at the platform, as before this input existed.
     It requires builtin_auth: the gate
     validates tokens against builtin_auth's registration, so a caller requests a token for the
-    audience builtin_auth.client_id (or api://<client_id>). A browser sign-in token for that same
+    audience builtin_auth.client_id, the bare client id. A browser sign-in token for that same
     registration is refused, because the registration itself is not an allowed application.
 
-    Turn it on only once the ca-frontend and ca-edge releases you run send their workload-identity
-    token to ca-api. Before that, ca-api refuses every call the frontend's server makes on a
-    user's behalf, and the application is unusable until it is turned off again. Turning it on or
-    off changes neither app: ca-api carries builtin_auth_client_secret whenever builtin_auth is
-    set. builtin_auth_recovery_until turns this gate off too, with ca-frontend's, for its window
-    of at most 60 minutes, and every write to ca-api's authentication configuration raises the
-    activity-log alert alert-<name_prefix>-api-auth-config-write. The application still
-    authenticates its callers as identity_binding sets; this gate is in front of that, not
-    instead of it.
+    The module wires both ends of that token. With it on, ca-frontend gets MASTERLY_API_AUDIENCE
+    (builtin_auth.client_id) and AZURE_CLIENT_ID (its own identity's client id), so it requests
+    the token; ca-api, and ca-workers, which shares its env, get the six MASTERLY_WORKLOAD_*
+    settings and MASTERLY_L1_TOKEN_REQUIRED = "true", so the application verifies the token too
+    and refuses a request without one. MASTERLY_WORKLOAD_EDGE_CLIENT_ID is empty without edge,
+    and MASTERLY_WORKLOAD_RECOVERY_CLIENT_ID is empty until ca-recovery exists. Off, none of them
+    is set. builtin_auth.client_id's app registration must issue v2.0 access tokens
+    (requestedAccessTokenVersion = 2 in its manifest), and be in the tenant this module deploys
+    to: otherwise ca-api refuses every workload token, and the second case warns at plan.
+
+    Turn it on only once the ca-frontend, ca-edge and ca-api releases you run send and verify
+    the workload-identity token, with empty edge and recovery client ids accepted. Before that,
+    ca-api refuses every call the frontend's server makes on a user's behalf, or does not start,
+    and the application is unusable until it is turned off again. Turning it on or off changes
+    the env of ca-frontend, ca-api and ca-workers and nothing else on them: ca-api carries
+    builtin_auth_client_secret whenever builtin_auth is set. builtin_auth_recovery_until turns
+    this gate off too, with ca-frontend's, for its window of at most 60 minutes, and every write
+    to ca-api's authentication configuration raises the activity-log alert
+    alert-<name_prefix>-api-auth-config-write. The application still authenticates its callers
+    as identity_binding sets; this gate is in front of that, not instead of it.
 
     With it on, the module also creates the alert alert-<name_prefix>-api-401 (severity 1): more
     than 20 responses with status 401 from ca-api in 15 minutes. It fires only once an install
