@@ -351,6 +351,7 @@ run "edge_workload_token_caches_per_audience_and_reads_the_environment" {
       strcontains(local.edge_workload_token_lua, "os.getenv(\"IDENTITY_ENDPOINT\")") &&
       strcontains(local.edge_workload_token_lua, "os.getenv(\"IDENTITY_HEADER\")") &&
       length(regexall("IDENTITY_(ENDPOINT|HEADER)", local.edge_workload_token_lua)) == 2 &&
+      length(regexall("os\\.getenv", local.edge_lua_source)) == 2 &&
       length(regexall("IDENTITY_HEADER", jsonencode(local.edge_envoy_config))) == 1
     )
     error_message = "IDENTITY_ENDPOINT and IDENTITY_HEADER must be read only through os.getenv, and IDENTITY_HEADER named nowhere else in the configuration."
