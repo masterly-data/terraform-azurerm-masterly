@@ -320,6 +320,38 @@ run "builtin_auth_refuses_a_non_uuid_client_id" {
   expect_failures = [var.builtin_auth]
 }
 
+# The ids reach ca-api's workload trust verbatim, and Entra writes them in lower case in a
+# token's iss and aud: an upper-case id is refused at the input, not lowered.
+run "builtin_auth_refuses_an_upper_case_tenant_id" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "AAAAAAAA-1111-1111-1111-111111111111"
+      client_id = "22222222-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  expect_failures = [var.builtin_auth]
+}
+
+run "builtin_auth_refuses_an_upper_case_client_id" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+    builtin_auth = {
+      tenant_id = "11111111-1111-1111-1111-111111111111"
+      client_id = "BBBBBBBB-2222-2222-2222-222222222222"
+    }
+    builtin_auth_client_secret = "test-only-not-a-secret"
+  }
+
+  expect_failures = [var.builtin_auth]
+}
+
 run "builtin_auth_refuses_a_relative_excluded_path" {
   command = plan
 

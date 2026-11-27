@@ -35,9 +35,10 @@ variable "builtin_auth" {
 
     tenant_id: the Entra tenant users sign in from (the issuer is
     https://login.microsoftonline.com/<tenant_id>/v2.0). client_id: the app registration the
-    platform signs users in with. Register https://<frontend host>/.auth/login/aad/callback as a
-    web redirect URI on it and enable ID token issuance; its client secret is
-    builtin_auth_client_secret. frontend_excluded_paths: paths on ca-frontend served without
+    platform signs users in with. Both are UUIDs in lower case, as Entra writes them in a
+    token; an upper-case id is refused. Register
+    https://<frontend host>/.auth/login/aad/callback as a web redirect URI on it and enable ID
+    token issuance; its client secret is builtin_auth_client_secret. frontend_excluded_paths: paths on ca-frontend served without
     sign-in; every path listed is reachable by anyone ingress_allowed_cidrs admits, so leave it
     empty unless a page must be public.
 
@@ -61,12 +62,15 @@ variable "builtin_auth" {
   validation {
     # A conditional, not `||`: Terraform before 1.12 evaluates both sides of `||`, and the
     # right side reads attributes of a null object when the input is unset. The deprecated api
-    # entries are not checked: an ignored value cannot fail a plan.
+    # entries are not checked: an ignored value cannot fail a plan. Lower case only: with
+    # builtin_auth_api the module copies both ids verbatim into ca-api's workload trust (the
+    # issuer, the JWKS URI and the audience), and Entra writes them in lower case in a token's
+    # iss and aud, so an upper-case id would make ca-api refuse every workload token.
     condition = var.builtin_auth == null ? true : alltrue([
       for id in [var.builtin_auth.tenant_id, var.builtin_auth.client_id] :
-      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))
+      can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))
     ])
-    error_message = "builtin_auth.tenant_id and client_id must be UUIDs: the tenant's directory id and the registration's application (client) id, not an object id or a name."
+    error_message = "builtin_auth.tenant_id and client_id must be UUIDs in lower case (as Entra writes them in a token's issuer and audience): the tenant's directory id and the registration's application (client) id, not an object id or a name."
   }
 
   validation {

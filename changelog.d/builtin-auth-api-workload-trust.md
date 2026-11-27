@@ -35,6 +35,12 @@
   window, so until MAS-5233 and MAS-5228 hand the application the window's expiry, a request in
   the window without a workload token is refused at L2 rather than let through.
 - `MASTERLY_SERVE_AUDIENCE` stays unset everywhere: `ca-serve` has no gate yet (MAS-3192).
+- **`builtin_auth.tenant_id` and `client_id` must be lower case.** The module copies both
+  verbatim into the workload trust (the issuer, the JWKS URI and the audience), and Entra writes
+  them in lower case in a token's `iss` and `aud`, so an upper-case id would make `ca-api` refuse
+  every workload token. The input now refuses upper-case hex instead of lowering it, so the gate's
+  issuer stays verbatim. A plan that set either id in upper case, with or without
+  `builtin_auth_api`, now fails validation: write the id in lower case.
 
 ### Security
 
