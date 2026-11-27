@@ -1667,9 +1667,9 @@ run "api_url_is_null_while_the_api_is_internal" {
 }
 
 # With edge set ca-api stays internal whatever api_ingress_external says, so api_url stays null
-# and a client's base URL is edge_url. The hostname is computed, so at plan it is unknown and an
-# assertion on it asserts nothing; `override_module` pins the api app's outputs to known values
-# so api_internal_fqdn is checkable. (apply is not an option — the mock provider hands out ids
+# and a client's base URL is edge_url. The hostname is computed, so at plan it is unknown and a
+# check of it proves nothing; `override_module` pins the api app's outputs to known values so
+# api_internal_fqdn is checkable. (apply is not an option — the mock provider hands out ids
 # that the azurerm provider then rejects as unparseable.)
 run "api_url_is_null_behind_the_edge" {
   command = plan
