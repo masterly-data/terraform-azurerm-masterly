@@ -8,9 +8,11 @@
 # per-concern plan files.
 
 mock_provider "azurerm" {
+  # The deployment's tenant is builtin_auth.tenant_id (below), as on a real install: with
+  # builtin_auth_api the check builtin_auth_tenant_is_the_deployment_tenant compares the two.
   mock_data "azurerm_client_config" {
     defaults = {
-      tenant_id = "00000000-0000-0000-0000-000000000000"
+      tenant_id = "11111111-1111-1111-1111-111111111111"
     }
   }
 
