@@ -1091,3 +1091,25 @@ run "existing_server_keeps_its_geo_backup_setting" {
     error_message = "A changed geo-redundant backup default must not change an existing server's setting — changing it replaces the server and destroys its data."
   }
 }
+
+# Azure runs one operation at a time on a flexible server: a parameter write sent while an Entra
+# administrator is being written fails with ServerIsBusy and stops a first apply halfway. Each
+# configuration resource must wait for both administrators. A plan cannot show depends_on, so the
+# source is read.
+run "postgres_parameters_wait_for_the_entra_administrators" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition = length(azurerm_postgresql_flexible_server_configuration.log) == 3 && alltrue([
+      for name in ["log", "operator", "pgbouncer"] : strcontains(
+        regex("(?s)\\nresource \"azurerm_postgresql_flexible_server_configuration\" \"${name}\" \\{.*?\\n\\}\\n", file("${path.module}/main.tf")),
+        "depends_on = [\n    azurerm_postgresql_flexible_server_active_directory_administrator.apps,\n    azurerm_postgresql_flexible_server_active_directory_administrator.migrate,\n  ]\n}"
+      )
+    ])
+    error_message = "Every azurerm_postgresql_flexible_server_configuration (log, operator, pgbouncer) must depend on both Entra administrators, or a first apply can fail with ServerIsBusy."
+  }
+}
